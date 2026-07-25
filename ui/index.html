@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pstack</title>
+<style>
+  :root {
+    --bg: #0e1013;
+    --panel: #15181d;
+    --panel-2: #1b1f26;
+    --line: #272d36;
+    --fg: #e6e9ee;
+    --fg-dim: #9aa4b2;
+    --fg-mute: #6b7480;
+    --ok: #3fb950;
+    --fail: #f85149;
+    --leak: #e3922a;
+    --neutral: #8b949e;
+    --accent: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --r: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
+  h2 { font-size: 12px; margin: 0 0 10px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .08em; }
+  a { color: var(--accent); }
+  code, .mono, pre { font-family: var(--mono); font-size: 12px; }
+
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .grow { flex: 1; }
+  .wrap { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; gap: 14px; padding: 14px; align-items: start; }
+  @media (max-width: 880px) { .wrap { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; margin-bottom: 14px; }
+  .col > .panel:last-child { margin-bottom: 0; }
+
+  input[type=text], input[type=password] {
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 0;
+  }
+  input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  button {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--fg-mute); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { border-color: #2d5a8e; background: #16324f; }
+  button.danger { border-color: #6b2b28; background: #3d1c1a; }
+  label { color: var(--fg-dim); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .stretch { flex: 1; }
+  .muted { color: var(--fg-mute); }
+  /* A spec path is long and unbreakable; truncate it rather than let it widen the page. */
+  .clip { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dim { color: var(--fg-dim); }
+  .err { color: var(--fail); }
+
+  .badge {
+    display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px;
+    border: 1px solid var(--line); color: var(--fg-dim); font-family: var(--mono);
+  }
+  .badge.busy, .badge.running { color: var(--accent); border-color: #2d5a8e; }
+  .badge.ok { color: var(--ok); border-color: #1f4a29; }
+  .badge.failed { color: var(--fail); border-color: #6b2b28; }
+  .badge.leaked, .badge.warn { color: var(--leak); border-color: #6d4a15; }
+
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li { padding: 7px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; }
+  ul.list li:last-child { border-bottom: 0; }
+  .name { font-family: var(--mono); word-break: break-all; }
+  .mine { color: var(--accent); }
+
+  pre.log {
+    margin: 0; background: #0a0c0f; border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .log .t { color: var(--fg-mute); }
+  .log .step { color: var(--accent); }
+  .log .warn { color: var(--leak); }
+  .log .error { color: var(--fail); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-mute); font-weight: 500; padding: 4px 8px 4px 0; }
+  td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line); vertical-align: top; font-size: 13px; }
+  td.mark { width: 1.4em; font-family: var(--mono); }
+  .s-ok { color: var(--ok); }
+  .s-failed { color: var(--fail); }
+  .s-leaked { color: var(--leak); }
+  .s-unverifiable { color: var(--neutral); }
+
+  .banner { border-radius: 6px; padding: 9px 11px; border: 1px solid var(--line); margin-bottom: 12px; }
+  .banner.leaked { border-color: #6d4a15; background: #2a1e08; color: #f0c078; }
+  .banner.failed { border-color: #6b2b28; background: #2c1513; color: #ffa198; }
+  .banner.ok { border-color: #1f4a29; background: #0f2415; color: #7ee18a; }
+  .banner.conflict { border-color: #2d5a8e; background: #10243a; color: #a3cfff; }
+  .banner b { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>pstack</h1>
+    <span class="muted mono clip" v-if="health.spec" :title="health.spec">{{ health.spec }}</span>
+    <span class="badge">var {{ varName }}</span>
+    <span class="grow"></span>
+    <label for="tok">token</label>
+    <input id="tok" type="password" v-model.trim="token" placeholder="PSTACK_TOKEN" style="width:180px">
+    <span v-if="health.authEnforced === false" class="muted">auth not enforced &mdash; server is loopback-only</span>
+  </header>
+
+  <div class="wrap">
+    <!-- ---------------- left: target, spec, host ---------------- -->
+    <div class="col">
+      <div class="panel">
+        <h2>Target</h2>
+        <div class="row">
+          <label for="tgt" class="mono">{{ varName }}=</label>
+          <input id="tgt" class="stretch" type="text" v-model.trim="target" placeholder="123"
+                 @keyup.enter="load">
+          <button class="primary" :disabled="!target || loadingSpec" @click="load">Load</button>
+        </div>
+        <p v-if="specError" class="err" style="margin:10px 0 0">{{ specError }}</p>
+
+        <template v-if="spec">
+          <div class="row" style="margin-top:12px">
+            <span class="name stretch">{{ spec.stack }}</span>
+            <span v-if="stackBusy" class="badge busy">busy</span>
+          </div>
+          <p class="muted mono" v-if="spec.compose" style="margin:6px 0 0">
+            {{ spec.compose.file }} [{{ spec.compose.profiles.join(', ') || 'no profiles' }}]
+          </p>
+          <p class="muted" v-else style="margin:6px 0 0">no compose section</p>
+
+          <div class="row" style="margin-top:12px">
+            <button class="primary" :disabled="acting" @click="act('up')">up</button>
+            <button class="danger" :disabled="acting" @click="act('down')">down</button>
+            <button :disabled="acting" @click="act('verify')">verify</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <label><input type="checkbox" v-model="verifyOnDown"> verify after down</label>
+          </div>
+          <p v-if="!verifyOnDown" class="muted" style="margin:6px 0 0">
+            Teardown will not check for leaks. Run <code>verify</code> yourself afterwards.
+          </p>
+
+          <h2 style="margin-top:16px">Axes <span class="muted">(up in order, down in reverse)</span></h2>
+          <ul class="list">
+            <li v-for="a in spec.axes" :key="a.name">
+              <span class="name stretch">{{ a.name }}</span>
+              <span>
+                <span v-for="h in a.hooks" :key="h" class="badge" style="margin-left:4px">{{ h }}</span>
+                <span v-if="!a.hooks.length" class="muted">no hooks</span>
+                <span v-if="a.hooks.includes('up') && !a.hooks.includes('assert_gone')"
+                      class="badge warn" style="margin-left:4px"
+                      title="verify cannot prove this axis was cleaned up">unverifiable</span>
+              </span>
+            </li>
+          </ul>
+
+          <template v-if="statusText">
+            <h2 style="margin-top:16px">Compose status</h2>
+            <pre class="log" style="height:120px">{{ statusText }}</pre>
+          </template>
+        </template>
+      </div>
+
+      <div class="panel">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0" class="stretch">Stacks on this host</h2>
+          <button @click="loadStacks">Refresh</button>
+        </div>
+        <p v-if="stacksError" class="err">{{ stacksError }}</p>
+        <pre v-if="stacksRaw" class="log" style="height:120px">{{ stacksRaw }}</pre>
+        <ul class="list" v-else>
+          <li v-for="s in stacks" :key="s.name">
+            <span class="name stretch" :class="{ mine: spec && s.name === spec.stack }">{{ s.name }}</span>
+            <span class="muted">{{ s.status }}</span>
+            <span v-if="s.busy" class="badge busy">busy</span>
+          </li>
+          <li v-if="!stacks.length" class="muted">nothing deployed</li>
+        </ul>
+        <p class="muted" style="margin:10px 0 0">
+          Actions are keyed by <code>{{ varName }}</code>, not by project name &mdash; the server
+          resolves the stack name from the spec itself.
+        </p>
+      </div>
+    </div>
+
+    <!-- ---------------- right: job ---------------- -->
+    <div class="col">
+      <div class="panel">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0" class="stretch">Job</h2>
+          <span v-if="job && job.action" class="mono muted">{{ job.action }} {{ job.stack }}</span>
+          <span v-if="job" class="badge" :class="job.state">{{ job.state }}</span>
+        </div>
+
+        <div v-if="conflict" class="banner conflict">
+          <b>{{ conflict }}</b> already has a job in flight, so this action was <b>not</b> sent again
+          &mdash; two lifecycle runs on one stack race over the same resources.
+          <a v-if="conflictJobId" href="#" @click.prevent="attach(conflictJobId)">Attach to it</a>
+          <span v-else>Wait for it to finish, or pick it from Recent jobs.</span>
+        </div>
+        <div v-if="postError" class="banner failed">{{ postError }}</div>
+
+        <div v-if="outcomeState === 'leaked'" class="banner leaked">
+          <b>LEAKED</b> &mdash; teardown ran, but these axes are still present:
+          <b>{{ leakedAxes.join(', ') }}</b>. Nothing else will clean them up: fix the axis
+          <code>down</code> hook and run <code>down</code> again.
+        </div>
+        <div v-else-if="outcomeState === 'failed'" class="banner failed">
+          <b>FAILED</b> &mdash; {{ job.error || 'a step exited non-zero; see the steps below.' }}
+        </div>
+        <div v-else-if="outcomeState === 'ok'" class="banner ok">
+          <b>OK</b><span v-if="unverifiableCount"> &mdash; but {{ unverifiableCount }} axis/axes have
+          no <code>assert_gone</code>, so this is not proof they are gone.</span>
+        </div>
+
+        <pre class="log" ref="logEl" @scroll="onScroll"><template v-for="l in lines" :key="l.seq"><span class="t">{{ hhmmss(l.at) }}</span> <span :class="l.level">{{ l.message }}</span>
+</template><span v-if="!lines.length" class="muted">no job yet &mdash; load a target, then pick an action</span></pre>
+
+        <template v-if="steps.length">
+          <h2 style="margin-top:14px">Steps</h2>
+          <table>
+            <thead><tr><th></th><th>axis</th><th>phase</th><th>detail</th></tr></thead>
+            <tbody>
+              <tr v-for="(s, i) in steps" :key="i">
+                <td class="mark" :class="'s-' + stepState(s)">{{ stepMark(s) }}</td>
+                <td class="mono">{{ s.axis }}</td>
+                <td class="mono dim">{{ s.phase }}</td>
+                <td :class="'s-' + stepState(s)">{{ s.message || (s.skipped ? 'skipped' : '') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
+      </div>
+
+      <div class="panel">
+        <div class="row" style="margin-bottom:10px">
+          <h2 style="margin:0" class="stretch">Recent jobs</h2>
+          <button @click="loadJobs">Refresh</button>
+        </div>
+        <ul class="list">
+          <li v-for="j in jobs" :key="j.id">
+            <a class="name stretch" href="#" @click.prevent="attach(j.id)">{{ j.action }} {{ j.stack }}</a>
+            <span class="muted mono">{{ hhmmss(j.startedAt) }}</span>
+            <span class="badge" :class="j.state">{{ j.state }}</span>
+          </li>
+          <li v-if="!jobs.length" class="muted">none &mdash; jobs are in-memory, a restart clears them</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+const { createApp } = Vue;
+
+createApp({
+  data() {
+    return {
+      health: { varName: 'PR', authEnforced: null, spec: '' },
+      token: localStorage.getItem('pstack.token') || '',
+      target: localStorage.getItem('pstack.target') || '',
+      spec: null, specError: '', loadingSpec: false, statusText: '',
+      stacks: [], stacksRaw: null, stacksError: '',
+      verifyOnDown: true,
+      job: null, jobs: [], lines: [], acting: false,
+      conflict: '', conflictJobId: '', postError: '',
+      es: null, pinned: true,
+    };
+  },
+
+  computed: {
+    varName() { return this.health.varName || 'PR'; },
+    steps() { return (this.job && this.job.outcome && this.job.outcome.steps) || []; },
+    /** Only a finished job has an outcome worth a banner. */
+    outcomeState() { return this.job && this.job.state !== 'running' ? this.job.state : ''; },
+    leakedAxes() {
+      return this.steps.filter((s) => s.phase === 'assert_gone' && !s.ok).map((s) => s.axis);
+    },
+    unverifiableCount() {
+      return this.steps.filter((s) => this.stepState(s) === 'unverifiable').length;
+    },
+    stackBusy() {
+      const row = this.spec && this.stacks.find((s) => s.name === this.spec.stack);
+      return !!(row && row.busy) || !!(this.job && this.job.state === 'running');
+    },
+  },
+
+  watch: {
+    token(v) { localStorage.setItem('pstack.token', v); },
+  },
+
+  mounted() {
+    this.loadHealth();
+    this.loadStacks();
+    this.loadJobs();
+    // A "busy" badge is only useful if it is current, and the server holds the lock, not us.
+    setInterval(this.loadStacks, 5000);
+    if (this.target) this.load();
+  },
+
+  methods: {
+    /** GETs need no auth: api.ts gates POST/DELETE only (EventSource cannot send headers anyway). */
+    async get(path) {
+      try {
+        const r = await fetch(path);
+        return { status: r.status, body: await r.json().catch(() => ({ error: `HTTP ${r.status}` })) };
+      } catch (e) {
+        return { status: 0, body: { error: `unreachable: ${e.message}` } };
+      }
+    },
+
+    async post(path, body) {
+      const headers = { 'content-type': 'application/json' };
+      if (this.token) headers.authorization = `Bearer ${this.token}`;
+      try {
+        const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body || {}) });
+        return { status: r.status, body: await r.json().catch(() => ({})) };
+      } catch (e) {
+        return { status: 0, body: { error: `unreachable: ${e.message}` } };
+      }
+    },
+
+    async loadHealth() {
+      const { body } = await this.get('/api/health');
+      if (body && body.varName) this.health = body;
+    },
+
+    async loadStacks() {
+      const { body } = await this.get('/api/stacks');
+      this.stacksError = body.error || '';
+      if (body.parseError) { this.stacksRaw = body.raw; this.stacks = []; return; }
+      this.stacksRaw = null;
+      this.stacks = body.stacks || [];
+    },
+
+    async loadJobs() {
+      const { body } = await this.get('/api/jobs');
+      this.jobs = (body.jobs || []).slice(0, 8);
+    },
+
+    /** Resolve the spec for this target, plus what compose currently has running for it. */
+    async load() {
+      this.loadingSpec = true;
+      this.specError = '';
+      localStorage.setItem('pstack.target', this.target);
+      const q = encodeURIComponent(this.varName.toLowerCase());
+      const id = encodeURIComponent(this.target);
+      const [s, st] = await Promise.all([
+        this.get(`/api/spec?${q}=${id}`),
+        this.get(`/api/stacks/${id}/status`),
+      ]);
+      this.loadingSpec = false;
+      if (s.status !== 200) {
+        this.spec = null; this.statusText = '';
+        this.specError = s.body.error || `HTTP ${s.status}`;
+        return;
+      }
+      this.spec = s.body;
+      this.statusText = st.status === 200 ? st.body.status : '';
+    },
+
+    async act(action) {
+      this.acting = true;
+      this.conflict = this.conflictJobId = this.postError = '';
+      const path = `/api/stacks/${encodeURIComponent(this.target)}/${action}`;
+      const { status, body } = await this.post(path, action === 'down' ? { verify: this.verifyOnDown } : {});
+      this.acting = false;
+
+      if (status === 202) return this.begin(body.job);
+      if (status === 409) {
+        // One job per stack, deliberately not queued. Surface it; never retry.
+        this.conflict = body.stack || this.target;
+        const { body: jl } = await this.get('/api/jobs');
+        this.jobs = (jl.jobs || []).slice(0, 8);
+        const live = (jl.jobs || []).find((j) => j.stack === body.stack && j.state === 'running');
+        if (live) this.conflictJobId = live.id;
+        return;
+      }
+      this.postError = status === 401
+        ? 'unauthorized — set the token in the header field.'
+        : (body.error || `HTTP ${status}`);
+    },
+
+    begin(job) {
+      this.job = { ...job, outcome: undefined, error: undefined };
+      this.lines = [];
+      this.pinned = true;
+      this.stream(job.id);
+      this.loadJobs();
+    },
+
+    /** Attach to an existing job. The stream replays its buffered log, so this works late too. */
+    attach(id) {
+      this.conflict = this.conflictJobId = '';
+      this.job = { id, action: '', stack: '', state: 'running' };
+      this.lines = [];
+      this.pinned = true;
+      this.stream(id);
+    },
+
+    stream(id) {
+      if (this.es) this.es.close();
+      const es = (this.es = new EventSource(`/api/jobs/${encodeURIComponent(id)}/stream`));
+      es.onmessage = (ev) => {
+        const e = JSON.parse(ev.data);
+        if (e.done) { this.close(); this.finish(id); return; }
+        this.lines.push(e);
+        this.scroll();
+      };
+      es.onerror = () => {
+        // A stream can drop without a `done` frame (server restart, proxy timeout). Fall back to
+        // the job record rather than leaving the UI stuck on "running".
+        this.close();
+        this.finish(id);
+      };
+    },
+
+    close() {
+      if (this.es) this.es.close();
+      this.es = null;
+    },
+
+    async finish(id) {
+      // The lock is released, so a "job in flight" notice is no longer true — never leave a stale
+      // conflict banner sitting next to a finished job's outcome.
+      this.conflict = this.conflictJobId = '';
+      const { body } = await this.get(`/api/jobs/${encodeURIComponent(id)}`);
+      if (body.job) this.job = body.job;
+      // No record: the server restarted (jobs are in-memory) or the id was evicted. Say so rather
+      // than leaving the panel pinned on "running" forever.
+      else if (this.job) this.job = { ...this.job, state: 'failed', error: 'lost the job record — server restarted?' };
+      this.loadStacks();
+      this.loadJobs();
+      if (this.spec) this.load();
+    },
+
+    scroll() {
+      if (!this.pinned) return;
+      this.$nextTick(() => {
+        const el = this.$refs.logEl;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    onScroll(e) {
+      const el = e.target;
+      this.pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    },
+
+    /**
+     * Four states that must not blur into each other:
+     *   leaked       assert_gone failed — the resource survived teardown. The signal this tool exists for.
+     *   failed       any other non-zero step.
+     *   unverifiable no assert_gone defined. NOT a pass.
+     *   ok           passed. A `down` step may still carry a "non-fatal:" message: teardown is
+     *                best-effort by design, so the step genuinely did not fail the run.
+     */
+    stepState(s) {
+      if (s.message && s.message.startsWith('unverifiable')) return 'unverifiable';
+      if (!s.ok) return s.phase === 'assert_gone' ? 'leaked' : 'failed';
+      return 'ok';
+    },
+
+    stepMark(s) {
+      return { ok: '✓', unverifiable: '?', leaked: '!', failed: '✗' }[this.stepState(s)];
+    },
+
+    hhmmss(ms) { return new Date(ms).toTimeString().slice(0, 8); },
+  },
+}).mount('#app');
+</script>
+</body>
+</html>

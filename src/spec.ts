@@ -1,0 +1,245 @@
+/**
+ * The spec: parse + validate a `preview.yml` into a resolved Stack.
+ *
+ * Design notes that matter:
+ *  - `${VAR}` interpolation happens ONCE, here, against a known env. Nothing downstream
+ *    re-interpolates, so a value containing `${...}` can never be re-expanded by accident.
+ *  - `stack` resolves to the single identity string every axis namespaces off. It is exported
+ *    to hooks as $STACK so a hook never has to reconstruct it.
+ *  - Axis order is significant: provisioned in declaration order, destroyed in REVERSE.
+ *    Declare dependencies before dependents (database before the app that migrates it).
+ */
+
+export type Axis = {
+  name: string;
+  /** Provision. Must be idempotent — `up` is re-run on every redeploy. */
+  up?: string;
+  /** Destroy. Best-effort: a non-zero exit is reported but does not abort teardown. */
+  down?: string;
+  /** Exit 0 ⇒ the resource is GONE. Run by `verify` and after `down`. This is the leak gate. */
+  assert_gone?: string;
+  /** Exit 0 ⇒ the resource EXISTS. Run after `up` to fail fast on a silent provision failure. */
+  assert_live?: string;
+};
+
+export type ComposeSpec = {
+  file: string;
+  /**
+   * Profiles to bring up. Every service in a preview compose file should be behind a profile so a
+   * bare `up` starts nothing. Teardown always passes ALL of these regardless of what was selected
+   * — see compose.ts for why (it is the network-leak fix).
+   */
+  profiles: string[];
+  /** Extra `-f` overlay files, applied in order after `file`. */
+  overlays?: string[];
+};
+
+export type Stack = {
+  version: number;
+  /** Resolved stack identity, e.g. `pr-123`. Exported to every hook as $STACK. */
+  stack: string;
+  compose?: ComposeSpec;
+  axes: Axis[];
+  /** Fully-resolved env handed to compose and to every hook. */
+  env: Record<string, string>;
+};
+
+export class SpecError extends Error {}
+
+/** Non-fatal spec observations, surfaced by `pstack validate`. Reset per `loadSpec`. */
+export const warnings: string[] = [];
+
+const VAR = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/**
+ * Substitute `${VAR}` from `vars`. Unknown variables are an error rather than an empty string:
+ * silently expanding `${PR}` to "" yields a stack named `pr-` that collides across every PR, which
+ * is far worse than failing loudly.
+ */
+export function interpolate(input: string, vars: Record<string, string>, where: string): string {
+  const missing = new Set<string>();
+  const out = input.replace(VAR, (_m, name: string) => {
+    const v = vars[name];
+    if (v === undefined || v === '') {
+      missing.add(name);
+      return '';
+    }
+    return v;
+  });
+  if (missing.size > 0) {
+    throw new SpecError(
+      `${where}: undefined variable(s) ${[...missing].map((m) => `\${${m}}`).join(', ')}. ` +
+        `Pass them in the environment or under \`env:\` in the spec.`,
+    );
+  }
+  return out;
+}
+
+/**
+ * True when an `assert_gone` is nothing but a negated probe, with no guard proving the probe could
+ * have answered. Deliberately narrow: a script that already contains `exit`, `||` or `&&` is
+ * assumed to handle its own failure modes, so guarded forms are not flagged.
+ */
+function isNaiveNegation(script: string): boolean {
+  const lines = script
+    .split('\n')
+    .map((l) => l.replace(/#.*$/, '').trim())
+    .filter(Boolean);
+  if (lines.length !== 1) return false;
+  const only = lines[0]!;
+  if (!only.startsWith('!')) return false;
+  return !/\bexit\b|\|\||&&/.test(only);
+}
+
+function asString(v: unknown, where: string): string {
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  throw new SpecError(`${where}: expected a string, got ${typeof v}`);
+}
+
+/**
+ * Parse and fully resolve a spec.
+ *
+ * @param source  raw YAML
+ * @param baseEnv the environment to interpolate against (usually process.env plus CLI overrides)
+ */
+export function parseSpec(source: string, baseEnv: Record<string, string | undefined>): Stack {
+  // Reset here, not in loadSpec: warnings describe THIS parse. Accumulating across calls made a
+  // long-lived server (which re-parses per request) report warnings from other stacks' specs.
+  warnings.length = 0;
+
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(source);
+  } catch (err) {
+    throw new SpecError(`invalid YAML: ${(err as Error).message}`);
+  }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) {
+    throw new SpecError('spec must be a YAML mapping');
+  }
+  const raw = doc as Record<string, unknown>;
+
+  const version = Number(raw.version ?? 1);
+  if (version !== 1) {
+    throw new SpecError(`unsupported version ${version} (this build understands version 1)`);
+  }
+
+  // Start from the ambient environment, then layer the spec's own `env:` on top of it. Spec values
+  // may themselves reference ambient vars, so they are interpolated as they are added — in
+  // declaration order, letting a later entry build on an earlier one.
+  const vars: Record<string, string> = {};
+  for (const [k, v] of Object.entries(baseEnv)) if (v !== undefined) vars[k] = v;
+
+  const specEnv = raw.env;
+  if (specEnv !== undefined) {
+    if (typeof specEnv !== 'object' || specEnv === null || Array.isArray(specEnv)) {
+      throw new SpecError('`env` must be a mapping of NAME: value');
+    }
+    for (const [k, v] of Object.entries(specEnv as Record<string, unknown>)) {
+      vars[k] = interpolate(asString(v, `env.${k}`), vars, `env.${k}`);
+    }
+  }
+
+  if (raw.stack === undefined) throw new SpecError('`stack` is required (the stack identity)');
+  const stack = interpolate(asString(raw.stack, 'stack'), vars, 'stack');
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(stack)) {
+    // Compose project names, DNS labels and most namespace APIs share roughly this alphabet.
+    // Rejecting here beats a confusing failure five steps into a deploy.
+    throw new SpecError(
+      `stack "${stack}" must match /^[a-z0-9][a-z0-9_-]*$/ — it becomes a compose project name, ` +
+        `a hostname label and (usually) a namespace identifier.`,
+    );
+  }
+  vars.STACK = stack;
+
+  let compose: ComposeSpec | undefined;
+  if (raw.compose !== undefined) {
+    const c = raw.compose;
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) {
+      throw new SpecError('`compose` must be a mapping');
+    }
+    const cm = c as Record<string, unknown>;
+    if (cm.file === undefined) throw new SpecError('`compose.file` is required when `compose` is set');
+    const profiles = cm.profiles === undefined ? [] : cm.profiles;
+    if (!Array.isArray(profiles)) throw new SpecError('`compose.profiles` must be a list');
+    const overlays = cm.overlays === undefined ? [] : cm.overlays;
+    if (!Array.isArray(overlays)) throw new SpecError('`compose.overlays` must be a list');
+    compose = {
+      file: interpolate(asString(cm.file, 'compose.file'), vars, 'compose.file'),
+      profiles: profiles.map((p, i) =>
+        interpolate(asString(p, `compose.profiles[${i}]`), vars, `compose.profiles[${i}]`),
+      ),
+      overlays: overlays.map((o, i) =>
+        interpolate(asString(o, `compose.overlays[${i}]`), vars, `compose.overlays[${i}]`),
+      ),
+    };
+  }
+
+  const rawAxes = raw.axes === undefined ? [] : raw.axes;
+  if (!Array.isArray(rawAxes)) throw new SpecError('`axes` must be a list');
+  const seen = new Set<string>();
+  const axes: Axis[] = rawAxes.map((a, i) => {
+    if (typeof a !== 'object' || a === null || Array.isArray(a)) {
+      throw new SpecError(`axes[${i}] must be a mapping`);
+    }
+    const am = a as Record<string, unknown>;
+    const name = asString(am.name ?? '', `axes[${i}].name`);
+    if (!name) throw new SpecError(`axes[${i}].name is required`);
+    if (seen.has(name)) throw new SpecError(`duplicate axis name "${name}"`);
+    seen.add(name);
+
+    const field = (k: keyof Axis) =>
+      am[k] === undefined
+        ? undefined
+        : interpolate(asString(am[k], `axes.${name}.${k}`), vars, `axes.${name}.${k}`);
+
+    const axis: Axis = {
+      name,
+      up: field('up'),
+      down: field('down'),
+      assert_gone: field('assert_gone'),
+      assert_live: field('assert_live'),
+    };
+    if (!axis.up && !axis.down && !axis.assert_gone && !axis.assert_live) {
+      throw new SpecError(`axis "${name}" defines no up/down/assert_gone/assert_live — remove it`);
+    }
+    // An axis that can be created but never proven gone is exactly how leaks accumulate. Warn
+    // rather than fail: some axes genuinely have no cheap existence probe.
+    if (axis.up && !axis.assert_gone) {
+      warnings.push(
+        `axis "${name}" has \`up\` but no \`assert_gone\` — \`pstack verify\` cannot prove it was cleaned up.`,
+      );
+    }
+    if (axis.assert_gone && isNaiveNegation(axis.assert_gone)) {
+      // The #1 way an assert_gone lies. `! <probe>` exits 0 whenever <probe> fails for ANY
+      // reason — missing CLI, expired token, unreachable API — so "cannot tell" is reported as
+      // "gone", which is a false negative on the exact thing this tool exists to catch.
+      warnings.push(
+        `axis "${name}": \`assert_gone\` is a bare \`! <probe>\` with no reachability guard — it will ` +
+          `report "gone" if the probe itself fails. Fail closed instead:\n` +
+          `      <probe-is-usable> || exit 1\n` +
+          `      ! <probe-for-this-resource>`,
+      );
+    }
+    if (axis.assert_gone && /\|\|\s*true\b/.test(axis.assert_gone)) {
+      // `|| true` forces exit 0, so the assert can never fail. It belongs on `down`, never here.
+      warnings.push(
+        `axis "${name}": \`assert_gone\` contains \`|| true\`, which makes it always pass. ` +
+          `Tolerate failure in \`down\`, never in an assert.`,
+      );
+    }
+    return axis;
+  });
+
+  return { version, stack, compose, axes, env: vars };
+}
+
+/** Parse a spec file from disk. `parseSpec` resets `warnings`. */
+export async function loadSpec(
+  path: string,
+  baseEnv: Record<string, string | undefined>,
+): Promise<Stack> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) throw new SpecError(`spec not found: ${path}`);
+  return parseSpec(await file.text(), baseEnv);
+}

@@ -1,0 +1,52 @@
+# CI for pstack.
+#
+# Deliberately small — this repo ships a guide about CI patterns, so its own CI should be a
+# legible example rather than a showcase. One job, three checks, no matrix: there is exactly one
+# supported runtime (Bun), so a matrix would test nothing.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on a PR, but never on main — a main run is the record for that commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned from a committed file so CI and local agree; bumping the runtime is a commit.
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      # The spec's own linting must hold for the shipped example, or the guide teaches a spec that
+      # its own tool would warn about.
+      - name: Validate the example spec
+        env:
+          PR: '1'
+          GIT_SHA: ci
+        run: bun src/cli.ts -f examples/preview.yml validate
+
+      # A dry-run catches a broken `files`/`exports`/`bin` map before a release does — the failure
+      # mode is a published package whose entry points 404.
+      - name: Release dry-run
+        run: bunx publish-kit publish --dry-run
