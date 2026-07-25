@@ -35,7 +35,8 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "check": "bun test && tsc --noEmit",
+    "check:package": "bun scripts/check-package.ts",
+    "check": "bun test && tsc --noEmit && bun scripts/check-package.ts",
     "release:plan": "publish-kit plan",
     "release:dry": "publish-kit publish --dry-run",
     "release:publish": "publish-kit publish"

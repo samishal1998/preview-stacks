@@ -46,7 +46,11 @@ jobs:
           GIT_SHA: ci
         run: bun src/cli.ts -f examples/preview.yml validate
 
-      # A dry-run catches a broken `files`/`exports`/`bin` map before a release does — the failure
-      # mode is a published package whose entry points 404.
-      - name: Release dry-run
-        run: bunx publish-kit publish --dry-run
+      # Catch a broken `files`/`exports`/`bin` map before a release does — the failure mode is a
+      # published package whose documented entry points throw "Cannot find module".
+      #
+      # NOT `publish-kit publish --dry-run`: `bun publish` demands registry auth even in dry-run
+      # mode, and handing CI a publish token merely to rehearse a publish is a supply-chain risk
+      # for no benefit. `bun pm pack` needs no credentials and asserts the same invariant.
+      - name: Package entry points are shipped
+        run: bun scripts/check-package.ts
