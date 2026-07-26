@@ -40,9 +40,35 @@ First release. Declarative lifecycle for ephemeral per-PR preview stacks.
 scratch — Hetzner + cloud-init), `AGENTS.md` (working on this codebase), `skills/pstack/` (a skill
 teaching an agent to use pstack).
 
+### Distribution
+
+Installs globally as a **bundle**, not source: `bun add -g @samyx/preview-stacks`. The published
+tarball is 8 files / 0.36 MB — `dist/cli.js` (~74 KB) plus `dist/index.js` for embedding, with the
+UI and control-stack template inlined as text imports. No source, docs, examples or skills ship.
+Not a compiled executable: that would bake the Bun runtime in per platform (~60 MB each).
+
+### TLS
+
+**HTTP-01 is the default** — `pstack init --domain … --acme-email …` needs no DNS credential at all;
+Traefik answers on port 80 (which must be reachable). It cannot issue wildcards, so every hostname
+gets its own certificate: with Let's Encrypt's ~50 new certs per registered domain per week and ~3
+surfaces per PR, that is roughly 16 new PRs/week, and a preview URL is not valid until its container
+exists. `--challenge dns01 --dns-provider <code>` issues one wildcard instead, lifting both limits at
+the cost of a DNS credential. Note the rules invert: under HTTP-01 each per-PR router needs
+`tls.certresolver`; under DNS-01 exactly one always-on router requests the wildcard and the rest must
+have `tls=true` only.
+
+### Hostnames
+
+`control.<domain>` (UI), `api.<domain>` (API), `<service>.<domain>` (a shared service), and
+`<surface>-pr-<n>.<domain>` per preview. Both control and api routers point at one container and the
+UI calls the API with relative paths, so it is same-origin and needs no CORS.
+
 ### Known limitations
 
-- **Bun-only** (`Bun.serve`/`file`/`YAML`/`spawn`). Not a Node package; bundling would not change that.
+- **Bun-only** (`Bun.serve`/`file`/`YAML`/`spawn`). Not a Node package.
+- `PSTACK_IMAGE` defaults to `pstack:local`, which does not exist on a fresh host — build it from the
+  repo (`docker build -t pstack:local .`) or point it at a registry you can pull.
 - **Not multi-tenant, not a sandbox.** Hooks are shell strings at CI trust level.
 - **No memory isolation** — set `mem_limit` per service yourself; one greedy heap can OOM every
   stack on a shared host.

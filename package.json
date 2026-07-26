@@ -12,35 +12,31 @@
   },
   "type": "module",
   "bin": {
-    "pstack": "./src/cli.ts"
+    "pstack": "./dist/cli.js"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./config": "./src/spec.ts"
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
   },
   "workspaces": [
     "."
   ],
   "files": [
-    "src",
-    "ui",
-    "templates",
-    "examples",
-    "skills",
-    "docs",
+    "dist",
     "README.md",
-    "AGENTS.md",
-    "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "check:package": "bun scripts/check-package.ts",
-    "check": "bun test && tsc --noEmit && bun scripts/check-package.ts",
+    "check": "bun test && tsc --noEmit && bun scripts/build.ts && bun scripts/check-package.ts",
     "release:plan": "publish-kit plan",
     "release:dry": "publish-kit publish --dry-run",
-    "release:publish": "publish-kit publish"
+    "release:publish": "publish-kit publish",
+    "build": "bun scripts/build.ts",
+    "prepublishOnly": "bun scripts/build.ts"
   },
   "keywords": [
     "preview-environments",

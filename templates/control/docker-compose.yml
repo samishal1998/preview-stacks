@@ -79,13 +79,10 @@ services:
       # sequencing problem. DNS-01 needs nothing running.
       - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.le.acme.dnschallenge=true
-      - --certificatesresolvers.le.acme.dnschallenge.provider=${DNS_PROVIDER}
+      # `pstack init` replaces this marker with the challenge args for the chosen mode. HTTP-01 is
+      # the default (no DNS credential to obtain, store or rotate); DNS-01 is `--challenge dns01`.
+      #__ACME_CHALLENGE__
       # Ask a public resolver during the precheck instead of the host's, which may serve stale or
-      # split-horizon answers and stall the challenge until it times out.
-      - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53
-      # Wait for the zone to converge before telling the CA to look. Raise it (120s) on a slow zone.
-      - --certificatesresolvers.le.acme.dnschallenge.propagation.delaybeforechecks=30s
       - --log.level=INFO
       - --accesslog=true
 
@@ -126,21 +123,25 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=preview-ingress
-      - traefik.http.routers.pstack.rule=Host(`pstack.${DOMAIN}`)
-      - traefik.http.routers.pstack.entrypoints=websecure
+      # TWO hostnames, ONE container — the API process also serves the UI.
+      #
+      #   control.<domain>   the web UI (an operator's browser)
+      #   api.<domain>       the API (CI, curl, scripts)
+      #
+      # Both routers point at the same service, and the UI calls the API with RELATIVE paths
+      # (`/api/…`). That is deliberate: the UI loaded from control.<domain> then talks to
+      # control.<domain>/api/… — same origin, so no CORS preflight, no cross-origin cookie rules,
+      # and nothing to reconfigure if the hostnames change. `api.<domain>` exists so external
+      # callers have a stable, honest name that is not "the UI host".
+      - traefik.http.routers.pstack-ui.rule=Host(`control.${DOMAIN}`)
+      - traefik.http.routers.pstack-ui.entrypoints=websecure
+      - traefik.http.routers.pstack-ui.service=pstack
+      - traefik.http.routers.pstack-api.rule=Host(`api.${DOMAIN}`)
+      - traefik.http.routers.pstack-api.entrypoints=websecure
+      - traefik.http.routers.pstack-api.service=pstack
+      #__ACME_ROUTER_TLS__
+
       - traefik.http.services.pstack.loadbalancer.server.port=7878
-      # ── THE ONE ROUTER THAT REQUESTS THE WILDCARD ────────────────────────────────────────────
-      # `certresolver` on a router makes Traefik request a certificate for THAT router's domains.
-      # Exactly one always-on router asks for the wildcard here; every other router on this host —
-      # every per-PR service — sets `tls=true` and NOTHING else, inheriting this certificate by
-      # SNI. Add `certresolver` to a per-PR router and each PR triggers its own issuance, which is
-      # how you meet Let's Encrypt's rate limits and end up with no TLS for a week.
-      - traefik.http.routers.pstack.tls=true
-      - traefik.http.routers.pstack.tls.certresolver=le
-      - traefik.http.routers.pstack.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.pstack.tls.domains[0].sans=*.${DOMAIN}
-      # Note the wildcard matches ONE label: `backend-pr-123.${DOMAIN}` is covered,
-      # `backend.pr-123.${DOMAIN}` is not. Flatten per-PR hostnames with dashes.
 
 volumes:
   letsencrypt:

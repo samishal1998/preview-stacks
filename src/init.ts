@@ -29,6 +29,9 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { shq } from './compose.ts';
 import type { Runner } from './exec.ts';
+// Embedded at BUILD time, not read from disk at runtime: the published package is a single bundled
+// file, so `new URL('../templates/…', import.meta.url)` would point at a path that does not ship.
+import CONTROL_TEMPLATE from '../templates/control/docker-compose.yml' with { type: 'text' };
 
 /** Compose project name of the control stack. Fixed: there is exactly one per host. */
 const CONTROL_PROJECT = 'pstack-control';
@@ -81,8 +84,23 @@ export type InitOptions = {
   domain: string;
   /** ACME registration address. Let's Encrypt mails expiry warnings here. */
   acmeEmail: string;
-  /** lego DNS-01 provider code, e.g. `cloudflare` (see `docs/bootstrap.md` §8). */
-  dnsProvider: string;
+  /**
+   * How Let's Encrypt verifies the domain.
+   *
+   *   'http01'  DEFAULT. Zero credentials — Traefik answers a challenge on port 80. Works the
+   *             moment DNS points at the box. CANNOT issue wildcards, so every hostname gets its
+   *             own certificate, and Let's Encrypt allows only ~50 new certificates per registered
+   *             domain per week. At 3 surfaces per PR that is ~16 PRs/week. It also cannot cover a
+   *             hostname before its container exists, so a not-yet-deployed preview URL has no cert.
+   *   'dns01'   One wildcard covers every present and future `*.<domain>` host: no per-PR issuance,
+   *             no rate-limit ceiling, and a URL is valid before the stack is deployed. Costs a DNS
+   *             API credential to obtain, store and rotate.
+   *
+   * Start on http01; move to dns01 when PR volume or pre-deploy URLs demand it.
+   */
+  challenge: 'http01' | 'dns01';
+  /** lego DNS-01 provider code, e.g. `cloudflare`. Required for, and only used by, `dns01`. */
+  dnsProvider?: string;
   /**
    * The DNS-01 API token, and ONLY that — it is written to `dns.env` for Traefik and never
    * reused as the API's bearer token. Two different secrets, two different blast radii: this one
@@ -104,7 +122,7 @@ function randomToken(): string {
 }
 
 export async function init(opts: InitOptions): Promise<void> {
-  const { dataDir, domain, acmeEmail, dnsProvider, dryRun, runner } = opts;
+  const { dataDir, domain, acmeEmail, dnsProvider, challenge, dryRun, runner } = opts;
   const image = defaultImage();
   const controlDir = join(dataDir, 'control');
   const composePath = join(controlDir, 'docker-compose.yml');
@@ -160,22 +178,28 @@ export async function init(opts: InitOptions): Promise<void> {
   }
 
   // ── 3. Configuration ────────────────────────────────────────────────────────────────────────
-  // The compose template is copied BYTE FOR BYTE. Its `${...}` placeholders are *Compose's* own
-  // interpolation, resolved from `.env` at `up` time — substituting them here would both defeat
-  // that and make pstack a second caller of interpolation (invariant 6: exactly one, in spec.ts).
-  const template = await Bun.file(new URL('../templates/control/docker-compose.yml', import.meta.url)).text();
+  // The template's `${...}` placeholders are *Compose's* own interpolation, resolved from `.env` at
+  // `up` time — never substituted here (invariant 6: exactly one interpolator, in spec.ts).
+  //
+  // The two `#__MARKER__` lines are different: Compose cannot conditionally include CLI arguments,
+  // and the ACME challenge changes both Traefik's flags and the router's TLS labels. So init
+  // renders those two blocks and leaves everything else byte-for-byte.
+  const template = CONTROL_TEMPLATE
+    .replace('      #__ACME_CHALLENGE__', acmeChallengeArgs(challenge, dnsProvider))
+    .replace('      #__ACME_ROUTER_TLS__', acmeRouterLabels(challenge));
   await write(composePath, template, 0o644, dryRun);
 
   await write(
     join(controlDir, '.env'),
-    envFile({ dataDir, domain, acmeEmail, dnsProvider, image, pstackToken }),
+    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken }),
     // 0600: this file holds PSTACK_TOKEN, and that token drives an API with a read-write Docker
     // socket — i.e. root on this host. Anyone who can read it owns the box.
     0o600,
     dryRun,
   );
 
-  await write(join(controlDir, 'dns.env'), dnsEnvFile(dnsProvider, opts.token), 0o600, dryRun);
+  // Only meaningful for dns01; written either way so switching modes needs no extra step.
+  await write(join(controlDir, 'dns.env'), dnsEnvFile(dnsProvider ?? '', opts.token), 0o600, dryRun);
 
   // ── 4. Bring it up ──────────────────────────────────────────────────────────────────────────
   const upCmd = `docker compose -p ${CONTROL_PROJECT} -f ${shq(composePath)} up -d --remove-orphans`;
@@ -292,6 +316,67 @@ function envFile(v: {
  * variable — and every provider names its token differently. `env_file:` is the native answer:
  * arbitrary keys, one file, no interpolation of the key itself.
  */
+/**
+ * Traefik's ACME challenge flags for the chosen mode, at the template's indentation.
+ *
+ * HTTP-01 needs no credential: Traefik answers on the `web` entrypoint over port 80. The
+ * web→websecure redirect does NOT break it — Traefik installs an internal ACME router at maximum
+ * priority that bypasses the redirect for `/.well-known/acme-challenge/`. Port 80 must be reachable
+ * from the internet, which is the one hard requirement.
+ */
+function acmeChallengeArgs(challenge: 'http01' | 'dns01', provider: string | undefined): string {
+  if (challenge === 'http01') {
+    return [
+      '      - --certificatesresolvers.le.acme.httpchallenge=true',
+      '      # Must be the :80 entrypoint, and :80 must be reachable from the internet.',
+      '      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web',
+    ].join('\n');
+  }
+  return [
+    '      - --certificatesresolvers.le.acme.dnschallenge=true',
+    `      - --certificatesresolvers.le.acme.dnschallenge.provider=\${DNS_PROVIDER}`,
+    '      # Ask the authoritative resolvers directly so a stale local cache cannot fail the',
+    '      # propagation check.',
+    '      - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53',
+    '      - --certificatesresolvers.le.acme.dnschallenge.propagation.delaybeforechecks=30s',
+  ].join('\n') + (provider ? '' : '');
+}
+
+/**
+ * The TLS labels on the control router.
+ *
+ * dns01 requests ONE wildcard from a single always-on router; every other router (including every
+ * per-PR one) sets `tls=true` alone and inherits it by SNI. Adding `certresolver` to another router
+ * makes Traefik order a SEPARATE certificate for it — the rate-limit trap.
+ *
+ * http01 cannot do wildcards at all, so each router resolves its own certificate on first request.
+ */
+function acmeRouterLabels(challenge: 'http01' | 'dns01'): string {
+  if (challenge === 'http01') {
+    return [
+      '      # HTTP-01 cannot issue wildcards, so each hostname resolves its own certificate on its',
+      '      # first HTTPS request. Per-PR routers therefore need `tls.certresolver=le` too — unlike',
+      '      # the dns01 setup, where they must NOT have it.',
+      '      - traefik.http.routers.pstack-ui.tls=true',
+      '      - traefik.http.routers.pstack-ui.tls.certresolver=le',
+      '      - traefik.http.routers.pstack-api.tls=true',
+      '      - traefik.http.routers.pstack-api.tls.certresolver=le',
+    ].join('\n');
+  }
+  return [
+    '      # THE ONE ROUTER THAT REQUESTS THE WILDCARD. Every other router — including every per-PR',
+    '      # service — sets `tls=true` and NOTHING else, inheriting this certificate by SNI. Adding',
+    '      # `certresolver` to a per-PR router orders a separate certificate and burns the',
+    '      # ~50-per-week limit. The wildcard matches ONE label: `backend-pr-1.${DOMAIN}` is covered,',
+    '      # `backend.pr-1.${DOMAIN}` is not — flatten per-PR hostnames with dashes.',
+    '      - traefik.http.routers.pstack-ui.tls=true',
+    '      - traefik.http.routers.pstack-ui.tls.certresolver=le',
+    '      - traefik.http.routers.pstack-ui.tls.domains[0].main=${DOMAIN}',
+    '      - traefik.http.routers.pstack-ui.tls.domains[0].sans=*.${DOMAIN}',
+    '      - traefik.http.routers.pstack-api.tls=true',
+  ].join('\n');
+}
+
 function dnsEnvFile(provider: string, token: string | undefined): string {
   const head = [
     '# DNS-01 credential for Traefik (lego). Written by `pstack init`, mode 0600.',

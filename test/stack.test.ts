@@ -3,6 +3,7 @@ import { parseSpec, SpecError, interpolate, warnings } from '../src/spec.ts';
 import { captureOutputs, createRunner, type RunResult, type Runner } from '../src/exec.ts';
 import { down, up, verify } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
+import { init } from '../src/init.ts';
 import { shq } from '../src/compose.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
@@ -344,5 +345,75 @@ axes:
     const out = await up(parseSpec(yaml, {}), r, nullSink());
     expect(out.ok).toBe(true);
     expect(r.log).toEqual(['docker network inspect net', 'echo made-db']);
+  });
+});
+
+describe('init — ACME challenge rendering', () => {
+  // These assert the CONTROL STACK MANIFEST, which is the artifact a host actually runs. Rendering
+  // it wrong is invisible until Traefik is up and certificates silently never arrive.
+
+  /**
+   * A runner that reports success for everything, so preconditions pass without Docker — and
+   * answers the health probe with `healthy`, otherwise init's wait loop polls for 60s and the test
+   * times out rather than failing.
+   */
+  const okRunner = (): Runner => ({
+    dryRun: false,
+    async run(cmd: string) {
+      const stdout = cmd.includes('State.Health.Status') ? 'healthy\n' : '';
+      return { ok: true, code: 0, stdout, stderr: '', skipped: false };
+    },
+  });
+
+  const render = async (extra: Record<string, unknown>) => {
+    const dir = `${process.env.TMPDIR ?? '/tmp'}/pstack-init-${Math.abs(Date.now() % 1e9)}-${Object.keys(extra).length}`;
+    await init({
+      dataDir: dir,
+      domain: 'preview.example.com',
+      acmeEmail: 'ops@example.com',
+      challenge: 'http01',
+      dryRun: false,
+      runner: okRunner(),
+      ...(extra as { challenge?: 'http01' | 'dns01' }),
+    } as Parameters<typeof init>[0]);
+    return Bun.file(`${dir}/control/docker-compose.yml`).text();
+  };
+
+  test('http01 is the default and needs no DNS credential', async () => {
+    const yaml = await render({});
+    expect(yaml).toContain('acme.httpchallenge=true');
+    expect(yaml).toContain('acme.httpchallenge.entrypoint=web');
+    expect(yaml).not.toContain('acme.dnschallenge=true');
+    // HTTP-01 cannot issue a wildcard, so no router may ask for one.
+    expect(yaml).not.toContain('tls.domains[0].sans');
+    // …and each hostname must resolve its own cert, so routers DO carry certresolver.
+    expect(yaml).toContain('routers.pstack-ui.tls.certresolver=le');
+  });
+
+  test('dns01 renders the wildcard on exactly one router', async () => {
+    const yaml = await render({ challenge: 'dns01', dnsProvider: 'hetzner' });
+    expect(yaml).toContain('acme.dnschallenge=true');
+    expect(yaml).toContain('tls.domains[0].sans=*.${DOMAIN}');
+    expect(yaml).not.toContain('acme.httpchallenge=true');
+    // Exactly one router requests it; a second would order a separate cert and burn the
+    // ~50-certs-per-registered-domain-per-week limit.
+    expect(yaml.match(/tls\.domains\[0\]\.main/g)?.length).toBe(1);
+  });
+
+  test('both modes route control.<domain> and api.<domain> at one service', async () => {
+    for (const opts of [{}, { challenge: 'dns01' as const, dnsProvider: 'hetzner' }]) {
+      const yaml = await render(opts);
+      expect(yaml).toContain('routers.pstack-ui.rule=Host(`control.${DOMAIN}`)');
+      expect(yaml).toContain('routers.pstack-api.rule=Host(`api.${DOMAIN}`)');
+      // One service behind both, so the UI's relative /api/… calls stay same-origin (no CORS).
+      expect(yaml).toContain('routers.pstack-ui.service=pstack');
+      expect(yaml).toContain('routers.pstack-api.service=pstack');
+    }
+  });
+
+  test('no unrendered markers survive', async () => {
+    const yaml = await render({});
+    expect(yaml).not.toContain('__ACME_CHALLENGE__');
+    expect(yaml).not.toContain('__ACME_ROUTER_TLS__');
   });
 });

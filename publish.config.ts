@@ -13,10 +13,17 @@
  * from `package.json#workspaces` and then filters by `packages.include`, so the root package must
  * appear in BOTH — that is the only reason `workspaces: ["."]` exists in package.json.
  *
- * No build step, deliberately. pstack calls `Bun.serve`, `Bun.file`, `Bun.YAML` and `Bun.spawn`,
- * so it is Bun-native at runtime; bundling to JavaScript could not make it run on Node, it would
- * only add a build to maintain. The package ships TypeScript sources, declares `engines.bun`, and
- * its `bin` is executed by Bun via the shebang.
+ * The package ships a BUNDLE, never the source tree. `pstack` installs globally, so shipping `src/`
+ * would make every user pay TypeScript parsing per invocation, download docs/examples/skills they
+ * did not ask for, and turn the internals into the public surface. `scripts/build.ts` emits
+ * `dist/cli.js` + `dist/index.js` (~74 KB, `--target=bun`, minified, sourcemapped) with the UI and
+ * the control-stack template inlined as text imports, so nothing resolves relative to source at
+ * runtime.
+ *
+ * Not `--compile`: a standalone executable bakes in the Bun runtime (~60 MB) per platform, which for
+ * npm means a 5-platform optionalDependencies matrix or a postinstall download. Bun is already a
+ * requirement (`engines.bun`) and there is no Node fallback to preserve — Bun.serve/YAML/spawn/file
+ * have no Node equivalent.
  */
 export default {
   packageManager: 'bun',
@@ -42,8 +49,9 @@ export default {
     dropFields: ['publishConfig', 'workspaces'],
   },
 
-  /** Bun-native TypeScript ships as-is. */
-  build: { skip: true },
+  // `bun scripts/build.ts`, also wired as `prepublishOnly` so a stale or missing bundle cannot be
+  // published even if a release is cut by hand.
+  build: { command: 'bun scripts/build.ts' },
 
   /** Re-check the registry after publishing rather than trusting the CLI's exit code. */
   verify: { enabled: true },

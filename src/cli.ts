@@ -39,6 +39,7 @@ type Parsed = {
   domain: string;
   acmeEmail: string;
   dnsProvider: string;
+  challenge: 'http01' | 'dns01';
 };
 
 function parseArgs(argv: string[]): Parsed {
@@ -53,6 +54,9 @@ function parseArgs(argv: string[]): Parsed {
     domain: process.env.PSTACK_DOMAIN ?? '',
     acmeEmail: process.env.PSTACK_ACME_EMAIL ?? '',
     dnsProvider: process.env.PSTACK_DNS_PROVIDER ?? '',
+    // HTTP-01 by default: it needs no DNS credential, so `init` works with nothing but a domain
+    // pointed at the box. See the ceiling documented on InitOptions.challenge before scaling PRs.
+    challenge: (process.env.PSTACK_CHALLENGE as 'http01' | 'dns01') || 'http01',
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -66,6 +70,11 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--domain') p.domain = argv[++i] ?? p.domain;
     else if (a === '--acme-email') p.acmeEmail = argv[++i] ?? p.acmeEmail;
     else if (a === '--dns-provider') p.dnsProvider = argv[++i] ?? p.dnsProvider;
+    else if (a === '--challenge') {
+      const c = argv[++i] ?? '';
+      if (c !== 'http01' && c !== 'dns01') fail(`--challenge must be http01 or dns01, got "${c}"`);
+      p.challenge = c;
+    }
     else if (a === '--set') {
       const kv = argv[++i] ?? '';
       const eq = kv.indexOf('=');
@@ -99,7 +108,8 @@ function usage(): void {
       '',
       '',
       'init flags: --domain <preview.example.com>  --acme-email <you@example.com>',
-      '            --dns-provider <lego-code>      (DNS-01 token via PSTACK_DNS_TOKEN)',
+      '            --challenge http01|dns01        (default http01 — no DNS credential needed)',
+      '            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)',
       '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
       '            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)',
@@ -194,12 +204,16 @@ switch (args.cmd) {
     const { dataDir } = await import('./registry.ts');
     if (!args.domain) fail('init needs --domain (or PSTACK_DOMAIN), e.g. preview.example.com');
     if (!args.acmeEmail) fail('init needs --acme-email (or PSTACK_ACME_EMAIL)');
-    if (!args.dnsProvider) fail('init needs --dns-provider (or PSTACK_DNS_PROVIDER), e.g. cloudflare');
+    // Only dns01 needs a provider; http01 answers on port 80 with no credential at all.
+    if (args.challenge === 'dns01' && !args.dnsProvider) {
+      fail('--challenge dns01 needs --dns-provider (or PSTACK_DNS_PROVIDER), e.g. cloudflare');
+    }
     await init({
       dataDir: dataDir(),
       domain: args.domain,
       acmeEmail: args.acmeEmail,
-      dnsProvider: args.dnsProvider,
+      dnsProvider: args.dnsProvider || undefined,
+      challenge: args.challenge,
       token: process.env.PSTACK_DNS_TOKEN,
       dryRun: args.dryRun,
       runner,
@@ -225,8 +239,7 @@ switch (args.cmd) {
       process.exit(EXIT.usage);
     }
 
-    const uiDir = new URL('../ui', import.meta.url).pathname;
-    createServer({ dataDir: dataDir(), port, host, token, uiDir });
+    createServer({ dataDir: dataDir(), port, host, token });
     console.log(`pstack api  http://${host}:${port}`);
     console.log(`  registry: ${dataDir()}/deployments`);
     console.log(

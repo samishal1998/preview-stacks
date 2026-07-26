@@ -46,6 +46,11 @@ jobs:
           GIT_SHA: ci
         run: bun src/cli.ts -f examples/preview.yml validate
 
+      # The published artifact is a BUNDLE, so build it here: a broken bundle (a bad text import, a
+      # dropped asset) is invisible to `bun test`, which runs the sources.
+      - name: Build the publishable bundle
+        run: bun scripts/build.ts
+
       # Catch a broken `files`/`exports`/`bin` map before a release does — the failure mode is a
       # published package whose documented entry points throw "Cannot find module".
       #

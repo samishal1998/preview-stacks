@@ -46,6 +46,15 @@
  */
 
 import pkg from '../package.json';
+// Embedded at BUILD time. The published package is a single bundled file, so reading `ui/` from a
+// path relative to the source would point at something that does not ship. It is one small file —
+// inlining it also removes a whole class of "works from the repo, 404s once installed" bug.
+import UI_HTML_ASSET from '../ui/index.html' with { type: 'text' };
+
+// `@types/bun` types every `.html` import as HTMLBundle (for Bun.serve's route bundling), even with
+// `type: 'text'`, but the text loader really does hand back a string — verified by bundling and
+// running with the source file deleted. Cast once, here, rather than at the use site.
+const UI_HTML = UI_HTML_ASSET as unknown as string;
 import { shq } from './compose.ts';
 import { createRunner } from './exec.ts';
 import { JobRegistry } from './jobs.ts';
@@ -59,7 +68,6 @@ export type ServerOptions = {
   port: number;
   host: string;
   token?: string;
-  uiDir: string;
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -171,15 +179,14 @@ export function createServer(opts: ServerOptions) {
       const url = new URL(req.url);
       const path = url.pathname;
 
-      // ---- static UI ----------------------------------------------------------------
+      // ---- the UI ---------------------------------------------------------------------
+      // A single embedded document, so there is no filesystem lookup and therefore no path
+      // traversal to contain. Every non-/api path serves it: the UI is a one-page app, and a
+      // deep link like /deployments/foo should render rather than 404.
       if (!path.startsWith('/api/')) {
-        const rel = path === '/' ? 'index.html' : path.replace(/^\/+/, '');
-        // Contain traversal: resolve and require the result to stay under uiDir.
-        const full = `${opts.uiDir}/${rel}`;
-        if (!full.startsWith(opts.uiDir) || rel.includes('..')) return new Response('no', { status: 400 });
-        const file = Bun.file(full);
-        if (await file.exists()) return new Response(file);
-        return new Response('not found', { status: 404 });
+        return new Response(UI_HTML, {
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+        });
       }
 
       if (path === '/api/health') {
