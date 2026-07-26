@@ -33,7 +33,7 @@ Two rules that follow, and both are enforced in code:
 1. **Never point a spec at the control stack.** The API cannot run `up` on the deployment containing
    the API — the process doing the work is inside the container being replaced, so it is killed
    mid-operation, and a bad image leaves no control plane and no remote way back. Upgrading it is a
-   host-side job: `pstack init` (implemented in `src/init.ts`; **`cli.ts` does not dispatch it
+   host-side job: `pstack init` (implemented and dispatched; **the API must never manage its own stack
    yet**, so today it is `docker compose -p pstack-control … up -d` from a shell on the host) and
    `pstack self-upgrade` (not built — it is `init` re-run after a fetch). Nothing in the code
    enforces this: the API cannot reliably know its own deployment id, so it is on you.

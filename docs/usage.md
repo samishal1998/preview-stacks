@@ -841,8 +841,7 @@ them, and preconditions between them.
 
 ### The layer you must not automate: `pstack init`
 
-> **Implemented in `src/init.ts` (+ `templates/control/`); `src/cli.ts` does not dispatch an `init`
-> command yet.** Until it does, the host brings its control stack up with `docker compose … up -d` —
+> **Implemented and reachable as `pstack init`.** > command yet.** Until it does, the host brings its control stack up with `docker compose … up -d` —
 > see [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file).
 
 `pstack init` creates the **control stack** — Traefik plus the `pstack` API/UI container, in compose

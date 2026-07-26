@@ -40,9 +40,10 @@ no remote way to fix it. `pstack init` / `pstack self-upgrade` handle that from 
 Full rationale, the registry contract, and the trust boundary:
 **[docs/control-plane.md](docs/control-plane.md)**.
 
-> Status: `kind`, `requires`, the `shared` `down` guard and the deployment registry are wired, and
-> the API is registry-backed (`/api/deployments/*`). `pstack init` is implemented in `src/init.ts`
-> but `src/cli.ts` does not dispatch it yet — `docs/control-plane.md` tracks what is reachable.
+> Status: `kind`, `requires`, the `shared` `down` guard, the deployment registry, the
+> registry-backed API (`/api/deployments/*`) and `pstack init` are all wired and reachable from the
+> CLI. Everything has been exercised against `--dry-run` and the API end-to-end; **none of it has
+> been run against a real Docker host yet** — `docs/control-plane.md` tracks the model.
 
 ## Why this exists
 

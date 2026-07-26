@@ -24,7 +24,7 @@ marks anything not yet reachable. The short version:
 | `requires:` preflight | `src/spec.ts`, `src/stack.ts` | **built** — asserted before anything is created |
 | The deployment registry | `src/registry.ts` | **built** |
 | `/api/deployments/*` routes | `src/api.ts` | **built** — the API is registry-backed; the old single-spec `/api/spec` and `/api/stacks` routes are gone |
-| `pstack init` | `src/init.ts` + `templates/control/` | **implemented**; *`src/cli.ts` does not dispatch an `init` command yet* |
+| `pstack init` | `src/init.ts` + `templates/control/` | **implemented and dispatched** — `pstack init --domain … --acme-email … --dns-provider …` |
 | `pstack self-upgrade` | — | *not built* — it is `init` re-run after a fetch (§7) |
 
 `src/api.ts`'s file header is the authoritative route list. Where this document and that header
@@ -358,7 +358,7 @@ const stack = await reg.resolve('pr-123', { PR: '123' });
 
 ### `pstack init`
 
-> **Implemented in `src/init.ts`; `src/cli.ts` does not dispatch an `init` command yet.** Until it
+> **Implemented and reachable as `pstack init`.** Until it
 > does, the host brings the control stack up with `docker compose … up -d` — see
 > [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file).
 

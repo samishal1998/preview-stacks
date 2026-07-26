@@ -188,7 +188,7 @@ secrets, and rotating a secret never means re-rendering the stack.
 > writes the control stack's compose file itself — the block marked **`init` will own this** below —
 > and brings it up with `docker compose up -d`. When it lands, delete that one block and swap the
 > final command; everything else in this file (the DNS token, the Traefik dynamic config,
-> `/etc/pstack.env`, the two external networks) is a **host input** `init` mounts rather than owns,
+> the two external networks) is a **host input** `init` mounts rather than owns,
 > and stays exactly as it is. Note `init` uses its own project name, `pstack-control`, and creates
 > the same two external networks — so on a host it has run, `docker network create … || true` below
 > is the no-op it is written to be.
@@ -230,167 +230,44 @@ packages:
   - openssl
 
 write_files:
-  # ── DNS-01 credential, mounted into Traefik as a file ──────────────────────────────────
-  # lego (which Traefik embeds) accepts a `_FILE` suffix on every provider variable, so the
-  # token never has to appear in an environment listing or in `docker inspect`.
-  - path: /etc/traefik/secrets/hetzner_dns_token
-    permissions: '0600'
-    owner: root:root
-    content: |
-      CHANGEME_HETZNER_DNS_API_TOKEN
+  # `pstack init` owns the control stack now, so this section only carries things init does NOT
+  # generate. It writes /var/lib/pstack/control/{docker-compose.yml,.env,dns.env} itself — do not
+  # hand-write those; a stale copy would be silently ignored (init renders its own) or fight it.
+  #
+  # What init does NOT do: dashboard credentials, and any Traefik dynamic config you want beyond
+  # the wildcard router. It creates an empty control/traefik-dynamic/ and mounts it read-only;
+  # anything you drop in there is picked up (watched, hot-reloaded).
 
-  # ── Traefik dynamic configuration (file provider) ──────────────────────────────────────
-  # This directory is WATCHED. Only real dynamic config may live here — see §5 for the
-  # htpasswd trap.
-  - path: /etc/traefik/dynamic/dashboard.yml
+  # ── Optional: a fallback router ─────────────────────────────────────────────────────────
+  # Serves a stable upstream for `<surface>-pr-<n>` hostnames whose stack is torn down (or not
+  # deployed yet), so a stale preview link degrades to something useful instead of a 404.
+  #
+  # NOTE it sets only `tls: {}` — no certResolver. Traefik's wildcard is requested by exactly ONE
+  # always-on router (the pstack UI's own, in init's template) and everything else inherits it by
+  # SNI. Adding certResolver here would trigger a SECOND issuance and burn Let's Encrypt rate
+  # limits. See §5.
+  - path: /var/lib/pstack/control/traefik-dynamic/fallback.yml
     permissions: '0644'
     owner: root:root
     content: |
-      # The ONE router that requests the wildcard certificate.
-      #
-      # Specifying `certResolver` inside an individual router's TLS block makes Traefik request a
-      # certificate for THAT router's domain. If every per-PR router did this, each PR would
-      # trigger its own issuance and you would hit Let's Encrypt rate limits. Instead: exactly
-      # one always-on router asks for the wildcard (below), and every other router sets only
-      # `tls: true` and inherits it by SNI.
-      #
-      # This router doubles as the dashboard because it is always on — one router, one cert
-      # request, nothing extra to keep alive.
       http:
         routers:
-          dashboard:
-            rule: "Host(`traefik.preview.example.com`)"
+          preview-fallback:
+            # Anchored Go regexp with escaped dots — Traefik v3 dropped v2's `{name:...}` syntax.
+            rule: "HostRegexp(`^[a-z]+-pr-[0-9]+\\.preview\\.example\\.com$`)"
+            # Priority 1 loses to every per-PR router (which are exact Host() matches at 100),
+            # so it only answers when that PR's stack is not running.
+            priority: 1
             entryPoints: [websecure]
-            service: api@internal
-            middlewares: [dashboard-auth]
-            tls:
-              certResolver: letsencrypt
-              domains:
-                - main: "preview.example.com"
-                  sans:
-                    - "*.preview.example.com"
-        middlewares:
-          dashboard-auth:
-            basicAuth:
-              # NOTE the path: /etc/traefik/auth, *not* /etc/traefik/dynamic.
-              usersFile: /etc/traefik/auth/dashboard.htpasswd
-
-  # ── The control stack ──  ⚠ `init` WILL OWN THIS BLOCK ─────────────────────────────────
-  # This is the one hand-written thing `pstack init` replaces: it renders exactly this and
-  # `compose up -d`s it. Until then, cloud-init writes it. Nothing else in write_files is
-  # affected — the token, the dynamic config and /etc/pstack.env are host inputs it mounts.
-  - path: /opt/preview/shared/docker-compose.yml
-    permissions: '0644'
-    owner: root:root
-    content: |
-      # `name:` pins the compose project name so volume names are deterministic
-      # (`shared_letsencrypt`) instead of being derived from the directory. Keep it stable —
-      # per-PR hooks reference container names derived from it (`shared-temporal-1`), and
-      # renaming it silently breaks every preview. (The project is still called `shared` for
-      # that reason, even though in control-plane terms this is the CONTROL stack.)
-      name: shared
-
-      services:
-        traefik:
-          # Pin ≥ v3.6.1: earlier 3.x releases fail to talk to Docker Engine 29's API and the
-          # docker provider comes up empty (every route 404s while Traefik itself looks healthy).
-          image: traefik:v3.6.1
-          restart: unless-stopped
-          mem_limit: 256m
-          ports:
-            - "80:80"
-            - "443:443"
-          networks: [preview-ingress]
-          environment:
-            HETZNER_API_TOKEN_FILE: /run/secrets/hetzner_dns_token
-            # Generous: a zone with slow propagation will otherwise fail the challenge.
-            HETZNER_PROPAGATION_TIMEOUT: "600"
-          volumes:
-            # Read-only, but still a privilege — see §9.
-            - /var/run/docker.sock:/var/run/docker.sock:ro
-            - letsencrypt:/letsencrypt
-            - /etc/traefik/dynamic:/etc/traefik/dynamic:ro
-            - /etc/traefik/auth:/etc/traefik/auth:ro
-            - /etc/traefik/secrets/hetzner_dns_token:/run/secrets/hetzner_dns_token:ro
-          command:
-            # providers
-            - --providers.docker=true
-            - --providers.docker.exposedbydefault=false
-            - --providers.docker.network=preview-ingress
-            - --providers.file.directory=/etc/traefik/dynamic
-            - --providers.file.watch=true
-            # entrypoints (all plaintext redirected to TLS)
-            - --entrypoints.web.address=:80
-            - --entrypoints.web.http.redirections.entrypoint.to=websecure
-            - --entrypoints.web.http.redirections.entrypoint.scheme=https
-            - --entrypoints.websecure.address=:443
-            # dashboard (exposed only through the basic-auth router above)
-            - --api.dashboard=true
-            # ACME over DNS-01
-            - --certificatesresolvers.letsencrypt.acme.email=you@example.com
-            - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-            - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
-            - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=hetzner
-            - --certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53
-            - --certificatesresolvers.letsencrypt.acme.dnschallenge.propagation.delaybeforechecks=30s
-            - --log.level=INFO
-            - --accesslog=true
-
-      volumes:
-        letsencrypt:
-
-      networks:
-        # Declared external here AND in every per-PR compose file. Created in runcmd.
-        preview-ingress:
-          external: true
-
-  # ── pstack environment ─────────────────────────────────────────────────────────────────
-  # Read by the systemd unit as EnvironmentFile. This is also how credentials reach axis
-  # hooks: pstack hands its own process environment to every `bash -c` it runs, so the DB /
-  # registry tokens your hooks shell out with belong in this same file.
-  - path: /etc/pstack.env
-    permissions: '0600'
-    owner: root:root
-    content: |
-      # --- pstack serve ---
-      PSTACK_TOKEN=CHANGEME_LONG_RANDOM_STRING
-      PSTACK_PORT=7878
-      PSTACK_HOST=127.0.0.1
-      PSTACK_VAR=PR
-
-      # --- consumed by the spec's env: block and by axis hooks ---
-      PREVIEW_DOMAIN=preview.example.com
-      # DB_API_TOKEN=…
-      # REGISTRY_TOKEN=…
-
-  # ── systemd unit for the API ───────────────────────────────────────────────────────────
-  - path: /etc/systemd/system/pstack.service
-    permissions: '0644'
-    owner: root:root
-    content: |
-      [Unit]
-      Description=pstack preview-stack API
-      Requires=docker.service
-      After=docker.service network-online.target
-
-      [Service]
-      Type=simple
-      User=preview
-      Group=docker
-      # REQUIRED, not cosmetic. pstack resolves `-f preview.yml` and every hook path
-      # (`./hooks/db-branch.sh`) relative to the process working directory — it never chdirs.
-      # This must be the checkout that holds preview.yml and hooks/.
-      WorkingDirectory=/opt/preview/config
-      EnvironmentFile=/etc/pstack.env
-      # Absolute path to bun: systemd's PATH does not include ~/.bun/bin.
-      ExecStart=/usr/local/bin/bun /opt/preview/pstack/src/cli.ts serve -f preview.yml
-      Restart=on-failure
-      RestartSec=5
-      StandardOutput=journal
-      StandardError=journal
-
-      [Install]
-      WantedBy=multi-user.target
+            service: fallback
+            tls: {}
+        services:
+          fallback:
+            loadBalancer:
+              servers:
+                - url: "https://api.dev.example.com"
+              # The upstream should see its own Host, not backend-pr-7.preview.example.com.
+              passHostHeader: false
 
 runcmd:
   # 1. Docker CE + the compose plugin, from the official apt repository.
@@ -431,17 +308,38 @@ runcmd:
   - git clone --depth 1 https://github.com/<you>/<your-project>.git /opt/preview/config
   - chown -R preview:preview /opt/preview
 
-  # 6. Bring the control stack up FROM THE HOST. This is the step `pstack init` becomes:
+  # 6. Stand up the control stack — FROM THE HOST, via `pstack init`.
   #
-  #        cd /opt/preview/config && /usr/local/bin/bun /opt/preview/pstack/src/cli.ts init
+  #    This is deliberately the host's job and never the API's: the API cannot recreate the stack
+  #    that contains it without killing the process doing the work, and a bad image would leave
+  #    the box with no control plane and no remote way in (control-plane.md §2).
   #
-  #    …and it is deliberately the host's job, not the API's: the API cannot recreate the stack
-  #    that contains it without killing the process doing the work (control-plane.md §2).
-  #    `init` is implemented but not yet dispatched from the CLI, so today it is this line plus
-  #    the systemd unit below.
-  - docker compose -f /opt/preview/shared/docker-compose.yml up -d
-  - systemctl daemon-reload
-  - systemctl enable --now pstack
+  #    `init` is idempotent — it renders /var/lib/pstack/control/docker-compose.yml, creates both
+  #    external networks, writes .env and dns.env at mode 0600, and `compose up -d`s the
+  #    `pstack-control` project. Re-running it after an image bump is the upgrade path.
+  #
+  #    PSTACK_TOKEN: supply your own to keep a known value; omit it and `init` generates one and
+  #    prints it (the API refuses to bind off-loopback without a token, and it holds a read-write
+  #    Docker socket). PSTACK_DNS_TOKEN is a SEPARATE secret — it only edits a DNS zone, whereas
+  #    PSTACK_TOKEN can start privileged containers. Never reuse one for both.
+  - >
+    PSTACK_DATA=/var/lib/pstack
+    PSTACK_TOKEN=CHANGEME_PSTACK_API_TOKEN
+    PSTACK_DNS_TOKEN=CHANGEME_HETZNER_DNS_API_TOKEN
+    /usr/local/bin/bun /opt/preview/pstack/src/cli.ts init
+    --domain preview.example.com
+    --acme-email ops@example.com
+    --dns-provider hetzner
+
+  # 7. Verify before you walk away. `init` exits non-zero if a precondition failed, but the
+  #    certificate is requested lazily on the first HTTPS request — so poke it.
+  - docker compose -p pstack-control ps
+  - curl -sf --max-time 10 http://127.0.0.1:7878/api/health || echo "API not answering — journalctl -u docker, docker logs pstack-control-pstack-1"
+
+  # NOTE: no systemd unit for `pstack serve`. The API runs as a CONTAINER in the control stack that
+  # `init` just created (restart: unless-stopped, so Docker restarts it on boot). A systemd unit
+  # would be a second, competing copy fighting over the same registry directory. Run `serve`
+  # under systemd only if you deliberately choose NOT to use `init`.
 ```
 
 ### Create the server
@@ -566,10 +464,10 @@ docker network ls --filter name=preview-
 # ── the shared stack is up ────────────────────────────────────────────────────────────
 docker compose ls --all
 #   NAME     STATUS       CONFIG FILES
-#   shared   running(1)   /opt/preview/shared/docker-compose.yml
+#   pstack-control   running(2)   /var/lib/pstack/control/docker-compose.yml
 
 # ── the certificate was issued: read the ACME conversation ────────────────────────────
-docker compose -f /opt/preview/shared/docker-compose.yml logs traefik | grep -iE 'acme|certificate|error'
+docker compose -p pstack-control logs traefik | grep -iE 'acme|certificate|error'
 #   want: "Trying to challenge using DNS-01" → "Served certificate"
 #   a "propagation" or "timeout" line here is §10
 
@@ -642,7 +540,7 @@ The safety interlock is enforced, not advisory: with no `PSTACK_TOKEN` and `PSTA
 anything but `127.0.0.1`, pstack **refuses to start** and exits `3`. An API that can delete
 production-adjacent databases does not get to be accidentally public.
 
-`/etc/pstack.env` does double duty. pstack passes its own process environment down to every hook
+`control/.env` does double duty. pstack passes its own process environment down to every hook
 (`bash -c`, with the spec's `env:` layered on top), so the DB / registry / cloud credentials your
 axes shell out with belong in the same `0600` root-owned file as `PSTACK_TOKEN`. One file to
 protect, one file to rotate.
@@ -860,7 +758,7 @@ Check in this order; each rules out the layer above.
 
 | Check | Command / expectation |
 |---|---|
-| Did the file provider load at all? | `docker compose -f /opt/preview/shared/docker-compose.yml logs traefik \| grep -i 'provider\|dynamic'` — a parse error here usually means something non-config in `/etc/traefik/dynamic` (the htpasswd trap, §5) |
+| Did the file provider load at all? | `docker compose -p pstack-control logs traefik \| grep -i 'provider\|dynamic'` — a parse error here usually means something non-config in `control/traefik-dynamic/` (the htpasswd trap, §5) |
 | Is any router requesting a cert? | Dashboard → HTTP → Routers; exactly one should show a resolver |
 | Is the token readable inside the container? | `docker compose … exec traefik wc -c /run/secrets/hetzner_dns_token` |
 | Did ACME even try? | `… logs traefik \| grep -i 'challenge\|acme'` — no challenge line at all ⇒ no router asked |
