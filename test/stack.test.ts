@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { parseSpec, SpecError, interpolate, warnings } from '../src/spec.ts';
 import { captureOutputs, createRunner, type RunResult, type Runner } from '../src/exec.ts';
 import { down, up, verify } from '../src/stack.ts';
+import { nullSink } from '../src/log.ts';
 import { shq } from '../src/compose.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
@@ -261,5 +262,87 @@ axes:
   test('flags `|| true` in an assert, which can never fail', () => {
     parse('stack: s\naxes:\n  - name: q\n    up: "true"\n    assert_gone: "probe || true"');
     expect(warnings.join('\n')).toMatch(/always pass/);
+  });
+});
+
+describe('deployment kinds', () => {
+  const parse = (yaml: string, env: Record<string, string> = { PR: '1' }) => parseSpec(yaml, env);
+
+  test('defaults to isolated', () => {
+    expect(parse('stack: s\naxes: []').kind).toBe('isolated');
+  });
+
+  test('rejects an unknown kind', () => {
+    expect(() => parse('kind: wat\nstack: s\naxes: []')).toThrow(/must be "shared" or "isolated"/);
+  });
+
+  test('a shared deployment cannot declare axes', () => {
+    // Axes isolate one tenant from another; a singleton has no such concern. Almost always a spec
+    // that meant `kind: isolated`.
+    expect(() =>
+      parse('kind: shared\nstack: s\naxes:\n  - name: db\n    up: "true"'),
+    ).toThrow(/cannot declare axes/);
+  });
+
+  test('warns when an isolated deployment has no axes', () => {
+    parse('kind: isolated\nstack: s\ncompose: {file: dc.yml, profiles: []}\naxes: []');
+    expect(warnings.join('\n')).toMatch(/nothing per-tenant/);
+  });
+
+  test('down REFUSES a shared deployment without force', async () => {
+    // The guard exists because `compose down -v` destroys volumes every tenant depends on:
+    // a TLS store, a shared database, admin credentials.
+    const s = parse('kind: shared\nstack: sharedsvc\ncompose: {file: dc.yml, profiles: []}');
+    const r = fakeRunner();
+    const out = await down(s, r, {}, nullSink());
+    expect(out.ok).toBe(false);
+    expect(out.steps[0]!.message).toMatch(/refused/);
+    expect(r.log).toEqual([]); // nothing ran at all
+  });
+
+  test('down proceeds on a shared deployment with force', async () => {
+    const s = parse('kind: shared\nstack: sharedsvc\ncompose: {file: dc.yml, profiles: []}');
+    const r = fakeRunner();
+    const out = await down(s, r, { force: true, verify: false }, nullSink());
+    expect(out.ok).toBe(true);
+    expect(r.log[0]).toContain('down -v');
+  });
+
+  test('isolated deployments are not guarded', async () => {
+    const s = parse('kind: isolated\nstack: pr-1\ncompose: {file: dc.yml, profiles: []}\naxes: []');
+    const r = fakeRunner();
+    await down(s, r, { verify: false }, nullSink());
+    expect(r.log[0]).toContain('down -v');
+  });
+});
+
+describe('requires — preflight', () => {
+  const yaml = `
+stack: pr-1
+requires:
+  - name: ingress network
+    assert: docker network inspect net
+    hint: run \`pstack init\` first
+axes:
+  - name: db
+    up: echo made-db
+`;
+
+  test('runs before any axis and blocks up when unmet', async () => {
+    // Without this, a missing shared dependency surfaces as whatever error an axis hook's CLI
+    // printed — which tells you nothing about the real cause.
+    const r = fakeRunner((c) => c.includes('network inspect'));
+    const out = await up(parseSpec(yaml, {}), r, nullSink());
+    expect(out.ok).toBe(false);
+    expect(out.steps[0]!.phase).toBe('requires');
+    expect(out.steps[0]!.message).toMatch(/unmet — run `pstack init` first/);
+    expect(r.log).toEqual(['docker network inspect net']); // the axis never ran
+  });
+
+  test('when met, axes proceed', async () => {
+    const r = fakeRunner();
+    const out = await up(parseSpec(yaml, {}), r, nullSink());
+    expect(out.ok).toBe(true);
+    expect(r.log).toEqual(['docker network inspect net', 'echo made-db']);
   });
 });

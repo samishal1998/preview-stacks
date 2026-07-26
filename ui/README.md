@@ -1,21 +1,25 @@
 # ui/
 
-The web UI `pstack serve` hosts. One file — [`index.html`](index.html) — Vue 3 from the CDN, no
+The web UI the control plane hosts. One file — [`index.html`](index.html) — Vue 3 from the CDN, no
 build step, no bundler, no other dependencies.
 
-```bash
-PSTACK_VAR=PR pstack serve -f preview.yml     # → http://127.0.0.1:7878
-```
+It drives the **deployment registry**: list what has been submitted to this host, open one, submit
+or replace a spec, run `up` / `verify` / `down`, and watch the job stream. Four screens, switched by
+a single `screen` value — no router.
 
-It does what the CLI does, with a live log: load a target, run `up` / `down` / `verify`, watch the
-job stream, read the step table. `down` sends `verify: true` unless you untick the box.
+| Screen | What it is for |
+|---|---|
+| **list** | every deployment: id, **kind**, state, updated. Row click → detail. |
+| **detail** | resolved stack name, compose, `requires`, axes + their hooks, and the three actions. |
+| **submit** | a textarea that `PUT`s a spec (+ optional compose) with an `env` key/value editor. |
+| **job** | live SSE log beside the detail screen, then the `outcome.steps` table. |
 
 ## Why there is no build step
 
-`pstack serve` is a single Bun process whose static branch serves this directory verbatim
-(`src/api.ts`). A bundler would add a toolchain, a `node_modules`, a watch mode and a CI step to
-produce one HTML file that a `<script src>` already produces — and it would put a build artifact
-between an operator and a hotfix. Editing `index.html` and reloading the tab is the whole loop.
+The API's static branch serves this directory verbatim. A bundler would add a toolchain, a
+`node_modules`, a watch mode and a CI step to produce one HTML file that a `<script src>` already
+produces — and it would put a build artifact between an operator and a hotfix. Editing
+`index.html` and reloading the tab is the whole loop.
 
 The tradeoffs are real and accepted: no components, no TypeScript, no tests, one global stylesheet,
 and the CDN must be reachable on first load (it is cached afterwards). At this size that is cheaper
@@ -23,54 +27,112 @@ than the toolchain.
 
 ## Routes it consumes
 
-Everything comes from `src/api.ts`. Nothing else is called.
-
 | Route | Used for |
 |---|---|
-| `GET /api/health` | the spec variable name (`varName`, default `PR`), spec path, and `authEnforced` |
-| `GET /api/spec?<var>=<value>` | resolved stack name, compose file + profiles, axes and the hooks each defines |
-| `GET /api/stacks` | compose projects on the host, with a `busy` flag per stack |
-| `GET /api/stacks/:id/status` | `compose ps` for the loaded target |
-| `POST /api/stacks/:id/up` | start an up job |
-| `POST /api/stacks/:id/down` | start a down job — body `{ "verify": true \| false }` |
-| `POST /api/stacks/:id/verify` | start a verify job |
-| `GET /api/jobs` | recent transcripts, so a reload can re-attach to a running job |
+| `GET /api/health` | `authEnforced` — the header says so when the server is loopback-only |
+| `GET /api/deployments` | the list. Polled every 5s while that screen is open |
+| `GET /api/deployments/:id` | detail: kind, resolved `stack`, `compose`, `requires`, `axes` |
+| `PUT /api/deployments/:id` | submit — body `{ spec, compose?, env? }` |
+| `POST /api/deployments/:id/{up,down,verify}` | start a job → `202 {job}` / `409` if busy. `down` body `{ verify, force }` |
+| `GET /api/jobs` | used only to find the running job behind a `409`, so you can attach to it |
 | `GET /api/jobs/:jobId` | the finished job, for `outcome.steps` |
 | `GET /api/jobs/:jobId/stream` | SSE live log; a final `{done:true,state}` frame ends it |
 
 Details worth knowing before you edit:
 
-- **`:id` is the variable value, not the stack name.** You POST to `/api/stacks/123/up`, not
-  `/api/stacks/pr-123/up`; the server owns the spec and resolves `pr-${PR}` itself. That is why the
-  stack list is informational — a project name cannot be turned back into a target.
-- **The query key on `/api/spec` is the lowercased `varName`** (`?pr=123`), per api.ts.
+- **`:id` is the deployment id**, the registry's directory name — not the resolved stack name. The
+  server owns the spec and resolves `pr-${PR}` itself.
 - **`202` means accepted, not done.** The response carries `{ job: { id, … } }`; the work happens in
   the background and the log arrives over SSE.
-- **`409` means a job is already in flight for that stack.** The server keeps one lock per stack so
-  an `up` and a `down` cannot race over the same database branch. The UI shows it and offers to
-  attach to the running job — it never retries.
-- **Only POST/DELETE are authenticated.** The token goes out as `Authorization: Bearer <token>` on
-  POSTs and is kept in `localStorage`. GETs are open, which is also why the log can use
-  `EventSource` — it cannot send headers. When `authEnforced` is `false` the server is bound to
-  127.0.0.1 and the header says so.
-- **Jobs are in-memory and capped at 50.** A server restart loses the history, not correctness —
-  truth about what exists lives in Docker and in each axis's `assert_*` probe.
+- **`409` means a job is already in flight for that stack.** One lock per stack, so an `up` and a
+  `down` cannot race over the same database branch. The UI shows it and offers to attach to the
+  running job — it never retries. Jobs are keyed by the *resolved stack*, but a `409` body may name
+  either the stack or the deployment id, so the attach lookup tries every name it holds
+  (`body.stack`, `body.id`, the id, `detail.stack`). Attaching is the whole remedy on that screen;
+  matching loosely beats offering no link.
+- **Auth goes on every non-GET request** (`Authorization: Bearer`, kept in `localStorage`) — `PUT`
+  destroys as thoroughly as `POST`. GETs are open, which is also why the log can use `EventSource`:
+  it cannot send headers.
+- **Every failure names the call it came from.** A bare `404` is ambiguous — "no such deployment" or
+  "this API predates this UI" — so the message says both rather than the page crashing on a missing
+  field.
+- **Response shapes are read defensively.** `GET /api/deployments` accepts an envelope or a bare
+  array; detail is read from either a flat body or `{deployment, spec}`; an axis may arrive
+  pre-summarised (`hooks: [...]`) or raw, in which case the hook list is derived from the four hook
+  keys. Add a field, don't rename one, and the UI keeps working.
+
+## `busy` is server-provided — the UI never guesses it
+
+On the **list**, `busy` is rendered only if the server sends it; otherwise the cell shows `—`.
+That is deliberate. The registry stores just `{id, kind, createdAt, updatedAt}`, and the job lock is
+keyed by the **resolved stack name** (`pr-123`), which an id alone cannot produce. Joining
+`GET /api/jobs` to rows by id would silently mislabel every deployment whose id ≠ stack. On the
+**detail** screen the resolved stack *is* known, so `job.stack === detail.stack` is a sound
+correlation and is used for the badge.
+
+Never render "idle" as a guess. Unknown is a state; say so.
+
+## The kind badge, and the shared-`down` blast radius
+
+`kind` is the most consequential thing on the list, so `shared` gets a *filled* amber badge while
+`isolated` is a quiet blue outline — different at a glance, not just different in wording.
+
+`down` runs `docker compose down -v`, and `-v` removes **volumes**. On a `kind: shared` deployment
+that destroys state every tenant depends on — TLS certificates, the shared database or queue, admin
+credentials — using the identical verb that is routine for a preview. So the detail screen:
+
+1. explains the blast radius in a banner before the button is usable,
+2. keeps `down` **disabled** until a confirmation checkbox is ticked,
+3. sends `force: true` only for a shared deployment that was explicitly confirmed, and
+4. re-arms the checkbox after every job, so the next teardown is a fresh decision.
+
+This is **defence in depth, not the guard.** The server refuses a shared `down` without `force`
+(`src/stack.ts`) and returns the refusal as a failed step whose message explains why — that text is
+the second teaching surface after `SpecError`, and the step table renders it in full.
 
 ## The four step states
 
-The step table deliberately distinguishes states the CLI's `report()` also separates. Do not collapse
-them:
+The step table distinguishes states the CLI's `report()` also separates. Do not collapse them:
 
 | State | Means | Colour |
 |---|---|---|
 | `ok` ✓ | the step passed. A `down` step may still show a `non-fatal:` message — teardown is best-effort by design, so it really did pass | green |
-| `failed` ✗ | a non-zero step other than `assert_gone` | red |
+| `failed` ✗ | a non-zero step other than `assert_gone` — including a refused shared `down` | red |
 | `leaked` ! | `assert_gone` failed: the resource **survived teardown** | amber, named in a banner |
 | `unverifiable` ? | no `assert_gone` defined for that axis — **not** a pass | neutral grey |
 
 `leaked` is the whole reason this tool exists (it maps to CLI exit code `2`, distinct from `1`), so
 it gets its own colour and its own banner listing the surviving axes. An `ok` job that contains
-unverifiable axes says so rather than implying proof.
+unverifiable axes says so rather than implying proof. The `unverifiable` test is
+`message.startsWith('unverifiable')`, matching `report()` — not `skipped` alone, which is also true
+of a dry run.
+
+The column is headed **axis / requirement** because `requires` steps put a *requirement* name there,
+not an axis.
+
+## Errors are the documentation
+
+A `SpecError` from `PUT` is rendered verbatim in a `<pre>`, newlines and indentation intact. It is
+the tool's main teaching surface — it names the key, the variable, or the assert that is wrong, and
+often prints the corrected form:
+
+```
+spec rejected: axis "queue": `assert_gone` is a bare `! <probe>` with no reachability guard — it
+will report "gone" if the probe itself fails. Fail closed instead:
+      <probe-is-usable> || exit 1
+      ! <probe-for-this-resource>
+```
+
+Never truncate it, never collapse it to one line, never replace it with "invalid spec".
+
+## Not built here
+
+- **Forget / `DELETE`.** The registry can forget a deployment, but the UI does not offer it:
+  forgetting while containers still run orphans them beyond the control plane's view, which is the
+  exact leak this project exists to prevent. Use the CLI once the semantics ("must be down first")
+  are settled.
+- **Recent-jobs list.** `GET /api/jobs` is called only to resolve a `409` into an attachable id.
+- **Hash routing**, deep links, and per-deployment dashboards.
 
 ## Swapping in a Vite + Vue SPA later
 
@@ -85,16 +147,13 @@ npm create vite@latest ui-src -- --template vue-ts
 npm --prefix ui-src run build     # writes ui/index.html + ui/assets/*
 ```
 
-Then: keep `ui/` build output out of git (`.gitignore`) and build it in CI before packaging, or keep
-committing it so `pstack serve` works from a fresh clone. The static branch resolves any path under
-`uiDir`, so hashed `assets/*.js` filenames work as-is.
-
 Worth porting first, because they are the parts that carry meaning rather than markup:
 
 1. the four step states above, and the leaked banner,
-2. `202` / `409` handling — accept-then-stream, and never retry a conflict,
-3. re-attaching to a running job from `GET /api/jobs` after a reload,
-4. autoscroll that stops when the operator scrolls up.
+2. the shared-`down` confirmation gate and its blast-radius copy,
+3. `202` / `409` handling — accept-then-stream, and never retry a conflict,
+4. `SpecError` rendered whole,
+5. `busy` from the server only, `—` when unknown,
+6. autoscroll that stops when the operator scrolls up.
 
-Do the swap when this file stops fitting on a screen or two — a client-side router, multiple views,
-or per-stack dashboards are the honest triggers. Not before.
+Do the swap when this file stops fitting on a screen or two. Not before.

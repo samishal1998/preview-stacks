@@ -5,15 +5,22 @@ Cloud + cloud-init**; every step names what it does so the AWS / GCP / bare-meta
 mechanical (see [Adapting to other providers](#8-adapting-to-other-providers)).
 
 Read [`../README.md`](../README.md) first — this document assumes you know what an axis is and why
-`down` is best-effort while `verify` is strict.
+`down` is best-effort while `verify` is strict — then
+[`control-plane.md`](control-plane.md), which explains why the **control stack is brought up from
+the host and never by the API**. That rule is what shapes this bootstrap: cloud-init's job is to
+install Docker, Bun and `pstack`, lay down the host inputs, and hand over to `pstack init`.
 
 ---
 
 ## 1. What you are building
 
-One host. Traefik owns 80/443. An always-on **shared stack** provides ingress and any per-host
-infrastructure the previews borrow. Each PR is its own Compose project (`docker compose -p pr-123`)
-attached to two **external** Docker networks.
+One host, three layers.
+
+**Control** — Traefik owns 80/443 and terminates the wildcard cert; `pstack` serves the API. This is
+the layer `pstack init` creates, from the host, and the only layer the API may not manage.
+**Shared** — the always-on singletons previews borrow (a database, a queue cluster, a registry
+mirror), each a `kind: shared` deployment. **Isolated** — one Compose project per PR
+(`docker compose -p pr-123`), attached to two **external** Docker networks.
 
 ```
                         DNS:  preview.example.com      A → 203.0.113.10
@@ -23,19 +30,23 @@ attached to two **external** Docker networks.
 ┌───────────────────────────────────────▼──────────────────────────────────────────┐
 │  preview host (one VM)                                                           │
 │                                                                                  │
-│  ┌─ shared stack (always on, `docker compose -p shared`) ───────────────────┐    │
+│  ┌─ CONTROL stack — `pstack init`, from the host, never from the API ───────┐    │
 │  │  traefik  ── docker provider (labels) + file provider (/etc/traefik/…)   │    │
 │  │             ── ONE router requests *.preview.example.com via DNS-01      │    │
-│  │  [optional] shared postgres / queue cluster / registry mirror …         │    │
+│  │  pstack   ── the API (systemd today; a service here once `init` ships)   │    │
 │  └────────────┬──────────────────────────────────────┬─────────────────────┘    │
 │               │                                      │                           │
 │   network: preview-ingress (external)    network: preview-shared (external)      │
 │      Traefik ⇄ per-PR web services         per-PR services ⇄ shared infra        │
 │               │                                      │                           │
-│      ┌────────┴────────┐  ┌─────────────────┐  ┌─────┴───────────┐               │
+│               │        ┌─ SHARED deployments (kind: shared, no axes) ─────┐      │
+│               │        │  postgres · queue cluster · registry mirror …    │      │
+│               │        └──────────────────┬──────────────────────────────┘      │
+│               │                           │ referenced by `requires:`            │
+│      ┌────────┴────────┐  ┌───────────────┴─┐  ┌─────────────────┐               │
 │      │ project pr-123  │  │ project pr-124  │  │ project pr-131  │  …            │
-│      │  backend        │  │  backend        │  │  backend        │               │
-│      │  frontend       │  │  frontend       │  │  frontend       │               │
+│      │  backend        │  │  backend        │  │  backend        │  ISOLATED     │
+│      │  frontend       │  │  frontend       │  │  frontend       │  deployments  │
 │      │  + its own      │  │  + its own      │  │  + its own      │               │
 │      │    default net  │  │    default net  │  │    default net  │               │
 │      └─────────────────┘  └─────────────────┘  └─────────────────┘               │
@@ -166,6 +177,22 @@ throw `ERR_CERT_AUTHORITY_INVALID` on a setup that otherwise looks correct.
 
 Save as `cloud-init.yaml`. Replace every `example.com`, `<your-…>` and `CHANGEME` placeholder.
 
+The file does four things, in this order: install **Docker**, install **Bun + pstack**, write the
+**host inputs**, then **bring the control stack up**. The split matters — the host inputs are
+mounted by the control stack, never baked into it, so re-rendering the stack never touches your
+secrets, and rotating a secret never means re-rendering the stack.
+
+> **`pstack init` is implemented (`src/init.ts` + `templates/control/`), but `src/cli.ts` does not
+> dispatch an `init` command yet.** What it does and why it is host-side:
+> [control-plane.md §7](control-plane.md#7-upgrade-path). Until the dispatch lands, cloud-init
+> writes the control stack's compose file itself — the block marked **`init` will own this** below —
+> and brings it up with `docker compose up -d`. When it lands, delete that one block and swap the
+> final command; everything else in this file (the DNS token, the Traefik dynamic config,
+> `/etc/pstack.env`, the two external networks) is a **host input** `init` mounts rather than owns,
+> and stays exactly as it is. Note `init` uses its own project name, `pstack-control`, and creates
+> the same two external networks — so on a host it has run, `docker network create … || true` below
+> is the no-op it is written to be.
+
 > **Secret handling.** The DNS token and `PSTACK_TOKEN` below are written into the instance's
 > user-data, which the provider stores and which is readable from the instance's metadata service —
 > any process on the box can recover it. That is acceptable for a **scoped, rotatable** token that
@@ -248,13 +275,19 @@ write_files:
               # NOTE the path: /etc/traefik/auth, *not* /etc/traefik/dynamic.
               usersFile: /etc/traefik/auth/dashboard.htpasswd
 
-  # ── The always-on shared stack ─────────────────────────────────────────────────────────
+  # ── The control stack ──  ⚠ `init` WILL OWN THIS BLOCK ─────────────────────────────────
+  # This is the one hand-written thing `pstack init` replaces: it renders exactly this and
+  # `compose up -d`s it. Until then, cloud-init writes it. Nothing else in write_files is
+  # affected — the token, the dynamic config and /etc/pstack.env are host inputs it mounts.
   - path: /opt/preview/shared/docker-compose.yml
     permissions: '0644'
     owner: root:root
     content: |
       # `name:` pins the compose project name so volume names are deterministic
-      # (`shared_letsencrypt`) instead of being derived from the directory.
+      # (`shared_letsencrypt`) instead of being derived from the directory. Keep it stable —
+      # per-PR hooks reference container names derived from it (`shared-temporal-1`), and
+      # renaming it silently breaks every preview. (The project is still called `shared` for
+      # that reason, even though in control-plane terms this is the CONTROL stack.)
       name: shared
 
       services:
@@ -398,7 +431,14 @@ runcmd:
   - git clone --depth 1 https://github.com/<you>/<your-project>.git /opt/preview/config
   - chown -R preview:preview /opt/preview
 
-  # 6. Bring up the shared stack, then the API.
+  # 6. Bring the control stack up FROM THE HOST. This is the step `pstack init` becomes:
+  #
+  #        cd /opt/preview/config && /usr/local/bin/bun /opt/preview/pstack/src/cli.ts init
+  #
+  #    …and it is deliberately the host's job, not the API's: the API cannot recreate the stack
+  #    that contains it without killing the process doing the work (control-plane.md §2).
+  #    `init` is implemented but not yet dispatched from the CLI, so today it is this line plus
+  #    the systemd unit below.
   - docker compose -f /opt/preview/shared/docker-compose.yml up -d
   - systemctl daemon-reload
   - systemctl enable --now pstack
@@ -432,9 +472,11 @@ theorising.
 
 ---
 
-## 5. The shared stack, explained
+## 5. The control stack, explained
 
-The compose file above is complete; these are the four decisions inside it.
+The compose file above is complete; these are the four decisions inside it. They are also the
+inputs `pstack init` will need, so they do not become obsolete when it ships — they move from a
+file you maintain to a file it renders.
 
 | Decision | Why |
 |---|---|
@@ -454,6 +496,21 @@ ACME instead of at a misplaced file.
 
 Keep credentials in a **sibling** directory (`/etc/traefik/auth/`), mounted separately. The rule
 generalises: nothing but dynamic config in the watched directory.
+
+### Shared deployments live *beside* the control stack, not inside it
+
+A shared Postgres, a queue cluster, a registry mirror — anything every preview borrows — is its own
+`kind: shared` deployment, not another service in the file above. Two reasons:
+
+- **Blast radius.** The control stack is upgraded from the host and never torn down; a shared
+  database is a normal deployment you may legitimately want to `down --force` one day. Folding it
+  into the control stack means every change to it recreates Traefik.
+- **`requires:` needs something to point at.** An isolated deployment declares
+  `requires: [{ name: shared-queue, assert: … }]` and fails by name before it creates anything. That
+  only reads cleanly when the dependency is a deployment with an identity.
+
+See [`../examples/shared.yml`](../examples/shared.yml) — and note its `down` is refused without
+`--force`, because `compose down -v` there destroys the state every tenant depends on.
 
 ### What a per-PR compose file must declare
 
@@ -551,6 +608,12 @@ That is why the unit sets **both** `WorkingDirectory=/opt/preview/config` and an
 get `spec not found: preview.yml`, or — worse — a spec that loads while every hook fails with
 `./hooks/db-branch.sh: No such file or directory`.
 
+**Both constraints belong to the systemd path specifically.** Once `pstack init` runs the API as a
+service inside the control stack, they become container concerns rather than unit concerns: the
+config checkout is a bind mount and the process cwd is set in the image, and `ui/` ships beside
+`src/` in the image rather than on the host. Nothing about them disappears — they move. Until then,
+these two lines are the ones that break the service if you edit the unit.
+
 Sanity-check the spec by hand before trusting the service:
 
 ```bash
@@ -594,24 +657,52 @@ journalctl -u pstack -f
 curl -s localhost:7878/api/health | jq
 #   { "ok": true, "authEnforced": true, "spec": "preview.yml", "varName": "PR" }
 
-curl -s 'localhost:7878/api/spec?pr=123' | jq          # the resolved spec for that stack
-curl -s localhost:7878/api/stacks | jq                 # compose projects that actually exist
+curl -s localhost:7878/api/deployments | jq            # every submitted deployment
+curl -s 'localhost:7878/api/deployments/pr-123?PR=123' | jq   # meta + resolved spec summary
+
+# submit or replace: the spec and compose file go in the body as strings
+curl -s -X PUT -H "Authorization: Bearer $PSTACK_TOKEN" \
+  -H 'content-type: application/json' \
+  -d "$(jq -n --rawfile s preview.yml --rawfile c docker-compose.preview.yml \
+          '{spec:$s, compose:$c, env:{PR:"123"}}')" \
+  localhost:7878/api/deployments/pr-123
 
 # mutating routes need the bearer token; they return 202 + a job id
-JOB=$(curl -s -X POST localhost:7878/api/stacks/123/up \
-        -H "Authorization: Bearer $PSTACK_TOKEN" | jq -r .job.id)
+JOB=$(curl -s -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
+        'localhost:7878/api/deployments/pr-123/up?PR=123' | jq -r .job.id)
 curl -s localhost:7878/api/jobs/$JOB | jq .state       # running | ok | failed | leaked
 curl -N  localhost:7878/api/jobs/$JOB/stream           # SSE live log
 
-curl -s -X POST localhost:7878/api/stacks/123/down \
+curl -s -X POST localhost:7878/api/deployments/pr-123/down?PR=123 \
   -H "Authorization: Bearer $PSTACK_TOKEN" \
   -H 'content-type: application/json' -d '{"verify":true}'
 ```
 
-`:id` is the **variable value** (`123`), never the resolved stack name (`pr-123`): the server owns
-the spec and resolves `pr-${PR}` itself, so a client cannot ask it to act on an arbitrary compose
-project. A second job for a stack that already has one in flight returns **409** rather than
-queueing — concurrent `up`/`down` on one stack would race over the same database branch.
+`:id` is a **registry id**, never a compose project name: the server owns the stored spec and
+resolves `stack:` itself, so a client cannot ask it to act on an arbitrary compose project. Spec
+variables ride on the query string and are **not stored** — pass the same `?PR=` to `down` as you
+did to `up`, or teardown targets a different stack than deploy created. A second job for a stack
+that already has one in flight returns **409** rather than queueing — concurrent `up`/`down` on one
+stack would race over the same database branch.
+
+### Upgrading it
+
+From the host, never over HTTP — the API cannot recreate the stack containing itself
+([control-plane.md §2](control-plane.md#2-the-invariant-the-api-never-manages-its-own-stack)).
+
+```bash
+cd /opt/preview/pstack && git pull        # new pstack
+curl -s localhost:7878/api/jobs | jq '[.jobs[] | select(.state == "running")]'   # drain first
+sudo systemctl restart pstack             # → `pstack init` once it ships
+curl -s localhost:7878/api/health         # confirm it came back
+```
+
+Drain before restarting: jobs are in-memory, so an in-flight `up` is truncated and must be re-run.
+There is no queue to preserve — adding one would be a state store.
+
+The shared and isolated deployments keep running throughout. They are separate compose projects and
+nothing about them depends on the API process being alive, so a broken control plane costs you the
+ability to *change* things, not the previews themselves.
 
 ### Exposing it: prefer the SSH tunnel
 
@@ -657,7 +748,7 @@ basic-auth middleware is genuinely in front of it. Two caveats before you do thi
 - **The bearer token gates mutations only.** `pstack` requires it for `POST`/`DELETE`; every `GET`
   is unauthenticated even with `PSTACK_TOKEN` set. That includes `GET /api/jobs/:id`, which returns
   the whole job transcript — hook step messages and the first line of a failed hook's stderr — and
-  `GET /api/stacks`, which enumerates every compose project on the box. So the ingress middleware is
+  `GET /api/deployments`, which enumerates every deployment on the box. So the ingress middleware is
   the **only** thing protecting your logs and your stack list. Writes are double-gated; reads are
   not.
 - **Binding to a bridge gateway ties the unit to that network's lifetime.** `172.18.x.x` is whatever
@@ -720,7 +811,7 @@ the VM.
 - [ ] **`pstack serve` is never exposed without `PSTACK_TOKEN`.** pstack enforces this (exit `3`);
       do not defeat it by setting a token and then skipping the ingress auth. Remember: `docker`
       group ⇒ root. And note the token gates **mutations only** — `GET /api/jobs/:id` (full hook
-      transcripts, including stderr) and `GET /api/stacks` answer without it, so ingress auth is the
+      transcripts, including stderr) and `GET /api/deployments` answer without it, so ingress auth is the
       only gate on reads.
 - [ ] **Rotate the DNS token.** Scope it to the one zone, note that a copy lives in user-data, and
       rotate on a schedule and on any suspicion. Rotation = new token in
@@ -746,7 +837,18 @@ the VM.
       "teardown errored". Different owners.
 - [ ] **The spec is trusted input.** Hooks are shell strings executed at CI trust level. Treat
       `preview.yml` with the same review discipline as a CI workflow; never point this host at a
-      spec from an untrusted fork.
+      spec from an untrusted fork. Accepting a spec — over HTTP or otherwise — is accepting
+      arbitrary compose **and** arbitrary shell: that is remote code execution by design, not by
+      bug, so the gate is *who may submit*, never what the spec contains
+      ([control-plane.md §5](control-plane.md#5-trust-boundary)).
+- [ ] **Mark host singletons `kind: shared`.** A shared database or queue declared as the default
+      `isolated` gets no guard on `down`, and `compose down -v` then destroys the state every
+      preview depends on. With `kind: shared` the teardown is refused unless someone types
+      `--force` — and the API never passes it, so a shared deployment cannot be destroyed over
+      HTTP at all.
+- [ ] **Never point `pstack` at the control stack.** No spec should name the compose project that
+      runs Traefik and the API. Upgrade it from the host (§7); a `down` there takes out
+      `acme.json` — every certificate, re-issued under a per-week rate limit.
 
 ---
 

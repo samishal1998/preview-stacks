@@ -19,7 +19,7 @@ import { consoleSink, type Sink } from './log.ts';
 
 export type StepResult = {
   axis: string;
-  phase: 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
+  phase: 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
   ok: boolean;
   code: number;
   message?: string;
@@ -45,6 +45,25 @@ const ok = (r: Outcome) => r.steps.every((s) => s.ok);
 export async function up(spec: Stack, runner: Runner, sink: Sink = consoleSink()): Promise<Outcome> {
   const steps: StepResult[] = [];
   const outputs: Record<string, string> = {};
+
+  // Preflight FIRST, before anything is created. A missing shared dependency should fail by name
+  // here rather than surfacing as an opaque error from whatever CLI an axis hook happened to call.
+  for (const req of spec.requires) {
+    sink.emit('step', `→ requires: ${req.name}`);
+    const r = await runner.run(req.assert, {
+      env: { ...spec.env, STACK: spec.stack },
+      label: `requires ${req.name}`,
+    });
+    steps.push({
+      axis: req.name,
+      phase: 'requires',
+      ok: r.ok,
+      code: r.code,
+      skipped: r.skipped,
+      message: r.ok ? undefined : `unmet${req.hint ? ` — ${req.hint}` : ''}`,
+    });
+    if (!r.ok) return { ok: false, steps, outputs };
+  }
 
   for (const axis of spec.axes) {
     if (axis.up) {
@@ -103,11 +122,32 @@ export async function up(spec: Stack, runner: Runner, sink: Sink = consoleSink()
 export async function down(
   spec: Stack,
   runner: Runner,
-  opts: { verify?: boolean } = {},
+  opts: { verify?: boolean; force?: boolean } = {},
   sink: Sink = consoleSink(),
 ): Promise<Outcome> {
   const steps: StepResult[] = [];
   const doVerify = opts.verify ?? true;
+
+  // `down` runs `compose down -v`, and on a shared singleton `-v` destroys the volumes every
+  // other deployment depends on — a TLS store, a shared database, admin credentials. Routine for
+  // a tenant, catastrophic here, and the verb is identical. Require an explicit force.
+  if (spec.kind === 'shared' && !opts.force) {
+    sink.emit('error', `refusing to tear down shared deployment "${spec.stack}"`);
+    return {
+      ok: false,
+      outputs: {},
+      steps: [{
+        axis: spec.stack,
+        phase: 'compose',
+        ok: false,
+        code: 1,
+        skipped: false,
+        message:
+          'refused: kind is `shared`. `down` removes volumes (-v), which on a shared deployment ' +
+          'destroys state every tenant depends on. Re-run with --force if that is truly intended.',
+      }],
+    };
+  }
 
   if (spec.compose) {
     sink.emit('step', '→ compose down (all profiles)');

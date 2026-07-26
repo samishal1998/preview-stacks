@@ -1,14 +1,48 @@
 # preview-stacks
 
-Declarative lifecycle for ephemeral per-PR preview stacks. You describe the **isolation axes** a
-preview needs — a database branch, a queue namespace, images, DNS — and `pstack` provisions them,
-runs your Compose stack, tears it all down in reverse, and then **proves nothing leaked**.
+A **control plane for ephemeral preview stacks**, driven by a CLI. You describe the **isolation
+axes** a preview needs — a database branch, a queue namespace, images, DNS — and `pstack`
+provisions them, runs your Compose stack, tears it all down in reverse, and then **proves nothing
+leaked**.
 
 ```bash
 PR=123 pstack up        # provision axes in order, then compose up
 PR=123 pstack down      # compose down (all profiles) → destroy axes in reverse → verify
 PR=123 pstack verify    # assert every axis is gone; exit 2 if anything survived
 ```
+
+## The control-plane model
+
+One host runs three layers, and **which layer something is decides what may be done to it**:
+
+```
+  host  ──  pstack init  ──▶  CONTROL stack:  traefik + pstack (API + UI)
+                                                        │ manages
+                                    ┌───────────────────┴───────────────────┐
+                                    ▼                                       ▼
+                          SHARED deployments                      ISOLATED deployments
+                          kind: shared                            kind: isolated
+                          a DB, a queue, a mirror   ◀── requires ──  pr-123, pr-124, …
+                          no axes · `down` guarded              axes · proven gone on `down`
+```
+
+| | control | shared | isolated |
+|---|---|---|---|
+| Managed by | the **CLI, on the host** | the API or the CLI | the API or the CLI |
+| Axes | n/a | **none allowed** | yes — that is the point |
+| `down` | not offered | refused unless forced | routine |
+
+**The CLI owns the control stack; the API owns everything else.** The API must never run `up` on the
+deployment containing the API — the process performing the upgrade is inside the stack being
+replaced, so it is killed mid-operation, and a bad image leaves the host with no control plane and
+no remote way to fix it. `pstack init` / `pstack self-upgrade` handle that from the host instead.
+
+Full rationale, the registry contract, and the trust boundary:
+**[docs/control-plane.md](docs/control-plane.md)**.
+
+> Status: `kind`, `requires`, the `shared` `down` guard and the deployment registry are wired, and
+> the API is registry-backed (`/api/deployments/*`). `pstack init` is implemented in `src/init.ts`
+> but `src/cli.ts` does not dispatch it yet — `docs/control-plane.md` tracks what is reachable.
 
 ## Why this exists
 
@@ -35,6 +69,7 @@ leak check a first-class command.
 
 ```yaml
 version: 1
+kind: isolated             # `isolated` (default) = one tenant · `shared` = a host singleton
 stack: pr-${PR}            # → compose project name, hostname label, and $STACK in every hook
 
 env:
@@ -43,6 +78,11 @@ env:
 compose:
   file: docker-compose.preview.yml
   profiles: [backend, frontend]   # up enables these; down enables ALL of them
+
+requires:                  # checked BEFORE anything is created — fails by name, not deep in a hook
+  - name: ingress-network
+    assert: docker network inspect preview-ingress >/dev/null 2>&1
+    hint: bring the shared deployment up first
 
 axes:                      # provisioned top→bottom, destroyed bottom→top
   - name: database
@@ -54,7 +94,20 @@ axes:                      # provisioned top→bottom, destroyed bottom→top
     assert_gone: "! ./hooks/db.sh exists \"$STACK\""      # exit 0 ⇒ gone    (the leak gate)
 ```
 
-See [`examples/preview.yml`](examples/preview.yml) for a fully-commented four-axis stack.
+See [`examples/preview.yml`](examples/preview.yml) for a fully-commented four-axis stack, and
+[`examples/shared.yml`](examples/shared.yml) for a `kind: shared` singleton.
+
+### `kind`, and why it is explicit
+
+`kind: shared` marks a host singleton — a database, a queue cluster, a registry mirror. It may
+declare **no axes** (a hard error if it does: axes exist to isolate one tenant from another and to
+prove a tenant's resources are gone, and a singleton has neither concern), and its `down` is
+**refused without `--force`**, because `compose down -v` there destroys the TLS store, the shared
+database, the admin credentials — state every other deployment depends on.
+
+The kind is declared rather than inferred from "does it have axes", because that guard is
+load-bearing: an isolated deployment that forgot its axes must not silently inherit a singleton's
+protection.
 
 ### The four hooks
 
@@ -108,6 +161,7 @@ pstack <up|down|verify|status|validate|serve> [flags]
   -q, --quiet         suppress per-step chatter
       --set K=V       override/define a variable (repeatable)
       --no-verify     down: skip the post-teardown leak check
+      --force         down: allow tearing down a `kind: shared` deployment
 
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
             PSTACK_HOST (127.0.0.1) · PSTACK_VAR (PR)
@@ -173,32 +227,52 @@ racing an `up` over the same database branch is corruption, not contention.
 
 | Route | Purpose |
 |---|---|
-| `GET /api/health` | liveness; reports whether auth is enforced |
-| `GET /api/spec?pr=123` | the resolved spec + axes for that stack |
-| `GET /api/stacks` | compose projects actually on this host |
-| `POST /api/stacks/:id/{up,down,verify}` | start a job → `202 {job}` / `409` if busy |
+| `GET /api/health` | liveness; auth mode, data dir, version |
+| `GET /api/deployments` | every submitted deployment, with `busy` and `running` |
+| `GET`/`PUT`/`DELETE` `/api/deployments/:id` | read · submit or replace (`{spec, compose?, env?}`) · forget (refused while containers exist) |
+| `POST /api/deployments/:id/{up,down,verify}` | start a job → `202 {job}` / `409` if busy. `down` body: `{verify?, force?}` |
 | `GET /api/jobs/:id` · `GET /api/jobs/:id/stream` | job transcript · live SSE log |
+
+`:id` is a **registry id**, not a compose project name — the server owns the stored spec and
+resolves `stack:` itself. A spec that interpolates `${PR}` needs it on every call
+(`?PR=123`), and the *same* variables on `down` as on `up`, or teardown targets a different stack
+than deploy created.
 
 **Two security guards, because this API destroys infrastructure:** a bearer token
 (`PSTACK_TOKEN`) on every mutating route, and — if no token is set — the server **refuses to bind
 anything but `127.0.0.1`**, so an unauthenticated instance cannot be exposed by accident. Job
 history is in-memory and unpersisted, consistent with the no-state-store rule.
 
-See [docs/usage.md](docs/usage.md) for worked examples and [docs/bootstrap.md](docs/bootstrap.md)
-to build a host from scratch (Hetzner + cloud-init).
+[docs/control-plane.md §6](docs/control-plane.md#6-submitting-a-deployment) has the worked
+`curl` flow and the five behaviours that surface is carrying — why variables are not persisted, why
+`PUT` parses before it writes, and why `DELETE` fails closed.
+
+See [docs/control-plane.md](docs/control-plane.md) for the architecture,
+[docs/usage.md](docs/usage.md) for worked examples, and [docs/bootstrap.md](docs/bootstrap.md) to
+build a host from scratch (Hetzner + cloud-init).
 
 ## Scope
 
-**In:** the spec, the CLI, leak verification, an HTTP API, a single-file web UI.
+**In:** the spec (`kind`, `requires`, axes), the CLI, leak verification, the HTTP API, the web UI,
+and the **deployment registry** — a control plane holding many deployments addressed by id
+(`src/registry.ts`; see [docs/control-plane.md](docs/control-plane.md)).
 
-**Not built, deliberately:** multi-tenancy, a persistent job store, a plugin system. The spec has
-not yet been proven against a *second* project — until it expresses one without changes, extra
-surface is a guess.
+**Not built, deliberately:** a persistent job store, a plugin system, a reconciliation loop. The
+registry is a *cache of intent* — truth lives in Docker and in each axis's `assert_*` probe — so
+losing it means "I forgot what you asked for", not "the host is inconsistent". The spec has also not
+yet been proven against a *second* project; until it expresses one without changes, extra surface is
+a guess.
 
-**Probably never:** running untrusted user-supplied specs. Hooks are shell strings at CI trust
-level; isolating them needs a per-tenant boundary (separate VMs/microVMs or Kubernetes namespaces),
-which is a different product. Note also that a shared Docker host has no memory isolation unless
-you add `mem_limit` yourself; one greedy heap can OOM every stack on the box.
+**Still out: multi-tenancy.** One spec, one Docker socket, one trust level; every caller who can
+reach the API can do everything. Real multi-tenancy needs a per-tenant isolation boundary (separate
+VMs/microVMs, or Kubernetes namespaces) plus a credential boundary — a different product. Tenant
+ids, per-user auth or RBAC bolted onto `api.ts` would create the *appearance* of a boundary where
+none exists, which is worse than having none.
+
+**Probably never:** running untrusted user-supplied specs. Accepting a spec is accepting arbitrary
+compose *and* arbitrary shell hooks — it is remote code execution by design, not by bug — and the
+Docker socket mount is root-equivalent on the host. Note also that a shared Docker host has no
+memory isolation unless you add `mem_limit` yourself; one greedy heap can OOM every stack on the box.
 
 ## Development
 

@@ -5,8 +5,14 @@ produce. For *why* the tool is shaped this way — the `down`/`verify` asymmetry
 no-state-store decision — read [`../README.md`](../README.md) first; this guide assumes it.
 
 Every `pstack` block below was produced by running the command against the code in this repo; the
-output is what it printed. The two exceptions, marked where they appear: the CI workflow in section 7
+output is what it printed. The exceptions, marked where they appear: the CI workflow in section 8
 (GitHub-side, not runnable here) and the abridged JSON in section 6.
+
+> **The HTTP surface is being replaced as you read this.** `pstack serve` is now registry-backed —
+> `/api/deployments/*`, documented in [section 7](#7-the-control-plane) — and the single-spec
+> `/api/spec` and `/api/stacks` routes shown in section 6 and the section 10 table are **gone**.
+> The file header of `src/api.ts` is the authoritative route list; those two sections have not
+> caught up yet.
 
 | I want to… | Go to |
 |---|---|
@@ -16,9 +22,10 @@ output is what it printed. The two exceptions, marked where they appear: the CI 
 | deploy, inspect, tear down | [4. Up, status, down](#4-up-status-down) |
 | know my teardown actually works | [5. Prove your teardown works](#5-prove-your-teardown-works) |
 | a dashboard and an HTTP API | [6. Run the API and UI](#6-run-the-api-and-ui) |
-| deploy from GitHub Actions | [7. Wire it into CI](#7-wire-it-into-ci) |
-| a nightly leak sweep, orphan hunting | [8. Day-2 operations](#8-day-2-operations) |
-| every flag, route, env var, exit code | [9. Reference](#9-reference) |
+| shared vs isolated, `requires`, `--force`, submitting deployments | [7. The control plane](#7-the-control-plane) |
+| deploy from GitHub Actions | [8. Wire it into CI](#8-wire-it-into-ci) |
+| a nightly leak sweep, orphan hunting | [9. Day-2 operations](#9-day-2-operations) |
+| every flag, route, env var, exit code | [10. Reference](#10-reference) |
 
 ---
 
@@ -54,6 +61,7 @@ Flags:
   -q, --quiet         suppress per-step chatter
       --set K=V       override/define a variable (repeatable)
       --no-verify     down: skip the post-teardown leak check
+      --force         down: allow tearing down a `kind: shared` deployment
 
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
             PSTACK_HOST (127.0.0.1) · PSTACK_VAR (PR)
@@ -68,10 +76,9 @@ Check the repo is healthy before you trust it with your infrastructure:
 
 ```console
 $ bun test
- 25 pass
+ ...
  0 fail
- 44 expect() calls
-Ran 25 tests across 1 file. [66.00ms]
+Ran N tests across 1 file.
 
 $ bunx tsc --noEmit      # strict, noUncheckedIndexedAccess; silent on success
 ```
@@ -112,11 +119,17 @@ Three things are happening:
 ```console
 $ PR=123 pstack validate
 stack: pr-123
-✓ spec parses — 0 axis/axes, stack "pr-123"
+✓ spec parses — kind: isolated, 0 axis/axes, stack "pr-123"
   compose: docker-compose.preview.yml [backend, frontend]
+  ! kind: isolated with no axes — nothing per-tenant is provisioned or verified, so this is just a compose project. If it is a host singleton, mark it `kind: shared` so `down` is guarded.
 ```
 
 The first line is the resolved identity. Read it — it is the single most common thing to get wrong.
+
+The `!` is the warning you should expect at this stage, and it says something true: with no axes
+this is a Compose wrapper, and `verify` has nothing to check. It goes away when you add the first
+axis in section 3. If this spec is *not* a per-PR stack but a host singleton — a shared database, a
+queue cluster — mark it `kind: shared` instead, which is [section 7](#7-the-control-plane).
 
 ### Dry-run it
 
@@ -203,7 +216,7 @@ Two mechanics to notice:
 ```console
 $ PR=123 pstack validate
 stack: pr-123
-✓ spec parses — 1 axis/axes, stack "pr-123"
+✓ spec parses — kind: isolated, 1 axis/axes, stack "pr-123"
   compose: docker-compose.preview.yml [backend, frontend]
   - database: up, down, assert_gone, assert_live
 ```
@@ -237,7 +250,7 @@ axes:
 ```console
 $ PR=123 pstack validate
 stack: pr-123
-✓ spec parses — 3 axis/axes, stack "pr-123"
+✓ spec parses — kind: isolated, 3 axis/axes, stack "pr-123"
   - dns-record: up, down
   - queue-namespace: up, down, assert_gone
   - images: down, assert_gone
@@ -598,6 +611,11 @@ Now you have evidence, not hope: you've seen this axis's `assert_gone` return bo
 `pstack serve` exposes the same core over HTTP, with a single-page dashboard. Use it when a human
 wants to click, or when something other than a shell needs to drive a deploy.
 
+> **Route drift.** The `/api/spec` and `/api/stacks/*` routes below describe the older single-spec
+> server. `serve` is now registry-backed (`/api/deployments/*` — [section 7](#7-the-control-plane));
+> the startup behaviour, the safety interlock, the job model, the `409`, and the UI notes in this
+> section still hold. `src/api.ts`'s header is the current route list.
+
 ### Start it
 
 The spec is resolved **at startup** as well as per request, so the stack variable must be set just to
@@ -813,7 +831,222 @@ watching the job stream and the step table. Also worth knowing:
 
 ---
 
-## 7. Wire it into CI
+## 7. The control plane
+
+Everything above drives **one** spec you point `pstack` at. A host that serves several projects and
+many PRs needs a second idea: deployments with identities, a kind that decides what may be done to
+them, and preconditions between them.
+
+[`control-plane.md`](control-plane.md) has the architecture. This section is the operator's view.
+
+### The layer you must not automate: `pstack init`
+
+> **Implemented in `src/init.ts` (+ `templates/control/`); `src/cli.ts` does not dispatch an `init`
+> command yet.** Until it does, the host brings its control stack up with `docker compose … up -d` —
+> see [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file).
+
+`pstack init` creates the **control stack** — Traefik plus the `pstack` API/UI container, in compose
+project `pstack-control` — from the host, and `pstack self-upgrade` will replace it. Both are
+CLI-only and will never be HTTP routes, because the API cannot recreate the stack that contains it:
+the process running the upgrade is inside the container being replaced, so it is killed
+mid-operation, and a bad image leaves you with no API and no remote way back. The host keeps one
+capability the API doesn't, and that asymmetry *is* the recovery path.
+
+It is idempotent — re-running it is the supported way to change the domain, rotate `PSTACK_TOKEN`,
+or move to a new image. It checks its preconditions first (Docker socket, Compose plugin, control
+image), creates `deployments/` and the two external networks `preview-ingress` / `preview-shared`,
+writes `.env` and `dns.env` at `0600`, brings the stack up, and then **waits for the container's
+healthcheck** — because `compose up -d` exits 0 as soon as containers are *created*, so a
+crash-looping API would otherwise be reported as success.
+
+Practically, this means: **never write a spec whose compose project is the one running Traefik and
+`pstack`.** Upgrade it from a shell on the host ([`bootstrap.md` §7](bootstrap.md#7-install-and-run-pstack)).
+
+### `shared` vs `isolated`
+
+`kind` is the second field in a spec and it decides how the deployment may be treated:
+
+| | `kind: isolated` (default) | `kind: shared` |
+|---|---|---|
+| What | one tenant — normally one PR | a host singleton every preview borrows: a database, a queue cluster, a registry mirror |
+| Axes | yes — the point of the tool | **none allowed**; declaring one is a hard error |
+| `down` | routine | **refused without `--force`** |
+| Over the API | `down` works | refused with **409** unless the body says `{ "force": true }` |
+
+```yaml
+version: 1
+kind: shared
+stack: shared-db          # a fixed identity, not a template — there is only one per host
+
+compose:
+  file: docker-compose.shared.yml
+  profiles: []            # nothing is profiled: a shared stack is always fully on
+```
+
+```console
+$ pstack -f shared.yml validate
+stack: shared-db
+✓ spec parses — kind: shared, 0 axis/axes, stack "shared-db"
+  compose: docker-compose.shared.yml [no profiles]
+```
+
+Axes on a shared deployment are rejected at parse time, not warned about — it is almost always a
+spec that meant `isolated`:
+
+```console
+$ pstack -f axes-on-shared.yml validate
+pstack: kind: shared cannot declare axes (found 1). Axes exist to isolate one tenant from another and to prove a tenant's resources were cleaned up; a shared singleton has neither concern. Did you mean `kind: isolated`?
+$ echo $?
+3
+```
+
+### `--force`, and why the guard exists
+
+`down` runs `docker compose down -v`. On a PR stack the `-v` removes that tenant's own volumes —
+routine. On a shared deployment the *same verb* removes Traefik's `acme.json` (every certificate for
+the host, re-issued under a per-week rate limit), the shared database volume (every preview's
+state), and your admin credentials. Same command, entirely different blast radius:
+
+```console
+$ pstack -f shared.yml down
+stack: shared-db
+refusing to tear down shared deployment "shared-db"
+  ✗ compose      shared-db  — refused: kind is `shared`. `down` removes volumes (-v), which on a shared deployment destroys state every tenant depends on. Re-run with --force if that is truly intended.
+$ echo $?
+1
+```
+
+`--force` lifts it, and nothing else does — over HTTP that is `{ "force": true }` in the
+`POST /api/deployments/:id/down` body, and without it the API answers **409 synchronously** rather
+than handing back a job id that is going to fail. Reach for it only when destroying that state is
+the actual goal; to *upgrade* a shared deployment, run `up` — it converges and never removes:
+
+```console
+$ pstack -f shared.yml down --force --dry-run
+stack: shared-db  (dry-run)
+→ compose down (all profiles)
+  [dry-run] compose down
+→ verify (asserting resources are gone)
+  ✓ compose      (compose)
+$ echo $?
+0
+```
+
+Note the guard keys off the **declared kind**, not off "does it have axes". An isolated deployment
+that forgot its axes must not silently inherit a singleton's protection — which is exactly why the
+no-axes warning in section 2 tells you to consider `kind: shared`.
+
+### `requires:` — fail by name, before anything is created
+
+An isolated deployment usually depends on shared ones: an ingress network, a reachable queue, a
+database endpoint. Without a preflight, a missing dependency surfaces partway through an axis hook
+as whatever error that CLI printed — which tells you nothing about what is actually wrong, *after*
+some resources already exist.
+
+```yaml
+requires:
+  - name: shared-db
+    assert: docker network inspect preview-shared >/dev/null 2>&1
+    hint: bring the shared deployment up first — `pstack -f shared.yml up`
+```
+
+`validate` lists them; `up` asserts every one **before** the first axis runs:
+
+```console
+$ PR=123 pstack -f req.yml validate
+stack: pr-123
+✓ spec parses — kind: isolated, 1 axis/axes, stack "pr-123"
+  requires: shared-db
+  compose: docker-compose.preview.yml [backend]
+  - database: up, down, assert_gone
+```
+
+```console
+$ PR=123 pstack -f req.yml up
+stack: pr-123
+→ requires: shared-db
+  ✗ requires     shared-db  — unmet — bring the shared deployment up first — `pstack -f shared.yml up`
+$ echo $?
+1
+```
+
+Nothing was provisioned. Write the `hint` as **how to fix it** — the assert already says what broke.
+Requirements are asserted in declaration order and the first failure stops the run.
+
+### Submitting a deployment
+
+The API is **registry-backed**: it holds many deployments under `$PSTACK_DATA/deployments/<id>/`
+(default `/var/lib/pstack`) and acts on them by id.
+
+```
+/var/lib/pstack/deployments/pr-123/
+    spec.yml       the submitted spec
+    compose.yml    the submitted compose file, when one was sent with it
+    meta.json      { id, kind, createdAt, updatedAt }
+```
+
+Plain files on purpose: the registry is a **cache of intent**, never the source of truth about what
+exists — truth stays in Docker and in each axis's `assert_*` probe. Losing it means "I forgot what
+you asked for", not "the host is inconsistent", and the fix is to re-submit. It is also greppable,
+diffable and `tar`-able, which a database is not.
+
+```bash
+# submit or replace  → 201 new, 200 replaced
+curl -sS -X PUT -H "Authorization: Bearer $PSTACK_TOKEN" \
+     -H 'content-type: application/json' \
+     -d "$(jq -n --rawfile s preview.yml --rawfile c docker-compose.preview.yml \
+             '{spec:$s, compose:$c, env:{PR:"123"}}')" \
+     http://localhost:7878/api/deployments/pr-123
+
+curl -sS  http://localhost:7878/api/deployments                     # list, with busy + running
+curl -sS 'http://localhost:7878/api/deployments/pr-123?PR=123'      # meta + spec summary
+
+curl -sS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
+     'http://localhost:7878/api/deployments/pr-123/up?PR=123'       # → 202 { job }
+
+curl -sS -X DELETE -H "Authorization: Bearer $PSTACK_TOKEN" \
+     'http://localhost:7878/api/deployments/pr-123?PR=123'          # forget, after a clean down
+```
+
+Five things that will bite you if you skip them:
+
+- **Variables ride on the query string, and are not stored.** A spec resolving `stack: pr-${PR}`
+  needs `?PR=123` on *every* call — `GET`, `up`, and the later `down`. Pass different ones to `down`
+  than you did to `up` and teardown targets a different stack than deploy created. A missing
+  variable is a `400` naming it, never a stack called `pr-`.
+- **`PUT` is refused (409) while that stack has a job in flight.** Swapping the spec mid-job means
+  the eventual `down` runs with different profiles and axes than `up` created.
+- **`DELETE` fails closed.** It refuses while containers exist, *and* refuses when Docker did not
+  answer — "could not tell" is not evidence of absence. Forgetting a live deployment orphans it
+  beyond the control plane's view, which is exactly the leak this tool exists to prevent. Always
+  `down` first.
+- **Submitted hooks cannot use relative paths.** A deployment's runner runs with `cwd` set to its
+  own directory (so `compose: { file: compose.yml }` finds the file `PUT` wrote), and only
+  `spec.yml` and `compose.yml` live there. `up: ./hooks/db.sh …` works from a CLI checkout and
+  cannot work over the API — use inline shell or absolute paths.
+- **`:id` is a registry id, not a compose project name.** The server owns the stored spec and
+  resolves `stack:` itself, so a client can never ask it to act on an arbitrary compose project.
+
+The same registry is available as a library — note `src/index.ts` does not re-export it:
+
+```ts
+import { Registry, dataDir } from './src/registry.ts';
+
+const reg = new Registry(dataDir());
+await reg.put('pr-123', specYaml, { composeYaml, env: { PR: '123' } });   // validates first
+const stack = await reg.resolve('pr-123', { PR: '123' });
+```
+
+`put` parses before it commits and deletes the directory if the spec is rejected, so a bad
+submission never leaves a half-created deployment behind. Ids must match
+`/^[a-z0-9][a-z0-9._-]{0,63}$/` — they become directory names and reach shell hooks, so no
+traversal, no spaces, no metacharacters.
+
+For CI, prefer the CLI with `-f` and `--set` (section 8): it needs no host access and no token.
+
+---
+
+## 8. Wire it into CI
 
 Two jobs: bring the preview up on demand, tear it down when the PR closes. Keep previews **opt-in by
 label** — most PRs don't need one, and every live preview costs a database branch and a slice of a
@@ -912,7 +1145,7 @@ Notes on the rest of it:
 
 ---
 
-## 8. Day-2 operations
+## 9. Day-2 operations
 
 ### The nightly sweep
 
@@ -1039,9 +1272,9 @@ hand-rolled script can.
 
 ---
 
-## 9. Reference
+## 10. Reference
 
-Derived from `src/cli.ts`, `src/api.ts`, `src/spec.ts` and `src/compose.ts`.
+Derived from `src/cli.ts`, `src/api.ts`, `src/spec.ts`, `src/compose.ts` and `src/registry.ts`.
 
 ### Commands
 
@@ -1051,15 +1284,16 @@ pstack <up|down|verify|status|validate|serve> [flags]
 
 | Command | Does | Exits |
 |---|---|---|
-| `up` | provision axes in declaration order (each `up`, then its `assert_live`), then `compose up -d --remove-orphans` with the **selected** profiles. **Fails fast** — stops at the first failure. | 0 · 1 |
-| `down` | `compose down -v --remove-orphans` with **all** profiles → each axis's `down` in **reverse** order (best-effort, never fatal) → `verify` unless `--no-verify` | 0 · 2 |
+| `up` | assert every `requires` **first**, then provision axes in declaration order (each `up`, then its `assert_live`), then `compose up -d --remove-orphans` with the **selected** profiles. **Fails fast** — stops at the first failure. | 0 · 1 |
+| `down` | `compose down -v --remove-orphans` with **all** profiles → each axis's `down` in **reverse** order (best-effort, never fatal) → `verify` unless `--no-verify`. **Refused on `kind: shared` without `--force`** (exit 1). | 0 · 1 · 2 |
 | `verify` | run every `assert_gone`. Axes without one are reported `unverifiable`, not passed. | 0 · 2 |
 | `status` | `compose ps` for this stack, passed through | 0 |
 | `validate` | parse, resolve interpolation, list axes and hooks, print warnings. Touches nothing. | 0 · 3 |
 | `serve` | HTTP API + UI over the same core. Runs until killed. | 3 on refusal |
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
-`assert_gone` is the only thing that moves the needle. An unhandled crash still exits 1.
+`assert_gone` is the only thing that moves the needle. The two ways it still returns 1: the
+`kind: shared` refusal (nothing ran at all), and an unhandled crash.
 
 ### Flags
 
@@ -1071,6 +1305,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `-q`, `--quiet` | all | narrower than it sounds: on its own it suppresses only the `stack: …` header. Step lines (`→ …`) and the final report **always print**. Combined with `-n` it also drops the `[dry-run]` lines. |
 | `--set K=V` | all | define/override a spec variable; repeatable. Wins over the ambient environment, but a key the spec's own `env:` defines still wins over `--set`. |
 | `--no-verify` | `down` | skip the post-teardown leak check. Turns a leak into exit 0. |
+| `--force` | `down` | allow tearing down a `kind: shared` deployment. Nothing else lifts that guard, and the HTTP API never passes it. |
 | `-h`, `--help` | — | usage, exit 0 |
 
 An unknown flag, an unknown command, no command, or a malformed `--set` all exit **3**.
@@ -1101,6 +1336,10 @@ the spec is resolved once at boot.
 
 ### HTTP API
 
+> **Superseded — see [section 7](#7-the-control-plane) and the header of `src/api.ts`.** This table
+> describes the single-spec server; the routes are now `/api/deployments/*`, `:id` is a registry id,
+> and mutations are `POST`/`PUT`/`DELETE`. The status-code column and the job model are unchanged.
+
 `:id` is the **spec variable's value** (e.g. `123`), never the resolved stack name. Auth applies to
 POST/DELETE only.
 
@@ -1128,6 +1367,7 @@ Job `state`: `running` · `ok` · `failed` · `leaked`.
 
 ```yaml
 version: 1                        # required, must be 1
+kind: isolated                    # optional; `isolated` (default) or `shared`
 stack: pr-${PR}                   # required — identity; must match /^[a-z0-9][a-z0-9_-]*$/
 
 env:                              # optional; interpolated in order, later entries may use earlier
@@ -1139,6 +1379,11 @@ compose:                          # optional
   profiles: [backend, frontend]      # up: these · down: ALL of them
   overlays: [docker-compose.tls.yml] # extra -f files, applied in order after `file`
 
+requires:                         # optional; asserted BEFORE anything is created, in order
+  - name: shared-db               # required — what the failure is reported as
+    assert: <shell>               # required; exit 0 ⇒ the precondition holds
+    hint: <text>                  # optional; shown on failure — say how to fix it
+
 axes:                             # optional; up in order, down in REVERSE
   - name: database                # required, unique
     up: <shell>                   # provision, idempotent, fatal on failure
@@ -1149,6 +1394,9 @@ axes:                             # optional; up in order, down in REVERSE
 
 | Rule | Detail |
 |---|---|
+| `kind: shared` | a host singleton. **May declare no axes** — a hard error, not a warning. `down` is refused unless `--force`, and the HTTP API never passes `force`, so it cannot be torn down over HTTP at all. |
+| `kind: isolated` | the default. With no axes you get a warning: nothing per-tenant is provisioned or verified, so it is just a Compose project. |
+| `requires` | every `assert` runs before the first axis, in declaration order; the first failure aborts `up` with exit 1 and nothing has been created. `hint` is appended to the failure message. |
 | interpolation | `${VAR}` only, resolved **once** at parse time, so a value containing `${…}` is never re-expanded |
 | precedence | spec `env:` **wins over** `--set`, which wins over the ambient environment. `--set` cannot override a key the spec's `env:` also defines — that is a spec edit, not a CLI override. |
 | undefined variable | **hard error**, exit 3. Empty string counts as undefined. |
@@ -1168,9 +1416,24 @@ All non-fatal; `validate` still exits 0. Each one is a way an axis can lie to yo
 
 | Warning | Trigger | Fix |
 |---|---|---|
+| `kind: isolated` with no axes | an isolated spec that has a `compose:` block and no axes | add the axes it needs, or mark it `kind: shared` if it is a host singleton so `down` is guarded |
 | has `up` but no `assert_gone` | an axis defines `up` and no `assert_gone` | add a probe, or accept a permanent `?` in every report |
 | `assert_gone` is a bare `! <probe>` | a single-line `assert_gone` starting with `!` and containing no `exit`, `\|\|` or `&&` | guard it: `<probe-is-usable> \|\| exit 1`, then `! <probe>` on the next line |
 | `assert_gone` contains `\|\| true` | `\|\| true` anywhere in the `assert_gone` script | remove it; tolerate failure in `down`, never in an assert |
+
+### The deployment registry
+
+> **Built, not wired.** `src/registry.ts` is complete; nothing imports it and no HTTP route uses it.
+> See [section 7](#7-the-control-plane) and [`control-plane.md`](control-plane.md).
+
+| | |
+|---|---|
+| Location | `$PSTACK_DATA/deployments/<id>/` — `PSTACK_DATA` defaults to `/var/lib/pstack` |
+| Files | `spec.yml` · `compose.yml` (when submitted) · `meta.json` (`{ id, kind, createdAt, updatedAt }`) |
+| Id charset | `/^[a-z0-9][a-z0-9._-]{0,63}$/`, no `..` — ids become directory names and reach shell hooks |
+| `put` | validates before committing; `rm -rf`s the directory and throws `RegistryError` if the spec is rejected. `kind` is read from the parsed spec, never from the caller. |
+| `remove` | **forgets only, never tears down.** Callers must `down` first — removing the record while containers run orphans them beyond the control plane's view. |
+| Why files | it is a cache of *intent*; truth is Docker + each axis's `assert_*`. Losing it is recoverable by re-submitting, and a directory of YAML is greppable and diffable. |
 
 ### The two compose rules
 

@@ -22,6 +22,37 @@ export type Axis = {
   assert_live?: string;
 };
 
+/**
+ * What a deployment IS, which decides how it may be treated.
+ *
+ *   shared    A singleton the host provides and previews borrow — a database, a queue, a registry
+ *             mirror. Created once, lives indefinitely. Has NO axes: there is nothing to isolate
+ *             and nothing to prove gone. `down` is guarded, because `compose down -v` on one of
+ *             these destroys state every other deployment depends on.
+ *   isolated  One tenant — typically one PR. Created and destroyed constantly, HAS axes, and is
+ *             expected to leave nothing behind.
+ *
+ * The kind is explicit rather than inferred from "does it have axes", because the guard on `down`
+ * is load-bearing: a misconfigured isolated deployment that forgot its axes must not silently
+ * inherit a singleton's protection.
+ */
+export type Kind = 'shared' | 'isolated';
+
+/**
+ * A precondition that must hold before `up`.
+ *
+ * An isolated deployment usually depends on shared ones — an ingress network, a reachable queue.
+ * Without these, `up` fails partway through an axis hook with whatever error that CLI printed,
+ * which tells you nothing. A requirement fails immediately, by name, before anything is created.
+ */
+export type Requirement = {
+  name: string;
+  /** Exit 0 ⇒ the precondition holds. */
+  assert: string;
+  /** Shown when it fails — say how to fix it, not just what broke. */
+  hint?: string;
+};
+
 export type ComposeSpec = {
   file: string;
   /**
@@ -36,9 +67,11 @@ export type ComposeSpec = {
 
 export type Stack = {
   version: number;
+  kind: Kind;
   /** Resolved stack identity, e.g. `pr-123`. Exported to every hook as $STACK. */
   stack: string;
   compose?: ComposeSpec;
+  requires: Requirement[];
   axes: Axis[];
   /** Fully-resolved env handed to compose and to every hook. */
   env: Record<string, string>;
@@ -124,6 +157,12 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     throw new SpecError(`unsupported version ${version} (this build understands version 1)`);
   }
 
+  const kindRaw = raw.kind === undefined ? 'isolated' : asString(raw.kind, 'kind');
+  if (kindRaw !== 'shared' && kindRaw !== 'isolated') {
+    throw new SpecError(`kind must be "shared" or "isolated", got "${kindRaw}"`);
+  }
+  const kind: Kind = kindRaw;
+
   // Start from the ambient environment, then layer the spec's own `env:` on top of it. Spec values
   // may themselves reference ambient vars, so they are interpolated as they are added — in
   // declaration order, letting a later entry build on an earlier one.
@@ -174,6 +213,25 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
       ),
     };
   }
+
+  const rawRequires = raw.requires === undefined ? [] : raw.requires;
+  if (!Array.isArray(rawRequires)) throw new SpecError('`requires` must be a list');
+  const requires: Requirement[] = rawRequires.map((r, i) => {
+    if (typeof r !== 'object' || r === null || Array.isArray(r)) {
+      throw new SpecError(`requires[${i}] must be a mapping`);
+    }
+    const rm = r as Record<string, unknown>;
+    const name = asString(rm.name ?? '', `requires[${i}].name`);
+    if (!name) throw new SpecError(`requires[${i}].name is required`);
+    if (rm.assert === undefined) throw new SpecError(`requires[${i}].assert is required`);
+    return {
+      name,
+      assert: interpolate(asString(rm.assert, `requires.${name}.assert`), vars, `requires.${name}.assert`),
+      hint: rm.hint === undefined
+        ? undefined
+        : interpolate(asString(rm.hint, `requires.${name}.hint`), vars, `requires.${name}.hint`),
+    };
+  });
 
   const rawAxes = raw.axes === undefined ? [] : raw.axes;
   if (!Array.isArray(rawAxes)) throw new SpecError('`axes` must be a list');
@@ -231,7 +289,23 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     return axis;
   });
 
-  return { version, stack, compose, axes, env: vars };
+  // A singleton has nothing to isolate and nothing to prove gone, so axes on it are a category
+  // error — almost always a spec that meant `kind: isolated`.
+  if (kind === 'shared' && axes.length > 0) {
+    throw new SpecError(
+      `kind: shared cannot declare axes (found ${axes.length}). Axes exist to isolate one tenant ` +
+        `from another and to prove a tenant's resources were cleaned up; a shared singleton has ` +
+        `neither concern. Did you mean \`kind: isolated\`?`,
+    );
+  }
+  if (kind === 'isolated' && axes.length === 0 && compose) {
+    warnings.push(
+      'kind: isolated with no axes — nothing per-tenant is provisioned or verified, so this is ' +
+        'just a compose project. If it is a host singleton, mark it `kind: shared` so `down` is guarded.',
+    );
+  }
+
+  return { version, kind, stack, compose, requires, axes, env: vars };
 }
 
 /** Parse a spec file from disk. `parseSpec` resets `warnings`. */

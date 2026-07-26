@@ -1,5 +1,17 @@
 # preview.yml — a per-PR preview stack with four isolation axes.
 #
+# ONE OF TWO FILES. See examples/shared.yml for the other. In short:
+#   shared.yml   one per HOST, always on, no axes   (Traefik, shared queue/DB) — bootstrapped
+#                by cloud-init; pstack does not own it
+#   preview.yml  one per PR, created and destroyed constantly, HAS axes   ← this file
+#
+# THIS FILE ASSUMES THE SHARED STACK IS ALREADY RUNNING. The hooks below reach for things it
+# provides — the external `traefik` network, a container named `shared-temporal-1` — and pstack
+# does NOT check that for you today: if the shared stack is down or renamed, `pstack up` fails
+# partway through an axis hook with whatever error that CLI happened to print. Until a preflight
+# exists, run `pstack -f preview.yml up --dry-run` on a fresh host and confirm the shared stack is
+# healthy first (`docker compose -p shared ps`).
+#
 # This is the shape extracted from a production setup: a shared host runs always-on infra
 # (ingress + a Temporal cluster + a registry pull secret), and each PR gets its own compose
 # project alongside it. The interesting part is not the compose file — it is that a preview

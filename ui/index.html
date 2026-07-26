@@ -32,21 +32,23 @@
   code, .mono, pre { font-family: var(--mono); font-size: 12px; }
 
   header {
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
     padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
   }
   .grow { flex: 1; }
-  .wrap { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; gap: 14px; padding: 14px; align-items: start; }
-  @media (max-width: 880px) { .wrap { grid-template-columns: 1fr; } }
+  .page { padding: 14px; }
+  .wrap { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 940px) { .wrap { grid-template-columns: 1fr; } }
 
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; margin-bottom: 14px; }
-  .col > .panel:last-child { margin-bottom: 0; }
+  .col > .panel:last-child, .page > .panel:last-child { margin-bottom: 0; }
 
-  input[type=text], input[type=password] {
+  input[type=text], input[type=password], textarea {
     background: var(--bg); color: var(--fg); border: 1px solid var(--line);
     border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 0;
   }
-  input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  textarea { width: 100%; font-family: var(--mono); font-size: 12px; resize: vertical; }
+  input:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
   button {
     background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
     border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer;
@@ -55,14 +57,18 @@
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.primary { border-color: #2d5a8e; background: #16324f; }
   button.danger { border-color: #6b2b28; background: #3d1c1a; }
+  button.link { background: none; border: 0; color: var(--accent); padding: 6px 8px; }
+  button.tab { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--fg-dim); }
+  button.tab.on { color: var(--fg); border-bottom-color: var(--accent); }
   label { color: var(--fg-dim); }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .stretch { flex: 1; }
   .muted { color: var(--fg-mute); }
-  /* A spec path is long and unbreakable; truncate it rather than let it widen the page. */
-  .clip { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dim { color: var(--fg-dim); }
   .err { color: var(--fail); }
+  /* `anywhere`, not `break-all`: a long id or compose path must not widen the page, but a value
+     that fits should never be chopped mid-word. */
+  .name { font-family: var(--mono); overflow-wrap: anywhere; }
 
   .badge {
     display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px;
@@ -72,16 +78,21 @@
   .badge.ok { color: var(--ok); border-color: #1f4a29; }
   .badge.failed { color: var(--fail); border-color: #6b2b28; }
   .badge.leaked, .badge.warn { color: var(--leak); border-color: #6d4a15; }
+  /*
+   * The kind badge is the most consequential glance on the list: `down` on a shared deployment
+   * destroys volumes every tenant depends on. Amber = handle with care, and it is filled rather
+   * than outlined so it reads differently from every other badge at a glance.
+   */
+  .badge.k-shared { color: #2a1e08; background: var(--leak); border-color: var(--leak); font-weight: 600; }
+  .badge.k-isolated { color: var(--accent); border-color: #2d5a8e; }
 
   ul.list { list-style: none; margin: 0; padding: 0; }
   ul.list li { padding: 7px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; }
   ul.list li:last-child { border-bottom: 0; }
-  .name { font-family: var(--mono); word-break: break-all; }
-  .mine { color: var(--accent); }
 
   pre.log {
     margin: 0; background: #0a0c0f; border: 1px solid var(--line); border-radius: 6px;
-    padding: 10px; height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    padding: 10px; height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
   }
   .log .t { color: var(--fg-mute); }
   .log .step { color: var(--accent); }
@@ -90,8 +101,10 @@
 
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-mute); font-weight: 500; padding: 4px 8px 4px 0; }
-  td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line); vertical-align: top; font-size: 13px; }
+  td { padding: 6px 8px 6px 0; border-top: 1px solid var(--line); vertical-align: top; font-size: 13px; }
   td.mark { width: 1.4em; font-family: var(--mono); }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--panel-2); }
   .s-ok { color: var(--ok); }
   .s-failed { color: var(--fail); }
   .s-leaked { color: var(--leak); }
@@ -103,58 +116,133 @@
   .banner.ok { border-color: #1f4a29; background: #0f2415; color: #7ee18a; }
   .banner.conflict { border-color: #2d5a8e; background: #10243a; color: #a3cfff; }
   .banner b { font-family: var(--mono); }
+  .banner code { background: rgba(0,0,0,.3); padding: 0 4px; border-radius: 3px; }
+
+  /* A SpecError is the tool's main teaching surface: multi-line, indented, meant to be read. */
+  pre.spec-error {
+    margin: 10px 0 0; background: #2c1513; border: 1px solid #6b2b28; color: #ffa198;
+    border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto;
+  }
+  .kv { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) auto; gap: 6px; margin-bottom: 6px; }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <h1>pstack</h1>
-    <span class="muted mono clip" v-if="health.spec" :title="health.spec">{{ health.spec }}</span>
-    <span class="badge">var {{ varName }}</span>
+    <button class="tab" :class="{ on: screen !== 'submit' }" @click="go('list')">Deployments</button>
+    <button class="tab" :class="{ on: screen === 'submit' }" @click="openSubmit('')">Submit</button>
     <span class="grow"></span>
     <label for="tok">token</label>
-    <input id="tok" type="password" v-model.trim="token" placeholder="PSTACK_TOKEN" style="width:180px">
-    <span v-if="health.authEnforced === false" class="muted">auth not enforced &mdash; server is loopback-only</span>
+    <input id="tok" type="password" v-model.trim="token" placeholder="PSTACK_TOKEN" style="width:170px">
+    <span v-if="health.authEnforced === false" class="muted">
+      auth not enforced &mdash; server is loopback-only
+    </span>
   </header>
 
-  <div class="wrap">
-    <!-- ---------------- left: target, spec, host ---------------- -->
+  <!-- ============================== list ============================== -->
+  <div class="page" v-if="screen === 'list'">
+    <div class="panel">
+      <div class="row" style="margin-bottom:10px">
+        <h2 style="margin:0" class="stretch">Deployments</h2>
+        <button @click="loadList">Refresh</button>
+      </div>
+      <p v-if="listError" class="err">{{ listError }}</p>
+      <table v-else>
+        <thead><tr><th>id</th><th>kind</th><th>state</th><th>updated</th></tr></thead>
+        <tbody>
+          <tr v-for="d in deployments" :key="d.id" class="click" @click="open(d.id)">
+            <td class="name">{{ d.id }}</td>
+            <td><span class="badge" :class="'k-' + d.kind">{{ d.kind }}</span></td>
+            <!--
+              busy is SERVER-provided. The registry stores only {id, kind, timestamps}, and the job
+              lock is keyed by the RESOLVED stack name (`pr-123`), which an id alone cannot produce.
+              So when the server says nothing, say nothing — never render "idle" as a guess.
+            -->
+            <td>
+              <span v-if="d.busy" class="badge busy">busy</span>
+              <span v-else-if="d.status" class="dim">{{ d.status }}</span>
+              <span v-else class="muted" title="the server did not report a state for this row">&mdash;</span>
+            </td>
+            <td class="dim mono">{{ stamp(d.updatedAt) }}</td>
+          </tr>
+          <tr v-if="!deployments.length"><td colspan="4" class="muted">
+            nothing submitted &mdash; use <b>Submit</b> to PUT a spec
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================== detail ============================== -->
+  <div class="page wrap" v-else-if="screen === 'detail'">
     <div class="col">
       <div class="panel">
-        <h2>Target</h2>
-        <div class="row">
-          <label for="tgt" class="mono">{{ varName }}=</label>
-          <input id="tgt" class="stretch" type="text" v-model.trim="target" placeholder="123"
-                 @keyup.enter="load">
-          <button class="primary" :disabled="!target || loadingSpec" @click="load">Load</button>
+        <div class="row" style="margin-bottom:10px">
+          <button class="link" @click="go('list')">&larr; all</button>
+          <span class="name stretch">{{ id }}</span>
+          <span v-if="detail" class="badge" :class="'k-' + detail.kind">{{ detail.kind }}</span>
+          <span v-if="busy" class="badge busy">busy</span>
         </div>
-        <p v-if="specError" class="err" style="margin:10px 0 0">{{ specError }}</p>
 
-        <template v-if="spec">
-          <div class="row" style="margin-top:12px">
-            <span class="name stretch">{{ spec.stack }}</span>
-            <span v-if="stackBusy" class="badge busy">busy</span>
-          </div>
-          <p class="muted mono" v-if="spec.compose" style="margin:6px 0 0">
-            {{ spec.compose.file }} [{{ spec.compose.profiles.join(', ') || 'no profiles' }}]
-          </p>
-          <p class="muted" v-else style="margin:6px 0 0">no compose section</p>
+        <p v-if="detailError" class="err">{{ detailError }}</p>
+
+        <template v-if="detail">
+          <ul class="list">
+            <li><span class="dim stretch">stack</span><span class="name">{{ detail.stack || '?' }}</span></li>
+            <li v-if="detail.compose">
+              <span class="dim stretch">compose</span>
+              <span class="name">{{ detail.compose.file }} [{{ (detail.compose.profiles || []).join(', ') || 'no profiles' }}]</span>
+            </li>
+            <li v-else><span class="dim stretch">compose</span><span class="muted">none</span></li>
+            <li><span class="dim stretch">updated</span><span class="mono">{{ stamp(detail.updatedAt) }}</span></li>
+          </ul>
 
           <div class="row" style="margin-top:12px">
             <button class="primary" :disabled="acting" @click="act('up')">up</button>
-            <button class="danger" :disabled="acting" @click="act('down')">down</button>
             <button :disabled="acting" @click="act('verify')">verify</button>
+            <button class="danger" :disabled="acting || (isShared && !confirmShared)" @click="act('down')">
+              {{ isShared ? 'down --force' : 'down' }}
+            </button>
+            <span class="grow"></span>
+            <button class="link" @click="openSubmit(id)">edit spec</button>
           </div>
           <div class="row" style="margin-top:8px">
-            <label><input type="checkbox" v-model="verifyOnDown"> verify after down</label>
+            <label><input type="checkbox" v-model="downVerify"> verify after down</label>
           </div>
-          <p v-if="!verifyOnDown" class="muted" style="margin:6px 0 0">
+          <p v-if="!downVerify" class="muted" style="margin:6px 0 0">
             Teardown will not check for leaks. Run <code>verify</code> yourself afterwards.
           </p>
 
+          <!--
+            Gate 1 of 2. The server refuses a shared `down` without force (stack.ts) and returns the
+            refusal as a failed step, so this checkbox is defence in depth, not the only guard.
+          -->
+          <div v-if="isShared" class="banner leaked" style="margin-top:12px">
+            <b>SHARED &mdash; read before tearing down.</b>
+            <code>down</code> runs <code>docker compose down -v</code>, and <code>-v</code> removes
+            <b>volumes</b>. On a shared deployment that destroys state every tenant depends on:
+            TLS certificates, the shared database or queue, admin credentials. It is the same verb
+            that is routine for a preview.
+            <div style="margin-top:8px">
+              <label><input type="checkbox" v-model="confirmShared">
+                I understand this destroys shared volumes, and want to send <code>force: true</code>.</label>
+            </div>
+          </div>
+
+          <template v-if="detail.requires.length">
+            <h2 style="margin-top:16px">Requires <span class="muted">(checked before up)</span></h2>
+            <ul class="list">
+              <li v-for="r in detail.requires" :key="r.name">
+                <span class="name stretch">{{ r.name }}</span>
+                <span class="muted" v-if="r.hint" :title="r.hint">hint</span>
+              </li>
+            </ul>
+          </template>
+
           <h2 style="margin-top:16px">Axes <span class="muted">(up in order, down in reverse)</span></h2>
           <ul class="list">
-            <li v-for="a in spec.axes" :key="a.name">
+            <li v-for="a in detail.axes" :key="a.name">
               <span class="name stretch">{{ a.name }}</span>
               <span>
                 <span v-for="h in a.hooks" :key="h" class="badge" style="margin-left:4px">{{ h }}</span>
@@ -164,38 +252,15 @@
                       title="verify cannot prove this axis was cleaned up">unverifiable</span>
               </span>
             </li>
+            <li v-if="!detail.axes.length" class="muted">
+              no axes<span v-if="isShared"> &mdash; a shared singleton has nothing to isolate</span>
+            </li>
           </ul>
-
-          <template v-if="statusText">
-            <h2 style="margin-top:16px">Compose status</h2>
-            <pre class="log" style="height:120px">{{ statusText }}</pre>
-          </template>
         </template>
-      </div>
-
-      <div class="panel">
-        <div class="row" style="margin-bottom:10px">
-          <h2 style="margin:0" class="stretch">Stacks on this host</h2>
-          <button @click="loadStacks">Refresh</button>
-        </div>
-        <p v-if="stacksError" class="err">{{ stacksError }}</p>
-        <pre v-if="stacksRaw" class="log" style="height:120px">{{ stacksRaw }}</pre>
-        <ul class="list" v-else>
-          <li v-for="s in stacks" :key="s.name">
-            <span class="name stretch" :class="{ mine: spec && s.name === spec.stack }">{{ s.name }}</span>
-            <span class="muted">{{ s.status }}</span>
-            <span v-if="s.busy" class="badge busy">busy</span>
-          </li>
-          <li v-if="!stacks.length" class="muted">nothing deployed</li>
-        </ul>
-        <p class="muted" style="margin:10px 0 0">
-          Actions are keyed by <code>{{ varName }}</code>, not by project name &mdash; the server
-          resolves the stack name from the spec itself.
-        </p>
       </div>
     </div>
 
-    <!-- ---------------- right: job ---------------- -->
+    <!-- ---------------- job ---------------- -->
     <div class="col">
       <div class="panel">
         <div class="row" style="margin-bottom:10px">
@@ -208,7 +273,7 @@
           <b>{{ conflict }}</b> already has a job in flight, so this action was <b>not</b> sent again
           &mdash; two lifecycle runs on one stack race over the same resources.
           <a v-if="conflictJobId" href="#" @click.prevent="attach(conflictJobId)">Attach to it</a>
-          <span v-else>Wait for it to finish, or pick it from Recent jobs.</span>
+          <span v-else>Wait for it to finish, then try again.</span>
         </div>
         <div v-if="postError" class="banner failed">{{ postError }}</div>
 
@@ -226,16 +291,17 @@
         </div>
 
         <pre class="log" ref="logEl" @scroll="onScroll"><template v-for="l in lines" :key="l.seq"><span class="t">{{ hhmmss(l.at) }}</span> <span :class="l.level">{{ l.message }}</span>
-</template><span v-if="!lines.length" class="muted">no job yet &mdash; load a target, then pick an action</span></pre>
+</template><span v-if="!lines.length" class="muted">no job yet &mdash; pick an action</span></pre>
 
         <template v-if="steps.length">
           <h2 style="margin-top:14px">Steps</h2>
           <table>
-            <thead><tr><th></th><th>axis</th><th>phase</th><th>detail</th></tr></thead>
+            <!-- `requires` steps put a REQUIREMENT name in this column, not an axis. Hence the header. -->
+            <thead><tr><th></th><th>axis / requirement</th><th>phase</th><th>detail</th></tr></thead>
             <tbody>
               <tr v-for="(s, i) in steps" :key="i">
                 <td class="mark" :class="'s-' + stepState(s)">{{ stepMark(s) }}</td>
-                <td class="mono">{{ s.axis }}</td>
+                <td class="name">{{ s.axis }}</td>
                 <td class="mono dim">{{ s.phase }}</td>
                 <td :class="'s-' + stepState(s)">{{ s.message || (s.skipped ? 'skipped' : '') }}</td>
               </tr>
@@ -243,21 +309,53 @@
           </table>
         </template>
       </div>
+    </div>
+  </div>
 
-      <div class="panel">
-        <div class="row" style="margin-bottom:10px">
-          <h2 style="margin:0" class="stretch">Recent jobs</h2>
-          <button @click="loadJobs">Refresh</button>
-        </div>
-        <ul class="list">
-          <li v-for="j in jobs" :key="j.id">
-            <a class="name stretch" href="#" @click.prevent="attach(j.id)">{{ j.action }} {{ j.stack }}</a>
-            <span class="muted mono">{{ hhmmss(j.startedAt) }}</span>
-            <span class="badge" :class="j.state">{{ j.state }}</span>
-          </li>
-          <li v-if="!jobs.length" class="muted">none &mdash; jobs are in-memory, a restart clears them</li>
-        </ul>
+  <!-- ============================== submit ============================== -->
+  <div class="page" v-else>
+    <div class="panel" style="max-width:900px">
+      <div class="row" style="margin-bottom:10px">
+        <button class="link" @click="go('list')">&larr; all</button>
+        <h2 style="margin:0" class="stretch">Submit a deployment</h2>
       </div>
+      <p class="muted" style="margin:0 0 12px">
+        <code>PUT /api/deployments/:id</code>. The spec is parsed before anything is stored, so a
+        rejected submission leaves nothing behind &mdash; and <code>kind</code> is read from the
+        spec, never from this form.
+      </p>
+
+      <div class="row" style="margin-bottom:10px">
+        <label for="did">id</label>
+        <input id="did" type="text" v-model.trim="form.id" placeholder="pr-123" style="width:220px">
+        <span class="muted mono">[a-z0-9][a-z0-9._-]{0,63}</span>
+      </div>
+
+      <h2>spec.yml</h2>
+      <textarea v-model="form.spec" rows="12" spellcheck="false"
+                placeholder="version: 1&#10;kind: isolated&#10;stack: pr-${PR}&#10;axes: []"></textarea>
+
+      <h2 style="margin-top:14px">compose.yml <span class="muted">(optional)</span></h2>
+      <textarea v-model="form.compose" rows="6" spellcheck="false"
+                placeholder="written next to spec.yml, so `compose.file: compose.yml` resolves"></textarea>
+
+      <h2 style="margin-top:14px">env <span class="muted">(variables for ${...} interpolation)</span></h2>
+      <div class="kv" v-for="(e, i) in form.env" :key="i">
+        <input type="text" v-model.trim="e.k" placeholder="PR">
+        <input type="text" v-model.trim="e.v" placeholder="123">
+        <button @click="form.env.splice(i, 1)">&minus;</button>
+      </div>
+      <button @click="form.env.push({ k: '', v: '' })">+ variable</button>
+
+      <div class="row" style="margin-top:14px">
+        <button class="primary" :disabled="!form.id || !form.spec.trim() || submitting" @click="submit">
+          {{ submitting ? 'submitting…' : 'Submit' }}
+        </button>
+        <span v-if="submitOk" class="s-ok">stored &mdash; <a href="#" @click.prevent="open(submitOk)">open {{ submitOk }}</a></span>
+      </div>
+
+      <!-- The server's rejection text IS the documentation. Render it whole, newlines intact. -->
+      <pre v-if="submitError" class="spec-error">{{ submitError }}</pre>
     </div>
   </div>
 </div>
@@ -266,23 +364,29 @@
 <script>
 const { createApp } = Vue;
 
+const HOOKS = ['up', 'down', 'assert_gone', 'assert_live'];
+
 createApp({
   data() {
     return {
-      health: { varName: 'PR', authEnforced: null, spec: '' },
+      health: { authEnforced: null },
       token: localStorage.getItem('pstack.token') || '',
-      target: localStorage.getItem('pstack.target') || '',
-      spec: null, specError: '', loadingSpec: false, statusText: '',
-      stacks: [], stacksRaw: null, stacksError: '',
-      verifyOnDown: true,
-      job: null, jobs: [], lines: [], acting: false,
+
+      screen: 'list',
+      deployments: [], listError: '',
+
+      id: '', detail: null, detailError: '',
+      downVerify: true, confirmShared: false, acting: false,
+
+      job: null, lines: [], es: null, pinned: true,
       conflict: '', conflictJobId: '', postError: '',
-      es: null, pinned: true,
+
+      form: { id: '', spec: '', compose: '', env: [{ k: '', v: '' }] },
+      submitting: false, submitError: '', submitOk: '',
     };
   },
 
   computed: {
-    varName() { return this.health.varName || 'PR'; },
     steps() { return (this.job && this.job.outcome && this.job.outcome.steps) || []; },
     /** Only a finished job has an outcome worth a banner. */
     outcomeState() { return this.job && this.job.state !== 'running' ? this.job.state : ''; },
@@ -292,9 +396,15 @@ createApp({
     unverifiableCount() {
       return this.steps.filter((s) => this.stepState(s) === 'unverifiable').length;
     },
-    stackBusy() {
-      const row = this.spec && this.stacks.find((s) => s.name === this.spec.stack);
-      return !!(row && row.busy) || !!(this.job && this.job.state === 'running');
+    isShared() { return !!this.detail && this.detail.kind === 'shared'; },
+    /**
+     * On DETAIL we know the resolved stack name, so correlating with a running job is sound.
+     * (On the list we do not — see the comment on the state column.)
+     */
+    busy() {
+      if (this.detail && this.detail.busy) return true;
+      return !!(this.job && this.job.state === 'running' &&
+                (!this.detail || !this.job.stack || this.job.stack === this.detail.stack));
     },
   },
 
@@ -304,102 +414,147 @@ createApp({
 
   mounted() {
     this.loadHealth();
-    this.loadStacks();
-    this.loadJobs();
-    // A "busy" badge is only useful if it is current, and the server holds the lock, not us.
-    setInterval(this.loadStacks, 5000);
-    if (this.target) this.load();
+    this.loadList();
+    // `busy` is only useful if it is current, and the server holds the lock, not us.
+    setInterval(() => { if (this.screen === 'list') this.loadList(); }, 5000);
   },
 
   methods: {
-    /** GETs need no auth: api.ts gates POST/DELETE only (EventSource cannot send headers anyway). */
-    async get(path) {
-      try {
-        const r = await fetch(path);
-        return { status: r.status, body: await r.json().catch(() => ({ error: `HTTP ${r.status}` })) };
-      } catch (e) {
-        return { status: 0, body: { error: `unreachable: ${e.message}` } };
+    /**
+     * One fetch path for everything. Auth goes on every NON-GET request (PUT and DELETE destroy
+     * just as thoroughly as POST). GETs stay open because EventSource cannot send headers, which
+     * is why the log stream works at all.
+     */
+    async api(method, path, body) {
+      const headers = {};
+      if (method !== 'GET') {
+        headers['content-type'] = 'application/json';
+        if (this.token) headers.authorization = `Bearer ${this.token}`;
       }
-    },
-
-    async post(path, body) {
-      const headers = { 'content-type': 'application/json' };
-      if (this.token) headers.authorization = `Bearer ${this.token}`;
       try {
-        const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body || {}) });
+        const r = await fetch(path, {
+          method,
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
         return { status: r.status, body: await r.json().catch(() => ({})) };
       } catch (e) {
         return { status: 0, body: { error: `unreachable: ${e.message}` } };
       }
     },
 
+    /**
+     * Turn a non-2xx into one sentence that names the call. A bare 404 here is ambiguous — it may
+     * mean "no such deployment" or "this server has no such route" — and the second is a very
+     * different problem, so say both rather than crashing on a missing field.
+     */
+    problem(res, what) {
+      if (res.status === 0) return res.body.error;
+      if (res.status === 401) return `${what}: unauthorized — set the token in the header field.`;
+      const e = res.body && res.body.error;
+      if (res.status === 404 && (!e || e === 'not found')) {
+        return `${what}: 404 — no such deployment, or this build of the API has no such route yet.`;
+      }
+      return e ? `${what}: ${e}` : `${what}: HTTP ${res.status}`;
+    },
+
     async loadHealth() {
-      const { body } = await this.get('/api/health');
-      if (body && body.varName) this.health = body;
+      const r = await this.api('GET', '/api/health');
+      if (r.status === 200) this.health = r.body;
     },
 
-    async loadStacks() {
-      const { body } = await this.get('/api/stacks');
-      this.stacksError = body.error || '';
-      if (body.parseError) { this.stacksRaw = body.raw; this.stacks = []; return; }
-      this.stacksRaw = null;
-      this.stacks = body.stacks || [];
-    },
-
-    async loadJobs() {
-      const { body } = await this.get('/api/jobs');
-      this.jobs = (body.jobs || []).slice(0, 8);
-    },
-
-    /** Resolve the spec for this target, plus what compose currently has running for it. */
-    async load() {
-      this.loadingSpec = true;
-      this.specError = '';
-      localStorage.setItem('pstack.target', this.target);
-      const q = encodeURIComponent(this.varName.toLowerCase());
-      const id = encodeURIComponent(this.target);
-      const [s, st] = await Promise.all([
-        this.get(`/api/spec?${q}=${id}`),
-        this.get(`/api/stacks/${id}/status`),
-      ]);
-      this.loadingSpec = false;
-      if (s.status !== 200) {
-        this.spec = null; this.statusText = '';
-        this.specError = s.body.error || `HTTP ${s.status}`;
+    // ---- list ------------------------------------------------------------------
+    async loadList() {
+      const r = await this.api('GET', '/api/deployments');
+      if (r.status !== 200) {
+        this.listError = this.problem(r, 'GET /api/deployments');
         return;
       }
-      this.spec = s.body;
-      this.statusText = st.status === 200 ? st.body.status : '';
+      this.listError = '';
+      // Accept either an envelope or a bare array; normalise kind so the badge class is never
+      // `k-undefined`.
+      const rows = r.body.deployments ?? (Array.isArray(r.body) ? r.body : []);
+      this.deployments = rows.map((d) => ({ ...d, kind: d.kind || 'isolated' }));
+    },
+
+    go(screen) {
+      this.close();
+      this.screen = screen;
+    },
+
+    // ---- detail ----------------------------------------------------------------
+    async open(id) {
+      this.close();
+      this.screen = 'detail';
+      this.id = id;
+      this.detail = null;
+      this.detailError = '';
+      this.confirmShared = false;
+      this.job = null;
+      this.lines = [];
+      this.conflict = this.conflictJobId = this.postError = '';
+      await this.loadDetail();
+    },
+
+    async loadDetail() {
+      const r = await this.api('GET', `/api/deployments/${encodeURIComponent(this.id)}`);
+      if (r.status !== 200) {
+        this.detailError = this.problem(r, `GET /api/deployments/${this.id}`);
+        return;
+      }
+      const b = r.body;
+      // The meta and the resolved spec may arrive flat or nested; read from whichever holds them.
+      const dep = b.deployment ?? b;
+      const spec = b.spec ?? b.stackSpec ?? b;
+      this.detail = {
+        kind: dep.kind || spec.kind || 'isolated',
+        updatedAt: dep.updatedAt,
+        busy: dep.busy ?? spec.busy ?? b.busy ?? false,
+        stack: typeof spec.stack === 'string' ? spec.stack : '',
+        compose: spec.compose || null,
+        requires: spec.requires || [],
+        // An axis may arrive pre-summarised (`hooks: [...]`, as /api/spec did) or raw from the
+        // spec. Derive the hook list when it is missing rather than showing "no hooks".
+        axes: (spec.axes || []).map((a) => ({
+          name: a.name,
+          hooks: Array.isArray(a.hooks) ? a.hooks : HOOKS.filter((k) => a[k]),
+        })),
+      };
     },
 
     async act(action) {
       this.acting = true;
       this.conflict = this.conflictJobId = this.postError = '';
-      const path = `/api/stacks/${encodeURIComponent(this.target)}/${action}`;
-      const { status, body } = await this.post(path, action === 'down' ? { verify: this.verifyOnDown } : {});
+      const path = `/api/deployments/${encodeURIComponent(this.id)}/${action}`;
+      const body = action === 'down'
+        // `force` is only ever true for a shared deployment the operator explicitly confirmed.
+        // The server refuses a shared down without it, which is the guard that actually holds.
+        ? { verify: this.downVerify, force: this.isShared && this.confirmShared }
+        : {};
+      const r = await this.api('POST', path, body);
       this.acting = false;
 
-      if (status === 202) return this.begin(body.job);
-      if (status === 409) {
+      if (r.status === 202) return this.begin(r.body.job || {});
+      if (r.status === 409) {
         // One job per stack, deliberately not queued. Surface it; never retry.
-        this.conflict = body.stack || this.target;
-        const { body: jl } = await this.get('/api/jobs');
-        this.jobs = (jl.jobs || []).slice(0, 8);
-        const live = (jl.jobs || []).find((j) => j.stack === body.stack && j.state === 'running');
+        this.conflict = r.body.stack || r.body.id || this.id;
+        // Jobs are keyed by the RESOLVED stack, but a 409 body may name either the stack or the
+        // deployment id. Try every name we hold for this deployment — attaching is the whole
+        // remedy on this screen, so failing to find the job is worse than matching loosely.
+        const names = [r.body.stack, r.body.id, this.id, this.detail && this.detail.stack];
+        const jl = await this.api('GET', '/api/jobs');
+        const live = (jl.body.jobs || []).find((j) => j.state === 'running' && names.includes(j.stack));
         if (live) this.conflictJobId = live.id;
         return;
       }
-      this.postError = status === 401
-        ? 'unauthorized — set the token in the header field.'
-        : (body.error || `HTTP ${status}`);
+      this.postError = this.problem(r, `POST ${path}`);
     },
 
     begin(job) {
-      this.job = { ...job, outcome: undefined, error: undefined };
+      this.job = { ...job, outcome: undefined, error: undefined, state: job.state || 'running' };
       this.lines = [];
       this.pinned = true;
-      this.stream(job.id);
-      this.loadJobs();
+      if (job.id) this.stream(job.id);
     },
 
     /** Attach to an existing job. The stream replays its buffered log, so this works late too. */
@@ -412,7 +567,7 @@ createApp({
     },
 
     stream(id) {
-      if (this.es) this.es.close();
+      this.close();
       const es = (this.es = new EventSource(`/api/jobs/${encodeURIComponent(id)}/stream`));
       es.onmessage = (ev) => {
         const e = JSON.parse(ev.data);
@@ -437,14 +592,16 @@ createApp({
       // The lock is released, so a "job in flight" notice is no longer true — never leave a stale
       // conflict banner sitting next to a finished job's outcome.
       this.conflict = this.conflictJobId = '';
-      const { body } = await this.get(`/api/jobs/${encodeURIComponent(id)}`);
-      if (body.job) this.job = body.job;
+      const r = await this.api('GET', `/api/jobs/${encodeURIComponent(id)}`);
+      if (r.body.job) this.job = r.body.job;
       // No record: the server restarted (jobs are in-memory) or the id was evicted. Say so rather
       // than leaving the panel pinned on "running" forever.
       else if (this.job) this.job = { ...this.job, state: 'failed', error: 'lost the job record — server restarted?' };
-      this.loadStacks();
-      this.loadJobs();
-      if (this.spec) this.load();
+      this.confirmShared = false; // re-arm the guard for the next teardown
+      // Refresh BOTH: the lock is released, so the list's `busy` badge is stale the moment this
+      // job ends — and the operator may already have navigated back to it.
+      this.loadList();
+      if (this.screen === 'detail') this.loadDetail();
     },
 
     scroll() {
@@ -460,10 +617,41 @@ createApp({
       this.pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     },
 
+    // ---- submit ----------------------------------------------------------------
+    openSubmit(id) {
+      this.close();
+      this.screen = 'submit';
+      this.submitError = this.submitOk = '';
+      if (id) this.form.id = id;
+    },
+
+    async submit() {
+      this.submitting = true;
+      this.submitError = this.submitOk = '';
+      const env = {};
+      for (const { k, v } of this.form.env) if (k) env[k] = v;
+      const body = { spec: this.form.spec, env };
+      if (this.form.compose.trim()) body.compose = this.form.compose;
+
+      const path = `/api/deployments/${encodeURIComponent(this.form.id)}`;
+      const r = await this.api('PUT', path, body);
+      this.submitting = false;
+
+      if (r.status === 200 || r.status === 201) {
+        this.submitOk = this.form.id;
+        this.loadList();
+        return;
+      }
+      // 400 carries the SpecError, which is the whole point of showing this verbatim: it names the
+      // key, the variable, or the assert that is wrong, and often how to fix it.
+      this.submitError = this.problem(r, `PUT ${path}`);
+    },
+
+    // ---- shared -----------------------------------------------------------------
     /**
      * Four states that must not blur into each other:
      *   leaked       assert_gone failed — the resource survived teardown. The signal this tool exists for.
-     *   failed       any other non-zero step.
+     *   failed       any other non-zero step (including a refused shared `down`).
      *   unverifiable no assert_gone defined. NOT a pass.
      *   ok           passed. A `down` step may still carry a "non-fatal:" message: teardown is
      *                best-effort by design, so the step genuinely did not fail the run.
@@ -479,6 +667,9 @@ createApp({
     },
 
     hhmmss(ms) { return new Date(ms).toTimeString().slice(0, 8); },
+    /** Local time, ISO-shaped (`sv` renders `2026-07-26 05:17:00`) — sortable, and the same clock
+     *  the log lines use. No zone marker: everything shown here is the viewer's local time. */
+    stamp(ms) { return ms ? new Date(ms).toLocaleString('sv') : '—'; },
   },
 }).mount('#app');
 </script>

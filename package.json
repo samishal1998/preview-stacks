@@ -24,6 +24,7 @@
   "files": [
     "src",
     "ui",
+    "templates",
     "examples",
     "skills",
     "docs",

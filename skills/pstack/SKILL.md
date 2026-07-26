@@ -1,6 +1,6 @@
 ---
 name: pstack
-description: Use when setting up, configuring, or debugging ephemeral per-PR preview stacks with pstack — writing a preview.yml, defining isolation axes, wiring up/down/verify into CI, or diagnosing leaked preview resources.
+description: Use when setting up, configuring, or debugging ephemeral per-PR preview stacks with pstack — writing a preview.yml, defining isolation axes and requires preconditions, choosing shared vs isolated kinds, wiring up/down/verify into CI, or diagnosing leaked preview resources.
 ---
 
 # Using pstack
@@ -10,12 +10,37 @@ preview needs (a database branch, a queue namespace, images, DNS), it provisions
 your Compose stack, tears everything down in reverse — and then **proves nothing leaked**.
 
 ```bash
-PR=123 pstack up        # provision axes in order, then compose up
+PR=123 pstack up        # assert `requires`, provision axes in order, then compose up
 PR=123 pstack down      # compose down (all profiles) → destroy axes in reverse → verify
 PR=123 pstack verify    # assert every axis is gone; exit 2 if anything survived
 PR=123 pstack validate  # parse, resolve interpolation, print warnings
 PR=123 pstack status    # compose ps for this stack
 ```
+
+## 0. The control-plane model — three layers, three sets of rules
+
+Before writing a spec, work out **which layer** you are describing. It decides what you may declare
+and what may be done to it.
+
+| Layer | What it is | Declared as | Axes? | `down` |
+|---|---|---|---|---|
+| **control** | Traefik + the `pstack` API + UI. One per host. | *not a spec you submit* | n/a | **not offered** |
+| **shared** | a host singleton every preview borrows: a database, a queue cluster, a registry mirror | `kind: shared` | **none allowed** — hard error | **refused unless explicitly forced** |
+| **isolated** | one tenant, normally one PR | `kind: isolated` (default) | yes — the point | routine |
+
+Two rules that follow, and both are enforced in code:
+
+1. **Never point a spec at the control stack.** The API cannot run `up` on the deployment containing
+   the API — the process doing the work is inside the container being replaced, so it is killed
+   mid-operation, and a bad image leaves no control plane and no remote way back. Upgrading it is a
+   host-side job: `pstack init` (implemented in `src/init.ts`; **`cli.ts` does not dispatch it
+   yet**, so today it is `docker compose -p pstack-control … up -d` from a shell on the host) and
+   `pstack self-upgrade` (not built — it is `init` re-run after a fetch). Nothing in the code
+   enforces this: the API cannot reliably know its own deployment id, so it is on you.
+2. **`down` on a `kind: shared` deployment is refused unless you force it explicitly** — see §2.
+
+If you are asked to "tear down the shared database" or "restart the preview host's Traefik", stop
+and check which layer it is before running anything.
 
 ## 1. When to reach for it
 
@@ -53,8 +78,71 @@ and it is silent until the disk fills.
 
 - Axes are provisioned in **declaration order** and destroyed in **reverse**. Declare a dependency
   before its dependents (database before the app that migrates it).
-- `up`: all axes → then compose up. Fails fast.
+- `up`: **`requires` asserts** → all axes → then compose up. Fails fast.
 - `down`: compose down → axes in reverse → `verify` (unless `--no-verify`).
+
+### Kinds, and why `down` on a shared deployment needs `--force`
+
+```yaml
+version: 1
+kind: shared              # default is `isolated`
+stack: shared-db          # a fixed identity, not a template — one per host
+compose:
+  file: docker-compose.shared.yml
+  profiles: []
+```
+
+`down` runs `docker compose down -v`. On an isolated stack the `-v` removes that tenant's own
+volumes — routine, and the whole point. On a **shared** deployment the *same verb* destroys
+Traefik's `acme.json` (every certificate for the host, re-issued under a per-week Let's Encrypt rate
+limit), the shared database volume (every preview's state), and the admin credentials. Identical
+command, completely different blast radius — so it is refused:
+
+```
+$ pstack -f shared.yml down
+refusing to tear down shared deployment "shared-db"
+  ✗ compose      shared-db  — refused: kind is `shared`. `down` removes volumes (-v), which on a
+    shared deployment destroys state every tenant depends on. Re-run with --force if that is truly
+    intended.        # exit 1 — nothing ran
+```
+
+- **Explicit force is the only thing that lifts it**: `--force` on the CLI, `{ "force": true }` in
+  the `POST /api/deployments/:id/down` body. Over HTTP, omitting it is a **synchronous 409** — no
+  job is started, so the reason is in the response rather than buried in a transcript. To *upgrade*
+  a shared deployment, run `up`: it converges and removes nothing.
+- **The guard keys off the declared `kind`, not "does it have axes".** An isolated deployment that
+  forgot its axes must not silently inherit a singleton's protection. That is why the kind is
+  written down rather than inferred.
+- **`kind: shared` may declare no axes** — it is a parse error, not a warning:
+  `kind: shared cannot declare axes (found 1) … Did you mean kind: isolated?` (exit 3). Axes exist
+  to isolate one tenant from another and to prove a tenant's resources are gone; a singleton has
+  neither concern.
+- `kind: isolated` **with no axes** gets a warning: nothing per-tenant is provisioned or verified,
+  so it is just a Compose project. Either add the axes or mark it `shared`.
+
+### Preconditions: `requires`
+
+An isolated deployment usually depends on shared ones. Without a preflight, a missing dependency
+surfaces partway through an axis hook as whatever error that CLI printed — uninformative, and
+*after* some resources already exist.
+
+```yaml
+requires:
+  - name: shared-db
+    assert: docker network inspect preview-shared >/dev/null 2>&1
+    hint: bring the shared deployment up first — `pstack -f shared.yml up`
+```
+
+```
+$ PR=123 pstack up
+→ requires: shared-db
+  ✗ requires     shared-db  — unmet — bring the shared deployment up first — `pstack -f shared.yml up`
+                                                                                        # exit 1
+```
+
+Every `assert` runs **before the first axis**, in declaration order; the first failure aborts and
+nothing has been created. Write `hint` as *how to fix it* — the assert already says what broke.
+Same discipline as an `assert_gone`: an `assert` that cannot answer must exit non-zero, not pass.
 
 ### What each hook can see
 
@@ -77,9 +165,10 @@ ambient environment — usually nothing. Every teardown hook and every assert mu
 | 2 | **leaked** — torn down, but an `assert_gone` says a resource survived | whoever owns the infra |
 | 3 | bad spec or usage (undefined variable, bad stack name, unknown flag) | whoever edited the spec |
 
-`2` is separate from `1` on purpose so CI can page the right person. Note in this build **`down`
-can only exit 0 or 2**: axis `down` failures are recorded as `non-fatal: …` lines in the report and
-never reach the exit code, so the leak gate is what actually fails the job.
+`2` is separate from `1` on purpose so CI can page the right person. Axis `down` failures are
+recorded as `non-fatal: …` lines in the report and never reach the exit code, so **`down` normally
+exits 0 or 2** and the leak gate is what actually fails the job. Two exceptions return 1: the
+`kind: shared` refusal (nothing ran) and an unhandled crash.
 
 `verify` exits **0 even when axes are `unverifiable`** (no `assert_gone` defined), and `validate`
 exits 0 even with warnings. Green ≠ checked — read the report, not just the code:
@@ -105,6 +194,7 @@ pstack <up|down|verify|status|validate|serve> [flags]
   -q, --quiet         suppress per-step chatter
       --set K=V       override/define a variable (repeatable)
       --no-verify     down: skip the post-teardown leak check
+      --force         down: allow tearing down a `kind: shared` deployment
 ```
 
 `-v` prints hook stdout verbatim and **nothing is masked** — do not use it in a public CI log for an
@@ -119,6 +209,7 @@ file. Run it from the repo root, or use absolute paths.
 
 ```yaml
 version: 1
+kind: isolated                        # default; `shared` for a host singleton (§2)
 stack: pr-${PR}                       # compose project name, hostname label, and $STACK in hooks
 
 compose:
@@ -522,7 +613,7 @@ Exit **2** and exit **1** have different owners: 2 means teardown ran and someth
 ```
 
 Or enumerate what actually exists on the host — `docker compose ls --all` (the same source
-`GET /api/stacks` uses) — and verify anything whose PR is closed.
+`GET /api/deployments` uses for its `running` flag) — and verify anything whose PR is closed.
 
 Notes:
 
@@ -544,37 +635,73 @@ API is the same core with a job queue in front.
 
 | Route | Notes |
 |---|---|
-| `GET /api/health` | liveness; reports whether auth is enforced |
-| `GET /api/spec?pr=123` | the resolved spec for that stack (query key = the var name, or `id`) |
-| `GET /api/stacks` | compose projects on the host, with a `busy` flag |
-| `GET /api/stacks/:id/status` | compose ps for one stack |
-| `POST /api/stacks/:id/up` | → `202 { job }` |
-| `POST /api/stacks/:id/down` | → `202 { job }`; body `{ "verify": false }` to skip the leak check |
-| `POST /api/stacks/:id/verify` | → `202 { job }` |
+| `GET /api/health` | liveness; auth mode, data dir, version |
+| `GET /api/deployments` | every submitted deployment, with `busy` and `running` |
+| `GET /api/deployments/:id` | meta + spec summary (axis **hook names**, never hook bodies) |
+| `PUT /api/deployments/:id` | submit or replace: `{ spec, compose?, env? }` → `201` new / `200` replaced |
+| `DELETE /api/deployments/:id` | forget it — **refused while containers still exist** |
+| `POST /api/deployments/:id/up` | → `202 { job }` |
+| `POST /api/deployments/:id/down` | → `202 { job }`; body `{ verify?, force? }` |
+| `POST /api/deployments/:id/verify` | → `202 { job }` |
 | `GET /api/jobs` · `GET /api/jobs/:jobId` | poll for `state` |
 | `GET /api/jobs/:jobId/stream` | SSE: buffered log replayed, then live |
 
 ```bash
 job=$(curl -fsS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
-        http://host:7878/api/stacks/123/down | jq -r .job.id)
-curl -fsS -N -H "Authorization: Bearer $PSTACK_TOKEN" http://host:7878/api/jobs/$job/stream
+        'http://host:7878/api/deployments/pr-123/down?PR=123' | jq -r .job.id)
+curl -fsS -N http://host:7878/api/jobs/$job/stream
 ```
 
 Things to know:
 
-- **`:id` is the value of the stack variable** (`PR` by default, set `PSTACK_VAR`), not the resolved
-  stack name. The server owns the spec and resolves `pr-${PR}` itself, so a client cannot point it at
-  an arbitrary compose project.
+- **`:id` is a registry id**, not a compose project name. The server owns the stored spec and
+  resolves `stack:` itself, so a client cannot point it at an arbitrary compose project.
+- **Spec variables ride on the query string and are NOT stored.** `stack: pr-${PR}` needs `?PR=123`
+  on every call — and the *same* ones on `down` as on `up`, or teardown targets a different stack
+  than deploy created. A missing variable is a `400` naming it.
 - **Job state replaces the exit code**: `running` → `ok` | `failed` | **`leaked`**. Map `leaked` to
   whatever your exit-2 path is; a `202` only means the job started.
 - **One job per stack.** A second request while one is in flight gets **409** rather than queueing —
   concurrent `up`/`down` would race over the same compose project and the same external resources.
 - **Jobs are in-memory**, last 50, lost on restart (which also clears the busy locks).
 - **`PSTACK_TOKEN` is required for every mutating route**, and without it the server refuses to bind
-  anything but `127.0.0.1` (exit 3 if you set `PSTACK_HOST` anyway). `GET`s are unauthenticated. It
-  is not multi-tenant — one spec, one Docker socket — so put it behind your ingress' auth or an SSH
-  tunnel.
-- `GET /` serves the web UI, which is a **placeholder in this build**. Treat the API as the surface.
+  anything but `127.0.0.1` (exit 3 if you set `PSTACK_HOST` anyway). `GET`s are unauthenticated —
+  `GET /api/jobs/:id` returns a whole hook transcript, so ingress auth is the only gate on reads.
+- **It is not multi-tenant and it is not a sandbox.** One spec, one Docker socket, one trust level:
+  accepting a spec means accepting arbitrary compose *and* arbitrary shell hooks — remote code
+  execution by design, not by bug. The socket mount is root-equivalent on the host. Gate *who may
+  submit* (ingress auth, or an SSH tunnel); never try to sanitize what a spec contains.
+- `GET /` serves the single-file Vue UI from `ui/` (next to `src/`), which does what the CLI does
+  with a live job log.
+
+### Submitting deployments by id
+
+The API is registry-backed: specs are stored under `$PSTACK_DATA/deployments/<id>/`
+(`spec.yml` · `compose.yml` · `meta.json`, default `/var/lib/pstack`) and addressed by id.
+
+```bash
+curl -fsS -X PUT -H "Authorization: Bearer $PSTACK_TOKEN" \
+     -H 'content-type: application/json' \
+     -d "$(jq -n --rawfile s preview.yml --rawfile c docker-compose.preview.yml \
+             '{spec:$s, compose:$c, env:{PR:"123"}}')" \
+     http://host:7878/api/deployments/pr-123
+```
+
+Four constraints that decide whether a submitted spec works at all:
+
+- **Hooks cannot use relative paths.** A deployment's runner runs with `cwd` set to its own
+  directory, and only `spec.yml` and `compose.yml` live there. `up: ./hooks/db.sh …` works from a
+  CLI checkout and **cannot** work over the API — inline the shell, or use absolute paths.
+- **`put` validates before it commits** (and the route parses the string first, so a typo on a
+  *replace* cannot delete a good record while its containers keep running). `kind` is read from the
+  parsed spec, never from the caller.
+- **`remove` forgets only — it never tears anything down.** `DELETE` therefore refuses while
+  containers exist, and refuses when Docker did not answer, because "could not tell" is not evidence
+  of absence. Always `down` clean *before* forgetting.
+- **`PUT` is refused (409) while that stack has a job in flight** — swapping the spec mid-job means
+  the eventual `down` runs with different profiles and axes than `up` created.
+
+For CI, prefer the CLI (`-f`, `--set`): no host access, no token, and the exit codes above.
 
 ## 8. Troubleshooting
 
@@ -592,6 +719,11 @@ Things to know:
 | `verify` is green but the resource is obviously there | inverted assert, or `\|\| true` / bare `!` swallowing the probe's failure | re-read §5; `pstack validate` flags both patterns |
 | report shows `?` and `unverifiable: no assert_gone defined`, exit 0 | that axis has no `assert_gone`, so nothing was checked | add one, or accept it knowingly — `verify` will never catch that axis |
 | `down` reports `non-fatal: …` but exits 0 | axis `down` failures are best-effort by design; only `assert_gone` fails the command | that is correct — if the resource survived, `assert_gone` would have said so. If it didn't, the assert is wrong. |
+| `refusing to tear down shared deployment "…"` (exit 1) | `kind: shared` guard — `down -v` there destroys state every tenant depends on | to **upgrade** it run `up` (converges, removes nothing). Only `--force` if destroying that state is genuinely the goal. |
+| `kind: shared cannot declare axes` (exit 3) | a singleton has nothing to isolate and nothing to prove gone | it is almost certainly `kind: isolated` |
+| `! kind: isolated with no axes …` (warning) | the spec is just a Compose wrapper | add the axes it needs, or mark it `kind: shared` so `down` is guarded |
+| `✗ requires  <name>  — unmet` (exit 1) | a `requires` assert failed; **nothing was created** | do what the `hint` says — usually bring the shared deployment up first |
+| a `requires` assert passes while the dependency is down | same fail-open bug as a bare `! <probe>` — the assert command itself failed | guard it the way §5 guards an `assert_gone` |
 | `409 already has a job in flight` | one job per stack | poll `GET /api/jobs/:id` to a terminal state, then retry |
 | `401 unauthorized` on a POST | `PSTACK_TOKEN` is set server-side; `GET`s are open, mutations are not | send `Authorization: Bearer $PSTACK_TOKEN` |
 | `refusing to bind 0.0.0.0 without PSTACK_TOKEN` (exit 3) | safety interlock — this API destroys infrastructure | set `PSTACK_TOKEN`, or leave it on loopback and tunnel |
@@ -620,3 +752,7 @@ Things to know:
    gated, fail the job when the report contains `unverifiable`.
 9. **Confirm no secrets in the log** if any `up` emits a connection string — nothing is masked, so
    drop `-v` on those runs.
+10. **Check the `kind` is right.** Run `pstack validate` and read the `kind:` in the first line. A
+    host singleton declared `isolated` has no guard on `down`, and one `pstack down` then takes out
+    the TLS store and every preview's shared state. Then break a `requires` on purpose and confirm
+    `up` stops **before** creating anything.
