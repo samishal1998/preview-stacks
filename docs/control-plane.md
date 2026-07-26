@@ -24,7 +24,9 @@ marks anything not yet reachable. The short version:
 | `requires:` preflight | `src/spec.ts`, `src/stack.ts` | **built** — asserted before anything is created |
 | The deployment registry | `src/registry.ts` | **built** |
 | `/api/deployments/*` routes | `src/api.ts` | **built** — the API is registry-backed; the old single-spec `/api/spec` and `/api/stacks` routes are gone |
-| `pstack init` | `src/init.ts` + `templates/control/` | **implemented and dispatched** — `pstack init --domain … --acme-email … --dns-provider …` |
+| `pstack init` | `src/init.ts` + `templates/control/` | **implemented and dispatched** — `pstack init --domain … --acme-email …`; DNS-01 adds `--challenge dns01 --dns-provider …` |
+| HTTP-01 / DNS-01 challenge modes | `src/init.ts`, `templates/control/` | **built** — HTTP-01 is the default; `init` renders the two `#__MARKER__` blocks per mode (§TLS) |
+| The published bundle | `scripts/build.ts`, `package.json` | **built** — `dist/cli.js` + `dist/index.js`, `bin` → `dist/cli.js` (§Distribution) |
 | `pstack self-upgrade` | — | *not built* — it is `init` re-run after a fetch (§7) |
 
 `src/api.ts`'s file header is the authoritative route list. Where this document and that header
@@ -42,9 +44,13 @@ disagree, the header is right.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  CONTROL stack                                                           │
 │                                                                          │
-│    traefik       owns :80/:443, terminates the wildcard cert             │
+│    traefik       owns :80/:443, terminates TLS for the whole host        │
+│                  (one wildcard cert under DNS-01; one cert per           │
+│                   hostname under the HTTP-01 default — see §TLS)         │
 │    pstack        the HTTP API: holds the registry, runs the jobs,        │
 │                  and serves the dashboard as static files                │
+│                    control.<domain>   the web UI                         │
+│                    api.<domain>       the API — same container           │
 │                                                                          │
 │  Lifecycle: created once by `pstack init`, upgraded from the host.       │
 └────────────────────────────────┬─────────────────────────────────────────┘
@@ -57,6 +63,7 @@ disagree, the header is right.
   │                        │            │                              │
   │  a database, a queue,  │            │  pr-123, pr-124, pr-131 …    │
   │  a registry mirror     │            │                              │
+  │  <service>.<domain>    │            │  <surface>-pr-<n>.<domain>   │
   │  no axes               │            │  axes, proven gone on `down` │
   │  `down` is guarded     │            │  ephemeral by design         │
   └────────────────────────┘            └──────────────────────────────┘
@@ -64,6 +71,155 @@ disagree, the header is right.
 
 Everything below the dashed line is data the API acts on. Everything above it is the API itself,
 and the API must not touch it.
+
+### Hostnames
+
+| Hostname | Serves | Owned by |
+|---|---|---|
+| `control.<domain>` | the web UI | the control stack (`traefik.http.routers.pstack-ui`) |
+| `api.<domain>` | the HTTP API — CI, `curl`, scripts | the control stack (`…routers.pstack-api`) |
+| `<service-name>.<domain>` | a shared service's own hostname, by convention | the shared deployment's own compose labels |
+| `<surface>-pr-<n>.<domain>` | one surface of one PR | the isolated deployment's own compose labels |
+
+**Two routers, one container.** `control.` and `api.` both point at the same `pstack` service,
+because the API process serves the UI. The routers are separate only so that external callers get an
+honest name: `api.<domain>` is a stable handle for CI that does not read as "the UI host", and it can
+be firewalled, rate-limited or fronted differently from the browser surface without moving anything.
+
+**The UI calls the API with relative `/api/…` paths — deliberately.** A page loaded from
+`control.<domain>` therefore talks to `control.<domain>/api/…`, which is **same-origin**: no CORS
+preflight, no `Access-Control-Allow-*` to maintain, no cross-origin cookie rules, and nothing to
+reconfigure when the domain changes or a second hostname is added. Hard-coding
+`https://api.<domain>` into the UI would buy nothing and cost a CORS policy on an API that can
+destroy infrastructure.
+
+Per-PR hostnames are **flat and dash-separated**. A wildcard certificate — and a wildcard DNS
+record — matches exactly **one** label: `backend-pr-1.<domain>` is covered, `backend.pr-1.<domain>`
+is not. Nesting the labels is a silent break, because DNS resolves and only TLS fails.
+
+*(The pre-0.1 UI hostname `pstack.<domain>` is gone.)*
+
+---
+
+## TLS: two challenge modes, opposite per-PR rules
+
+Traefik terminates TLS for every hostname on the host, and how it *proves* the domain is an `init`
+choice with architectural consequences. **HTTP-01 is the default**; DNS-01 is opt-in:
+
+```bash
+pstack init --domain preview.example.com --acme-email <you>@example.com
+pstack init --domain preview.example.com --acme-email <you>@example.com \
+            --challenge dns01 --dns-provider cloudflare      # token via PSTACK_DNS_TOKEN
+```
+
+`--dns-provider` is required **only** for `dns01`; `init` rejects the combination without it.
+`init` renders the two `#__MARKER__` blocks in `templates/control/docker-compose.yml` per mode
+(`acmeChallengeArgs` / `acmeRouterLabels` in `src/init.ts`) and leaves the rest byte-for-byte —
+Compose cannot conditionally include CLI arguments, which is why these two blocks are generated and
+nothing else is.
+
+| | **HTTP-01** (default) | **DNS-01** |
+|---|---|---|
+| Credential | **none** | a DNS API token per provider (or an instance identity) |
+| Hard requirement | **port 80 reachable from the internet** | the token can write TXT records in the zone |
+| Wildcard | **impossible** — Let's Encrypt does not offer HTTP-01 for `*.<domain>` | **one** `*.<domain>` + apex covers everything |
+| Certs issued | one **per hostname** | **one**, total |
+| Valid before the stack is deployed | **no** — the challenge needs something already answering on that hostname | **yes** — the wildcard exists before any PR does |
+| Practical ceiling | ~50 new certs / registered domain / week ÷ 3 surfaces per PR ≈ **16 new PRs/week** | none from issuance |
+
+### HTTP-01 and the `web` → `websecure` redirect
+
+The control stack redirects all of `:80` to HTTPS
+(`--entrypoints.web.http.redirections.entrypoint.to=websecure`), which looks like it should break an
+HTTP-01 challenge served over port 80. It does not: **Traefik installs an internal ACME router at
+maximum priority that bypasses the redirect for `/.well-known/acme-challenge/`.** You do not add a
+middleware, an exclusion, or a second entrypoint. The two flags are all of it:
+
+```
+- --certificatesresolvers.le.acme.httpchallenge=true
+- --certificatesresolvers.le.acme.httpchallenge.entrypoint=web    # must be the :80 entrypoint
+```
+
+The one hard requirement is that **port 80 is reachable from the internet**. A firewall that admits
+only 443 — a reasonable-looking hardening step — makes every issuance fail with a validation error
+that says nothing about the firewall.
+
+### Why the ceiling is the reason to move to DNS-01
+
+Let's Encrypt allows roughly **50 new certificates per registered domain per week**. Renewals do not
+count against it; the separate **duplicate-certificate limit is 5 per week** and applies to
+re-issuing the *same* set of hostnames.
+
+Because HTTP-01 cannot issue a wildcard, each preview hostname is a *new* certificate. With three
+surfaces per PR — backend, frontend, admin — that is:
+
+```
+50 new certs/week ÷ 3 certs/PR ≈ 16 new PRs/week
+```
+
+PR 17 in a busy week gets a TLS error, not a preview. Nothing degrades gracefully: the limit is
+per registered domain, it resets on a rolling week, and the failure surfaces as an unrelated-looking
+handshake error on a stack that deployed fine. That arithmetic — not elegance — is when you switch.
+
+The second reason is sequencing. HTTP-01 cannot certify a hostname **before its container exists**,
+so a preview URL is not valid until the stack is actually deployed; a PR mid-build serves a TLS
+error that reads like a certificate problem and is really an ordering problem. A DNS-01 wildcard is
+valid immediately, so the URL can be posted to the PR before the deploy finishes.
+
+### The per-PR router rules are OPPOSITE per mode
+
+This is the easiest thing in the whole system to get wrong, because the correct label set in one
+mode is the rate-limit bug in the other.
+
+| | **HTTP-01** | **DNS-01** |
+|---|---|---|
+| Per-PR router labels | `tls=true` **and** `tls.certresolver=le` | `tls=true` **and nothing else** |
+| Who requests a cert | **every** router, for its own hostname, on first HTTPS request | **exactly one** always-on router |
+| `tls.domains[0].main` / `.sans` | not used | on that one router only: `${DOMAIN}` / `*.${DOMAIN}` |
+| How other routers get TLS | they don't inherit — each resolves its own | **inherit the wildcard by SNI** |
+
+Under **HTTP-01**, a per-PR router *without* `certresolver` has no certificate and no way to obtain
+one — the hostname serves a TLS error.
+
+Under **DNS-01**, a per-PR router *with* `certresolver` makes Traefik order a **separate**
+certificate for that hostname, silently converting the one-wildcard design back into
+one-cert-per-hostname and burning the ~50/week limit. The stack looks healthy the whole time. In
+this template the single always-on requester is the `pstack-ui` router; every other router on the
+host — shared and per-PR alike — sets `tls=true` and stops there.
+
+If you switch modes on an existing host, **the per-PR compose labels must change too.** `init`
+re-renders the control stack; it has no reach into your deployments' label sets.
+
+### DNS records
+
+Both modes want the same DNS: a wildcard `*.<domain>` plus the apex, pointed at the host. HTTP-01
+changes what gets *certified*, never what *resolves* — without the wildcard record a per-PR
+hostname does not resolve at all, and the challenge cannot even be attempted. Remember the wildcard
+matches one label: flatten per-PR hostnames with dashes.
+
+### DNS-01 credentials
+
+`init` writes the token to `control/dns.env` (mode `0600`) under the variable name lego expects,
+loaded by Traefik via `env_file:`. It is a **separate secret from `PSTACK_TOKEN`**, with a
+deliberately different blast radius: this one can edit a DNS zone, `PSTACK_TOKEN` can start
+privileged containers on the host.
+
+| Provider (`--dns-provider`) | Variable | Notes |
+|---|---|---|
+| `cloudflare` | `CF_DNS_API_TOKEN` | one token, scoped **Zone:Read + DNS:Edit** |
+| `hetzner` | `HETZNER_API_TOKEN` | optional `HETZNER_PROPAGATION_TIMEOUT`, `HETZNER_TTL`. **Never `HETZNER_API_KEY`** — that name is not read, and the symptom is an ACME "propagation timeout" that sends you debugging DNS instead of a typo |
+| `route53` | *(none)* | tokenless — satisfied by the IAM **instance profile** |
+| `gcloud` | *(none)* | tokenless — satisfied by the VM's **attached service account** |
+
+Any lego variable also accepts a `_FILE` suffix if you would rather mount the secret than write it.
+**Prefer the tokenless providers where you have the choice:** nothing to store, nothing to rotate,
+nothing to leak. A provider `init` does not recognise gets a `CHANGEME_VARIABLE_NAME=` line pointing
+at [lego's provider list](https://go-acme.github.io/lego/dns/) rather than a guessed variable name —
+for the same reason as the `HETZNER_API_KEY` note above.
+
+Traefik's `acme.json` lives in the `letsencrypt` volume. **Back it up.** Losing it means re-issuing,
+and re-issuing into a rate limit at the wrong moment means no TLS at all for hours — a risk that is
+per-hostname-sized under HTTP-01 and whole-host-sized under DNS-01.
 
 ---
 
@@ -130,8 +286,9 @@ Two rules follow — and note the first is **operator discipline, not an enforce
 | | **control** | **shared** | **isolated** |
 |---|---|---|---|
 | What it is | Traefik + the `pstack` API/UI container | a host singleton every tenant borrows: a database, a queue cluster, a registry mirror | one tenant — normally one PR |
+| Hostnames | `control.<domain>`, `api.<domain>` | `<service-name>.<domain>` | `<surface>-pr-<n>.<domain>` |
 | Declared as | not a spec the API holds — it is not in the registry at all | `kind: shared` | `kind: isolated` (the default) |
-| Created by | `pstack init`, on the host *(`src/init.ts`; CLI dispatch pending)* | the API, or the CLI | the API, or the CLI, usually from CI |
+| Created by | `pstack init`, on the host (`src/init.ts`, dispatched from `src/cli.ts`) | the API, or the CLI | the API, or the CLI, usually from CI |
 | Lifecycle | once per host; upgraded rarely, deliberately | once per host; lives indefinitely | constantly created and destroyed |
 | Axes allowed? | n/a | **no** — a hard `SpecError`. Axes isolate one tenant from another and prove a tenant's resources are gone; a singleton has neither concern | **yes** — that is the point |
 | `down` guarded? | **not offered at all** | **yes** — refused unless explicitly forced (`--force`, or `{"force":true}` in the request body) | no — routine |
@@ -184,8 +341,7 @@ Write the `hint` as *how to fix it*, not *what broke*. The assert already says w
 
 ## 4. The registry
 
-> **Built as a library, not wired.** `src/registry.ts` is complete and tested; nothing imports it
-> yet. The storage contract below is real — the routes that would use it are in §6.
+> **Built and wired.** `src/registry.ts` backs the `/api/deployments/*` routes (§6).
 
 The CLI acts on one spec file you point it at. The control plane holds many, addressed by id:
 
@@ -227,7 +383,8 @@ The one thing that *is* dangerous is forgetting a deployment while its container
 project exists to prevent. Hence the rule the wiring must preserve:
 
 > **`remove` requires a successful `down` first.** `Registry.remove` does not enforce it — it
-> cannot, it has no runner. The API must, and today no route does, because no route exists.
+> cannot, it has no runner. `DELETE /api/deployments/:id` does, and fails closed: it refuses while
+> containers exist *and* when Docker did not answer (§6).
 
 ### What is not in the registry
 
@@ -358,9 +515,10 @@ const stack = await reg.resolve('pr-123', { PR: '123' });
 
 ### `pstack init`
 
-> **Implemented and reachable as `pstack init`.** Until it
-> does, the host brings the control stack up with `docker compose … up -d` — see
-> [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file).
+> **Implemented and reachable as `pstack init`** (`src/cli.ts` → `src/init.ts`). A host can still
+> bring the control stack up by hand with `docker compose … up -d` — see
+> [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file) — but `init` is the supported path,
+> because a hand-maintained compose file drifts from what the release expects.
 
 `init` stands the control stack up **from the host**, into compose project **`pstack-control`**, and
 is **idempotent** — re-running it is the supported way to change the domain, rotate the token, or
@@ -379,9 +537,11 @@ What it does, in order:
 3. **The two external networks**, `preview-ingress` and `preview-shared`, `|| true` so a re-run is
    the idempotent path rather than an aborted one. **These names are a contract** with every per-PR
    compose file, which must declare both `external: true`.
-4. **Configuration** — `templates/control/docker-compose.yml` copied **byte for byte** (its `${...}`
-   are *Compose's* interpolation, resolved from `.env` at `up` time; substituting them here would
-   make pstack a second caller of interpolation), plus `.env` and `dns.env`, both `0600`.
+4. **Configuration** — `templates/control/docker-compose.yml` copied byte for byte **except the two
+   `#__MARKER__` lines**, which `init` replaces with the ACME challenge args and router TLS labels
+   for the chosen mode (§TLS). Everything else is verbatim: the `${...}` are *Compose's*
+   interpolation, resolved from `.env` at `up` time, and substituting them here would make pstack a
+   second caller of interpolation. Plus `.env` and `dns.env`, both `0600`.
 5. **`compose up -d --remove-orphans`**, then **wait for the container's HEALTHCHECK**. `up -d`
    exits 0 as soon as containers are *created*, so a crash-looping API would otherwise be reported
    as success.
@@ -407,10 +567,15 @@ still works when the API is down.
 
 ```
 1.  drain            GET /api/jobs — wait for terminal states
-2.  install          git pull / pull the new control image on the host
+2.  install          bun add -g @samyx/preview-stacks  +  pull the new control image on the host
 3.  pstack init …    re-render + `compose up -d` the control stack
-4.  verify           curl -sf https://pstack.<domain>/api/health
+4.  verify           curl -sf https://api.<domain>/api/health
 ```
+
+Step 2 has **two** artifacts, and they upgrade independently: the globally-installed `pstack` CLI
+(the bundle — §Distribution) and `PSTACK_IMAGE`, the image the control container runs. `init` is a
+CLI command that starts a container from that image, so a new CLI against an old image, or the
+reverse, is a supported-but-untested combination — move both.
 
 Step 3 recreates the `pstack` container. Any in-flight job dies with it — jobs are in-memory —
 hence step 1. There is no queue to preserve, and adding one would be a state store (see the
@@ -434,6 +599,65 @@ The **shared and isolated deployments keep running** throughout. They are separa
 nothing about them depends on the API process being alive. A dead control plane costs you the
 ability to *change* things, not the previews themselves — which is the property the two-layer split
 was chosen to give you.
+
+---
+
+## Distribution: what ships, and why a bundle
+
+`pstack` is a **globally installed CLI** — it runs on the host, over SSH or from systemd, precisely
+where the API cannot reach (§2). So the artifact has to be installable without the repository:
+
+```bash
+bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+pstack --help
+```
+
+`bun scripts/build.ts` produces the two outputs, both `--target=bun`, minified, with linked
+sourcemaps so a stack trace from an operator's box still names real functions:
+
+| Output | Role | `package.json` |
+|---|---|---|
+| `dist/cli.js` (~74 KB) | the CLI + API + UI, one file | `bin.pstack` |
+| `dist/index.js` | the library entry, for embedding the lifecycle in your own tooling | `exports["."]` |
+
+The published tarball is **8 files, ~0.36 MB unpacked** (`files: [dist, README.md, LICENSE,
+CHANGELOG.md]`): the two bundles, their two sourcemaps, and four metadata files. It contains **no
+source, no docs, no examples, no skills** — verified by extracting the tarball and running it with
+the repository unreachable. Working from a checkout (`bun src/cli.ts …`) is the **contributor** path,
+not the user path.
+
+### Why a bundle, and not the source tree
+
+Shipping `src/` would make every invocation pay TypeScript parsing, download docs/examples/skills
+nobody asked for, and turn the internals into the public surface — a module layout you can no longer
+change without a major version.
+
+### Why a bundle, and not `--compile`
+
+A standalone executable bakes the Bun runtime (~60 MB) into the artifact, **per platform**. For an
+npm package that means one of two bad shapes: a five-platform `optionalDependencies` matrix, or a
+postinstall hook that downloads a binary (which breaks in exactly the locked-down CI environments
+this tool is meant to run in).
+
+A bundle is ~74 KB, and it costs nothing extra, because **Bun is already required**. The package
+declares `engines.bun: ">=1.3.0"` and `bin` is a `#!/usr/bin/env bun` script — the shebang the
+bundler does not emit and `build.ts` adds. There is no Node fallback being given up: the runtime APIs
+this uses — `Bun.serve`, `Bun.YAML`, `Bun.spawn`, `Bun.file` — have no Node equivalent, so
+`engines.bun` is load-bearing rather than advisory.
+
+### Assets are embedded, not read from disk
+
+The web UI and `templates/control/docker-compose.yml` are imported with `with { type: 'text' }`, so
+the bundler **inlines them**. Nothing resolves a path relative to the source at runtime.
+
+That is the whole point. `new URL('../templates/control/docker-compose.yml', import.meta.url)` works
+perfectly from a checkout and does not exist in the published package — the failure mode where a tool
+passes every local test and then `init` dies on a missing template on the one host that matters.
+`build.ts` guards it the only way that proves anything: it runs `--help` against the **emitted
+bundle**, not the sources, and fails the build if that exits non-zero.
+
+The consequence to remember: **editing `templates/control/docker-compose.yml` requires a rebuild.**
+The file on disk is the build input, not what a running `pstack` reads.
 
 ---
 

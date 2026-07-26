@@ -1,6 +1,6 @@
 ---
 name: pstack
-description: Use when setting up, configuring, or debugging ephemeral per-PR preview stacks with pstack — writing a preview.yml, defining isolation axes and requires preconditions, choosing shared vs isolated kinds, wiring up/down/verify into CI, or diagnosing leaked preview resources.
+description: Use when setting up, configuring, or debugging ephemeral per-PR preview stacks with pstack — installing it, standing up the control stack with pstack init, choosing an ACME challenge (HTTP-01 vs DNS-01) and the per-PR TLS labels each mode requires, writing a preview.yml, defining isolation axes and requires preconditions, choosing shared vs isolated kinds, wiring up/down/verify into CI, or diagnosing leaked preview resources.
 ---
 
 # Using pstack
@@ -9,12 +9,40 @@ description: Use when setting up, configuring, or debugging ephemeral per-PR pre
 preview needs (a database branch, a queue namespace, images, DNS), it provisions them in order, runs
 your Compose stack, tears everything down in reverse — and then **proves nothing leaked**.
 
+## Install
+
+It is a **global package** — a ~74 KB bundle, no runtime dependencies, Bun ≥ 1.3 required
+(`engines.bun`):
+
+```bash
+bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+pstack --help
+```
+
+The published tarball is **8 files / 0.36 MB unpacked**: `dist/cli.js`, `dist/index.js`, their
+sourcemaps, and the four metadata files. **No source, no docs, no examples, no skills, no templates,
+no `ui/`.** Two things follow that matter when you are helping someone:
+
+- **Do not tell a user to clone the repo, run `bun install`, or `bun link`.** `bun src/cli.ts …` is
+  the **contributor** path, for changing pstack itself. Users run `pstack`.
+- **Nothing is read from a path next to the source at runtime.** The web UI and the control-stack
+  compose template are `with { type: 'text' }` imports inlined into the bundle, so "it works from a
+  checkout but 404s once installed" cannot happen — and there is no `ui/` directory on an installed
+  host to look for, edit, or mount.
+
+It is a bundle rather than a `--compile`d binary because a standalone executable embeds the Bun
+runtime (~60 MB) per platform — a five-platform `optionalDependencies` matrix or a postinstall
+download. There is no Node fallback to preserve: `Bun.serve`, `Bun.YAML`, `Bun.spawn` and `Bun.file`
+have no Node equivalent.
+
 ```bash
 PR=123 pstack up        # assert `requires`, provision axes in order, then compose up
 PR=123 pstack down      # compose down (all profiles) → destroy axes in reverse → verify
 PR=123 pstack verify    # assert every axis is gone; exit 2 if anything survived
 PR=123 pstack validate  # parse, resolve interpolation, print warnings
 PR=123 pstack status    # compose ps for this stack
+pstack init --domain … --acme-email …   # HOST ONLY: stand up the control stack (§0)
+pstack serve            # HOST ONLY: the API + UI over the deployment registry
 ```
 
 ## 0. The control-plane model — three layers, three sets of rules
@@ -24,23 +52,150 @@ and what may be done to it.
 
 | Layer | What it is | Declared as | Axes? | `down` |
 |---|---|---|---|---|
-| **control** | Traefik + the `pstack` API + UI. One per host. | *not a spec you submit* | n/a | **not offered** |
+| **control** | Traefik + the `pstack` API/UI, compose project `pstack-control`. One per host, at `control.<domain>` / `api.<domain>`. | **`pstack init`** on the host — never a spec you submit | n/a | **not offered** |
 | **shared** | a host singleton every preview borrows: a database, a queue cluster, a registry mirror | `kind: shared` | **none allowed** — hard error | **refused unless explicitly forced** |
 | **isolated** | one tenant, normally one PR | `kind: isolated` (default) | yes — the point | routine |
 
-Two rules that follow, and both are enforced in code:
+Two rules that follow:
 
 1. **Never point a spec at the control stack.** The API cannot run `up` on the deployment containing
    the API — the process doing the work is inside the container being replaced, so it is killed
-   mid-operation, and a bad image leaves no control plane and no remote way back. Upgrading it is a
-   host-side job: `pstack init` (implemented and dispatched; **the API must never manage its own stack
-   yet**, so today it is `docker compose -p pstack-control … up -d` from a shell on the host) and
-   `pstack self-upgrade` (not built — it is `init` re-run after a fetch). Nothing in the code
-   enforces this: the API cannot reliably know its own deployment id, so it is on you.
+   mid-operation, the job transcript dies with it (jobs are in-memory), and a bad image leaves no
+   control plane and no remote way back. The control stack belongs to **`pstack init`**, run from the
+   host (over SSH, from systemd, or from CI-with-a-key); `pstack self-upgrade` is not built yet — it
+   is `init` re-run after a fetch. **Nothing in the code enforces this**: the API cannot reliably know
+   its own deployment id, so it is on you.
 2. **`down` on a `kind: shared` deployment is refused unless you force it explicitly** — see §2.
 
 If you are asked to "tear down the shared database" or "restart the preview host's Traefik", stop
 and check which layer it is before running anything.
+
+### Standing a host up: `pstack init`
+
+Run **on the host**, idempotently — re-running is the supported way to change the domain, rotate the
+API token, switch challenge mode, or move to a new image. The minimum needs **no DNS credential**:
+
+```bash
+pstack init --domain preview.example.com --acme-email <you>@example.com
+```
+
+| Flag / variable | Required | Notes |
+|---|---|---|
+| `--domain` / `PSTACK_DOMAIN` | yes | every hostname derives from it |
+| `--acme-email` / `PSTACK_ACME_EMAIL` | yes | Let's Encrypt expiry mail |
+| `--challenge http01\|dns01` / `PSTACK_CHALLENGE` | no | **default `http01`** |
+| `--dns-provider <lego-code>` / `PSTACK_DNS_PROVIDER` | **`dns01` only** | ignored by `http01` |
+| `PSTACK_DNS_TOKEN` | `dns01`, unless tokenless | env-only, no flag; written to `control/dns.env` (`0600`) |
+| `PSTACK_TOKEN` | no | the **API bearer token**. Generated and printed **once** when unset |
+| `PSTACK_IMAGE` | no | control image, default `pstack:local` (build it: `docker build -t pstack:local .`) |
+| `PSTACK_DATA` | no | default `/var/lib/pstack` |
+
+It checks preconditions by name first (Docker socket, Compose plugin, control image), creates
+`<data>/deployments` and the two external networks **`preview-ingress`** and **`preview-shared`**
+(both must be declared `external: true` in every per-PR compose file), writes its config `0600`,
+brings `pstack-control` up, and then **waits for the container's healthcheck** — `compose up -d` exits
+0 as soon as containers are *created*, so success is not proof of a live control plane.
+
+`PSTACK_DNS_TOKEN` and `PSTACK_TOKEN` are **two different secrets with two different blast radii**:
+one edits a DNS zone, the other drives an API holding a read-write Docker socket (root on the host).
+Never reuse one as the other.
+
+### Hostnames
+
+| Hostname | Serves |
+|---|---|
+| `control.<domain>` | the web UI (a browser) |
+| `api.<domain>` | the API (CI, `curl`, scripts) |
+| `<service-name>.<domain>` | the convention for a shared service's own hostname |
+| `<surface>-pr-<n>.<domain>` | a per-PR surface, e.g. `backend-pr-123.<domain>` |
+
+`control` and `api` are two routers on **one** container — the API process serves the UI, and the UI
+calls the API with **relative** `/api/…` paths, so it is same-origin from `control.<domain>` and needs
+no CORS. `api.<domain>` exists to give external callers an honest name.
+
+**Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
+`backend-pr-1.<domain>` is covered by `*.<domain>`; `backend.pr-1.<domain>` is **not**.
+
+### TLS: HTTP-01 by default, DNS-01 when the arithmetic says so
+
+| | `http01` (default) | `dns01` |
+|---|---|---|
+| Credential | **none** | a DNS API token to obtain, store, rotate |
+| Hard requirement | **port 80 reachable from the internet** | the provider's API reachable |
+| Traefik flags | `httpchallenge=true` · `httpchallenge.entrypoint=web` | `dnschallenge=true` · `dnschallenge.provider=<code>` |
+| Wildcards | **impossible** — one cert per hostname | one `*.<domain>` covers everything |
+| Ceiling | ~50 new certs/week per registered domain ⇒ **~16 PRs/week** at 3 surfaces each | none |
+| URL valid before deploy | **no** | **yes** |
+| Per-PR router labels | `tls=true` **+** `tls.certresolver=le` | `tls=true` **and nothing else** |
+
+The web→websecure redirect does **not** break HTTP-01: Traefik installs an internal ACME router at
+maximum priority that bypasses the redirect for `/.well-known/acme-challenge/`. The only hard
+requirement is that **port 80 is reachable from the internet**.
+
+**The arithmetic — this is the reason to migrate:**
+
+```
+3 surfaces per PR (backend, frontend, admin)  ×  1 cert each  =  3 new certs per PR
+~50 new certs per registered domain per week  ÷  3            ≈  16 new PRs per week
+```
+
+Renewals do **not** count against that limit (a separate duplicate-certificate limit caps 5 identical
+certs/week). Past ~16 new PRs a week, issuance starts failing and the symptom is a browser TLS error
+on a preview that deployed perfectly. It cannot be raised, and HTTP-01 cannot be made to cover many
+hosts with one certificate — the only fix is DNS-01. Second reason: HTTP-01 **cannot certify a
+hostname before its container exists**, so a preview URL is invalid until the stack is deployed (a
+sequencing problem that presents as a certificate problem). DNS-01's wildcard is valid immediately.
+
+Recommend `http01` to start; recommend switching with `--challenge dns01 --dns-provider <code>` when
+PR volume approaches the ceiling or pre-deploy URLs are needed. Re-running `init` is the whole
+migration.
+
+#### The per-PR `certresolver` rule is OPPOSITE in the two modes
+
+> **Read this before writing TLS labels on any per-PR router.** It is the most expensive mistake
+> available in this system and it is one careless copy-paste away.
+>
+> | Mode | Every per-PR router carries | If you get it wrong |
+> |---|---|---|
+> | **`http01`** | `tls=true` **and** `tls.certresolver=le` | omit the resolver → that hostname never gets a certificate |
+> | **`dns01`** | `tls=true` — **NOTHING else** | add `certresolver` → Traefik orders a **separate certificate per PR host** |
+>
+> Under **`dns01`**, **exactly ONE** always-on router requests the wildcard — the control router, with
+> `tls.domains[0].main=<domain>` + `tls.domains[0].sans=*.<domain>`. Every other router, including
+> every per-PR one, inherits that certificate **by SNI** with a bare `tls=true`.
+>
+> Adding `tls.certresolver=le` to a per-PR router under DNS-01 silently burns the ~50-new-certs-per-week
+> budget and eventually takes TLS down for the **whole host — including the control plane**, which is
+> also how you lose the UI you would have used to diagnose it. Copying a router-label block from an
+> HTTP-01 host into a DNS-01 host is exactly how this ships.
+>
+> **Before writing per-PR TLS labels, check which mode the host was initialised with**
+> (`--challenge` in the `init` command, or the rendered `certificatesresolvers.le.acme.*challenge`
+> args in `<PSTACK_DATA>/control/docker-compose.yml`). Do not guess, and do not assume the labels in
+> an example you found match this host's mode.
+
+#### DNS-01 credentials
+
+Only the verified providers are written for you. A wrong variable name surfaces as an ACME
+**"propagation timeout"** — which sends you debugging DNS instead of a typo — so an unrecognised
+provider gets a `CHANGEME_VARIABLE_NAME` line pointing at <https://go-acme.github.io/lego/dns/>
+rather than a guess.
+
+| Provider | `--dns-provider` | Credential |
+|---|---|---|
+| Cloudflare | `cloudflare` | `CF_DNS_API_TOKEN` — **one** token, `Zone:Read` + `DNS:Edit` |
+| Hetzner | `hetzner` | `HETZNER_API_TOKEN` (also `HETZNER_PROPAGATION_TIMEOUT`, `HETZNER_TTL`) |
+| AWS Route 53 | `route53` | **none** — the instance's IAM profile |
+| Google Cloud DNS | `gcloud` | **none** — the VM's attached service account |
+
+Every lego variable also accepts a `_FILE` suffix. **Never write `HETZNER_API_KEY`** — it does not
+exist, and the failure looks like a DNS propagation problem. Prefer the tokenless providers where
+available: nothing to store, nothing to rotate.
+
+DNS records, either mode: `*.<domain>` and `<domain>` A-records pointing at the host, so any per-PR
+hostname resolves. Under DNS-01 that is also what the single wildcard *certificate* covers; under
+HTTP-01 resolution and certification are separate problems and each hostname is certified on its
+first HTTPS request.
 
 ## 1. When to reach for it
 
@@ -187,7 +342,7 @@ code). An axis marked `?` is invisible to the leak gate forever.
 ### Flags
 
 ```
-pstack <up|down|verify|status|validate|serve> [flags]
+pstack <up|down|verify|status|validate|init|serve> [flags]
   -f, --file <path>   spec file (default: preview.yml)
   -n, --dry-run       print every command in order, execute nothing
   -v, --verbose       echo commands and their output
@@ -195,7 +350,17 @@ pstack <up|down|verify|status|validate|serve> [flags]
       --set K=V       override/define a variable (repeatable)
       --no-verify     down: skip the post-teardown leak check
       --force         down: allow tearing down a `kind: shared` deployment
+
+init flags: --domain <preview.example.com>  --acme-email <you@example.com>
+            --challenge http01|dns01        (default http01 — no DNS credential needed)
+            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)
+
+serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
+            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)
 ```
+
+`init` and `serve` are **spec-free** — they act on the host and on the registry, so `-f` does not
+apply and neither fails because `./preview.yml` is absent.
 
 `-v` prints hook stdout verbatim and **nothing is masked** — do not use it in a public CI log for an
 axis whose `up` emits a connection string.
@@ -617,6 +782,9 @@ Or enumerate what actually exists on the host — `docker compose ls --all` (the
 
 Notes:
 
+- Install it in the job with **`bun add -g @samyx/preview-stacks`** after `oven-sh/setup-bun` — not by
+  checking out the pstack repo. Pin the version if you want teardown to behave exactly like the deploy
+  that created the stack.
 - Pass variables as **env** (`PR=…`) or `--set PR=…`; both feed interpolation and reach hooks.
 - Run `pstack` from the repo root so relative hook paths and `compose.file` resolve.
 - `--no-verify` only when you are about to redeploy immediately and a resource is meant to survive.
@@ -624,9 +792,12 @@ Notes:
 
 ## 7. The HTTP API (and the UI)
 
+On a real host you do not run this by hand — `pstack init` runs it in the control stack behind
+Traefik, at `control.<domain>` (UI) and `api.<domain>` (API). Run it directly only to develop against
+it; there is **no `-f`**, because `serve` acts on the registry, not on a spec:
+
 ```bash
-PSTACK_TOKEN=$(openssl rand -hex 32) PSTACK_HOST=0.0.0.0 PSTACK_PORT=7878 \
-  pstack -f preview.yml serve
+PSTACK_TOKEN=$(openssl rand -hex 32) PSTACK_HOST=0.0.0.0 PSTACK_PORT=7878 pstack serve
 ```
 
 Use the API instead of the CLI when the caller is **not** on the preview host: a chat-ops command, a
@@ -647,9 +818,10 @@ API is the same core with a job queue in front.
 | `GET /api/jobs/:jobId/stream` | SSE: buffered log replayed, then live |
 
 ```bash
+API=https://api.preview.example.com
 job=$(curl -fsS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
-        'http://host:7878/api/deployments/pr-123/down?PR=123' | jq -r .job.id)
-curl -fsS -N http://host:7878/api/jobs/$job/stream
+        "$API/api/deployments/pr-123/down?PR=123" | jq -r .job.id)
+curl -fsS -N "$API/api/jobs/$job/stream"
 ```
 
 Things to know:
@@ -671,8 +843,11 @@ Things to know:
   accepting a spec means accepting arbitrary compose *and* arbitrary shell hooks — remote code
   execution by design, not by bug. The socket mount is root-equivalent on the host. Gate *who may
   submit* (ingress auth, or an SSH tunnel); never try to sanitize what a spec contains.
-- `GET /` serves the single-file Vue UI from `ui/` (next to `src/`), which does what the CLI does
-  with a live job log.
+- **`GET /` — and every other non-`/api/` path — serves the UI**, a single HTML document **embedded in
+  the bundle**. There is no static-file directory to point at or mount, no filesystem lookup, and
+  therefore no path traversal; a deep link renders instead of 404ing. It does what the CLI does with a
+  live job log, and it calls the API with **relative** `/api/…` paths, so it is same-origin from
+  `control.<domain>` and needs no CORS.
 
 ### Submitting deployments by id
 
@@ -684,7 +859,7 @@ curl -fsS -X PUT -H "Authorization: Bearer $PSTACK_TOKEN" \
      -H 'content-type: application/json' \
      -d "$(jq -n --rawfile s preview.yml --rawfile c docker-compose.preview.yml \
              '{spec:$s, compose:$c, env:{PR:"123"}}')" \
-     http://host:7878/api/deployments/pr-123
+     https://api.preview.example.com/api/deployments/pr-123
 ```
 
 Four constraints that decide whether a submitted spec works at all:
@@ -695,6 +870,10 @@ Four constraints that decide whether a submitted spec works at all:
 - **`put` validates before it commits** (and the route parses the string first, so a typo on a
   *replace* cannot delete a good record while its containers keep running). `kind` is read from the
   parsed spec, never from the caller.
+- **On `PUT`, variables come from the body's `env` — the query string is NOT read.** The spec is
+  parsed before it is stored, so `{"spec": "…stack: pr-${PR}…"}` without `env: {"PR": "123"}` is a
+  400 naming the variable. `?PR=123` works on the *action* routes (`up`/`down`/`verify`) and on the
+  `GET`s, not on the submit. They are still not persisted either way.
 - **`remove` forgets only — it never tears anything down.** `DELETE` therefore refuses while
   containers exist, and refuses when Docker did not answer, because "could not tell" is not evidence
   of absence. Always `down` clean *before* forgetting.
@@ -728,6 +907,16 @@ For CI, prefer the CLI (`-f`, `--set`): no host access, no token, and the exit c
 | `401 unauthorized` on a POST | `PSTACK_TOKEN` is set server-side; `GET`s are open, mutations are not | send `Authorization: Bearer $PSTACK_TOKEN` |
 | `refusing to bind 0.0.0.0 without PSTACK_TOKEN` (exit 3) | safety interlock — this API destroys infrastructure | set `PSTACK_TOKEN`, or leave it on loopback and tunnel |
 | a hook can't find `./hooks/db.sh` | hook cwd is where you ran `pstack`, not the spec's directory | run from the repo root or use absolute paths |
+| `init needs --domain` / `needs --acme-email` (exit 3) | neither the flag nor `PSTACK_DOMAIN` / `PSTACK_ACME_EMAIL` was given | pass them; **no DNS credential is needed** for the default HTTP-01 |
+| `--challenge dns01 needs --dns-provider` (exit 3) | the provider is required for, and only for, `dns01` | `--dns-provider cloudflare` (or drop back to the default `http01`) |
+| `control stack started but the API never became healthy` | `compose up -d` succeeded but the container is crash-looping | `docker compose -p pstack-control logs pstack` — usually a bad `PSTACK_IMAGE` |
+| `image pstack:local not found` (precondition) | the control image was never built or pulled | `docker build -t pstack:local .` from a pstack checkout, or set `PSTACK_IMAGE` |
+| ACME **"propagation timeout"** under `dns01` | almost always a wrong credential **variable name**, not DNS | check it against lego's list; Hetzner is `HETZNER_API_TOKEN` (**never** `HETZNER_API_KEY`), Cloudflare `CF_DNS_API_TOKEN` |
+| no certificate ever arrives under `http01` | **port 80 is not reachable from the internet** (the web→websecure redirect is *not* the cause — Traefik bypasses it for the challenge path) | open :80 to the internet, or switch to `dns01` |
+| TLS errors appear on *new* previews while old ones are fine | HTTP-01's ~50-new-certs-per-registered-domain-per-week limit — ~16 PRs at 3 surfaces each | switch to `dns01` (§0); it needs one wildcard, so there is no per-PR issuance |
+| TLS suddenly broken **host-wide**, including `control.<domain>`, on a `dns01` host | a per-PR router carries `tls.certresolver=le`, so every PR ordered its own certificate and burned the limit | remove it — per-PR routers under `dns01` get `tls=true` and **nothing else** (§0) |
+| a preview hostname 404s while its container is healthy | a per-PR compose file declared `preview-ingress` non-`external`, so Compose made `pr-N_preview-ingress` | declare **both** networks `external: true` |
+| `https://pstack.<domain>` does not resolve or 404s | that hostname is gone — no router matches it | the UI is `control.<domain>`, the API `api.<domain>` |
 
 ## 9. Before you trust a spec in CI
 
@@ -756,3 +945,12 @@ For CI, prefer the CLI (`-f`, `--set`): no host access, no token, and the exit c
     host singleton declared `isolated` has no guard on `down`, and one `pstack down` then takes out
     the TLS store and every preview's shared state. Then break a `requires` on purpose and confirm
     `up` stops **before** creating anything.
+11. **Check the host's TLS mode before you write per-PR TLS labels.** Read the rendered
+    `certificatesresolvers.le.acme.*challenge` args in `<PSTACK_DATA>/control/docker-compose.yml` (or
+    the `--challenge` the host was `init`ed with). Under `http01` each per-PR router needs
+    `tls.certresolver=le`; under `dns01` it must carry `tls=true` and **nothing else**. Getting this
+    backwards either leaves a host uncertified or burns the weekly certificate budget for everyone —
+    see the warning in §0. Never copy router labels between hosts without checking their modes match.
+12. **Confirm both external networks are `external: true`** in the per-PR compose file
+    (`preview-ingress`, `preview-shared`). A non-external declaration yields a healthy, unreachable
+    container and a 404 that looks like a routing bug.

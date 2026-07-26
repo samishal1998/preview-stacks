@@ -6,13 +6,8 @@ no-state-store decision — read [`../README.md`](../README.md) first; this guid
 
 Every `pstack` block below was produced by running the command against the code in this repo; the
 output is what it printed. The exceptions, marked where they appear: the CI workflow in section 8
-(GitHub-side, not runnable here) and the abridged JSON in section 6.
-
-> **The HTTP surface is being replaced as you read this.** `pstack serve` is now registry-backed —
-> `/api/deployments/*`, documented in [section 7](#7-the-control-plane) — and the single-spec
-> `/api/spec` and `/api/stacks` routes shown in section 6 and the section 10 table are **gone**.
-> The file header of `src/api.ts` is the authoritative route list; those two sections have not
-> caught up yet.
+(GitHub-side, not runnable here), the `init` walkthrough in section 7 (it needs a real host with a
+real domain), and the abridged JSON in section 6.
 
 | I want to… | Go to |
 |---|---|
@@ -22,6 +17,8 @@ output is what it printed. The exceptions, marked where they appear: the CI work
 | deploy, inspect, tear down | [4. Up, status, down](#4-up-status-down) |
 | know my teardown actually works | [5. Prove your teardown works](#5-prove-your-teardown-works) |
 | a dashboard and an HTTP API | [6. Run the API and UI](#6-run-the-api-and-ui) |
+| **stand up the control stack on a host** | [7 → `pstack init`](#stand-up-the-host-pstack-init) |
+| **choose a TLS mode (HTTP-01 or DNS-01)** | [7 → Choose a TLS mode](#choose-a-tls-mode) |
 | shared vs isolated, `requires`, `--force`, submitting deployments | [7. The control plane](#7-the-control-plane) |
 | deploy from GitHub Actions | [8. Wire it into CI](#8-wire-it-into-ci) |
 | a nightly leak sweep, orphan hunting | [9. Day-2 operations](#9-day-2-operations) |
@@ -31,28 +28,24 @@ output is what it printed. The exceptions, marked where they appear: the CI work
 
 ## 1. Install & first run
 
-Requires [Bun](https://bun.sh) **≥ 1.3** — the spec parser uses native `Bun.YAML`, and there are no
-other dependencies. `docker` (with the Compose v2 plugin) must be on the PATH of whatever box runs
-`up`/`down`, but not to validate or dry-run a spec.
+`pstack` ships as a **global package**. Requires [Bun](https://bun.sh) **≥ 1.3** (declared as
+`engines.bun`) — the spec parser is `Bun.YAML`, the server is `Bun.serve`, hooks run through
+`Bun.spawn`, and there are no runtime dependencies at all. `docker` with the Compose v2 plugin must
+be on the PATH of whatever box runs `up` / `down` / `init`, but not to `validate` or dry-run a spec.
 
 ```bash
-bun --version          # must be >= 1.3.0
-git clone <this-repo> && cd preview-stacks
-bun install
-bun link               # puts `pstack` on your PATH
+bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+pstack --help
 ```
-
-`bun link` prints instructions for consuming the package as a dependency — ignore those; the part you
-want is the `bin`, which is installed globally:
 
 ```console
 $ which pstack
-/Users/you/.bun/bin/pstack
+/Users/<you>/.bun/bin/pstack
 
 $ pstack --help
 pstack — declarative lifecycle for ephemeral preview stacks
 
-Usage: pstack <up|down|verify|status|validate|serve> [flags]
+Usage: pstack <up|down|verify|status|validate|init|serve> [flags]
 
 Flags:
   -f, --file <path>   spec file (default: preview.yml)
@@ -63,28 +56,60 @@ Flags:
       --no-verify     down: skip the post-teardown leak check
       --force         down: allow tearing down a `kind: shared` deployment
 
+
+init flags: --domain <preview.example.com>  --acme-email <you@example.com>
+            --challenge http01|dns01        (default http01 — no DNS credential needed)
+            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)
+
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
-            PSTACK_HOST (127.0.0.1) · PSTACK_VAR (PR)
+            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)
 
 Exit: 0 ok · 1 failed · 2 leaked · 3 bad spec/usage
 ```
 
-Don't want to link it? `bun src/cli.ts <command>` is equivalent everywhere in this guide. In CI,
-prefer the explicit form — it needs no global state.
+### What actually gets installed
 
-Check the repo is healthy before you trust it with your infrastructure:
+| | |
+|---|---|
+| Contents | `dist/cli.js` (~74 KB, the `bin`) · `dist/index.js` (the library entry) · both `.map` files · `package.json` · `README.md` · `LICENSE` · `CHANGELOG.md` |
+| Tarball | **8 files, 0.36 MB unpacked** (~118 KB packed) |
+| Not shipped | `src/`, `docs/`, `examples/`, `skills/`, `templates/`, `ui/`, tests |
+
+Both entrypoints are **bundles**, built by `bun scripts/build.ts` with `--target=bun`, minified, with
+linked sourcemaps so a stack trace from your box still names real functions. Two consequences worth
+knowing:
+
+- **Nothing is read from a path relative to the source at runtime.** The web UI and the control-stack
+  compose template are `with { type: 'text' }` imports, inlined into the bundle. That removes the
+  whole class of bug where a tool works from a checkout and 404s once installed — verified by
+  extracting the tarball and running it with the repo unreachable.
+- **It is a bundle, not a `--compile`d executable, on purpose.** A standalone binary bakes in the Bun
+  runtime (~60 MB) *per platform*, which for npm means either a five-platform
+  `optionalDependencies` matrix or a postinstall download. A 74 KB bundle needs neither, and Bun is
+  already a hard requirement — there is no Node fallback being preserved, because `Bun.serve`,
+  `Bun.YAML`, `Bun.spawn` and `Bun.file` have no Node equivalent.
+
+### Working from a checkout (contributors)
+
+Everywhere in this guide, `bun src/cli.ts <command>` is equivalent to `pstack <command>` — that is
+the **contributor** path, not the user path. Use it when you are changing pstack itself:
 
 ```console
+$ git clone <this-repo> && cd preview-stacks
+$ bun install
+$ bun src/cli.ts --help          # run from source, no build step
+$ bun scripts/build.ts           # build dist/ and smoke-test the real artifact
 $ bun test
  ...
  0 fail
 Ran N tests across 1 file.
 
-$ bunx tsc --noEmit      # strict, noUncheckedIndexedAccess; silent on success
+$ bunx tsc --noEmit              # strict, noUncheckedIndexedAccess; silent on success
 ```
 
 The suite includes end-to-end leak detection against the real filesystem, so a green run means the
-`down`/`verify` asymmetry itself is working, not just that the parser compiles.
+`down`/`verify` asymmetry itself is working, not just that the parser compiles. `scripts/build.ts`
+finishes by running `--help` out of the built bundle: a bundle that cannot start is not a build.
 
 ---
 
@@ -609,28 +634,25 @@ Now you have evidence, not hope: you've seen this axis's `assert_gone` return bo
 ## 6. Run the API and UI
 
 `pstack serve` exposes the same core over HTTP, with a single-page dashboard. Use it when a human
-wants to click, or when something other than a shell needs to drive a deploy.
-
-> **Route drift.** The `/api/spec` and `/api/stacks/*` routes below describe the older single-spec
-> server. `serve` is now registry-backed (`/api/deployments/*` — [section 7](#7-the-control-plane));
-> the startup behaviour, the safety interlock, the job model, the `409`, and the UI notes in this
-> section still hold. `src/api.ts`'s header is the current route list.
+wants to click, or when something other than a shell needs to drive a deploy. On a real host you do
+not run it by hand — [`pstack init`](#stand-up-the-host-pstack-init) runs it in the control stack,
+behind Traefik, at `control.<domain>` and `api.<domain>`. Run it directly to develop against it.
 
 ### Start it
 
-The spec is resolved **at startup** as well as per request, so the stack variable must be set just to
-boot. Any placeholder works — every request re-resolves the spec with its own value.
+`serve` is **registry-backed and spec-free**: it acts on the deployments submitted to
+`$PSTACK_DATA/deployments/` ([section 7](#submitting-a-deployment)), so it needs no `preview.yml` and
+no stack variable to boot. Variables arrive per request.
 
 ```console
 $ pstack serve
-pstack: stack: undefined variable(s) ${PR}. Pass them in the environment or under `env:` in the spec.
-
-$ PR=0 pstack serve
-stack: pr-0
 pstack api  http://127.0.0.1:7878
-  spec: preview.yml   var: PR
+  registry: /var/lib/pstack/deployments
   auth: NONE — bound to loopback only (set PSTACK_TOKEN to expose)
 ```
+
+`init` and `serve` are the two commands that skip spec loading entirely — they operate on the host
+and on the registry, so neither should fail because `./preview.yml` happens to be absent.
 
 ### The safety interlock
 
@@ -638,8 +660,7 @@ This API can delete databases. Without a token it binds **127.0.0.1** and refuse
 the interlock is not a warning you can click past:
 
 ```console
-$ PR=0 PSTACK_HOST=0.0.0.0 pstack serve
-stack: pr-0
+$ PSTACK_HOST=0.0.0.0 pstack serve
 pstack: refusing to bind 0.0.0.0 without PSTACK_TOKEN set — this API can destroy
         infrastructure. Set PSTACK_TOKEN=<secret> to listen off-loopback.
 $ echo $?
@@ -651,12 +672,14 @@ authenticate the `curl` calls below:
 
 ```console
 $ export PSTACK_TOKEN=$(openssl rand -hex 16)
-$ PR=0 PSTACK_HOST=0.0.0.0 pstack serve
-stack: pr-0
+$ PSTACK_HOST=0.0.0.0 pstack serve
 pstack api  http://0.0.0.0:7878
-  spec: preview.yml   var: PR
+  registry: /var/lib/pstack/deployments
   auth: bearer token required for mutating routes
 ```
+
+`pstack init` generates this token for you and stores it `0600` in the control stack's `.env`; it is
+a **different secret** from the DNS-01 credential, with a different blast radius.
 
 The token gates **POST/DELETE only**; GETs are always open (that is also what lets the log stream use
 `EventSource`, which cannot send headers). It is **not multi-tenant** — one spec, one Docker socket,
@@ -665,33 +688,46 @@ every caller equal. Put it behind your ingress' auth or an SSH tunnel
 
 ### Drive it with curl
 
-`:id` is the **value of the spec variable** (`PR`), not the resolved stack name. The server owns the
-spec and resolves `pr-${PR}` itself, so a client cannot ask it to act on an arbitrary Compose project.
+Against a deployed control stack the API's own hostname is **`api.<domain>`** — the honest name for
+external callers (CI, `curl`, scripts). `control.<domain>` serves the same container; it is the name a
+browser loads. Substitute `http://127.0.0.1:7878` when you are driving a local `serve`.
+
+`:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves
+`stack:` itself, so a client can never ask it to act on an arbitrary Compose project on the host.
 
 ```console
-$ curl -s localhost:7878/api/health
+$ curl -s https://api.preview.example.com/api/health
 {
   "ok": true,
   "authEnforced": true,
-  "spec": "preview.yml",
-  "varName": "PR"
+  "dataDir": "/data",
+  "version": "0.1.0"
 }
 ```
 
-The resolved spec for one target — the query key is the **lowercased** variable name:
+A deployment's meta plus its resolved spec summary. Spec variables ride on the **query string** —
+`stack: pr-${PR}` needs `?PR=123`, and axes come back as hook *names*, never hook bodies:
 
 ```console
-$ curl -s 'localhost:7878/api/spec?pr=123'
+$ curl -s 'https://api.preview.example.com/api/deployments/pr-123?PR=123'
 {
+  "id": "pr-123",
+  "kind": "isolated",
+  "createdAt": 1785014255903,
+  "updatedAt": 1785014255903,
   "stack": "pr-123",
+  "busy": false,
   "compose": {
-    "file": "docker-compose.preview.yml",
+    "file": "compose.yml",
     "profiles": [
       "backend",
       "frontend"
     ],
     "overlays": []
   },
+  "requires": [
+    "shared-db"
+  ],
   "axes": [
     {
       "name": "database",
@@ -709,7 +745,7 @@ $ curl -s 'localhost:7878/api/spec?pr=123'
 Mutating without the bearer header gets nowhere:
 
 ```console
-$ curl -s -X POST localhost:7878/api/stacks/123/up
+$ curl -s -X POST https://api.preview.example.com/api/deployments/pr-123/up
 {
   "error": "unauthorized"
 }
@@ -720,7 +756,7 @@ synchronously:
 
 ```console
 $ curl -s -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
-       localhost:7878/api/stacks/123/up
+       'https://api.preview.example.com/api/deployments/pr-123/up?PR=123'
 {
   "job": {
     "id": "up-pr-123-1-apeq0d",
@@ -731,12 +767,13 @@ $ curl -s -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
 }
 ```
 
-`down` takes a body; omit it and `verify` defaults to true:
+`down` takes a body; omit it and `verify` defaults to true. `force` is what lifts the `kind: shared`
+guard ([section 7](#7-the-control-plane)):
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
      -H 'content-type: application/json' -d '{"verify":true}' \
-     localhost:7878/api/stacks/123/down
+     'https://api.preview.example.com/api/deployments/pr-123/down?PR=123'
 ```
 
 ### Read a job
@@ -746,7 +783,7 @@ plus any captured `outputs` (whitespace compacted below; the server pretty-print
 line):
 
 ```console
-$ curl -s localhost:7878/api/jobs/up-pr-123-1-apeq0d
+$ curl -s https://api.preview.example.com/api/jobs/up-pr-123-1-apeq0d
 {
   "job": {
     "id": "up-pr-123-1-apeq0d",
@@ -781,7 +818,7 @@ The SSE stream replays the buffered log from the beginning, then streams live, t
 terminal frame — so attaching late still gets the whole story:
 
 ```console
-$ curl -sN localhost:7878/api/jobs/down-pr-123-3-a3zn01/stream
+$ curl -sN https://api.preview.example.com/api/jobs/down-pr-123-3-a3zn01/stream
 data: {"seq":1,"at":1785014283186,"level":"step","message":"→ compose down (all profiles)"}
 
 data: {"seq":2,"at":1785014283193,"level":"step","message":"→ down: database"}
@@ -798,7 +835,7 @@ A second action on a busy stack is rejected, not queued — a `down` deleting th
 
 ```console
 $ curl -s -w " [%{http_code}]\n" -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
-       localhost:7878/api/stacks/777/up
+       'https://api.preview.example.com/api/deployments/pr-777/up?PR=777'
 {
   "error": "stack pr-777 already has a job in flight",
   "stack": "pr-777"
@@ -811,12 +848,19 @@ restart loses history, not correctness. Truth about what exists lives in Docker 
 
 ### The UI
 
-Open `http://127.0.0.1:7878/` — `serve` hosts `ui/` (next to `src/`) as static files: `/` →
-`index.html`, `/api/*` is reserved for the API, anything else falls through to the file server and
-404s if absent. No build step; Vue 3 comes from a CDN, so first load needs internet.
+Open **`https://control.<domain>/`** (or `http://127.0.0.1:7878/` against a local `serve`). The UI is a
+single HTML document **embedded in the bundle**, not a directory of static files: `/api/*` is the API,
+and *every* other path serves that one document — so a deep link like `/deployments/pr-123` renders
+instead of 404ing, and there is no filesystem lookup and therefore no path traversal to contain. No
+build step; Vue 3 comes from unpkg, so first load needs internet.
 
-It does what the CLI does, with a live log: enter a target, **Load**, then `up` / `down` / `verify`,
-watching the job stream and the step table. Also worth knowing:
+The UI calls the API with **relative** `/api/…` paths. That is deliberate: loaded from
+`control.<domain>` it talks to `control.<domain>/api/…` — same origin, so no CORS preflight, no
+cross-origin cookie rules, and nothing to reconfigure when the hostnames change. `api.<domain>` exists
+for callers that are not the UI.
+
+It does what the CLI does, with a live log: enter a deployment id, **Load**, then `up` / `down` /
+`verify`, watching the job stream and the step table. Also worth knowing:
 
 - The token goes in the header field and is kept in `localStorage`. When `authEnforced` is false the
   header says so.
@@ -839,27 +883,177 @@ them, and preconditions between them.
 
 [`control-plane.md`](control-plane.md) has the architecture. This section is the operator's view.
 
-### The layer you must not automate: `pstack init`
+### Stand up the host: `pstack init`
 
-> **Implemented and reachable as `pstack init`.** > command yet.** Until it does, the host brings its control stack up with `docker compose … up -d` —
-> see [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file).
+> The blocks in this subsection are the shape `init` prints; unlike the rest of the guide they were
+> not captured here, because `init` needs a real host, a real domain and a running Docker.
 
 `pstack init` creates the **control stack** — Traefik plus the `pstack` API/UI container, in compose
-project `pstack-control` — from the host, and `pstack self-upgrade` will replace it. Both are
-CLI-only and will never be HTTP routes, because the API cannot recreate the stack that contains it:
-the process running the upgrade is inside the container being replaced, so it is killed
-mid-operation, and a bad image leaves you with no API and no remote way back. The host keeps one
-capability the API doesn't, and that asymmetry *is* the recovery path.
+project `pstack-control` — from the host. The minimum is a domain and an ACME address. **No DNS
+credential**: HTTP-01 is the default.
 
-It is idempotent — re-running it is the supported way to change the domain, rotate `PSTACK_TOKEN`,
-or move to a new image. It checks its preconditions first (Docker socket, Compose plugin, control
-image), creates `deployments/` and the two external networks `preview-ingress` / `preview-shared`,
-writes `.env` and `dns.env` at `0600`, brings the stack up, and then **waits for the container's
-healthcheck** — because `compose up -d` exits 0 as soon as containers are *created*, so a
-crash-looping API would otherwise be reported as success.
+```bash
+pstack init --domain preview.example.com --acme-email <you>@example.com
+```
 
-Practically, this means: **never write a spec whose compose project is the one running Traefik and
-`pstack`.** Upgrade it from a shell on the host ([`bootstrap.md` §7](bootstrap.md#7-install-and-run-pstack)).
+DNS-01 is opt-in, and the provider is required only then:
+
+```bash
+PSTACK_DNS_TOKEN=<token> pstack init \
+  --domain preview.example.com --acme-email <you>@example.com \
+  --challenge dns01 --dns-provider cloudflare
+```
+
+Everything `init` reads:
+
+| Flag | Environment | Default | Notes |
+|---|---|---|---|
+| `--domain <apex>` | `PSTACK_DOMAIN` | — | **required.** Hostnames are derived from it: `control.<domain>`, `api.<domain>`, `<service>.<domain>`, `<surface>-pr-<n>.<domain>` |
+| `--acme-email <addr>` | `PSTACK_ACME_EMAIL` | — | **required.** Let's Encrypt mails expiry warnings here |
+| `--challenge http01\|dns01` | `PSTACK_CHALLENGE` | `http01` | see [Choose a TLS mode](#choose-a-tls-mode). Anything else exits 3 |
+| `--dns-provider <lego-code>` | `PSTACK_DNS_PROVIDER` | — | **required for `dns01` only**, ignored by `http01` |
+| — | `PSTACK_DNS_TOKEN` | *unset* | the DNS-01 credential, written to `dns.env`. Omit for the tokenless providers |
+| — | `PSTACK_TOKEN` | *generated* | the API bearer token. Supply it to keep or rotate a known one; leave it unset to be handed a fresh one **printed exactly once** |
+| — | `PSTACK_IMAGE` | `pstack:local` | the control image. A property of the installation, not the host |
+| — | `PSTACK_DATA` | `/var/lib/pstack` | where the registry and the control stack's config live |
+
+`-n` / `--dry-run`, `-v` and `-q` behave exactly as they do everywhere else. **Two secrets, two blast
+radii:** `PSTACK_DNS_TOKEN` can edit a DNS zone; `PSTACK_TOKEN` drives an API holding a read-write
+Docker socket, i.e. root on the host. They are never the same value and live in different files.
+
+What it does, in order:
+
+| Step | Detail |
+|---|---|
+| 0. Preconditions | Docker socket at `/var/run/docker.sock`, the Compose v2 plugin, and the control image present. Fails by name, before anything is created — `docker build -t pstack:local .` from a pstack checkout if the image is missing |
+| 1. State dirs | `<data>/deployments` (the registry) and `<data>/control/traefik-dynamic` (Traefik's file provider, created empty so the mount does not fail) |
+| 2. Networks | `preview-ingress` and `preview-shared`, created idempotently. **Both must be declared `external: true` in every per-PR compose file** — declare one non-external and Compose silently makes `pr-123_preview-ingress` instead, so the container comes up healthy and unreachable |
+| 3. Config | `control/docker-compose.yml` (the template, with the two challenge-dependent blocks rendered), `control/.env` (`0600`, holds `PSTACK_TOKEN`), `control/dns.env` (`0600`, holds the DNS credential; written either way so switching modes needs no extra step) |
+| 4. Up | `docker compose -p pstack-control -f <path> up -d --remove-orphans` |
+| 5. **Prove it** | polls the container's `HEALTHCHECK` for ~60s. `up -d` exits 0 as soon as containers are *created*, so a crash-looping API would otherwise be reported as success |
+| 6. Next steps | the URLs, the rotation recipe, and the generated `PSTACK_TOKEN` — **the only time it is printed** |
+
+It is **idempotent**: re-running it is the supported way to change the domain, rotate `PSTACK_TOKEN`,
+switch challenge mode, or move to a new image. (`chmod` is re-applied unconditionally, so a `.env`
+someone loosened to `0644` is tightened back on the next run.)
+
+```bash
+PSTACK_TOKEN=<new> pstack init --domain preview.example.com --acme-email <you>@example.com
+```
+
+### Why `init` is CLI-only, and always will be
+
+`init` — and the `self-upgrade` that will follow it — are CLI-only and will never be HTTP routes,
+because the API cannot recreate the stack that contains it: the process running the upgrade is inside
+the container being replaced, so it is killed mid-operation, the request never returns, the job
+transcript dies with the process (job history is in-memory), and a bad image leaves you with no
+control plane and no remote way back. The host keeps one capability the API doesn't, and that
+asymmetry *is* the recovery path.
+
+Practically: **never submit a spec whose compose project is the one running Traefik and `pstack`.**
+Nothing in the code can stop you — the API cannot reliably know its own deployment id.
+
+### Hostnames
+
+| Hostname | Serves |
+|---|---|
+| `control.<domain>` | the web UI (an operator's browser) |
+| `api.<domain>` | the API (CI, `curl`, scripts) |
+| `<service-name>.<domain>` | the convention for a shared service's own hostname |
+| `<surface>-pr-<n>.<domain>` | a per-PR surface, e.g. `backend-pr-123.<domain>` |
+
+`control` and `api` are **two routers pointing at one container** — the API process serves the UI. The
+UI calls the API with relative `/api/…` paths, so it is same-origin from `control.<domain>` and needs
+no CORS; `api.<domain>` exists to give external callers an honest name that is not "the UI host".
+
+**Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
+`backend-pr-1.<domain>` is covered by `*.<domain>`, `backend.pr-1.<domain>` is not.
+
+### Choose a TLS mode
+
+Both modes get certificates from Let's Encrypt through Traefik's `le` resolver. They differ in what
+proves you own the domain, and that difference decides how many PRs a week the host can certify.
+
+| | `--challenge http01` (default) | `--challenge dns01` |
+|---|---|---|
+| Credential | **none** | a DNS API token to obtain, store and rotate |
+| Hard requirement | **port 80 reachable from the internet** | the provider's API reachable |
+| Traefik flags | `httpchallenge=true`, `httpchallenge.entrypoint=web` | `dnschallenge=true`, `dnschallenge.provider=<code>` |
+| Wildcards | **cannot issue them** — one certificate per hostname | one `*.<domain>` covers every present and future host |
+| New-cert budget | ~50/week per registered domain ⇒ **~16 PRs/week** at 3 surfaces each | one certificate, so no per-PR issuance and no ceiling |
+| URL valid before deploy | **no** — the hostname must already have a container answering | **yes** — the wildcard exists before the stack does |
+| Per-PR router labels | `tls=true` **and** `tls.certresolver=le` | `tls=true` **and nothing else** |
+
+**The redirect is not a problem for HTTP-01.** The control stack redirects `web` → `websecure`, and
+Traefik still answers the challenge: it installs an internal ACME router at maximum priority that
+bypasses the redirect for `/.well-known/acme-challenge/`. The one thing that *does* break HTTP-01 is
+port 80 not being reachable from the internet.
+
+#### The arithmetic that makes you move to DNS-01
+
+Let's Encrypt allows roughly **50 new certificates per registered domain per week**. Renewals do not
+count against it; a separate duplicate-certificate limit caps 5 identical certificates per week.
+HTTP-01 cannot issue a wildcard, so **every hostname is a new certificate**:
+
+```
+3 surfaces per PR (backend, frontend, admin)  ×  1 certificate each  =  3 new certs per PR
+50 new certs per week  ÷  3  ≈  16 new PRs per week
+```
+
+Past that, issuance starts failing and the symptom is a browser TLS error on a preview that deployed
+fine. There is no way to raise it and no way to make HTTP-01 issue one certificate for many hosts —
+the only fix is DNS-01. The second reason to move: HTTP-01 cannot certify a hostname **before its
+container exists**, so a preview URL is invalid until the stack is actually deployed, which surfaces
+as a certificate error that is really a sequencing problem. DNS-01's wildcard is valid immediately.
+
+Start on `http01`; switch with `--challenge dns01 --dns-provider <code>` when PR volume or pre-deploy
+URLs demand it. Re-running `init` is the whole migration.
+
+#### The per-PR `certresolver` rule is OPPOSITE per mode
+
+This is the easiest thing in the whole system to get wrong, and it is expensive in one direction.
+
+| Mode | Every per-PR router | Why |
+|---|---|---|
+| `http01` | `tls=true` **+** `tls.certresolver=le` | there is no wildcard to inherit; each hostname must resolve its own certificate on first request. Omit the resolver and that host has no certificate, ever |
+| `dns01` | `tls=true` — **nothing else** | **exactly one** always-on router requests the wildcard (`tls.domains[0].main=<domain>` + `.sans=*.<domain>`, on the control router). Every other router inherits it by SNI |
+
+> **Under DNS-01, adding `tls.certresolver=le` to a per-PR router orders a SEPARATE certificate for
+> that hostname** — which is how a fleet of previews silently burns the ~50-per-week budget and takes
+> TLS down for the whole host, including the control plane. Copying a router label block from an
+> HTTP-01 host into a DNS-01 host is exactly how it happens.
+
+#### DNS-01 credentials
+
+Provider codes and variable names are lego's, and only the verified ones are written for you. A wrong
+variable name surfaces as an ACME **"propagation timeout"**, which sends you debugging DNS instead of
+a typo — so an unrecognised provider gets a `CHANGEME_VARIABLE_NAME` line pointing at
+[lego's provider list](https://go-acme.github.io/lego/dns/) rather than a guess.
+
+| Provider | `--dns-provider` | Credential in `dns.env` |
+|---|---|---|
+| Cloudflare | `cloudflare` | `CF_DNS_API_TOKEN` — **one** token with `Zone:Read` + `DNS:Edit` |
+| Hetzner | `hetzner` | `HETZNER_API_TOKEN` (optionally `HETZNER_PROPAGATION_TIMEOUT`, `HETZNER_TTL`) |
+| AWS Route 53 | `route53` | **none** — satisfied by the instance's IAM profile |
+| Google Cloud DNS | `gcloud` | **none** — satisfied by the VM's attached service account |
+
+Every lego variable also accepts a `_FILE` suffix if you would rather mount the secret than store it.
+It is `HETZNER_API_TOKEN` — **never `HETZNER_API_KEY`**, which does not exist and fails as a
+propagation timeout. Prefer the tokenless providers where you have the choice: nothing to store,
+nothing to rotate.
+
+#### DNS records you need either way
+
+Point a wildcard at the box so *any* per-PR hostname resolves:
+
+```
+*.preview.example.com.   A   <host-ip>
+preview.example.com.     A   <host-ip>
+```
+
+Under DNS-01 that wildcard record plus the apex is also what the single wildcard **certificate**
+covers. Under HTTP-01 you still want the wildcard record — resolution and certification are separate
+problems — but each hostname is certified individually, on its first HTTPS request.
 
 ### `shared` vs `isolated`
 
@@ -990,21 +1184,23 @@ you asked for", not "the host is inconsistent", and the fix is to re-submit. It 
 diffable and `tar`-able, which a database is not.
 
 ```bash
+API=https://api.preview.example.com
+
 # submit or replace  → 201 new, 200 replaced
 curl -sS -X PUT -H "Authorization: Bearer $PSTACK_TOKEN" \
      -H 'content-type: application/json' \
      -d "$(jq -n --rawfile s preview.yml --rawfile c docker-compose.preview.yml \
              '{spec:$s, compose:$c, env:{PR:"123"}}')" \
-     http://localhost:7878/api/deployments/pr-123
+     "$API/api/deployments/pr-123"
 
-curl -sS  http://localhost:7878/api/deployments                     # list, with busy + running
-curl -sS 'http://localhost:7878/api/deployments/pr-123?PR=123'      # meta + spec summary
+curl -sS  "$API/api/deployments"                     # list, with busy + running
+curl -sS  "$API/api/deployments/pr-123?PR=123"       # meta + spec summary
 
 curl -sS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
-     'http://localhost:7878/api/deployments/pr-123/up?PR=123'       # → 202 { job }
+     "$API/api/deployments/pr-123/up?PR=123"         # → 202 { job }
 
 curl -sS -X DELETE -H "Authorization: Bearer $PSTACK_TOKEN" \
-     'http://localhost:7878/api/deployments/pr-123?PR=123'          # forget, after a clean down
+     "$API/api/deployments/pr-123?PR=123"            # forget, after a clean down
 ```
 
 Five things that will bite you if you skip them:
@@ -1026,13 +1222,24 @@ Five things that will bite you if you skip them:
 - **`:id` is a registry id, not a compose project name.** The server owns the stored spec and
   resolves `stack:` itself, so a client can never ask it to act on an arbitrary compose project.
 
-The same registry is available as a library — note `src/index.ts` does not re-export it:
+The lifecycle itself is importable — `dist/index.js` is the package's `exports` entry, so embedding it
+in your own tooling is a normal import:
 
 ```ts
-import { Registry, dataDir } from './src/registry.ts';
+import { loadSpec, createRunner, down } from '@samyx/preview-stacks';
 
-const reg = new Registry(dataDir());
-await reg.put('pr-123', specYaml, { composeYaml, env: { PR: '123' } });   // validates first
+const spec = await loadSpec('preview.yml', { ...process.env, PR: '123' });
+const result = await down(spec, createRunner({ dryRun: false }));
+if (!result.ok) throw new Error('something leaked');
+```
+
+The registry is **not** part of that surface — `src/index.ts` deliberately does not re-export it, so
+`Registry` / `dataDir` are reachable only from a checkout (`./src/registry.ts`). Drive stored
+deployments over the API instead:
+
+```ts
+const reg = new Registry(dataDir());                                       // checkout only
+await reg.put('pr-123', specYaml, { composeYaml, env: { PR: '123' } });    // validates first
 const stack = await reg.resolve('pr-123', { PR: '123' });
 ```
 
@@ -1069,17 +1276,17 @@ jobs:
       group: preview-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4          # your repo: preview.yml, hooks, compose file
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.3.12 }
-      - run: bun install --frozen-lockfile
+      - run: bun add -g @samyx/preview-stacks
 
       - name: Bring the preview up
         env:
           PR: ${{ github.event.pull_request.number }}
           GIT_SHA: ${{ github.event.pull_request.head.sha }}
           DB_API_TOKEN: ${{ secrets.DB_API_TOKEN }}
-        run: bun src/cli.ts up -v
+        run: pstack up -v
 
   down:
     if: github.event.action == 'closed'
@@ -1091,7 +1298,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.3.12 }
-      - run: bun install --frozen-lockfile
+      - run: bun add -g @samyx/preview-stacks
 
       - name: Tear the preview down
         env:
@@ -1100,7 +1307,7 @@ jobs:
           DB_API_TOKEN: ${{ secrets.DB_API_TOKEN }}
         run: |
           set +e
-          bun src/cli.ts down -v
+          pstack down -v
           code=$?
           set -e
           case $code in
@@ -1139,8 +1346,11 @@ Notes on the rest of it:
 - **Pass every variable the spec interpolates** (`PR`, `GIT_SHA`, …) *and* every secret the hooks
   need. A missing one is exit 3 at parse time, before anything is touched — which is the good failure.
 - **`-v` in CI**, always. The log is the only forensics you get after the runner is gone.
-- **Validate the spec on every PR** — a cheap job on its own, no runner privileges needed:
-  `PR=0 bun src/cli.ts validate` (add `GIT_SHA=0000000` or whatever else it interpolates).
+- **Validate the spec on every PR** — a cheap job on its own, needing neither Docker nor runner
+  privileges: `PR=0 pstack validate` (add `GIT_SHA=0000000` or whatever else it interpolates).
+- **`bun add -g` is the whole install**, so this workflow runs on a hosted runner too if your hooks
+  and Docker do. Pin the pstack version (`@samyx/preview-stacks@<x.y.z>`) if you want teardown to
+  behave identically to the deploy that created the stack.
 
 ---
 
@@ -1159,7 +1369,7 @@ workflow, a runner that died mid-teardown, a PR closed while the box was down. I
 # Verify every given PR is really gone. Exit 1 if anything leaked.
 leaked=()
 for pr in "$@"; do
-  bun src/cli.ts --set PR="$pr" verify -q >/dev/null 2>&1
+  pstack --set PR="$pr" verify -q >/dev/null 2>&1
   case $? in
     0) echo "  pr-$pr clean" ;;               # clean, or unverifiable — see below
     2) echo "  pr-$pr LEAKED"; leaked+=("$pr") ;;
@@ -1221,20 +1431,36 @@ docker images                                 # per-PR tags compose never remove
 docker system df                              # is the disk actually the problem?
 ```
 
-Or over the API, which adds a `busy` flag per project so you don't tear down something mid-deploy:
+Or over the API. `GET /api/deployments` lists everything ever *submitted*, cross-referenced against
+`docker compose ls --all`, so you can tell intent from reality:
 
 ```console
-$ curl -s localhost:7878/api/stacks          # nothing listed on this host
+$ curl -s https://api.preview.example.com/api/deployments
 {
-  "stacks": []
+  "deployments": [
+    {
+      "id": "pr-123",
+      "kind": "isolated",
+      "createdAt": 1785014255903,
+      "updatedAt": 1785014255903,
+      "stack": "pr-123",
+      "busy": false,
+      "running": true
+    }
+  ]
 }
 ```
 
-Each entry is `{ "name", "status", "busy" }` — `name` and `status` straight from
-`docker compose ls --all`, `busy` true while a job holds that stack's lock. `name` is the Compose
-project name, i.e. your resolved stack (`pr-123`), so map it back to a PR number and hand that to
-`down`. An older Compose that can't emit JSON gets you `{ raw, parseError: true }` instead of a
-parsed list, rather than a silent empty answer.
+- **`busy`** — a job holds that stack's lock. Don't act on it; attach to the job instead.
+- **`running`** — a compose project by that name exists on the host.
+- **Both are `null`, never `false`, when they could not be determined**: an unresolved spec has no
+  stack name to look up, and a Docker that did not answer is not the same fact as "nothing is
+  running". A row whose variables were not supplied on the query string carries `unresolved` with the
+  reason, instead of failing the whole listing — one broken deployment must not hide the other twenty.
+
+`running: true` with a closed PR is your orphan list. The reverse — a compose project on the host with
+**no** row here — is a stack submitted before the registry was wiped, or one created by hand; the
+`docker` commands above are the only way to see those.
 
 A cluster of `<stack>_default` networks with no containers is the signature of the profile bug: a
 teardown that passed fewer profiles than the deploy did. `pstack down` cannot produce it; a
@@ -1273,12 +1499,13 @@ hand-rolled script can.
 
 ## 10. Reference
 
-Derived from `src/cli.ts`, `src/api.ts`, `src/spec.ts`, `src/compose.ts` and `src/registry.ts`.
+Derived from `src/cli.ts`, `src/init.ts`, `src/api.ts`, `src/spec.ts`, `src/compose.ts`,
+`src/registry.ts` and `templates/control/docker-compose.yml`.
 
 ### Commands
 
 ```
-pstack <up|down|verify|status|validate|serve> [flags]
+pstack <up|down|verify|status|validate|init|serve> [flags]
 ```
 
 | Command | Does | Exits |
@@ -1288,7 +1515,11 @@ pstack <up|down|verify|status|validate|serve> [flags]
 | `verify` | run every `assert_gone`. Axes without one are reported `unverifiable`, not passed. | 0 · 2 |
 | `status` | `compose ps` for this stack, passed through | 0 |
 | `validate` | parse, resolve interpolation, list axes and hooks, print warnings. Touches nothing. | 0 · 3 |
-| `serve` | HTTP API + UI over the same core. Runs until killed. | 3 on refusal |
+| `init` | stand up the control stack (`pstack-control`: Traefik + the API/UI) on **this host**. Idempotent. Preconditions → dirs → networks → config → `compose up -d` → wait for the healthcheck. **Never an HTTP route.** | 0 · 1 · 3 |
+| `serve` | HTTP API + UI over the deployment registry. Runs until killed. | 3 on refusal |
+
+`init` and `serve` are the two **spec-free** commands: they act on the host and on the registry, so
+neither loads `preview.yml` and neither fails because it is absent.
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
 `assert_gone` is the only thing that moves the needle. The two ways it still returns 1: the
@@ -1298,16 +1529,21 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `-f`, `--file <path>` | all | spec file. Default `preview.yml`. |
-| `-n`, `--dry-run` | `up` `down` `verify` | print each step, execute nothing. Prints step **labels**, not shell commands. |
+| `-f`, `--file <path>` | all but `init` `serve` | spec file. Default `preview.yml`. |
+| `-n`, `--dry-run` | `up` `down` `verify` `init` | print each step, execute nothing. Prints step **labels**, not shell commands. **A green dry-run proves ordering, never absence** — `requires` asserts and `init`'s preconditions are skipped and report ok, so `init -n` says nothing about whether Docker or the control image exist. |
 | `-v`, `--verbose` | all | echo each command as `$ <cmd>` plus its stdout/stderr, indented `\|`. Ignored under `--dry-run`. |
 | `-q`, `--quiet` | all | narrower than it sounds: on its own it suppresses only the `stack: …` header. Step lines (`→ …`) and the final report **always print**. Combined with `-n` it also drops the `[dry-run]` lines. |
 | `--set K=V` | all | define/override a spec variable; repeatable. Wins over the ambient environment, but a key the spec's own `env:` defines still wins over `--set`. |
 | `--no-verify` | `down` | skip the post-teardown leak check. Turns a leak into exit 0. |
 | `--force` | `down` | allow tearing down a `kind: shared` deployment. Nothing else lifts that guard, and the HTTP API never passes it. |
+| `--domain <apex>` | `init` | **required** (or `PSTACK_DOMAIN`). Every hostname is derived from it. |
+| `--acme-email <addr>` | `init` | **required** (or `PSTACK_ACME_EMAIL`). |
+| `--challenge http01\|dns01` | `init` | default **`http01`** (or `PSTACK_CHALLENGE`). Any other value exits 3. |
+| `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
 | `-h`, `--help` | — | usage, exit 0 |
 
-An unknown flag, an unknown command, no command, or a malformed `--set` all exit **3**.
+An unknown flag, an unknown command, no command, a malformed `--set`, a bad `--challenge`, a missing
+`--domain`/`--acme-email`, or `dns01` without a provider all exit **3**.
 
 ### Exit codes
 
@@ -1321,46 +1557,61 @@ An unknown flag, an unknown command, no command, or a malformed `--set` all exit
 2 is distinct from 1 on purpose: "torn down but something survived" and "teardown errored" are
 different problems with different owners.
 
-### `serve` environment
+### Environment
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `PSTACK_TOKEN` | *unset* | bearer token for mutating routes. **Required** to bind off-loopback. |
-| `PSTACK_PORT` | `7878` | listen port |
-| `PSTACK_HOST` | `127.0.0.1` | listen address. Forced to `127.0.0.1` without a token; a non-loopback value without a token is refused with exit 3. |
-| `PSTACK_VAR` | `PR` | spec variable bound to the `:id` path segment and to `/api/spec?<var>=` |
+| Variable | Used by | Default | Meaning |
+|---|---|---|---|
+| `PSTACK_TOKEN` | `serve` `init` | *unset* / *generated* | bearer token for mutating routes. **Required** to bind off-loopback. `init` generates one when unset and prints it once. |
+| `PSTACK_PORT` | `serve` | `7878` | listen port |
+| `PSTACK_HOST` | `serve` | `127.0.0.1` | listen address. Forced to `127.0.0.1` without a token; a non-loopback value without a token is refused with exit 3. |
+| `PSTACK_DATA` | `serve` `init` | `/var/lib/pstack` | registry + control-stack config root. The registry lives at `<PSTACK_DATA>/deployments`. |
+| `PSTACK_DOMAIN` | `init` | — | same as `--domain` |
+| `PSTACK_ACME_EMAIL` | `init` | — | same as `--acme-email` |
+| `PSTACK_CHALLENGE` | `init` | `http01` | same as `--challenge` |
+| `PSTACK_DNS_PROVIDER` | `init` | — | same as `--dns-provider` |
+| `PSTACK_DNS_TOKEN` | `init` | *unset* | the DNS-01 credential; written to `control/dns.env` (`0600`) under the provider's own variable name. **Flag-less on purpose** — a secret does not belong in a shell history. |
+| `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
 
-The stack variable (`PR` by default) must also be set in the environment for `serve` to start, since
-the spec is resolved once at boot.
+`serve` needs **no** spec and no stack variable to start.
 
 ### HTTP API
 
-> **Superseded — see [section 7](#7-the-control-plane) and the header of `src/api.ts`.** This table
-> describes the single-spec server; the routes are now `/api/deployments/*`, `:id` is a registry id,
-> and mutations are `POST`/`PUT`/`DELETE`. The status-code column and the job model are unchanged.
-
-`:id` is the **spec variable's value** (e.g. `123`), never the resolved stack name. Auth applies to
-POST/DELETE only.
+`:id` is a **registry id** (e.g. `pr-123`), never the resolved stack name. Auth applies to
+**POST/PUT/DELETE** only; every `GET` is open, which is also what lets the log stream use
+`EventSource` (it cannot send headers). `GET /api/jobs/:id` returns a whole hook transcript, so the
+ingress in front of this is the only gate on reads.
 
 | Method | Route | Body / query | Returns |
 |---|---|---|---|
-| GET | `/api/health` | — | `{ ok, authEnforced, spec, varName }` |
-| GET | `/api/spec` | `?pr=<id>` (lowercased `varName`; `?id=` also accepted) | resolved `{ stack, compose, axes[{name,hooks}] }`; 400 if missing |
-| GET | `/api/stacks` | — | `{ stacks: [{ name, status, busy }] }`; `{ raw, parseError, busy }` on older compose |
-| GET | `/api/stacks/:id` · `/api/stacks/:id/status` | — | `{ stack, busy, status }` |
-| POST | `/api/stacks/:id/up` | — | **202** `{ job }` · 409 if busy |
-| POST | `/api/stacks/:id/down` | `{ "verify": true \| false }` (default true) | **202** `{ job }` · 409 if busy |
-| POST | `/api/stacks/:id/verify` | — | **202** `{ job }` · 409 if busy |
-| GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50 |
+| GET | `/api/health` | — | `{ ok, authEnforced, dataDir, version }` |
+| GET | `/api/deployments` | spec variables as `?K=V`, **optional** | `{ deployments: [{ …meta, stack, busy, running, unresolved? }] }`. A row whose variables were not supplied degrades to `stack: null` + `unresolved: <reason>` rather than failing the listing; `busy`/`running` are `null` when undeterminable |
+| GET | `/api/deployments/:id` | spec variables as `?K=V`, **required** | `{ id, kind, createdAt, updatedAt, stack, busy, compose, requires, axes[{name,hooks}] }` — hook **names**, never bodies |
+| PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }` · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
+| DELETE | `/api/deployments/:id` | spec variables as `?K=V` | forget it. Refused while containers exist **and** when Docker did not answer |
+| POST | `/api/deployments/:id/up` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
+| POST | `/api/deployments/:id/down` | `{ verify?, force? }` (`verify` defaults true) | **202** `{ job }` · 409 if busy · 409 on `kind: shared` without `force` |
+| POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
+| GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |
 | GET | `/api/jobs/:jobId` | — | `{ job }` · 404 |
 | GET | `/api/jobs/:jobId/stream` | — | SSE: buffered log replay, then live, then `{done:true,state}` |
-| GET | `/` and any non-`/api/` path | — | static file from `ui/`; `/` → `index.html`; 404 otherwise |
+| GET | `/` and **any** non-`/api/` path | — | the embedded single-page UI. No filesystem lookup, so a deep link renders rather than 404s |
 
-Status codes: **202** accepted · **400** bad spec or missing query · **401** unauthorized ·
-**404** unknown job/file · **405** wrong method on an action · **409** job in flight for that stack ·
-**500** unexpected.
+Status codes: **202** accepted · **400** bad spec or missing variable · **401** unauthorized ·
+**404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
+stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 
 Job `state`: `running` · `ok` · `failed` · `leaked`.
+
+### Control-stack hostnames
+
+| Hostname | Router | Serves |
+|---|---|---|
+| `control.<domain>` | `pstack-ui` | the web UI |
+| `api.<domain>` | `pstack-api` | the API |
+
+Both point at the **same** container on port `7878`; the UI calls `/api/…` relatively, so it is
+same-origin and needs no CORS. Under `dns01` the `pstack-ui` router is the **one** router carrying
+`tls.domains[0].main` + `.sans` — the wildcard every other router inherits by SNI.
 
 ### Spec schema
 
@@ -1421,9 +1672,6 @@ All non-fatal; `validate` still exits 0. Each one is a way an axis can lie to yo
 | `assert_gone` contains `\|\| true` | `\|\| true` anywhere in the `assert_gone` script | remove it; tolerate failure in `down`, never in an assert |
 
 ### The deployment registry
-
-> **Built, not wired.** `src/registry.ts` is complete; nothing imports it and no HTTP route uses it.
-> See [section 7](#7-the-control-plane) and [`control-plane.md`](control-plane.md).
 
 | | |
 |---|---|

@@ -17,20 +17,31 @@ One host runs three layers, and **which layer something is decides what may be d
 
 ```
   host  ──  pstack init  ──▶  CONTROL stack:  traefik + pstack (API + UI)
+                                              control.<domain>   the web UI
+                                              api.<domain>       the API
                                                         │ manages
                                     ┌───────────────────┴───────────────────┐
                                     ▼                                       ▼
                           SHARED deployments                      ISOLATED deployments
                           kind: shared                            kind: isolated
-                          a DB, a queue, a mirror   ◀── requires ──  pr-123, pr-124, …
+                          <service>.<domain>        ◀── requires ──  <surface>-pr-<n>.<domain>
+                          a DB, a queue, a mirror                  pr-123, pr-124, …
                           no axes · `down` guarded              axes · proven gone on `down`
 ```
 
 | | control | shared | isolated |
 |---|---|---|---|
 | Managed by | the **CLI, on the host** | the API or the CLI | the API or the CLI |
+| Hostnames | `control.<domain>` (UI) · `api.<domain>` (API) | `<service>.<domain>` | `<surface>-pr-<n>.<domain>` |
 | Axes | n/a | **none allowed** | yes — that is the point |
 | `down` | not offered | refused unless forced | routine |
+
+`control.` and `api.` are **two routers onto the same container** — the API process serves the UI
+too. The UI then calls the API with **relative** `/api/…` paths, so a page loaded from
+`control.<domain>` talks to `control.<domain>/api/…`: same origin, no CORS preflight, nothing to
+reconfigure if the domain changes. `api.<domain>` exists to give CI, `curl` and scripts an honest
+name that is not "the UI host". Per-PR hostnames are flat and dash-separated
+(`backend-pr-1.<domain>`, not `backend.pr-1.<domain>`) because a wildcard matches exactly one label.
 
 **The CLI owns the control stack; the API owns everything else.** The API must never run `up` on the
 deployment containing the API — the process performing the upgrade is inside the stack being
@@ -40,10 +51,29 @@ no remote way to fix it. `pstack init` / `pstack self-upgrade` handle that from 
 Full rationale, the registry contract, and the trust boundary:
 **[docs/control-plane.md](docs/control-plane.md)**.
 
+### TLS: HTTP-01 by default, DNS-01 when you outgrow it
+
+`pstack init --domain … --acme-email …` needs **no DNS credential**. Traefik proves the domain over
+HTTP-01, on port 80. DNS-01 is opt-in: `--challenge dns01 --dns-provider <lego-code>`.
+
+| | **HTTP-01** (default) | **DNS-01** (`--challenge dns01`) |
+|---|---|---|
+| Credential to obtain, store, rotate | **none** — but **port 80 must be reachable from the internet**. That is the one hard requirement. | a DNS API token (`--dns-provider`); `route53`/`gcloud` are tokenless, satisfying lego from the instance's own identity |
+| Wildcard | **no** — Let's Encrypt does not issue wildcards over HTTP-01, so **every hostname gets its own certificate** | **yes** — one `*.<domain>` covers every present and future host |
+| Cert before the stack is deployed | **no** — the challenge needs a router/container already answering on that hostname, so a preview URL is not valid until it is deployed | **yes** — the wildcard is valid immediately |
+| Practical PR ceiling | Let's Encrypt allows **~50 new certificates per registered domain per week**. At 3 surfaces per PR (backend/frontend/admin): 50 ÷ 3 ≈ **16 new PRs per week** before issuance starts failing. (The separate duplicate-certificate limit is 5/week, and bites on re-issuing the *same* hostname set. Renewals count against neither.) | no per-PR issuance, so no ceiling |
+
+Start on HTTP-01; move to DNS-01 when PR volume or pre-deploy URLs demand it. Both modes want the
+wildcard **DNS** record (`*.<domain>` + apex) so any per-PR host resolves — HTTP-01 changes what
+gets certified, not what resolves. The per-PR router labels differ between the two modes, and
+getting that wrong is what burns the rate limit: see
+[docs/control-plane.md](docs/control-plane.md#tls-two-challenge-modes-opposite-per-pr-rules).
+
 > Status: `kind`, `requires`, the `shared` `down` guard, the deployment registry, the
-> registry-backed API (`/api/deployments/*`) and `pstack init` are all wired and reachable from the
-> CLI. Everything has been exercised against `--dry-run` and the API end-to-end; **none of it has
-> been run against a real Docker host yet** — `docs/control-plane.md` tracks the model.
+> registry-backed API (`/api/deployments/*`), `pstack init` (both challenge modes) and the published
+> bundle are **all wired** and reachable from the CLI. Everything has been exercised against
+> `--dry-run`, the API end-to-end, and the built artifact; **nothing has been run against a real
+> Docker host yet** — `docs/control-plane.md` tracks the model.
 
 ## Why this exists
 
@@ -143,18 +173,38 @@ Two leak classes it catches out of the box:
 
 ## Install
 
-Requires [Bun](https://bun.sh) ≥ 1.3 (uses native `Bun.YAML`; no dependencies).
+Requires [Bun](https://bun.sh) **≥ 1.3** — no other dependencies. Bun is not a preference here:
+`Bun.YAML`, `Bun.serve`, `Bun.spawn` and `Bun.file` have no Node equivalent, so there is no Node
+fallback to fall back to. The `bin` is a `#!/usr/bin/env bun` script, which makes `engines.bun`
+load-bearing rather than advisory.
 
 ```bash
-git clone <this repo> && cd preview-stacks && bun install
-bun link                      # exposes `pstack`
-# or run directly:  bun src/cli.ts --help
+bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+pstack --help
+```
+
+What ships is a **bundle, not the source tree**: `dist/cli.js` (~74 KB) and `dist/index.js`, both
+built with `--target=bun`, minified, with sourcemaps. The published tarball is **8 files, ~0.36 MB
+unpacked** — no source, no docs, no examples, no skills. The UI and the control-stack compose
+template are inlined into the bundle (`with { type: 'text' }` imports), so nothing is read from a
+path relative to the source at runtime. See
+[docs/control-plane.md](docs/control-plane.md#distribution-what-ships-and-why-a-bundle) for why a
+bundle and not `--compile`.
+
+### Contributing
+
+Working from a checkout is the **contributor** path, not the user path:
+
+```bash
+git clone https://github.com/samishal1998/preview-stacks && cd preview-stacks && bun install
+bun src/cli.ts --help        # run from source
+bun run build                # → dist/, then smoke-tests `pstack --help` from the bundle
 ```
 
 ## Usage
 
 ```
-pstack <up|down|verify|status|validate|serve> [flags]
+pstack <up|down|verify|status|validate|init|serve> [flags]
 
   -f, --file <path>   spec file (default: preview.yml)
   -n, --dry-run       print what would run, change nothing
@@ -164,11 +214,18 @@ pstack <up|down|verify|status|validate|serve> [flags]
       --no-verify     down: skip the post-teardown leak check
       --force         down: allow tearing down a `kind: shared` deployment
 
+init flags: --domain <preview.example.com>  --acme-email <you@example.com>
+            --challenge http01|dns01        (default http01 — no DNS credential needed)
+            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)
+
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
-            PSTACK_HOST (127.0.0.1) · PSTACK_VAR (PR)
+            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)
 
 Exit: 0 ok · 1 failed · 2 leaked · 3 bad spec/usage
 ```
+
+`init` and `serve` are the control-plane commands: they act on the host and on the registry, so
+neither needs a `preview.yml` to be present.
 
 `pstack validate` also **lints your asserts**, which is where the tool earns its keep:
 
@@ -278,9 +335,14 @@ memory isolation unless you add `mem_limit` yourself; one greedy heap can OOM ev
 ## Development
 
 ```bash
-bun test           # 22 tests, incl. end-to-end leak detection against the real filesystem
+bun test           # incl. end-to-end leak detection against the real filesystem
 bunx tsc --noEmit  # strict, noUncheckedIndexedAccess
-bun run check      # both
+bun run build      # bundle to dist/, then smoke-test `pstack --help` from the artifact
+bun run check      # all of the above + `check:package` (what the tarball would contain)
 ```
+
+`build` refuses to succeed on a bundle that cannot start: it runs `--help` against the emitted
+`dist/cli.js`, not against the sources, because "works from a checkout, 404s once installed" is the
+exact failure the bundle exists to prevent.
 
 MIT.
