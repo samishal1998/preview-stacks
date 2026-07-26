@@ -350,13 +350,21 @@ anything. This is a real gap in the credential-free happy path; pick one of two 
 
 | Option | What you do | Cost |
 |---|---|---|
-| **Pull from a registry** *(what the cloud-init below does)* | `docker pull ghcr.io/<you>/pstack:<tag>`, then run `init` with `PSTACK_IMAGE=ghcr.io/<you>/pstack:<tag>` | you must publish the image somewhere the box can pull. **No source on the host** |
-| **Build on the host** | `git clone` this repo, `docker build -t pstack:local .`, then `init` with the default | needs a pstack **source checkout** on the box — the one thing a global install otherwise removes — plus build time and RAM on every upgrade |
+| **Build on the host** *(what the cloud-init below does)* | `git clone` this repo, `docker build -t pstack:local .`, then `init` with **no** `PSTACK_IMAGE` — `pstack:local` is already the default | needs a pstack **source checkout** on the box, plus ~1–2 min of build time and some RAM per upgrade |
+| **Pull from a registry** | `docker pull <registry>/pstack:<tag>`, then run `init` with `PSTACK_IMAGE=<registry>/pstack:<tag>` | you must publish the image somewhere the box can pull. **No source on the host**, and boots are seconds instead of minutes |
+
+**Build-on-host is the default here** because it needs nothing published: the image always matches
+the source on that box, and the same checkout supplies both the `Dockerfile` and — until the package
+is on a registry — the `pstack` binary itself. The checkout is not wasted; `git pull && bun
+scripts/build.ts` upgrades the CLI, and re-running `docker build` upgrades the control image.
+
+Switch to a registry pull when build time per boot starts to hurt, or when you want boxes that carry
+no source at all.
 
 `PSTACK_IMAGE` is read from the environment on **every** `init` run and written into
-`control/.env`. Re-run `init` without it and it falls back to `pstack:local`, which is how an upgrade
-turns into "image not found" on a box that was working. Pass it every time (or tag your pull as
-`pstack:local`).
+`control/.env`. If you *do* move to a registry, pass it on every run — re-running `init` without it
+falls back to `pstack:local`, which is how an upgrade turns into "image not found" on a box that was
+working. (Or tag your pull as `pstack:local` and keep the default.)
 
 > **Secret handling.** On the default HTTP-01 path there is **no DNS secret at all** — nothing in
 > user-data, nothing on disk, nothing to rotate. What remains is `PSTACK_TOKEN`, the API's bearer
@@ -462,14 +470,28 @@ runcmd:
   #    a wrong bin directory fails HERE, in cloud-init-output.log, and not later under a different
   #    HOME. (Installing a local tarball — `npm i -g ./samyx-preview-stacks-<v>.tgz` — is the same
   #    8-file artifact if you are on a pre-release build.)
-  - BUN_INSTALL=/usr/local /usr/local/bin/bun add -g @samyx/preview-stacks
+  # `bun add -g @samyx/preview-stacks` is the path once the package is published. Until then —
+  # and whenever you want the image built on the box rather than pulled — install from the
+  # checkout, which is also what supplies the Dockerfile in step 4.
+  - git clone --depth 1 https://github.com/<you>/preview-stacks.git /opt/preview/pstack
+  - cd /opt/preview/pstack && bun install --frozen-lockfile && bun scripts/build.ts
+  # Expose it on PATH with a symlink, NOT `bun link`: `bun link` registers the package so another
+  # project can depend on it, but it does not install the `bin` shim, so `pstack` stays unknown to
+  # the shell. The bundle carries `#!/usr/bin/env bun` and the exec bit (scripts/build.ts sets
+  # both), so a symlink is all that is needed — and it keeps pointing at the checkout, so a later
+  # `git pull && bun scripts/build.ts` upgrades the CLI with no reinstall.
+  - ln -sf /opt/preview/pstack/dist/cli.js /usr/local/bin/pstack
   - BUN_INSTALL=/usr/local /usr/local/bin/bun pm bin -g
   - /usr/local/bin/pstack --help
 
   # 4. The control image. `init`'s precondition is `docker image inspect`, which does NOT pull, so
   #    it must be here BEFORE init runs (§4). Registry option shown; the alternative is to clone
   #    this repo and `docker build -t pstack:local .` — see the table above.
-  - docker pull ghcr.io/<you>/pstack:v0.1.0
+  #    BUILD ON THE BOX from the checkout above. The tag `pstack:local` is PSTACK_IMAGE's default,
+  #    so `init` needs no PSTACK_IMAGE at all — nothing to publish, no registry login, and the
+  #    image always matches the source on this host. Costs ~1–2 min of build time per boot; switch
+  #    to a registry pull when that matters (§4).
+  - cd /opt/preview/pstack && docker build -t pstack:local .
 
   # 5. Optional: your preview config, for driving the CLI from the host or from a cron sweep.
   #    Not needed for the API path — a submitted spec travels over HTTP as a string.
@@ -494,7 +516,6 @@ runcmd:
   #    one, stores it 0600 in control/.env and prints it once — into cloud-init-output.log.
   - >
     PSTACK_DATA=/var/lib/pstack
-    PSTACK_IMAGE=ghcr.io/<you>/pstack:v0.1.0
     PSTACK_TOKEN=CHANGEME_PSTACK_API_TOKEN
     /usr/local/bin/pstack init
     --domain preview.example.com
@@ -754,16 +775,19 @@ From the host, never over HTTP — the API cannot recreate the stack containing 
 # 1. drain: jobs are in-memory, so an in-flight `up` is truncated by a restart
 curl -s https://api.preview.example.com/api/jobs | jq '[.jobs[] | select(.state == "running")]'
 
-# 2. new pstack CLI, and/or a new control image
-bun add -g @samyx/preview-stacks       # the CLI
-docker pull ghcr.io/<you>/pstack:v0.2.0
+# 2. new pstack CLI + control image, both from the checkout (build-on-host, §4).
+#    /usr/local/bin/pstack is a symlink INTO this checkout, so rebuilding the bundle upgrades the
+#    CLI in place — there is nothing to reinstall.
+cd /opt/preview/pstack && git pull
+bun install --frozen-lockfile && bun scripts/build.ts   # the CLI
+docker build -t pstack:local .                          # the control image
 
 # 3. re-run init — idempotent, and the ONLY supported way to change any of this.
 #    Re-pass the FULL configuration, including the challenge mode (see the warning below).
-PSTACK_IMAGE=ghcr.io/<you>/pstack:v0.2.0 pstack init \
-  --domain preview.example.com --acme-email ops@example.com
+#    No PSTACK_IMAGE needed: `pstack:local` is the default, and the build above just replaced it.
+pstack init --domain preview.example.com --acme-email ops@example.com
 #    …and on a DNS-01 host, that same command must carry the mode too:
-# PSTACK_IMAGE=… PSTACK_DNS_TOKEN=… pstack init --domain … --acme-email … \
+# PSTACK_DNS_TOKEN=… pstack init --domain … --acme-email … \
 #   --challenge dns01 --dns-provider hetzner
 
 # 4. it waits for the healthcheck itself; confirm from outside too
@@ -982,7 +1006,8 @@ There is **no Traefik dashboard** on this host (§5), so "is the router there?" 
 labels and logs:
 
 ```bash
-docker inspect -f '{{json .Config.Labels}}' <container> | jq
+# Traefik reads its routing from container LABELS, so inspect the container, not the compose file:
+docker inspect -f '{{json .Config.Labels}}' "$(docker compose -p pr-7 ps -q backend)" | jq
 docker compose -p pstack-control logs traefik | grep -iE 'router|provider|error'
 ```
 

@@ -1,25 +1,48 @@
 # pstack — the control-plane image (HTTP API + web UI in one container).
 #
-# ── WHY THERE IS NO BUILD STAGE ──────────────────────────────────────────────────────────────
-# Bun runs TypeScript directly, so there is nothing to compile: `bun src/cli.ts serve` executes
-# the same files you edit and test. A bundling step here would buy nothing and cost the one
-# property that makes this image debuggable — that the source in the container is byte-identical
-# to the source in the repo, so a stack trace points at a real line you can read. pstack also has
-# no runtime dependencies (package.json lists devDependencies only), so there is no `bun install`
-# either. The only multi-stage part is stealing the Docker CLI, below.
+# Built ON THE HOST from a checkout:
+#
+#     docker build -t pstack:local .          # `pstack:local` is PSTACK_IMAGE's default
+#
+# so `pstack init` finds it with no registry, no login and no image to publish. When you outgrow
+# that, push it somewhere and set PSTACK_IMAGE=<registry>/pstack:<tag>.
+#
+# ── WHY A BUILD STAGE ────────────────────────────────────────────────────────────────────────
+# The runtime layer gets `dist/` and nothing else — no src/, no ui/, no node_modules. Same reason
+# the npm package ships a bundle: TypeScript is parsed once at build time instead of on every
+# container start, and the image's contents stop being a second copy of the repo that can drift
+# from it. Sourcemaps are emitted alongside, so a stack trace still names real functions and lines.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
 # The Docker CLI + Compose plugin, lifted from the official image rather than installed from apt:
-# the layer is ~50 MB instead of ~200 MB and needs no key/repo dance. pstack drives `docker
-# compose` by shelling out, so without these the API starts fine and every operation fails.
+# the layer is ~50 MB instead of ~200 MB and needs no key/repo dance. pstack drives `docker compose`
+# by shelling out, so without these the API starts fine and every operation fails.
 FROM docker:28-cli AS docker-cli
 
+# ── build: source → bundle ───────────────────────────────────────────────────────────────────
+FROM oven/bun:1 AS build
+WORKDIR /build
+
+# devDependencies only (typescript, the publisher). `--frozen-lockfile` so an image build can never
+# silently resolve a different tree than CI tested.
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+# `templates/` and `ui/` are needed AT BUILD TIME even though neither is copied into the runtime
+# layer: both are `with { type: 'text' }` imports, so the bundler inlines their contents. Omit them
+# here and the build fails outright rather than producing a half-working image.
+COPY src ./src
+COPY ui ./ui
+COPY templates ./templates
+COPY scripts ./scripts
+RUN bun scripts/build.ts
+
+# ── runtime ──────────────────────────────────────────────────────────────────────────────────
 FROM oven/bun:1
 
-# Copy both the binary and the plugin. Compose is a CLI *plugin*: `docker compose` resolves
-# `docker-compose` out of the plugin directory, so copying only the binary yields
-# "docker: 'compose' is not a docker command".
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+# Compose is a CLI *plugin*: `docker compose` resolves `docker-compose` out of the plugin
+# directory, so copying only the binary yields "docker: 'compose' is not a docker command".
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose \
                        /usr/local/libexec/docker/cli-plugins/docker-compose
 
@@ -31,36 +54,16 @@ RUN docker --version && docker compose version
 
 WORKDIR /app
 
-# `ui/` MUST land as a sibling of `src/`: the server resolves its static directory as `../ui`
-# relative to the source file (`new URL('../ui', import.meta.url)` in src/cli.ts). Flatten this
-# and every UI request 404s while /api/* keeps answering — a confusing half-broken container.
-COPY package.json ./
-COPY src ./src
-COPY ui ./ui
+# The whole application: one bundle plus its sourcemap. The UI and the control-stack template are
+# inlined into it, so there is nothing to keep as a sibling and no path resolved relative to source
+# — the failure mode where an image works from a checkout and 404s once built.
+COPY --from=build /build/dist ./dist
 
-# `templates/` is deliberately NOT copied. `pstack init` reads it, and `init` runs from the HOST,
-# never from this container — the control plane must not be able to recreate the stack it runs in.
-
-# An inert spec at the path `-f` defaults to. NOT a description of the control stack.
-#
-# WHY IT EXISTS: src/cli.ts loads the spec unconditionally, before dispatching any command, so
-# `pstack serve` in a directory without one exits 3 ("spec not found: preview.yml") and this
-# container crash-loops behind `restart: unless-stopped` — while `docker compose up -d` still
-# returns 0, so `init` would report success over a dead control plane.
-#
-# It sits at the DEFAULT path rather than being passed with `-f` on purpose: once `serve` stops
-# requiring a single spec (the registry supersedes it — see src/api.ts, whose deployments come from
-# ${PSTACK_DATA}), this file is simply ignored and nothing in CMD has to change. Deleting it then
-# is a one-line cleanup, not a coupling.
-#
-# It must never describe the control stack: that would hand the API the self-management footgun
-# this architecture exists to prevent.
-RUN printf '%s\n' \
-      '# Inert placeholder — see the Dockerfile. NOT the control stack, and not a deployment.' \
-      '# The control plane reads its deployments from the registry at $PSTACK_DATA/deployments.' \
-      'version: 1' \
-      'stack: pstack-control-placeholder' \
-    > /app/preview.yml
+# NOTE: no placeholder spec. `serve` and `init` do not read a spec file (see SPEC_FREE in
+# src/cli.ts) — the API's deployments come from the registry at $PSTACK_DATA/deployments. An
+# earlier revision needed one here because the CLI loaded ./preview.yml before dispatching any
+# command, which crash-looped this container behind `restart: unless-stopped` while
+# `docker compose up -d` still exited 0 — a dead control plane reported as a success.
 
 # Non-root by default: this image is also useful as a plain CLI (`validate`, `--dry-run`), where
 # root buys nothing. The control stack deliberately overrides it with `user: "0:0"` because it
@@ -75,4 +78,4 @@ EXPOSE 7878
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD ["bun", "--eval", "const r = await fetch('http://127.0.0.1:' + (process.env.PSTACK_PORT ?? 7878) + '/api/health'); process.exit(r.ok ? 0 : 1)"]
 
-CMD ["bun", "src/cli.ts", "serve"]
+CMD ["bun", "dist/cli.js", "serve"]
