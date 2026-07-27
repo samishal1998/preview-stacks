@@ -27,10 +27,16 @@ export type { Sink, LogEvent } from './log.ts';
 export { up, down, verify, status, report } from './stack.ts';
 export type { Outcome, StepResult } from './stack.ts';
 
-export { composeUp, composeDown, composePs, shq } from './compose.ts';
+export { composeUp, composeDown, composePs, composeLogs, shq } from './compose.ts';
 
 export { JobRegistry } from './jobs.ts';
 export type { Job, JobAction, JobState } from './jobs.ts';
+
+export { displayVar, displayDeclared, isSecretName, mask, redactText } from './redact.ts';
+export type { DisplayVar, Visibility } from './redact.ts';
+
+export { init, CONTROL_PROJECT } from './init.ts';
+export type { InitOptions } from './init.ts';
 
 export { createServer } from './api.ts';
 export type { ServerOptions } from './api.ts';

@@ -73,8 +73,23 @@ export type Stack = {
   compose?: ComposeSpec;
   requires: Requirement[];
   axes: Axis[];
-  /** Fully-resolved env handed to compose and to every hook. */
+  /**
+   * Fully-resolved env handed to compose and to every hook.
+   *
+   * DANGER — this is seeded from the WHOLE ambient environment before the spec's own `env:` is
+   * layered on, so it contains every secret this process holds, `PSTACK_TOKEN` included. Never
+   * serialise it, never log it, never return it from an HTTP response. Use `declaredEnv` to show a
+   * spec's variables to a human.
+   */
   env: Record<string, string>;
+  /**
+   * The variable names the SPEC ITSELF declared under `env:`, in declaration order.
+   *
+   * Exists so a UI can show "what this deployment configures" without dumping the ambient
+   * environment. Values still need redacting before display — a spec author may legitimately write
+   * `env: { SECRETS_TOKEN: \${SOME_TOKEN} }` — but the key set is authored, not inherited.
+   */
+  declaredEnv: string[];
 };
 
 export class SpecError extends Error {}
@@ -169,6 +184,7 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
   const vars: Record<string, string> = {};
   for (const [k, v] of Object.entries(baseEnv)) if (v !== undefined) vars[k] = v;
 
+  const declaredEnv: string[] = [];
   const specEnv = raw.env;
   if (specEnv !== undefined) {
     if (typeof specEnv !== 'object' || specEnv === null || Array.isArray(specEnv)) {
@@ -176,6 +192,7 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     }
     for (const [k, v] of Object.entries(specEnv as Record<string, unknown>)) {
       vars[k] = interpolate(asString(v, `env.${k}`), vars, `env.${k}`);
+      declaredEnv.push(k);
     }
   }
 
@@ -305,7 +322,7 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     );
   }
 
-  return { version, kind, stack, compose, requires, axes, env: vars };
+  return { version, kind, stack, compose, requires, axes, env: vars, declaredEnv };
 }
 
 /** Parse a spec file from disk. `parseSpec` resets `warnings`. */

@@ -34,7 +34,12 @@ import type { Runner } from './exec.ts';
 import CONTROL_TEMPLATE from '../templates/control/docker-compose.yml' with { type: 'text' };
 
 /** Compose project name of the control stack. Fixed: there is exactly one per host. */
-const CONTROL_PROJECT = 'pstack-control';
+/**
+ * The control stack's compose project name. Exported because the API reads it to SHOW the control
+ * stack's status — never to act on it. Keep it stable: it is how an operator finds the stack with
+ * `docker compose -p pstack-control …`.
+ */
+export const CONTROL_PROJECT = 'pstack-control';
 
 /**
  * The two external Docker networks, matching `docs/bootstrap.md` §1 and the per-PR compose

@@ -57,6 +57,21 @@ export async function composeDown(spec: Stack, runner: Runner): Promise<RunResul
   return runner.run(cmd, { env: { ...spec.env, STACK: spec.stack }, label: 'compose down' });
 }
 
+/**
+ * Recent logs for a stack. `--no-color` because the output is rendered in a browser, where ANSI
+ * escapes are noise, and `--tail` because an unbounded fetch on a chatty stack would stream
+ * megabytes into a tab. Every profile is enabled for the same reason `down` enables them: compose
+ * treats an unenabled profile's services as absent, so their logs would silently be missing.
+ */
+export async function composeLogs(spec: Stack, runner: Runner, tail: number): Promise<RunResult> {
+  const c = spec.compose;
+  if (!c) return { ok: true, code: 0, stdout: '', stderr: '(no compose section in spec)', skipped: false };
+  return runner.run(
+    `${base(spec)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}`,
+    { env: { ...spec.env, STACK: spec.stack }, label: 'compose logs' },
+  );
+}
+
 export async function composePs(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
   return runner.run(`${base(spec)} ${profileArgs(c.profiles)} ps`, {

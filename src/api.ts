@@ -9,6 +9,8 @@
  *   POST   /api/deployments/:id/up        → 202 { job }
  *   POST   /api/deployments/:id/down      → 202 { job }   body: { verify?, force? }
  *   POST   /api/deployments/:id/verify    → 202 { job }
+ *   GET    /api/control                   READ-ONLY view of the control stack (never actionable)
+ *   GET    /api/deployments/:id/logs      recent compose logs for a deployment (redacted)
  *   GET    /api/jobs                      recent job transcripts
  *   GET    /api/jobs/:jobId               one job (poll this for state)
  *   GET    /api/jobs/:jobId/stream        SSE live log
@@ -55,10 +57,12 @@ import UI_HTML_ASSET from '../ui/index.html' with { type: 'text' };
 // `type: 'text'`, but the text loader really does hand back a string — verified by bundling and
 // running with the source file deleted. Cast once, here, rather than at the use site.
 const UI_HTML = UI_HTML_ASSET as unknown as string;
-import { shq } from './compose.ts';
+import { composeLogs, shq } from './compose.ts';
 import { createRunner } from './exec.ts';
 import { JobRegistry } from './jobs.ts';
 import { Registry, RegistryError } from './registry.ts';
+import { CONTROL_PROJECT } from './init.ts';
+import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
 import { down, up, verify } from './stack.ts';
 
@@ -299,11 +303,20 @@ export function createServer(opts: ServerOptions) {
                 compose: spec.compose
                   ? { file: spec.compose.file, profiles: spec.compose.profiles, overlays: spec.compose.overlays ?? [] }
                   : null,
-                requires: spec.requires.map((r) => r.name),
+                // Requirement NAMES and hints. A hint is authored guidance ("run `pstack init`
+                // first"), not a credential; the `assert` command stays server-side for the same
+                // reason axis hook bodies do.
+                requires: spec.requires.map((r) => ({ name: r.name, hint: r.hint ?? null })),
                 axes: spec.axes.map((a) => ({
                   name: a.name,
                   hooks: (['up', 'down', 'assert_gone', 'assert_live'] as const).filter((k) => a[k]),
+                  // Surfaced so the UI can flag the one axis shape `verify` cannot prove clean.
+                  verifiable: Boolean(a.assert_gone),
                 })),
+                // The variables the SPEC declared, values redacted by name. NEVER `spec.env` — that
+                // is seeded from the whole ambient environment and holds PSTACK_TOKEN. See the
+                // Stack.env doc comment and src/redact.ts.
+                env: displayDeclared(spec.declaredEnv, spec.env),
               });
             }
 
@@ -390,6 +403,68 @@ export function createServer(opts: ServerOptions) {
             );
           }
           return json({ job: { id: job.id, stack: job.stack, action: job.action, state: job.state } }, { status: 202 });
+        }
+
+        // ---- the control stack: READ ONLY ------------------------------------------------
+        // Deliberately has no up/down/verify. The API runs INSIDE this stack, so acting on it would
+        // kill the process doing the work (control-plane.md §2) — but being unable to SEE it is just
+        // a blind spot, and an operator debugging "why is my preview unreachable" needs to know
+        // whether Traefik is even up. Read is safe; write is the invariant.
+        if (path === '/api/control' && req.method === 'GET') {
+          const ps = await host.run(
+            `docker compose -p ${shq(CONTROL_PROJECT)} ps --format json`,
+          );
+          let services: Array<{ name: string; state: string; health: string; image: string }> = [];
+          let parseError = false;
+          if (ps.ok) {
+            try {
+              // `--format json` emits either an array or newline-delimited objects depending on the
+              // compose version. Handle both rather than trusting one.
+              const raw = ps.stdout.trim();
+              const rows = raw.startsWith('[')
+                ? (JSON.parse(raw) as unknown[])
+                : raw.split('\n').filter(Boolean).map((l) => JSON.parse(l) as unknown);
+              services = (rows as Array<Record<string, string>>).map((r) => ({
+                name: r.Service ?? r.Name ?? '?',
+                state: r.State ?? '?',
+                health: r.Health ?? '',
+                image: r.Image ?? '',
+              }));
+            } catch {
+              parseError = true;
+            }
+          }
+          return json({
+            project: CONTROL_PROJECT,
+            // `null` means "docker did not answer", which is NOT the same as "nothing is running".
+            reachable: ps.ok,
+            parseError,
+            services,
+            // Stated in the payload so a UI cannot imply an action that must never exist here.
+            managedBy: 'pstack init, from the host',
+            actionable: false,
+            note:
+              'The control stack is not managed through this API: the process serving this request ' +
+              'runs inside it. Upgrade with `pstack init` on the host.',
+          });
+        }
+
+        // ---- recent logs for a deployment -----------------------------------------------
+        const lm = /^\/api\/deployments\/([^/]+)\/logs$/.exec(path);
+        if (lm && req.method === 'GET') {
+          const id = decodeURIComponent(lm[1]!);
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          const spec = await registry.resolve(id, vars);
+          // Bounded: an unbounded tail on a chatty stack would stream megabytes into a browser tab.
+          const tailRaw = Number(url.searchParams.get('tail') ?? 200);
+          const tail = Number.isFinite(tailRaw) ? Math.min(Math.max(tailRaw, 1), 2000) : 200;
+          const r = await composeLogs(spec, runnerFor(spec, dep.dir), tail);
+          // Application logs are the one place a secret shows up as free text — an app echoing its
+          // own config, a hook printing a connection string. Redact by content before it leaves the
+          // host, and mask this process's own token explicitly since it is the worst thing to leak.
+          const text = redactText(r.stdout + (r.stderr ? `\n${r.stderr}` : ''), [opts.token ?? '']);
+          return json({ stack: spec.stack, tail, ok: r.ok, text });
         }
 
         // ---- jobs -------------------------------------------------------------------

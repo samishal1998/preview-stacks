@@ -4,6 +4,7 @@ import { captureOutputs, createRunner, type RunResult, type Runner } from '../sr
 import { down, up, verify } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
 import { init } from '../src/init.ts';
+import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { shq } from '../src/compose.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
@@ -415,5 +416,59 @@ describe('init — ACME challenge rendering', () => {
     const yaml = await render({});
     expect(yaml).not.toContain('__ACME_CHALLENGE__');
     expect(yaml).not.toContain('__ACME_ROUTER_TLS__');
+  });
+});
+
+describe('redaction — what a browser may see', () => {
+  test('secret-looking names are masked, topology names are shown', () => {
+    for (const k of ['DATABASE_URL', 'PSTACK_TOKEN', 'API_AUTH_KEY', 'STRIPE_SECRET', 'DSN', 'SESSION_KEY']) {
+      expect(isSecretName(k)).toBe(true);
+    }
+    for (const k of ['PR', 'PR_NUMBER', 'PREVIEW_DOMAIN', 'PORT', 'IMAGE_TAG', 'GIT_SHA', 'LOG_LEVEL']) {
+      expect(isSecretName(k)).toBe(false);
+    }
+  });
+
+  test('deny by default — an unrecognised name is treated as secret', () => {
+    // The asymmetry that drives this: wrongly masking a domain is an annoyance, wrongly revealing
+    // a connection string in a browser tab is a breach.
+    expect(isSecretName('SOMETHING_NOBODY_ANTICIPATED')).toBe(true);
+  });
+
+  test('a secret name wins over a safe-looking suffix', () => {
+    // `_IMAGE` is on the safe list, but this is a pull secret.
+    expect(isSecretName('REGISTRY_IMAGE_PULL_SECRET')).toBe(true);
+  });
+
+  test('mask reveals no prefix of the real value', () => {
+    // A deliberately fake-looking fixture: a realistic `sk_live_…` shape trips secret scanners on
+    // every commit, and the property under test (no prefix survives) does not need realism.
+    const m = mask('NOT-A-REAL-TOKEN-0123456789');
+    expect(m).not.toContain('NOT-A-REAL');
+    expect(m).toMatch(/^•+$/);
+  });
+
+  test('only DECLARED vars are rendered, never the ambient environment', () => {
+    // The whole point: Stack.env holds every secret the process has.
+    const env = { PR: '7', DATABASE_URL: 'postgres://u:p@h/db', PSTACK_TOKEN: 'supersecrettoken' };
+    const out = displayDeclared(['PR', 'DATABASE_URL'], env);
+    expect(out.map((v) => v.key)).toEqual(['PR', 'DATABASE_URL']);
+    expect(JSON.stringify(out)).not.toContain('supersecrettoken');
+    expect(JSON.stringify(out)).not.toContain('postgres://u:p@h/db');
+    expect(out[0]!.value).toBe('7');
+    expect(out[1]!.length).toBe('postgres://u:p@h/db'.length); // shape without content
+  });
+
+  test('redactText strips URL passwords and secret assignments from output', () => {
+    const t = 'connecting to postgres://admin:hunter2@db.internal/app with API_TOKEN=abc123xyz';
+    const r = redactText(t);
+    expect(r).not.toContain('hunter2');
+    expect(r).not.toContain('abc123xyz');
+    expect(r).toContain('postgres://admin:••••@db.internal/app');
+  });
+
+  test('redactText masks known secret values wherever they appear', () => {
+    const r = redactText('token is supersecrettoken here', ['supersecrettoken']);
+    expect(r).not.toContain('supersecrettoken');
   });
 });
