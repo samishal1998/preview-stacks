@@ -9,6 +9,7 @@
     --bg: #0e1013;
     --panel: #15181d;
     --panel-2: #1b1f26;
+    --sunk: #0a0c0f;
     --line: #272d36;
     --fg: #e6e9ee;
     --fg-dim: #9aa4b2;
@@ -22,33 +23,58 @@
     --r: 8px;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
   h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
   h2 { font-size: 12px; margin: 0 0 10px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .08em; }
-  a { color: var(--accent); }
+  h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+  p { margin: 0 0 8px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
   code, .mono, pre { font-family: var(--mono); font-size: 12px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+  /* ---- shell: header across the top, nav down the left, view on the right ---------------- */
+  #app { display: flex; flex-direction: column; min-height: 100%; }
   header {
     display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+    padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
   }
-  .grow { flex: 1; }
-  .page { padding: 14px; }
-  .wrap { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 14px; align-items: start; }
-  @media (max-width: 940px) { .wrap { grid-template-columns: 1fr; } }
+  .shell { display: grid; grid-template-columns: 186px minmax(0, 1fr); flex: 1; align-items: start; }
+  nav { border-right: 1px solid var(--line); padding: 12px 10px; position: sticky; top: 0; }
+  nav ul { list-style: none; margin: 0 0 14px; padding: 0; }
+  nav a {
+    display: flex; gap: 8px; align-items: baseline; justify-content: space-between;
+    padding: 6px 9px; border-radius: 6px; color: var(--fg-dim);
+  }
+  nav a:hover { background: var(--panel-2); color: var(--fg); text-decoration: none; }
+  nav a[aria-current=page] { background: var(--panel-2); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+  nav .n { font-family: var(--mono); font-size: 11px; color: var(--fg-mute); }
+  nav .meta { border-top: 1px solid var(--line); padding: 10px 9px 0; font-size: 11px; color: var(--fg-mute); }
+  nav .meta div { overflow-wrap: anywhere; margin-bottom: 3px; }
+  .view { padding: 14px 16px 32px; min-width: 0; }
+
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .two.wide-left { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+  @media (max-width: 1080px) { .two, .two.wide-left { grid-template-columns: 1fr; } }
 
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; margin-bottom: 14px; }
-  .col > .panel:last-child, .page > .panel:last-child { margin-bottom: 0; }
+  .panel:last-child { margin-bottom: 0; }
+  .panel.flat { background: none; }
+  .phead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .phead h2 { margin: 0; }
+  .crumbs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 
-  input[type=text], input[type=password], textarea {
+  /* ---- controls -------------------------------------------------------------------------- */
+  input[type=text], input[type=password], input[type=number], select, textarea {
     background: var(--bg); color: var(--fg); border: 1px solid var(--line);
-    border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 0;
+    border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 0; max-width: 100%;
   }
   textarea { width: 100%; font-family: var(--mono); font-size: 12px; resize: vertical; }
-  input:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
   button {
     background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
     border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer;
@@ -57,27 +83,45 @@
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.primary { border-color: #2d5a8e; background: #16324f; }
   button.danger { border-color: #6b2b28; background: #3d1c1a; }
-  button.link { background: none; border: 0; color: var(--accent); padding: 6px 8px; }
-  button.tab { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--fg-dim); }
-  button.tab.on { color: var(--fg); border-bottom-color: var(--accent); }
+  button.link { background: none; border: 0; color: var(--accent); padding: 4px 6px; }
+  button.small { padding: 3px 8px; font-size: 12px; }
   label { color: var(--fg-dim); }
+  .field { display: flex; flex-direction: column; gap: 4px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .stretch { flex: 1; }
+  .grow { flex: 1; }
   .muted { color: var(--fg-mute); }
   .dim { color: var(--fg-dim); }
   .err { color: var(--fail); }
+  .nowrap { white-space: nowrap; }
   /* `anywhere`, not `break-all`: a long id or compose path must not widen the page, but a value
      that fits should never be chopped mid-word. */
   .name { font-family: var(--mono); overflow-wrap: anywhere; }
+  .hint { color: var(--fg-mute); font-size: 12px; margin: 6px 0 0; }
 
+  /* ---- tabs ------------------------------------------------------------------------------ */
+  .tabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .tabs a {
+    padding: 7px 12px; color: var(--fg-dim); border-bottom: 2px solid transparent;
+    border-radius: 0; font-size: 13px;
+  }
+  .tabs a:hover { color: var(--fg); text-decoration: none; }
+  .tabs a[aria-current=page] { color: var(--fg); border-bottom-color: var(--accent); }
+  .tabs .n { font-family: var(--mono); font-size: 11px; color: var(--fg-mute); }
+
+  /* ---- badges ---------------------------------------------------------------------------- */
   .badge {
     display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px;
-    border: 1px solid var(--line); color: var(--fg-dim); font-family: var(--mono);
+    border: 1px solid var(--line); color: var(--fg-dim); font-family: var(--mono); white-space: nowrap;
   }
   .badge.busy, .badge.running { color: var(--accent); border-color: #2d5a8e; }
   .badge.ok { color: var(--ok); border-color: #1f4a29; }
   .badge.failed { color: var(--fail); border-color: #6b2b28; }
-  .badge.leaked, .badge.warn { color: var(--leak); border-color: #6d4a15; }
+  .badge.warn { color: var(--leak); border-color: #6d4a15; }
+  /* leaked is FILLED, not outlined. It is the one outcome this whole tool exists to surface, and it
+     must not be mistakable for `failed` (red) or `ok` (green) at a glance. */
+  .badge.leaked { color: #2a1e08; background: var(--leak); border-color: var(--leak); font-weight: 600; }
+  .badge.unknown { color: var(--fg-mute); border-style: dashed; }
   /*
    * The kind badge is the most consequential glance on the list: `down` on a shared deployment
    * destroys volumes every tenant depends on. Amber = handle with care, and it is filled rather
@@ -86,344 +130,1247 @@
   .badge.k-shared { color: #2a1e08; background: var(--leak); border-color: var(--leak); font-weight: 600; }
   .badge.k-isolated { color: var(--accent); border-color: #2d5a8e; }
 
+  /* ---- lists & tables -------------------------------------------------------------------- */
   ul.list { list-style: none; margin: 0; padding: 0; }
-  ul.list li { padding: 7px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; }
+  ul.list li { padding: 7px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; }
   ul.list li:last-child { border-bottom: 0; }
-
-  pre.log {
-    margin: 0; background: #0a0c0f; border: 1px solid var(--line); border-radius: 6px;
-    padding: 10px; height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
-  }
-  .log .t { color: var(--fg-mute); }
-  .log .step { color: var(--accent); }
-  .log .warn { color: var(--leak); }
-  .log .error { color: var(--fail); }
-
+  .scroll-x { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-mute); font-weight: 500; padding: 4px 8px 4px 0; }
-  td { padding: 6px 8px 6px 0; border-top: 1px solid var(--line); vertical-align: top; font-size: 13px; }
-  td.mark { width: 1.4em; font-family: var(--mono); }
-  tr.click { cursor: pointer; }
-  tr.click:hover td { background: var(--panel-2); }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--fg-mute); font-weight: 500; padding: 4px 10px 4px 0; white-space: nowrap;
+  }
+  td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); vertical-align: top; font-size: 13px; }
+  tbody tr:hover td { background: var(--panel-2); }
+  td.mark { width: 1.4em; font-family: var(--mono); text-align: center; }
   .s-ok { color: var(--ok); }
   .s-failed { color: var(--fail); }
-  .s-leaked { color: var(--leak); }
+  .s-leaked { color: var(--leak); font-weight: 600; }
   .s-unverifiable { color: var(--neutral); }
 
+  /* ---- stat tiles ------------------------------------------------------------------------ */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .stat .v { font-size: 20px; font-family: var(--mono); line-height: 1.2; }
+  .stat .k { font-size: 11px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: .05em; }
+  .stat.unknown .v { color: var(--fg-mute); }
+
+  /* ---- log pane -------------------------------------------------------------------------- */
+  pre.log {
+    margin: 0; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; height: 380px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  pre.log.short { height: 240px; }
+  .log .t { color: var(--fg-mute); }
+  .lv-step { color: var(--accent); }
+  .lv-warn { color: var(--leak); }
+  .lv-error { color: var(--fail); }
+
+  /* ---- banners --------------------------------------------------------------------------- */
   .banner { border-radius: 6px; padding: 9px 11px; border: 1px solid var(--line); margin-bottom: 12px; }
+  .banner:last-child { margin-bottom: 0; }
   .banner.leaked { border-color: #6d4a15; background: #2a1e08; color: #f0c078; }
+  .banner.warn { border-color: #6d4a15; background: #2a1e08; color: #f0c078; }
   .banner.failed { border-color: #6b2b28; background: #2c1513; color: #ffa198; }
   .banner.ok { border-color: #1f4a29; background: #0f2415; color: #7ee18a; }
-  .banner.conflict { border-color: #2d5a8e; background: #10243a; color: #a3cfff; }
+  .banner.info { border-color: #2d5a8e; background: #10243a; color: #a3cfff; }
+  .banner.plain { background: var(--panel-2); color: var(--fg-dim); }
   .banner b { font-family: var(--mono); }
   .banner code { background: rgba(0,0,0,.3); padding: 0 4px; border-radius: 3px; }
+  .banner a { color: inherit; text-decoration: underline; }
+  .banner ul { margin: 6px 0 0; padding-left: 20px; }
 
   /* A SpecError is the tool's main teaching surface: multi-line, indented, meant to be read. */
   pre.spec-error {
     margin: 10px 0 0; background: #2c1513; border: 1px solid #6b2b28; color: #ffa198;
-    border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto;
+    border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-word;
+    max-height: 340px; overflow: auto;
   }
-  .kv { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) auto; gap: 6px; margin-bottom: 6px; }
+  pre.text-out {
+    margin: 0; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; max-height: 460px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* ---- key/value editor ------------------------------------------------------------------ */
+  .kv { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 6px; margin-bottom: 6px; }
+  .kv-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-mute); }
+  .masked { color: var(--fg-mute); letter-spacing: .12em; }
+  .sr {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 </style>
 </head>
 <body>
 <div id="app">
+
+  <!-- ================================ header ================================ -->
   <header>
     <h1>pstack</h1>
-    <button class="tab" :class="{ on: screen !== 'submit' }" @click="go('list')">Deployments</button>
-    <button class="tab" :class="{ on: screen === 'submit' }" @click="openSubmit('')">Submit</button>
+    <span class="badge" v-if="health.version">v{{ health.version }}</span>
     <span class="grow"></span>
+
     <label for="tok">token</label>
-    <input id="tok" type="password" v-model.trim="token" placeholder="PSTACK_TOKEN" style="width:170px">
-    <span v-if="health.authEnforced === false" class="muted">
-      auth not enforced &mdash; server is loopback-only
+    <input id="tok" type="password" v-model.trim="token" placeholder="PSTACK_TOKEN"
+           autocomplete="off" style="width:170px">
+    <!--
+      Auth is only checked on POST/PUT/DELETE. When no token is configured the server binds
+      127.0.0.1 and refuses 0.0.0.0 (cli.ts), so "not enforced" is a deliberate loopback-only mode,
+      not an accident — say which of the two you are looking at.
+    -->
+    <span v-if="health.authEnforced === false" class="muted nowrap">
+      auth not enforced &mdash; loopback-only
     </span>
+    <span v-else-if="health.authEnforced === true && !token" class="badge warn">token required</span>
   </header>
 
-  <!-- ============================== list ============================== -->
-  <div class="page" v-if="screen === 'list'">
-    <div class="panel">
-      <div class="row" style="margin-bottom:10px">
-        <h2 style="margin:0" class="stretch">Deployments</h2>
-        <button @click="loadList">Refresh</button>
+  <div class="shell">
+    <!-- ================================ nav ================================ -->
+    <nav aria-label="Sections">
+      <ul>
+        <li><a href="#/" :aria-current="route.view === 'overview' ? 'page' : null">Overview</a></li>
+        <li>
+          <a href="#/deployments" :aria-current="['list','detail'].includes(route.view) ? 'page' : null">
+            Deployments <span class="n">{{ deployments.length }}</span>
+          </a>
+        </li>
+        <li><a href="#/submit" :aria-current="route.view === 'submit' ? 'page' : null">Submit</a></li>
+        <li>
+          <a href="#/jobs" :aria-current="['jobs','job'].includes(route.view) ? 'page' : null">
+            Jobs <span class="n">{{ jobs.length }}</span>
+          </a>
+        </li>
+      </ul>
+      <div class="meta">
+        <div v-if="health.dataDir">data <span class="mono">{{ health.dataDir }}</span></div>
+        <div v-if="control.project">control <span class="mono">{{ control.project }}</span></div>
+        <div v-if="healthError" class="err">{{ healthError }}</div>
       </div>
-      <p v-if="listError" class="err">{{ listError }}</p>
-      <table v-else>
-        <thead><tr><th>id</th><th>kind</th><th>state</th><th>updated</th></tr></thead>
-        <tbody>
-          <tr v-for="d in deployments" :key="d.id" class="click" @click="open(d.id)">
-            <td class="name">{{ d.id }}</td>
-            <td><span class="badge" :class="'k-' + d.kind">{{ d.kind }}</span></td>
-            <!--
-              busy is SERVER-provided. The registry stores only {id, kind, timestamps}, and the job
-              lock is keyed by the RESOLVED stack name (`pr-123`), which an id alone cannot produce.
-              So when the server says nothing, say nothing — never render "idle" as a guess.
-            -->
-            <td>
-              <span v-if="d.busy" class="badge busy">busy</span>
-              <span v-else-if="d.status" class="dim">{{ d.status }}</span>
-              <span v-else class="muted" title="the server did not report a state for this row">&mdash;</span>
-            </td>
-            <td class="dim mono">{{ stamp(d.updatedAt) }}</td>
-          </tr>
-          <tr v-if="!deployments.length"><td colspan="4" class="muted">
-            nothing submitted &mdash; use <b>Submit</b> to PUT a spec
-          </td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+    </nav>
 
-  <!-- ============================== detail ============================== -->
-  <div class="page wrap" v-else-if="screen === 'detail'">
-    <div class="col">
-      <div class="panel">
-        <div class="row" style="margin-bottom:10px">
-          <button class="link" @click="go('list')">&larr; all</button>
-          <span class="name stretch">{{ id }}</span>
-          <span v-if="detail" class="badge" :class="'k-' + detail.kind">{{ detail.kind }}</span>
-          <span v-if="busy" class="badge busy">busy</span>
-        </div>
+    <main class="view">
 
-        <p v-if="detailError" class="err">{{ detailError }}</p>
+      <!-- ============================== overview ============================== -->
+      <template v-if="route.view === 'overview'">
+        <div class="two wide-left">
 
-        <template v-if="detail">
-          <ul class="list">
-            <li><span class="dim stretch">stack</span><span class="name">{{ detail.stack || '?' }}</span></li>
-            <li v-if="detail.compose">
-              <span class="dim stretch">compose</span>
-              <span class="name">{{ detail.compose.file }} [{{ (detail.compose.profiles || []).join(', ') || 'no profiles' }}]</span>
-            </li>
-            <li v-else><span class="dim stretch">compose</span><span class="muted">none</span></li>
-            <li><span class="dim stretch">updated</span><span class="mono">{{ stamp(detail.updatedAt) }}</span></li>
-          </ul>
+          <!-- ---- control stack: read-only, on purpose ---- -->
+          <div>
+            <div class="panel">
+              <div class="phead">
+                <h2>Control stack</h2>
+                <span class="badge" v-if="control.project">{{ control.project }}</span>
+                <span class="grow"></span>
+                <button class="small" @click="loadControl">Refresh</button>
+              </div>
 
-          <div class="row" style="margin-top:12px">
-            <button class="primary" :disabled="acting" @click="act('up')">up</button>
-            <button :disabled="acting" @click="act('verify')">verify</button>
-            <button class="danger" :disabled="acting || (isShared && !confirmShared)" @click="act('down')">
-              {{ isShared ? 'down --force' : 'down' }}
-            </button>
-            <span class="grow"></span>
-            <button class="link" @click="openSubmit(id)">edit spec</button>
-          </div>
-          <div class="row" style="margin-top:8px">
-            <label><input type="checkbox" v-model="downVerify"> verify after down</label>
-          </div>
-          <p v-if="!downVerify" class="muted" style="margin:6px 0 0">
-            Teardown will not check for leaks. Run <code>verify</code> yourself afterwards.
-          </p>
+              <p v-if="controlError" class="err">{{ controlError }}</p>
 
-          <!--
-            Gate 1 of 2. The server refuses a shared `down` without force (stack.ts) and returns the
-            refusal as a failed step, so this checkbox is defence in depth, not the only guard.
-          -->
-          <div v-if="isShared" class="banner leaked" style="margin-top:12px">
-            <b>SHARED &mdash; read before tearing down.</b>
-            <code>down</code> runs <code>docker compose down -v</code>, and <code>-v</code> removes
-            <b>volumes</b>. On a shared deployment that destroys state every tenant depends on:
-            TLS certificates, the shared database or queue, admin credentials. It is the same verb
-            that is routine for a preview.
-            <div style="margin-top:8px">
-              <label><input type="checkbox" v-model="confirmShared">
-                I understand this destroys shared volumes, and want to send <code>force: true</code>.</label>
+              <template v-else-if="controlLoaded">
+                <!--
+                  Three distinct failure shapes, and collapsing any of them into "nothing running"
+                  would be a lie an operator acts on:
+                    reachable:false  docker did not answer — we know NOTHING about the stack
+                    parseError       docker answered, we could not read it
+                    services: []     docker answered clearly: no containers
+                -->
+                <div v-if="!control.reachable" class="banner warn">
+                  <b>docker did not answer.</b> This is <em>not</em> the same as &ldquo;nothing is
+                  running&rdquo; &mdash; the control stack may be perfectly healthy while this
+                  process cannot reach the socket. Check the daemon and the socket mount, then
+                  refresh.
+                </div>
+                <div v-else-if="control.parseError" class="banner warn">
+                  <b>docker answered, but the output could not be parsed.</b> Service state is
+                  unknown for this refresh; the stack itself may be fine.
+                </div>
+                <div v-else-if="!control.services.length" class="banner failed">
+                  <b>no containers in this project.</b> docker answered clearly, so the control
+                  stack really is down &mdash; yet you are reading this page, which it serves.
+                  You are most likely reaching the API by some other route.
+                </div>
+
+                <div class="scroll-x" v-if="control.services.length">
+                  <table>
+                    <thead><tr><th>service</th><th>state</th><th>health</th><th>image</th></tr></thead>
+                    <tbody>
+                      <tr v-for="s in control.services" :key="s.name">
+                        <td class="name">{{ s.name }}</td>
+                        <td :class="s.state === 'running' ? 's-ok' : 's-failed'">{{ s.state || '—' }}</td>
+                        <td :class="s.health === 'healthy' ? 's-ok' : (s.health ? 's-failed' : '')">
+                          {{ s.health || '—' }}
+                        </td>
+                        <td class="name dim">{{ s.image || '—' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!--
+                  This sits exactly where an operator's eye goes looking for up/down/verify buttons,
+                  because the answer to "where are they" is the important part: the API serving this
+                  page runs INSIDE this stack. `up` here would kill the process performing it, and a
+                  failed self-upgrade leaves the host with no control plane and no remote way in.
+                  The server states `actionable: false` in the payload for this reason. Never add an
+                  action here, even a "safe" one.
+                -->
+                <div class="banner plain" style="margin-top:12px">
+                  <b>Read-only &mdash; there are no actions here.</b>
+                  <p style="margin:6px 0 0">{{ control.note || defaultControlNote }}</p>
+                  <p class="muted" style="margin:6px 0 0" v-if="control.managedBy">
+                    Managed by <code>{{ control.managedBy }}</code>.
+                  </p>
+                </div>
+              </template>
+              <p v-else class="muted">loading…</p>
             </div>
           </div>
 
-          <template v-if="detail.requires.length">
-            <h2 style="margin-top:16px">Requires <span class="muted">(checked before up)</span></h2>
-            <ul class="list">
-              <li v-for="r in detail.requires" :key="r.name">
-                <span class="name stretch">{{ r.name }}</span>
-                <span class="muted" v-if="r.hint" :title="r.hint">hint</span>
-              </li>
-            </ul>
-          </template>
+          <!-- ---- deployment summary + recent jobs ---- -->
+          <div>
+            <div class="panel">
+              <div class="phead">
+                <h2>Deployments</h2>
+                <span class="grow"></span>
+                <a href="#/deployments">all &rarr;</a>
+              </div>
+              <p v-if="listError" class="err">{{ listError }}</p>
+              <div class="stats" v-else>
+                <div class="stat"><div class="v">{{ summary.total }}</div><div class="k">total</div></div>
+                <div class="stat"><div class="v">{{ summary.isolated }}</div><div class="k">isolated</div></div>
+                <div class="stat"><div class="v">{{ summary.shared }}</div><div class="k">shared</div></div>
+                <div class="stat"><div class="v">{{ summary.running }}</div><div class="k">running</div></div>
+                <div class="stat"><div class="v">{{ summary.busy }}</div><div class="k">busy</div></div>
+                <!--
+                  The server sends `null`, never `false`, when it could not determine busy/running.
+                  An unknown must never be counted as a zero: that is how a live stack gets reported
+                  as torn down. It gets its own tile.
+                -->
+                <div class="stat unknown" v-if="summary.unknown">
+                  <div class="v">{{ summary.unknown }}</div><div class="k">unknown</div>
+                </div>
+              </div>
+              <p class="hint" v-if="summary.unresolved">
+                {{ summary.unresolved }} deployment(s) could not be resolved in this listing &mdash;
+                their spec needs <code>${VAR}</code> values. Open one and set its variables.
+              </p>
+              <p class="hint" v-else-if="summary.unknown">
+                &ldquo;unknown&rdquo; means the server could not determine <code>busy</code> or
+                <code>running</code> for that row, not that it is idle.
+              </p>
+            </div>
 
-          <h2 style="margin-top:16px">Axes <span class="muted">(up in order, down in reverse)</span></h2>
-          <ul class="list">
-            <li v-for="a in detail.axes" :key="a.name">
-              <span class="name stretch">{{ a.name }}</span>
-              <span>
-                <span v-for="h in a.hooks" :key="h" class="badge" style="margin-left:4px">{{ h }}</span>
-                <span v-if="!a.hooks.length" class="muted">no hooks</span>
-                <span v-if="a.hooks.includes('up') && !a.hooks.includes('assert_gone')"
-                      class="badge warn" style="margin-left:4px"
-                      title="verify cannot prove this axis was cleaned up">unverifiable</span>
+            <div class="panel">
+              <div class="phead">
+                <h2>Recent jobs</h2>
+                <span class="grow"></span>
+                <a href="#/jobs">all &rarr;</a>
+              </div>
+              <p v-if="jobsError" class="err">{{ jobsError }}</p>
+              <ul class="list" v-else>
+                <li v-for="j in jobs.slice(0, 7)" :key="j.id">
+                  <span class="badge" :class="j.state">{{ j.state }}</span>
+                  <a class="name stretch" :href="'#/jobs/' + encodeURIComponent(j.id)">
+                    {{ j.action }} {{ j.stack }}
+                  </a>
+                  <span class="mono muted nowrap">{{ stamp(j.startedAt) }}</span>
+                </li>
+                <li v-if="!jobs.length" class="muted">
+                  no jobs yet &mdash; jobs are held in memory, so a server restart clears the history
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ============================== deployments list ============================== -->
+      <template v-else-if="route.view === 'list'">
+        <div class="panel">
+          <div class="phead">
+            <h2>Deployments</h2>
+            <span class="grow"></span>
+            <button class="small" @click="loadDeployments">Refresh</button>
+            <a href="#/submit">+ submit</a>
+          </div>
+
+          <p v-if="listError" class="err">{{ listError }}</p>
+          <template v-else>
+            <div class="scroll-x">
+              <table>
+                <thead>
+                  <tr><th>id</th><th>kind</th><th>stack</th><th>state</th><th>updated</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="d in deployments" :key="d.id">
+                    <td><a class="name" :href="'#/deployments/' + encodeURIComponent(d.id)">{{ d.id }}</a></td>
+                    <td><span class="badge" :class="'k-' + d.kind">{{ d.kind }}</span></td>
+                    <td class="name dim">
+                      <span v-if="d.stack">{{ d.stack }}</span>
+                      <span v-else class="badge warn" title="the spec could not be resolved without variables">
+                        needs variables
+                      </span>
+                    </td>
+                    <!--
+                      busy/running are SERVER-provided tri-state: true / false / null. `null` means
+                      "could not determine" — an unresolved spec has no stack name to look up, and a
+                      docker that did not answer is not the same fact as "nothing is running".
+                      Rendering either as "idle" would be a guess, so unknown says unknown.
+                    -->
+                    <td>
+                      <span v-if="d.busy === true" class="badge busy">busy</span>
+                      <span v-else-if="d.running === true" class="badge running">running</span>
+                      <span v-else-if="d.busy === null || d.running === null"
+                            class="badge unknown" title="the server could not determine this">unknown</span>
+                      <span v-else class="muted">idle</span>
+                    </td>
+                    <td class="dim mono nowrap">{{ stamp(d.updatedAt) }}</td>
+                  </tr>
+                  <tr v-if="!deployments.length">
+                    <td colspan="5" class="muted">
+                      nothing submitted &mdash; use <a href="#/submit">Submit</a> to PUT a spec
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- One `unresolved` message per row, verbatim: it names the missing variable. -->
+            <div v-for="d in unresolvedRows" :key="'u-' + d.id" class="banner warn" style="margin-top:12px">
+              <b>{{ d.id }}</b> could not be resolved: <span class="mono">{{ d.unresolved }}</span>
+              <p style="margin:6px 0 0">
+                This listing resolves every spec with the <em>same</em> (empty) variable set, so a
+                spec with a <code>${VAR}</code> in it will always show up here.
+                <a :href="'#/deployments/' + encodeURIComponent(d.id) + '/config'">Set its variables</a>
+                and the detail view will resolve.
+              </p>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- ============================== deployment detail ============================== -->
+      <template v-else-if="route.view === 'detail'">
+        <div class="crumbs">
+          <a href="#/deployments">&larr; deployments</a>
+          <span class="name">{{ route.id }}</span>
+          <span v-if="detail" class="badge" :class="'k-' + detail.kind">{{ detail.kind }}</span>
+          <span v-if="detail && detail.busy === true" class="badge busy">busy</span>
+          <span class="grow"></span>
+          <button class="small" @click="loadDetail">Refresh</button>
+        </div>
+
+        <div class="tabs">
+          <a v-for="t in TABS" :key="t" :href="tabHref(t)"
+             :aria-current="route.tab === t ? 'page' : null">{{ t }}</a>
+        </div>
+
+        <!--
+          A resolve failure is a 400 whose text names the missing variable. It is not a dead end: the
+          fix is on the Config tab, so the load handler sends the operator there rather than leaving
+          them staring at an error with no editor in reach.
+        -->
+        <div v-if="detailError" class="banner failed">
+          <b>could not resolve this deployment.</b>
+          <pre class="spec-error" style="margin-top:8px">{{ detailError }}</pre>
+          <p style="margin:8px 0 0">
+            If that names a variable, add it under <b>config</b> below and press
+            <b>Apply &amp; reload</b>. Everything else on this page stays unavailable until the spec
+            resolves &mdash; the server cannot tell us the stack name without it.
+          </p>
+        </div>
+
+        <!-- ---------------- tab: overview ---------------- -->
+        <div class="panel" v-if="route.tab === 'overview'">
+          <h2>Resolved spec</h2>
+          <p v-if="!detail && !detailError" class="muted">loading…</p>
+          <ul class="list" v-if="detail">
+            <li><span class="dim" style="width:120px">stack</span><span class="name stretch">{{ detail.stack || '—' }}</span></li>
+            <li><span class="dim" style="width:120px">kind</span>
+              <span class="stretch">
+                <span class="badge" :class="'k-' + detail.kind">{{ detail.kind }}</span>
+                <span class="muted" style="margin-left:8px">{{ kindBlurb }}</span>
               </span>
             </li>
-            <li v-if="!detail.axes.length" class="muted">
-              no axes<span v-if="isShared"> &mdash; a shared singleton has nothing to isolate</span>
+            <li><span class="dim" style="width:120px">compose file</span>
+              <span class="name stretch">{{ detail.compose ? detail.compose.file : '—  (no compose section)' }}</span>
             </li>
+            <li v-if="detail.compose"><span class="dim" style="width:120px">profiles</span>
+              <span class="stretch">
+                <span v-for="p in detail.compose.profiles" :key="p" class="badge" style="margin-right:4px">{{ p }}</span>
+                <span v-if="!detail.compose.profiles.length" class="muted">none &mdash; a bare up starts every service</span>
+              </span>
+            </li>
+            <li v-if="detail.compose"><span class="dim" style="width:120px">overlays</span>
+              <span class="stretch">
+                <span v-for="o in detail.compose.overlays" :key="o" class="name" style="margin-right:8px">{{ o }}</span>
+                <span v-if="!detail.compose.overlays.length" class="muted">none</span>
+              </span>
+            </li>
+            <li><span class="dim" style="width:120px">axes</span><span class="stretch">{{ detail.axes.length }}</span></li>
+            <li><span class="dim" style="width:120px">requires</span><span class="stretch">{{ detail.requires.length }}</span></li>
+            <li><span class="dim" style="width:120px">created</span><span class="mono stretch">{{ stamp(detail.createdAt) }}</span></li>
+            <li><span class="dim" style="width:120px">updated</span><span class="mono stretch">{{ stamp(detail.updatedAt) }}</span></li>
           </ul>
-        </template>
-      </div>
-    </div>
+          <p class="hint" v-if="detail">
+            <code>:id</code> is the registry id (a directory name). <code>stack</code> is what the
+            spec resolved to &mdash; the compose project name, and <code>$STACK</code> in every hook.
+          </p>
+        </div>
 
-    <!-- ---------------- job ---------------- -->
-    <div class="col">
-      <div class="panel">
-        <div class="row" style="margin-bottom:10px">
-          <h2 style="margin:0" class="stretch">Job</h2>
-          <span v-if="job && job.action" class="mono muted">{{ job.action }} {{ job.stack }}</span>
+        <!-- ---------------- tab: config ---------------- -->
+        <template v-if="route.tab === 'config'">
+          <div class="panel">
+            <h2>Variables for this deployment</h2>
+            <!--
+              THE safety rule on this page. A spec interpolates `${VAR}` once, at resolve time, and
+              the registry stores the spec but NOT the variables. Every route that resolves a
+              deployment layers the request's query params over process.env — so `up` with PR=7 and
+              a later `down` with no PR resolve to two DIFFERENT stacks, and the teardown misses the
+              containers the deploy created. Persisting them in this browser is what keeps the pair
+              matched; it is convenience, not a guarantee, which is why the warning stays visible.
+            -->
+            <div class="banner warn">
+              <b>The same variables must accompany <code>down</code> as accompanied <code>up</code>.</b>
+              <p style="margin:6px 0 0">
+                Variables are <em>not</em> stored with the deployment. They are sent as query
+                parameters on every call, so <code>up</code> with <code>PR=7</code> and
+                <code>down</code> without it target two different stacks &mdash; and the teardown
+                quietly misses everything the deploy created. These pairs are kept in this browser
+                (<code>localStorage</code>, keyed by deployment id) so they stay matched here, but a
+                different browser, a CI job, or the CLI must pass the same ones itself.
+              </p>
+            </div>
+
+            <div class="kv kv-head"><span>name</span><span>value</span><span></span></div>
+            <div class="kv" v-for="(e, i) in vars" :key="i">
+              <input type="text" v-model.trim="e.k" :aria-label="'variable name ' + (i + 1)"
+                     placeholder="PR" spellcheck="false" @input="persistVars">
+              <input type="text" v-model="e.v" :aria-label="'variable value ' + (i + 1)"
+                     placeholder="7" spellcheck="false" @input="persistVars">
+              <button class="small" @click="removeVar(i)" :aria-label="'remove variable ' + (i + 1)">&minus;</button>
+            </div>
+            <div class="row">
+              <button class="small" @click="addVar">+ variable</button>
+              <button class="primary" @click="applyVars">Apply &amp; reload</button>
+              <span class="muted mono" v-if="varsQuery">{{ varsQuery }}</span>
+            </div>
+            <p class="hint">
+              The <code>env</code> table below lists what the spec <em>declares</em>, which is not
+              the same as what it <em>needs</em>: <code>stack: pr-${PR}</code> consumes
+              <code>PR</code> without declaring it. So this editor is free-form, and the 400 message
+              on the resolve error is the authoritative list of what is missing.
+            </p>
+          </div>
+
+          <div class="panel">
+            <h2>Declared env <span class="muted">(after interpolation)</span></h2>
+            <p v-if="!detail" class="muted">unavailable until the spec resolves.</p>
+            <template v-else>
+              <div class="scroll-x">
+                <table>
+                  <thead><tr><th>key</th><th>value</th><th>visibility</th><th>length</th></tr></thead>
+                  <tbody>
+                    <tr v-for="e in detail.env" :key="e.key">
+                      <td class="name">{{ e.key }}</td>
+                      <td :class="e.visibility === 'masked' ? 'masked name' : 'name'">{{ e.value }}</td>
+                      <td>
+                        <span class="badge" :class="e.visibility === 'masked' ? 'warn' : ''">{{ e.visibility }}</span>
+                      </td>
+                      <!--
+                        `length` exists so an operator can answer "did it get set at all?" without
+                        the value. length 0 on a masked var is the interesting case: declared, never
+                        set — which usually means a hook is about to fail on an empty credential.
+                      -->
+                      <td class="dim mono">
+                        {{ e.length }} chars
+                        <span v-if="e.length === 0" class="badge warn" style="margin-left:6px">never set</span>
+                      </td>
+                    </tr>
+                    <tr v-if="!detail.env.length">
+                      <td colspan="4" class="muted">this spec declares no <code>env:</code> block</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <!--
+                Masked is not "hidden pending a click". The plaintext was never in the response, so
+                there is nothing here to reveal — a reveal control would be a lie, and adding one
+                would mean sending secrets to a browser tab (and into screenshots and support
+                tickets). Deny-by-default by name; see src/redact.ts.
+              -->
+              <p class="hint">
+                A <b>masked</b> value was redacted on the host because its name reads as a secret.
+                The real value was never sent to this page, so there is nothing to reveal &mdash;
+                only its length is shown. Read it on the host if you need it.
+              </p>
+            </template>
+          </div>
+        </template>
+
+        <!-- ---------------- tab: axes ---------------- -->
+        <div class="panel" v-if="route.tab === 'axes'">
+          <h2>Axes <span class="muted">(provisioned in order, destroyed in reverse)</span></h2>
+          <p v-if="!detail" class="muted">unavailable until the spec resolves.</p>
+          <template v-else>
+            <!-- One line that teaches the model, so the table below needs no legend of its own. -->
+            <p class="hint" style="margin:0 0 10px">
+              <code>up</code> provision &middot; <code>assert_live</code> it exists &middot;
+              <code>down</code> destroy &middot; <code>assert_gone</code> proven gone.
+              Hook <em>bodies</em> are never sent to this page &mdash; a hook is a shell string that
+              routinely carries a token inline.
+            </p>
+            <div class="scroll-x">
+              <table>
+                <thead><tr><th>axis</th><th>hooks</th><th>teardown provable?</th></tr></thead>
+                <tbody>
+                  <tr v-for="a in detail.axes" :key="a.name">
+                    <td class="name">{{ a.name }}</td>
+                    <td>
+                      <span v-for="h in HOOKS" :key="h" class="badge"
+                            :class="a.hooks.includes(h) ? '' : 'unknown'"
+                            :style="{ marginRight: '4px', opacity: a.hooks.includes(h) ? 1 : .35 }">{{ h }}</span>
+                    </td>
+                    <!--
+                      `verifiable:false` means the axis defines no assert_gone, so `verify` CANNOT
+                      prove it was cleaned up. That is a third state — neither pass nor fail — and
+                      must never be coloured green: a green verify on an unverifiable axis is exactly
+                      the false confidence this tool exists to remove.
+                    -->
+                    <td>
+                      <span v-if="a.verifiable" class="badge ok">assert_gone</span>
+                      <span v-else class="badge warn" title="verify cannot prove this axis was cleaned up">
+                        unverifiable
+                      </span>
+                    </td>
+                  </tr>
+                  <tr v-if="!detail.axes.length">
+                    <td colspan="3" class="muted">
+                      no axes<span v-if="isShared"> &mdash; a shared singleton has nothing to isolate
+                      and nothing to prove gone</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="unverifiableAxes.length" class="banner warn" style="margin-top:12px">
+              <b>{{ unverifiableAxes.length }} axis/axes cannot be verified:</b>
+              <span class="mono">{{ unverifiableAxes.join(', ') }}</span>.
+              They define no <code>assert_gone</code>, so a green <code>verify</code> is silence
+              about them, not proof they are gone. Add an <code>assert_gone</code> that
+              <em>fails closed</em> &mdash; probe that the check itself works, then assert absence.
+            </div>
+          </template>
+        </div>
+
+        <!-- ---------------- tab: requires ---------------- -->
+        <div class="panel" v-if="route.tab === 'requires'">
+          <h2>Requires <span class="muted">(checked before anything is created)</span></h2>
+          <p v-if="!detail" class="muted">unavailable until the spec resolves.</p>
+          <template v-else>
+            <p class="hint" style="margin:0 0 10px">
+              Preconditions run first, in order, and <code>up</code> stops at the first one that
+              fails &mdash; by name, before a single resource exists. The <code>assert</code> command
+              itself stays on the host; only the name and its hint are sent here.
+            </p>
+            <div class="scroll-x">
+              <table>
+                <thead><tr><th>requirement</th><th>hint shown on failure</th></tr></thead>
+                <tbody>
+                  <tr v-for="r in detail.requires" :key="r.name">
+                    <td class="name">{{ r.name }}</td>
+                    <td class="dim">{{ r.hint || '— (no hint authored)' }}</td>
+                  </tr>
+                  <tr v-if="!detail.requires.length">
+                    <td colspan="2" class="muted">
+                      none declared &mdash; an isolated deployment that borrows shared infrastructure
+                      usually wants at least one
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+
+        <!-- ---------------- tab: logs ---------------- -->
+        <div class="panel" v-if="route.tab === 'logs'">
+          <div class="phead">
+            <h2>Compose logs</h2>
+            <span class="grow"></span>
+            <label for="tail">tail</label>
+            <select id="tail" v-model.number="tail">
+              <option :value="50">50</option>
+              <option :value="200">200</option>
+              <option :value="500">500</option>
+              <option :value="1000">1000</option>
+              <option :value="2000">2000</option>
+            </select>
+            <button class="small" :disabled="logsLoading || !detail || !detail.compose" @click="loadLogs">
+              {{ logsLoading ? 'reading…' : 'Fetch' }}
+            </button>
+          </div>
+
+          <p v-if="!detail" class="muted">unavailable until the spec resolves.</p>
+          <!-- Guard on the field rather than calling and interpreting a failure after the fact. -->
+          <p v-else-if="!detail.compose" class="muted">
+            This spec has no <code>compose:</code> section, so there are no compose logs to read.
+            Its axes may still have created resources &mdash; check those at their own source.
+          </p>
+          <template v-else>
+            <p class="hint" style="margin:0 0 10px">
+              Fetched on demand, never polled: an auto-refresh against a chatty stack would hammer
+              the host through <code>docker compose logs</code>. <code>tail</code> is clamped to
+              1&ndash;2000 by the server.
+            </p>
+            <div v-if="logsError" class="banner failed">{{ logsError }}</div>
+            <!--
+              `ok:false` means compose exited non-zero. Usually "no such project" because the stack
+              was never brought up — not a server fault, so it is a note rather than an error.
+            -->
+            <div v-else-if="logs && !logs.ok" class="banner warn">
+              <b>compose exited non-zero.</b> Most often the project does not exist yet (nothing has
+              been brought up), or a profile is missing. Any output it did produce is below.
+            </div>
+            <pre class="text-out" v-if="logs">{{ logs.text || '(no output)' }}</pre>
+            <p class="muted" v-else-if="!logsLoading">press <b>Fetch</b> to read the last {{ tail }} lines.</p>
+            <p class="hint" v-if="logs">
+              Redacted on the host before sending: credentials in URLs, <code>NAME=value</code> pairs
+              whose name reads as a secret, and this server's own token.
+            </p>
+          </template>
+        </div>
+
+        <!-- ---------------- tab: actions ---------------- -->
+        <template v-if="route.tab === 'actions'">
+          <div class="panel">
+            <h2>Lifecycle</h2>
+
+            <p v-if="!detail" class="muted">
+              Actions are unavailable until the spec resolves &mdash; the server cannot act on a
+              deployment whose stack name it cannot compute. Fix the variables under
+              <a :href="tabHref('config')">config</a> first.
+            </p>
+
+            <template v-else>
+              <div v-if="health.authEnforced === true && !token" class="banner warn">
+                <b>no token set.</b> Every action below is a mutating request and will be refused
+                with <code>401</code>. Put <code>PSTACK_TOKEN</code> in the header field.
+              </div>
+
+              <div class="row">
+                <button class="primary" :disabled="acting || detail.busy === true" @click="act('up')">up</button>
+                <button :disabled="acting || detail.busy === true" @click="act('verify')">verify</button>
+                <button class="danger" :disabled="acting || detail.busy === true || (isShared && !forceArmed)"
+                        @click="act('down')">
+                  {{ isShared ? 'down (force)' : 'down' }}
+                </button>
+                <span class="grow"></span>
+                <a :href="'#/submit/' + encodeURIComponent(route.id)">replace spec &rarr;</a>
+              </div>
+              <p class="hint" v-if="detail.busy === true">
+                A job is in flight for <b>{{ detail.stack }}</b>. One job per stack, deliberately not
+                queued &mdash; a <code>down</code> racing an <code>up</code> over the same database
+                branch is corruption, not contention.
+              </p>
+              <p class="hint">
+                Sent with <span class="mono">{{ varsQuery || 'no variables' }}</span>.
+                <a :href="tabHref('config')">change</a>
+              </p>
+
+              <div class="row" style="margin-top:10px">
+                <label><input type="checkbox" v-model="downVerify"> run <code>verify</code> after <code>down</code></label>
+              </div>
+              <p class="hint" v-if="!downVerify">
+                Teardown will not check for leaks. A teardown that silently half-worked is the exact
+                failure this tool exists to catch &mdash; run <code>verify</code> yourself afterwards.
+              </p>
+
+              <!--
+                Gate 1 of 2, and the typed confirmation is the point: a checkbox is one stray click,
+                typing the stack name is a decision. The server holds the authoritative guard —
+                `down()` in stack.ts refuses a shared teardown without `force`, and the API answers
+                409 before starting a job — so this is defence in depth, not the only barrier.
+              -->
+              <div v-if="isShared" class="banner leaked" style="margin-top:12px">
+                <b>SHARED &mdash; read before tearing down.</b>
+                <p style="margin:6px 0 0">
+                  <code>down</code> runs <code>docker compose down -v</code>, and <code>-v</code>
+                  removes <b>volumes</b>. On a shared deployment that destroys state every tenant
+                  depends on &mdash; the TLS certificate store, the shared database or queue, admin
+                  credentials. Nothing here recreates them: every preview on this host breaks until
+                  someone rebuilds the singleton by hand. It is the identical verb that is routine
+                  for a preview.
+                </p>
+                <div class="field" style="margin-top:10px;max-width:360px">
+                  <label :for="'confirm-' + route.id">
+                    Type the stack name <b>{{ detail.stack }}</b> to send <code>force: true</code>
+                  </label>
+                  <input :id="'confirm-' + route.id" type="text" v-model.trim="forceTyped"
+                         :placeholder="detail.stack" spellcheck="false" autocomplete="off">
+                </div>
+                <p style="margin:6px 0 0" v-if="forceTyped && !forceArmed" class="mono">
+                  does not match &mdash; <code>down</code> stays disabled
+                </p>
+              </div>
+
+              <!-- ---- results of the last attempt ---- -->
+              <div v-if="actionError" class="banner failed" style="margin-top:12px">
+                <pre class="spec-error" style="margin:0">{{ actionError }}</pre>
+              </div>
+
+              <!--
+                Not every 409 is "busy". Discriminated by payload SHAPE, never by matching text:
+                  body.kind        → the shared-down refusal (route to the gate above)
+                  body.containers  → DELETE refused, containers still exist
+                  otherwise        → a job in flight, or docker would not answer; print verbatim
+              -->
+              <div v-if="conflict" class="banner" :class="conflict.kind === 'shared' ? 'leaked' : 'info'"
+                   style="margin-top:12px" role="alert">
+                <b>409 &mdash; refused, and nothing was started.</b>
+                <pre class="text-out" style="margin:8px 0 0;max-height:200px">{{ conflict.text }}</pre>
+                <p style="margin:8px 0 0" v-if="conflict.kind === 'shared'">
+                  Confirm the stack name above and press <code>down</code> again.
+                </p>
+                <p style="margin:8px 0 0" v-else-if="conflict.kind === 'containers'">
+                  Run <code>down</code> first. Forgetting the record now would orphan those
+                  containers beyond the control plane's view: nothing left would know their stack
+                  name, their axes, or how to tear them down.
+                </p>
+                <p style="margin:8px 0 0" v-else-if="conflict.jobId">
+                  <a :href="'#/jobs/' + encodeURIComponent(conflict.jobId)">Follow the running job &rarr;</a>
+                </p>
+                <p style="margin:8px 0 0" v-else>
+                  Nothing was retried. Wait for the lock to clear, then try again.
+                </p>
+              </div>
+            </template>
+          </div>
+
+          <!-- ---- forget ---- -->
+          <div class="panel">
+            <h2>Forget this deployment</h2>
+            <!--
+              Gated on a resolved spec for the same reason the lifecycle actions are: DELETE resolves
+              the stack server-side to count its containers, so an unresolved spec 400s before the
+              guard can even run.
+            -->
+            <p v-if="!detail" class="muted">
+              Unavailable until the spec resolves &mdash; the server counts this stack's containers
+              before it will forget the record, and it cannot name the stack without its variables.
+            </p>
+            <template v-else>
+            <p class="dim">
+              <code>DELETE</code> removes the <em>record</em> &mdash; the stored
+              <code>spec.yml</code>, <code>compose.yml</code> and <code>meta.json</code>.
+              <b>It never tears anything down.</b> The server refuses with <code>409</code> while any
+              container for this stack still exists, and refuses just as firmly when docker did not
+              answer: &ldquo;cannot confirm&rdquo; is not evidence of absence.
+            </p>
+            <p class="hint">
+              After forgetting, this deployment disappears from the control plane. If a resource an
+              axis created is still alive, nothing here knows how to remove it any more.
+            </p>
+            <div class="row" style="margin-top:10px">
+              <label><input type="checkbox" v-model="forgetArmed">
+                I have torn this down and want the record removed</label>
+              <button class="danger" :disabled="!forgetArmed || acting" @click="forget">Forget</button>
+            </div>
+            </template>
+          </div>
+        </template>
+      </template>
+
+      <!-- ============================== submit ============================== -->
+      <template v-else-if="route.view === 'submit'">
+        <div class="panel" style="max-width:940px">
+          <div class="phead">
+            <h2>Submit or replace a deployment</h2>
+            <span class="grow"></span>
+            <button class="small" @click="fillExample">Load example spec</button>
+          </div>
+
+          <p class="dim">
+            <code>PUT /api/deployments/:id</code>. The spec is parsed <em>before</em> anything
+            touches disk, so a rejected submission leaves nothing behind &mdash; and on a replace,
+            a good record is never destroyed over a typo. <code>kind</code> is read from the spec,
+            never from this form.
+          </p>
+
+          <!--
+            The API has no route that returns a stored spec, so this form cannot pre-fill one — and
+            a `PUT` REPLACES the whole record. Say that out loud: a half-remembered spec pasted here
+            is valid YAML, so the server will accept it and the axes the original declared simply
+            stop existing as far as the control plane knows.
+          -->
+          <div v-if="route.id" class="banner warn">
+            <b>Replacing <span class="mono">{{ route.id }}</span>.</b>
+            This starts <em>empty</em>: the API has no route that hands back a stored spec, so
+            nothing here was loaded from disk. Paste the <b>complete</b> spec you want stored &mdash;
+            <code>PUT</code> replaces the record outright, and axes you leave out stop being tracked
+            while whatever they created keeps running.
+          </div>
+
+          <div class="row" style="margin-bottom:12px">
+            <div class="field">
+              <label for="did">deployment id</label>
+              <input id="did" type="text" v-model.trim="form.id" placeholder="pr-123" style="width:240px"
+                     spellcheck="false" autocomplete="off">
+            </div>
+            <span class="muted mono" style="align-self:end">[a-z0-9][a-z0-9._-]{0,63}</span>
+          </div>
+
+          <div class="field">
+            <label for="spec">spec.yml</label>
+            <textarea id="spec" v-model="form.spec" rows="18" spellcheck="false"
+                      placeholder="version: 1&#10;kind: isolated&#10;stack: pr-${PR}&#10;axes: []"></textarea>
+          </div>
+
+          <div class="field" style="margin-top:12px">
+            <label for="compose">compose.yml <span class="muted">(optional)</span></label>
+            <textarea id="compose" v-model="form.compose" rows="8" spellcheck="false"
+                      placeholder="written next to spec.yml, so `compose: { file: compose.yml }` resolves"></textarea>
+          </div>
+          <p class="hint">
+            Only <code>spec.yml</code> and <code>compose.yml</code> ever live in a deployment
+            directory, and hooks run from there &mdash; so a hook must be inline shell or an
+            absolute path. <code>up: ./hooks/db.sh</code> cannot work here.
+          </p>
+
+          <h2 style="margin-top:16px">env <span class="muted">(variables used to validate the spec)</span></h2>
+          <div class="kv kv-head"><span>name</span><span>value</span><span></span></div>
+          <div class="kv" v-for="(e, i) in form.env" :key="i">
+            <input type="text" v-model.trim="e.k" :aria-label="'env name ' + (i + 1)" placeholder="PR" spellcheck="false">
+            <input type="text" v-model="e.v" :aria-label="'env value ' + (i + 1)" placeholder="123" spellcheck="false">
+            <button class="small" @click="form.env.splice(i, 1)" :aria-label="'remove env ' + (i + 1)">&minus;</button>
+          </div>
+          <button class="small" @click="form.env.push({ k: '', v: '' })">+ variable</button>
+          <p class="hint">
+            These validate the spec now; they are <b>not</b> stored with it. On success they are
+            saved as this deployment's variables <em>in this browser</em>, so the later
+            <code>up</code>/<code>down</code> from this page use the same ones.
+          </p>
+
+          <div class="row" style="margin-top:16px">
+            <button class="primary" :disabled="!form.id || !form.spec.trim() || submitting" @click="submit">
+              {{ submitting ? 'submitting…' : 'Submit' }}
+            </button>
+            <span v-if="submitResult" class="s-ok">
+              {{ submitResult.created ? 'created' : 'replaced' }}
+              &mdash; stack <b class="mono">{{ submitResult.stack }}</b>
+              <a :href="'#/deployments/' + encodeURIComponent(submitResult.id)">open &rarr;</a>
+            </span>
+          </div>
+
+          <!--
+            The server's rejection text IS the documentation. It names the key, the variable, or the
+            assert that is wrong, and often prints the corrected form — including the assert-lint
+            warnings about an `assert_gone` that fails open. Rendered whole, newlines and indentation
+            intact. Never truncate it, never collapse it to one line, never replace it with
+            "invalid spec".
+          -->
+          <pre v-if="submitError" class="spec-error" role="alert">{{ submitError }}</pre>
+        </div>
+      </template>
+
+      <!-- ============================== jobs list ============================== -->
+      <template v-else-if="route.view === 'jobs'">
+        <div class="panel">
+          <div class="phead">
+            <h2>Jobs</h2>
+            <span class="grow"></span>
+            <button class="small" @click="loadJobs">Refresh</button>
+          </div>
+          <p class="hint" style="margin:0 0 10px">
+            Held in memory, most recent first, capped at the last 50. A server restart clears the
+            history &mdash; a job record is the transcript of an attempt, not the truth about what
+            exists. That truth lives in docker and in each axis's own probe.
+          </p>
+          <p v-if="jobsError" class="err">{{ jobsError }}</p>
+          <div class="scroll-x" v-else>
+            <table>
+              <thead>
+                <tr><th>state</th><th>action</th><th>stack</th><th>started</th><th>took</th><th>steps</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="j in jobs" :key="j.id">
+                  <td>
+                    <a :href="'#/jobs/' + encodeURIComponent(j.id)">
+                      <span class="badge" :class="j.state">{{ j.state }}</span>
+                    </a>
+                  </td>
+                  <td class="mono">{{ j.action }}</td>
+                  <td class="name">{{ j.stack }}</td>
+                  <td class="mono dim nowrap">{{ stamp(j.startedAt) }}</td>
+                  <td class="mono dim nowrap">{{ took(j) }}</td>
+                  <td class="dim">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
+                </tr>
+                <tr v-if="!jobs.length"><td colspan="6" class="muted">no jobs recorded</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+
+      <!-- ============================== job detail ============================== -->
+      <template v-else-if="route.view === 'job'">
+        <div class="crumbs">
+          <a href="#/jobs">&larr; jobs</a>
+          <span class="name">{{ route.jobId }}</span>
           <span v-if="job" class="badge" :class="job.state">{{ job.state }}</span>
+          <span v-if="following" class="badge running">following</span>
+          <span class="grow"></span>
+          <a v-if="job" :href="'#/deployments'">deployments</a>
         </div>
 
-        <div v-if="conflict" class="banner conflict">
-          <b>{{ conflict }}</b> already has a job in flight, so this action was <b>not</b> sent again
-          &mdash; two lifecycle runs on one stack race over the same resources.
-          <a v-if="conflictJobId" href="#" @click.prevent="attach(conflictJobId)">Attach to it</a>
-          <span v-else>Wait for it to finish, then try again.</span>
-        </div>
-        <div v-if="postError" class="banner failed">{{ postError }}</div>
+        <p v-if="jobError" class="banner failed">{{ jobError }}</p>
 
-        <div v-if="outcomeState === 'leaked'" class="banner leaked">
-          <b>LEAKED</b> &mdash; teardown ran, but these axes are still present:
-          <b>{{ leakedAxes.join(', ') }}</b>. Nothing else will clean them up: fix the axis
-          <code>down</code> hook and run <code>down</code> again.
-        </div>
-        <div v-else-if="outcomeState === 'failed'" class="banner failed">
-          <b>FAILED</b> &mdash; {{ job.error || 'a step exited non-zero; see the steps below.' }}
-        </div>
-        <div v-else-if="outcomeState === 'ok'" class="banner ok">
-          <b>OK</b><span v-if="unverifiableCount"> &mdash; but {{ unverifiableCount }} axis/axes have
-          no <code>assert_gone</code>, so this is not proof they are gone.</span>
-        </div>
+        <template v-if="job">
+          <div class="panel">
+            <ul class="list">
+              <li><span class="dim" style="width:100px">action</span><span class="mono stretch">{{ job.action }}</span></li>
+              <li><span class="dim" style="width:100px">stack</span><span class="name stretch">{{ job.stack }}</span></li>
+              <li><span class="dim" style="width:100px">started</span><span class="mono stretch">{{ stamp(job.startedAt) }}</span></li>
+              <li><span class="dim" style="width:100px">ended</span><span class="mono stretch">{{ job.endedAt ? stamp(job.endedAt) : '— still running' }}</span></li>
+              <li><span class="dim" style="width:100px">took</span><span class="mono stretch">{{ took(job) }}</span></li>
+            </ul>
+          </div>
 
-        <pre class="log" ref="logEl" @scroll="onScroll"><template v-for="l in lines" :key="l.seq"><span class="t">{{ hhmmss(l.at) }}</span> <span :class="l.level">{{ l.message }}</span>
-</template><span v-if="!lines.length" class="muted">no job yet &mdash; pick an action</span></pre>
+          <!-- ---- the outcome, in the four states that must never blur together ---- -->
+          <div aria-live="polite">
+            <div v-if="job.state === 'running'" class="banner info">
+              <b>running.</b> Following the live log below. Leaving this page stops the follow but
+              never the job.
+            </div>
+            <div v-else-if="job.state === 'leaked'" class="banner leaked">
+              <b>LEAKED &mdash; teardown ran, and these are still present:</b>
+              <span class="mono">{{ leakedAxes.join(', ') || '(see the steps below)' }}</span>.
+              <p style="margin:6px 0 0">
+                Nothing else will clean them up. <code>compose down -v</code> removed containers,
+                volumes and networks; whatever survived is outside compose's reach. Fix that axis's
+                <code>down</code> hook and run <code>down</code> again.
+              </p>
+            </div>
+            <div v-else-if="job.state === 'failed'" class="banner failed">
+              <b>FAILED.</b>
+              {{ job.error || 'a step exited non-zero — see the steps below.' }}
+            </div>
+            <div v-else-if="job.state === 'ok'" class="banner ok">
+              <b>OK.</b>
+              <span v-if="unverifiableSteps">
+                {{ unverifiableSteps }} step(s) were <b>unverifiable</b> &mdash; those axes define no
+                <code>assert_gone</code>, so this is silence about them, not proof they are gone.
+              </span>
+              <span v-else>Every step that could be checked was checked.</span>
+            </div>
+          </div>
 
-        <template v-if="steps.length">
-          <h2 style="margin-top:14px">Steps</h2>
-          <table>
-            <!-- `requires` steps put a REQUIREMENT name in this column, not an axis. Hence the header. -->
-            <thead><tr><th></th><th>axis / requirement</th><th>phase</th><th>detail</th></tr></thead>
-            <tbody>
-              <tr v-for="(s, i) in steps" :key="i">
-                <td class="mark" :class="'s-' + stepState(s)">{{ stepMark(s) }}</td>
-                <td class="name">{{ s.axis }}</td>
-                <td class="mono dim">{{ s.phase }}</td>
-                <td :class="'s-' + stepState(s)">{{ s.message || (s.skipped ? 'skipped' : '') }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="panel">
+            <div class="phead">
+              <h2>Log</h2>
+              <span class="grow"></span>
+              <label><input type="checkbox" v-model="autoscroll"> autoscroll</label>
+              <button class="small" v-if="!following && job.state === 'running'" @click="follow(job.id)">Re-follow</button>
+              <button class="small" v-else-if="!following" @click="loadJob(job.id)">Reload</button>
+            </div>
+            <pre class="log" ref="logEl" @scroll="onLogScroll"><template v-for="l in lines" :key="l.seq"><span class="t">{{ hhmmss(l.at) }}</span> <span :class="'lv-' + l.level">{{ l.message }}</span>
+</template><span v-if="!lines.length" class="muted">no log lines</span></pre>
+            <p class="hint" v-if="streamDropped">
+              The live stream dropped without a completion frame (a restart, a proxy timeout, or a
+              job longer than the server's 240s idle window). The job record above was re-fetched,
+              so the state is current even though the tail of the log may be missing.
+            </p>
+          </div>
+
+          <div class="panel" v-if="steps.length">
+            <h2>Steps</h2>
+            <div class="scroll-x">
+              <table>
+                <!-- `requires` steps put a REQUIREMENT name in this column, not an axis. -->
+                <thead><tr><th></th><th>axis / requirement</th><th>phase</th><th>result</th></tr></thead>
+                <tbody>
+                  <tr v-for="(s, i) in steps" :key="i">
+                    <td class="mark" :class="'s-' + stepState(s)">{{ stepMark(s) }}</td>
+                    <td class="name">{{ s.axis }}</td>
+                    <td class="mono dim">{{ s.phase }}</td>
+                    <td :class="'s-' + stepState(s)">{{ stepText(s) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              <span class="s-ok">✓ ok</span> &middot;
+              <span class="s-failed">✗ failed</span> &middot;
+              <span class="s-leaked">! leaked &mdash; survived teardown</span> &middot;
+              <span class="s-unverifiable">? unverifiable &mdash; nothing to check, not a pass</span>.
+              A <code>down</code> step marked ok may still carry a <code>non-fatal:</code> note:
+              teardown is best-effort by design, so aborting halfway would leave more behind than
+              continuing.
+            </p>
+          </div>
+          <p v-else-if="job.state !== 'running'" class="muted">
+            This job produced no step results &mdash; it failed before the first step ran.
+          </p>
         </template>
-      </div>
-    </div>
-  </div>
+        <p v-else-if="!jobError" class="muted">loading…</p>
+      </template>
 
-  <!-- ============================== submit ============================== -->
-  <div class="page" v-else>
-    <div class="panel" style="max-width:900px">
-      <div class="row" style="margin-bottom:10px">
-        <button class="link" @click="go('list')">&larr; all</button>
-        <h2 style="margin:0" class="stretch">Submit a deployment</h2>
-      </div>
-      <p class="muted" style="margin:0 0 12px">
-        <code>PUT /api/deployments/:id</code>. The spec is parsed before anything is stored, so a
-        rejected submission leaves nothing behind &mdash; and <code>kind</code> is read from the
-        spec, never from this form.
-      </p>
+      <!-- ============================== unknown route ============================== -->
+      <template v-else>
+        <div class="panel">
+          <h2>No such view</h2>
+          <p>
+            <span class="name">#/{{ route.raw }}</span> does not match any view in
+            this UI. Every non-<code>/api/</code> path serves this same page, so a deep link into a
+            path that does not exist here lands you here rather than on a 404.
+          </p>
+          <p><a href="#/">&larr; overview</a></p>
+        </div>
+      </template>
 
-      <div class="row" style="margin-bottom:10px">
-        <label for="did">id</label>
-        <input id="did" type="text" v-model.trim="form.id" placeholder="pr-123" style="width:220px">
-        <span class="muted mono">[a-z0-9][a-z0-9._-]{0,63}</span>
-      </div>
-
-      <h2>spec.yml</h2>
-      <textarea v-model="form.spec" rows="12" spellcheck="false"
-                placeholder="version: 1&#10;kind: isolated&#10;stack: pr-${PR}&#10;axes: []"></textarea>
-
-      <h2 style="margin-top:14px">compose.yml <span class="muted">(optional)</span></h2>
-      <textarea v-model="form.compose" rows="6" spellcheck="false"
-                placeholder="written next to spec.yml, so `compose.file: compose.yml` resolves"></textarea>
-
-      <h2 style="margin-top:14px">env <span class="muted">(variables for ${...} interpolation)</span></h2>
-      <div class="kv" v-for="(e, i) in form.env" :key="i">
-        <input type="text" v-model.trim="e.k" placeholder="PR">
-        <input type="text" v-model.trim="e.v" placeholder="123">
-        <button @click="form.env.splice(i, 1)">&minus;</button>
-      </div>
-      <button @click="form.env.push({ k: '', v: '' })">+ variable</button>
-
-      <div class="row" style="margin-top:14px">
-        <button class="primary" :disabled="!form.id || !form.spec.trim() || submitting" @click="submit">
-          {{ submitting ? 'submitting…' : 'Submit' }}
-        </button>
-        <span v-if="submitOk" class="s-ok">stored &mdash; <a href="#" @click.prevent="open(submitOk)">open {{ submitOk }}</a></span>
-      </div>
-
-      <!-- The server's rejection text IS the documentation. Render it whole, newlines intact. -->
-      <pre v-if="submitError" class="spec-error">{{ submitError }}</pre>
-    </div>
+    </main>
   </div>
 </div>
 
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script>
+'use strict';
 const { createApp } = Vue;
 
-const HOOKS = ['up', 'down', 'assert_gone', 'assert_live'];
+/** Hook names, in the order `up` / `verify` actually use them. Also the column order in Axes. */
+const HOOKS = ['up', 'assert_live', 'down', 'assert_gone'];
+const TABS = ['overview', 'config', 'axes', 'requires', 'logs', 'actions'];
+const VARS_KEY = 'pstack.vars.';
+const enc = encodeURIComponent;
+
+const EXAMPLE_SPEC = `version: 1
+kind: isolated
+
+# The stack identity: the compose project name, and $STACK inside every hook.
+# \${PR} is interpolated ONCE, at resolve time, from the variables sent with the request.
+stack: pr-\${PR}
+
+env:
+  PREVIEW_DOMAIN: preview.example.com
+
+compose:
+  file: compose.yml
+  # Every service sits behind a profile so a bare \`up\` starts nothing.
+  # \`down\` always enables ALL of them — otherwise the unselected profiles' network leaks.
+  profiles: [app]
+
+requires:
+  - name: traefik-network
+    assert: docker network inspect traefik >/dev/null 2>&1
+    hint: run \`pstack init\` on the host first
+
+axes:
+  # Hooks run from the deployment directory, which holds only spec.yml and compose.yml —
+  # so use inline shell or absolute paths, never ./hooks/foo.sh.
+  - name: scratch
+    up: mkdir -p /tmp/$STACK
+    assert_live: test -d /tmp/$STACK
+    down: rm -rf /tmp/$STACK
+    # assert_gone MUST FAIL CLOSED. A bare \`! <probe>\` reports "gone" whenever the probe fails
+    # for any reason — a missing CLI, an expired token — turning "I could not tell" into
+    # "it is gone", a false negative on the one thing this tool exists to catch.
+    assert_gone: |
+      test -d /tmp || exit 1
+      ! test -d /tmp/$STACK
+`;
+
+const EXAMPLE_COMPOSE = `services:
+  app:
+    image: nginx:alpine
+    profiles: [app]
+    labels:
+      - traefik.enable=true
+`;
+
+/** `#/deployments/acme/logs` → a route object. Unknown shapes fall through to `unknown`. */
+function parseRoute() {
+  const raw = String(location.hash || '').replace(/^#\/?/, '');
+  const seg = raw.split('/').filter(Boolean).map((s) => {
+    try { return decodeURIComponent(s); } catch { return s; }
+  });
+  if (!seg.length) return { view: 'overview', id: '', tab: '', jobId: '', raw };
+  const base = { view: 'unknown', id: '', tab: '', jobId: '', raw };
+  if (seg[0] === 'deployments') {
+    if (!seg[1]) return { ...base, view: 'list' };
+    // An unrecognised tab segment falls back to `overview` rather than rendering nothing.
+    return { ...base, view: 'detail', id: seg[1], tab: TABS.includes(seg[2]) ? seg[2] : 'overview' };
+  }
+  if (seg[0] === 'jobs') return seg[1] ? { ...base, view: 'job', jobId: seg[1] } : { ...base, view: 'jobs' };
+  if (seg[0] === 'submit') return { ...base, view: 'submit', id: seg[1] || '' };
+  return base;
+}
+
+/** Variable pairs → `?PR=7&REGION=eu`, plus any extra params. Empty names are dropped. */
+function query(pairs, extra) {
+  const p = new URLSearchParams();
+  for (const e of pairs || []) if (e && e.k) p.set(e.k, e.v == null ? '' : String(e.v));
+  for (const [k, v] of Object.entries(extra || {})) p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
 
 createApp({
   data() {
     return {
-      health: { authEnforced: null },
+      HOOKS, TABS,
+      route: parseRoute(),
+
       token: localStorage.getItem('pstack.token') || '',
+      health: {}, healthError: '',
 
-      screen: 'list',
+      control: {}, controlLoaded: false, controlError: '',
       deployments: [], listError: '',
+      jobs: [], jobsError: '',
 
-      id: '', detail: null, detailError: '',
-      downVerify: true, confirmShared: false, acting: false,
+      // ---- detail ----
+      detail: null, detailError: '',
+      vars: [], tail: 200,
+      logs: null, logsError: '', logsLoading: false,
+      acting: false, actionError: '', conflict: null,
+      downVerify: true, forceTyped: '', forgetArmed: false,
 
-      job: null, lines: [], es: null, pinned: true,
-      conflict: '', conflictJobId: '', postError: '',
+      // ---- job ----
+      job: null, jobError: '', lines: [], es: null, following: false,
+      autoscroll: true, streamDropped: false,
 
+      // ---- submit ----
       form: { id: '', spec: '', compose: '', env: [{ k: '', v: '' }] },
-      submitting: false, submitError: '', submitOk: '',
+      submitting: false, submitError: '', submitResult: null,
+
+      poll: 0,
+      defaultControlNote:
+        'The control stack is not managed through this API: the process serving this request runs ' +
+        'inside it.',
     };
   },
 
   computed: {
+    isShared() { return !!this.detail && this.detail.kind === 'shared'; },
+
+    /** Typed confirmation, exact match against the resolved stack name. Nothing looser. */
+    forceArmed() {
+      return !!this.detail && !!this.detail.stack && this.forceTyped === this.detail.stack;
+    },
+
+    varsQuery() { return query(this.vars); },
+
+    unverifiableAxes() {
+      return (this.detail ? this.detail.axes : []).filter((a) => !a.verifiable).map((a) => a.name);
+    },
+
+    unresolvedRows() { return this.deployments.filter((d) => d.unresolved); },
+
+    /**
+     * Counts for the overview. `busy` and `running` are tri-state, so an unknown is counted in its
+     * own bucket — never folded into the false side.
+     */
+    summary() {
+      const c = { total: 0, shared: 0, isolated: 0, busy: 0, running: 0, unknown: 0, unresolved: 0 };
+      for (const d of this.deployments) {
+        c.total++;
+        if (d.kind === 'shared') c.shared++; else c.isolated++;
+        if (d.busy === true) c.busy++;
+        if (d.running === true) c.running++;
+        if (d.busy == null || d.running == null) c.unknown++;
+        if (d.unresolved) c.unresolved++;
+      }
+      return c;
+    },
+
     steps() { return (this.job && this.job.outcome && this.job.outcome.steps) || []; },
-    /** Only a finished job has an outcome worth a banner. */
-    outcomeState() { return this.job && this.job.state !== 'running' ? this.job.state : ''; },
+
+    /** Only `assert_gone` failing is a leak. Every other non-zero step is a plain failure. */
     leakedAxes() {
       return this.steps.filter((s) => s.phase === 'assert_gone' && !s.ok).map((s) => s.axis);
     },
-    unverifiableCount() {
+
+    unverifiableSteps() {
       return this.steps.filter((s) => this.stepState(s) === 'unverifiable').length;
     },
-    isShared() { return !!this.detail && this.detail.kind === 'shared'; },
-    /**
-     * On DETAIL we know the resolved stack name, so correlating with a running job is sound.
-     * (On the list we do not — see the comment on the state column.)
-     */
-    busy() {
-      if (this.detail && this.detail.busy) return true;
-      return !!(this.job && this.job.state === 'running' &&
-                (!this.detail || !this.job.stack || this.job.stack === this.detail.stack));
+
+    kindBlurb() {
+      return this.isShared
+        ? 'a host singleton previews borrow — no axes, and down is guarded'
+        : 'one tenant, created and destroyed constantly, expected to leave nothing behind';
     },
   },
 
   watch: {
     token(v) { localStorage.setItem('pstack.token', v); },
+    /**
+     * One place that reacts to navigation. Closing the stream here (not only on a `done` frame) is
+     * what stops a leak the old single-screen UI could not have: navigating away from a running job
+     * would otherwise keep the EventSource open, appending to a `lines` array nobody is watching.
+     */
+    route: {
+      handler(to, from) {
+        if (!from || to.view !== 'job' || to.jobId !== from.jobId) this.closeStream();
+        this.onRoute(to, from);
+      },
+    },
   },
 
   mounted() {
+    addEventListener('hashchange', this.onHash);
     this.loadHealth();
-    this.loadList();
-    // `busy` is only useful if it is current, and the server holds the lock, not us.
-    setInterval(() => { if (this.screen === 'list') this.loadList(); }, 5000);
+    // Unconditional, so the nav's deployment count is right even on a deep link into Jobs.
+    this.loadDeployments();
+    this.onRoute(this.route, null);
+    // The whole point of `busy` is being current, and the server holds the lock — not us. Only the
+    // views that display it poll, and never the log (SSE) or compose logs (expensive).
+    this.poll = setInterval(() => {
+      if (this.route.view === 'overview') { this.loadDeployments(); this.loadJobs(); }
+      else if (this.route.view === 'list') this.loadDeployments();
+      else if (this.route.view === 'jobs') this.loadJobs();
+    }, 5000);
+  },
+
+  beforeUnmount() {
+    removeEventListener('hashchange', this.onHash);
+    clearInterval(this.poll);
+    this.closeStream();
   },
 
   methods: {
+    onHash() { this.route = parseRoute(); },
+    go(path) { location.hash = `#${path}`; },
+    tabHref(t) { return `#/deployments/${enc(this.route.id)}/${t}`; },
+
+    /** Load exactly what the destination view needs, and nothing else. */
+    onRoute(to, from) {
+      const sameDeployment = from && from.view === 'detail' && from.id === to.id;
+      if (to.view === 'overview') { this.loadControl(); this.loadDeployments(); this.loadJobs(); }
+      if (to.view === 'list') this.loadDeployments();
+      if (to.view === 'jobs') this.loadJobs();
+      if (to.view === 'job') { if (!from || from.jobId !== to.jobId) this.loadJob(to.jobId); }
+      if (to.view === 'submit') this.prepareSubmit(to.id);
+      if (to.view === 'detail') {
+        // Switching tabs must not re-fetch or wipe the panel. Only a different deployment does.
+        if (!sameDeployment) {
+          this.vars = this.readVars(to.id);
+          this.forceTyped = '';
+          this.forgetArmed = false;
+          this.conflict = null;
+          this.actionError = '';
+          this.logs = null;
+          this.logsError = '';
+          this.detail = null;
+          this.loadDeployments();
+          this.loadDetail();
+        }
+      }
+    },
+
+    // ---- transport ---------------------------------------------------------------------
     /**
-     * One fetch path for everything. Auth goes on every NON-GET request (PUT and DELETE destroy
-     * just as thoroughly as POST). GETs stay open because EventSource cannot send headers, which
-     * is why the log stream works at all.
+     * The one fetch path. Auth goes on every NON-GET request — `PUT` and `DELETE` destroy just as
+     * thoroughly as `POST`. GETs stay open, which is also why the log stream works at all:
+     * `EventSource` cannot send headers.
      */
     async api(method, path, body) {
       const headers = {};
@@ -433,228 +1380,396 @@ createApp({
       }
       try {
         const r = await fetch(path, {
-          method,
-          headers,
+          method, headers,
           body: body === undefined ? undefined : JSON.stringify(body),
         });
-        return { status: r.status, body: await r.json().catch(() => ({})) };
+        const text = await r.text();
+        let parsed = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch { /* handled below */ }
+        // A non-JSON body means we are talking to something that is not this API — a proxy error
+        // page, most often. Say that instead of throwing on `undefined.error`.
+        if (parsed === null && text) {
+          return { status: r.status, ok: r.ok, body: {}, raw: text, notJson: true };
+        }
+        return { status: r.status, ok: r.ok, body: parsed || {}, raw: text };
       } catch (e) {
-        return { status: 0, body: { error: `unreachable: ${e.message}` } };
+        return { status: 0, ok: false, body: { error: `unreachable: ${e.message}` } };
       }
     },
 
+    get(path) { return this.api('GET', path); },
+
     /**
-     * Turn a non-2xx into one sentence that names the call. A bare 404 here is ambiguous — it may
-     * mean "no such deployment" or "this server has no such route" — and the second is a very
-     * different problem, so say both rather than crashing on a missing field.
+     * Turn a non-2xx into text that names the call. A bare 404 is ambiguous — "no such deployment"
+     * or "this build of the API has no such route" — and the second is a very different problem, so
+     * say both rather than crashing on a missing field.
      */
     problem(res, what) {
       if (res.status === 0) return res.body.error;
-      if (res.status === 401) return `${what}: unauthorized — set the token in the header field.`;
+      if (res.status === 401) return `${what}: 401 unauthorized — set the token in the header field.`;
+      if (res.notJson) {
+        return `${what}: HTTP ${res.status}, and the response was not JSON. Something other than ` +
+               `the pstack API answered — a proxy or an error page.\n\n${String(res.raw).slice(0, 400)}`;
+      }
       const e = res.body && res.body.error;
       if (res.status === 404 && (!e || e === 'not found')) {
-        return `${what}: 404 — no such deployment, or this build of the API has no such route yet.`;
+        return `${what}: 404 — no such resource, or this build of the API has no such route yet.`;
       }
       return e ? `${what}: ${e}` : `${what}: HTTP ${res.status}`;
     },
 
+    // ---- loaders -----------------------------------------------------------------------
     async loadHealth() {
-      const r = await this.api('GET', '/api/health');
-      if (r.status === 200) this.health = r.body;
+      const r = await this.get('/api/health');
+      if (r.ok) { this.health = r.body || {}; this.healthError = ''; }
+      else this.healthError = this.problem(r, 'GET /api/health');
     },
 
-    // ---- list ------------------------------------------------------------------
-    async loadList() {
-      const r = await this.api('GET', '/api/deployments');
-      if (r.status !== 200) {
-        this.listError = this.problem(r, 'GET /api/deployments');
-        return;
-      }
-      this.listError = '';
-      // Accept either an envelope or a bare array; normalise kind so the badge class is never
-      // `k-undefined`.
-      const rows = r.body.deployments ?? (Array.isArray(r.body) ? r.body : []);
-      this.deployments = rows.map((d) => ({ ...d, kind: d.kind || 'isolated' }));
-    },
-
-    go(screen) {
-      this.close();
-      this.screen = screen;
-    },
-
-    // ---- detail ----------------------------------------------------------------
-    async open(id) {
-      this.close();
-      this.screen = 'detail';
-      this.id = id;
-      this.detail = null;
-      this.detailError = '';
-      this.confirmShared = false;
-      this.job = null;
-      this.lines = [];
-      this.conflict = this.conflictJobId = this.postError = '';
-      await this.loadDetail();
-    },
-
-    async loadDetail() {
-      const r = await this.api('GET', `/api/deployments/${encodeURIComponent(this.id)}`);
-      if (r.status !== 200) {
-        this.detailError = this.problem(r, `GET /api/deployments/${this.id}`);
-        return;
-      }
-      const b = r.body;
-      // The meta and the resolved spec may arrive flat or nested; read from whichever holds them.
-      const dep = b.deployment ?? b;
-      const spec = b.spec ?? b.stackSpec ?? b;
-      this.detail = {
-        kind: dep.kind || spec.kind || 'isolated',
-        updatedAt: dep.updatedAt,
-        busy: dep.busy ?? spec.busy ?? b.busy ?? false,
-        stack: typeof spec.stack === 'string' ? spec.stack : '',
-        compose: spec.compose || null,
-        requires: spec.requires || [],
-        // An axis may arrive pre-summarised (`hooks: [...]`, as /api/spec did) or raw from the
-        // spec. Derive the hook list when it is missing rather than showing "no hooks".
-        axes: (spec.axes || []).map((a) => ({
-          name: a.name,
-          hooks: Array.isArray(a.hooks) ? a.hooks : HOOKS.filter((k) => a[k]),
-        })),
+    async loadControl() {
+      const r = await this.get('/api/control');
+      this.controlLoaded = true;
+      if (!r.ok) { this.controlError = this.problem(r, 'GET /api/control'); return; }
+      this.controlError = '';
+      const b = r.body || {};
+      this.control = {
+        project: b.project || '',
+        reachable: b.reachable !== false,
+        parseError: !!b.parseError,
+        services: Array.isArray(b.services) ? b.services : [],
+        managedBy: b.managedBy || '',
+        note: b.note || '',
+        // Read but never trusted to be `true`: this view has no actions regardless of what the
+        // payload says. The field exists so a UI cannot claim it was not told.
+        actionable: b.actionable === true,
       };
     },
 
+    async loadDeployments() {
+      const r = await this.get('/api/deployments');
+      if (!r.ok) { this.listError = this.problem(r, 'GET /api/deployments'); return; }
+      this.listError = '';
+      const rows = Array.isArray(r.body.deployments) ? r.body.deployments : [];
+      this.deployments = rows.map((d) => ({
+        ...d,
+        kind: d.kind === 'shared' ? 'shared' : 'isolated',
+        // Normalise "absent" to null so the tri-state stays a tri-state. `?? null` — not `|| null`
+        // — because `false` is a real, different answer from "could not tell".
+        busy: d.busy ?? null,
+        running: d.running ?? null,
+        stack: d.stack || '',
+      }));
+    },
+
+    async loadJobs() {
+      const r = await this.get('/api/jobs');
+      if (!r.ok) { this.jobsError = this.problem(r, 'GET /api/jobs'); return; }
+      this.jobsError = '';
+      this.jobs = Array.isArray(r.body.jobs) ? r.body.jobs : [];
+    },
+
+    async loadDetail() {
+      const id = this.route.id;
+      const r = await this.get(`/api/deployments/${enc(id)}${this.varsQuery}`);
+      if (this.route.id !== id) return; // navigated away mid-flight
+      if (!r.ok) {
+        this.detail = null;
+        this.detailError = this.problem(r, `GET /api/deployments/${id}`);
+        // The fix lives on the config tab, so put the operator in front of the editor rather than
+        // in front of an error with no control in reach.
+        if (this.route.tab === 'overview') this.go(`/deployments/${enc(id)}/config`);
+        return;
+      }
+      this.detailError = '';
+      const b = r.body || {};
+      this.detail = {
+        id: b.id || id,
+        kind: b.kind === 'shared' ? 'shared' : 'isolated',
+        createdAt: b.createdAt,
+        updatedAt: b.updatedAt,
+        stack: typeof b.stack === 'string' ? b.stack : '',
+        busy: b.busy ?? null,
+        compose: b.compose
+          ? {
+              file: b.compose.file || '?',
+              profiles: b.compose.profiles || [],
+              overlays: b.compose.overlays || [],
+            }
+          : null,
+        requires: Array.isArray(b.requires) ? b.requires : [],
+        axes: (Array.isArray(b.axes) ? b.axes : []).map((a) => ({
+          name: a.name,
+          hooks: Array.isArray(a.hooks) ? a.hooks : [],
+          // Derive it if an older build omits the field, rather than claiming unverifiable.
+          verifiable: a.verifiable ?? (Array.isArray(a.hooks) && a.hooks.includes('assert_gone')),
+        })),
+        env: Array.isArray(b.env) ? b.env : [],
+      };
+    },
+
+    async loadLogs() {
+      if (!this.detail || !this.detail.compose) return;
+      const id = this.route.id;
+      this.logsLoading = true;
+      this.logsError = '';
+      const r = await this.get(`/api/deployments/${enc(id)}/logs${query(this.vars, { tail: this.tail })}`);
+      this.logsLoading = false;
+      if (this.route.id !== id) return;
+      if (!r.ok) { this.logs = null; this.logsError = this.problem(r, 'GET logs'); return; }
+      this.logs = { ok: r.body.ok !== false, text: r.body.text || '', stack: r.body.stack || '' };
+    },
+
+    // ---- variables ---------------------------------------------------------------------
+    /**
+     * Per-deployment, in this browser. Keyed by deployment id, because the variables that produced
+     * a stack on `up` are exactly the ones the later `down` must send — see the banner on the
+     * config tab. Corrupt or absent storage degrades to one empty pair, never to a thrown error.
+     */
+    readVars(id) {
+      try {
+        const raw = JSON.parse(localStorage.getItem(VARS_KEY + id) || '[]');
+        const pairs = Array.isArray(raw)
+          ? raw.filter((e) => e && typeof e.k === 'string').map((e) => ({ k: e.k, v: String(e.v ?? '') }))
+          : [];
+        return pairs.length ? pairs : [{ k: '', v: '' }];
+      } catch {
+        return [{ k: '', v: '' }];
+      }
+    },
+
+    /** Written against the id in the URL right now, so a mid-navigation save cannot cross wires. */
+    persistVars() {
+      const id = this.route.id;
+      if (!id) return;
+      try {
+        localStorage.setItem(VARS_KEY + id, JSON.stringify(this.vars.filter((e) => e.k)));
+      } catch { /* private mode / quota — the pairs still work for this page load */ }
+    },
+
+    addVar() { this.vars.push({ k: '', v: '' }); },
+    removeVar(i) { this.vars.splice(i, 1); if (!this.vars.length) this.addVar(); this.persistVars(); },
+
+    applyVars() {
+      this.persistVars();
+      this.logs = null;
+      this.loadDetail();
+    },
+
+    // ---- actions -----------------------------------------------------------------------
     async act(action) {
+      if (!this.detail) return;
       this.acting = true;
-      this.conflict = this.conflictJobId = this.postError = '';
-      const path = `/api/deployments/${encodeURIComponent(this.id)}/${action}`;
+      this.actionError = '';
+      this.conflict = null;
+      const path = `/api/deployments/${enc(this.route.id)}/${action}${this.varsQuery}`;
       const body = action === 'down'
-        // `force` is only ever true for a shared deployment the operator explicitly confirmed.
-        // The server refuses a shared down without it, which is the guard that actually holds.
-        ? { verify: this.downVerify, force: this.isShared && this.confirmShared }
+        // `force` is only ever true for a shared deployment whose stack name was typed out. The
+        // server's own refusal is the guard that actually holds; this is the second lock.
+        ? { verify: this.downVerify, force: this.isShared && this.forceArmed }
         : {};
       const r = await this.api('POST', path, body);
       this.acting = false;
 
-      if (r.status === 202) return this.begin(r.body.job || {});
-      if (r.status === 409) {
-        // One job per stack, deliberately not queued. Surface it; never retry.
-        this.conflict = r.body.stack || r.body.id || this.id;
-        // Jobs are keyed by the RESOLVED stack, but a 409 body may name either the stack or the
-        // deployment id. Try every name we hold for this deployment — attaching is the whole
-        // remedy on this screen, so failing to find the job is worse than matching loosely.
-        const names = [r.body.stack, r.body.id, this.id, this.detail && this.detail.stack];
-        const jl = await this.api('GET', '/api/jobs');
-        const live = (jl.body.jobs || []).find((j) => j.state === 'running' && names.includes(j.stack));
-        if (live) this.conflictJobId = live.id;
+      if (r.status === 202) {
+        const job = r.body.job;
+        if (job && job.id) { this.loadDeployments(); this.go(`/jobs/${enc(job.id)}`); return; }
+        this.actionError = '202 accepted, but the response carried no job id — nothing to follow.';
         return;
       }
-      this.postError = this.problem(r, `POST ${path}`);
+      if (r.status === 409) return this.onConflict(r);
+      this.actionError = this.problem(r, `POST ${action}`);
     },
 
-    begin(job) {
-      this.job = { ...job, outcome: undefined, error: undefined, state: job.state || 'running' };
+    async forget() {
+      if (!this.forgetArmed) return;
+      this.acting = true;
+      this.actionError = '';
+      this.conflict = null;
+      const r = await this.api('DELETE', `/api/deployments/${enc(this.route.id)}${this.varsQuery}`);
+      this.acting = false;
+      if (r.ok) { this.forgetArmed = false; this.loadDeployments(); this.go('/deployments'); return; }
+      if (r.status === 409) return this.onConflict(r);
+      this.actionError = this.problem(r, 'DELETE deployment');
+    },
+
+    /**
+     * A 409 is not one thing, and guessing wrong is misleading. Discriminate on payload SHAPE, never
+     * on the message text:
+     *   `kind`        the shared-`down` refusal — the fix is the typed confirmation, not waiting
+     *   `containers`  DELETE refused because containers still exist — the fix is `down` first
+     *   otherwise     a job in flight, or "docker did not answer" (DELETE's fail-closed case).
+     *                 Both are shape-identical, so do not classify them: print the server's message
+     *                 and only offer "attach" when a running job with that stack really exists.
+     * Never retry.
+     */
+    async onConflict(r) {
+      const b = r.body || {};
+      const text = b.error || `HTTP 409 (no message)`;
+      if (b.kind) { this.conflict = { kind: 'shared', text }; this.forceTyped = ''; return; }
+      if (b.containers !== undefined) { this.conflict = { kind: 'containers', text }; return; }
+
+      this.conflict = { kind: 'other', text, jobId: '' };
+      const stack = b.stack || (this.detail && this.detail.stack) || '';
+      if (!stack) return;
+      const jl = await this.get('/api/jobs');
+      const live = (jl.body.jobs || []).find((j) => j.state === 'running' && j.stack === stack);
+      if (live && this.conflict) this.conflict.jobId = live.id;
+    },
+
+    // ---- job following -----------------------------------------------------------------
+    async loadJob(id) {
+      this.closeStream();
+      this.job = null;
+      this.jobError = '';
       this.lines = [];
-      this.pinned = true;
-      if (job.id) this.stream(job.id);
+      this.streamDropped = false;
+      const r = await this.get(`/api/jobs/${enc(id)}`);
+      if (this.route.jobId !== id) return;
+      if (!r.ok) { this.jobError = this.problem(r, `GET /api/jobs/${id}`); return; }
+      this.job = r.body.job || null;
+      if (!this.job) { this.jobError = 'the server returned no job record for that id.'; return; }
+      if (this.job.state === 'running') {
+        // The stream replays the whole buffered log first, so seeding `lines` from `job.log` here
+        // would double every line already emitted.
+        this.follow(id);
+      } else {
+        this.lines = this.job.log || [];
+        this.scrollLog();
+      }
     },
 
-    /** Attach to an existing job. The stream replays its buffered log, so this works late too. */
-    attach(id) {
-      this.conflict = this.conflictJobId = '';
-      this.job = { id, action: '', stack: '', state: 'running' };
+    follow(id) {
+      this.closeStream();
       this.lines = [];
-      this.pinned = true;
-      this.stream(id);
-    },
-
-    stream(id) {
-      this.close();
-      const es = (this.es = new EventSource(`/api/jobs/${encodeURIComponent(id)}/stream`));
+      this.streamDropped = false;
+      this.autoscroll = true;
+      const es = new EventSource(`/api/jobs/${enc(id)}/stream`);
+      this.es = es;
+      this.following = true;
       es.onmessage = (ev) => {
-        const e = JSON.parse(ev.data);
-        if (e.done) { this.close(); this.finish(id); return; }
+        let e;
+        try { e = JSON.parse(ev.data); } catch { return; }
+        if (e && e.done) { this.closeStream(); this.settle(id); return; }
         this.lines.push(e);
-        this.scroll();
+        this.scrollLog();
       };
       es.onerror = () => {
-        // A stream can drop without a `done` frame (server restart, proxy timeout). Fall back to
-        // the job record rather than leaving the UI stuck on "running".
-        this.close();
-        this.finish(id);
+        // A stream can end without a `done` frame: server restart, proxy timeout, or a job that
+        // outlived the server's 240s idle window. Fall back to the record rather than leaving the
+        // page pinned on "running" forever.
+        this.closeStream();
+        this.streamDropped = true;
+        this.settle(id);
       };
     },
 
-    close() {
+    closeStream() {
       if (this.es) this.es.close();
       this.es = null;
+      this.following = false;
     },
 
-    async finish(id) {
-      // The lock is released, so a "job in flight" notice is no longer true — never leave a stale
-      // conflict banner sitting next to a finished job's outcome.
-      this.conflict = this.conflictJobId = '';
-      const r = await this.api('GET', `/api/jobs/${encodeURIComponent(id)}`);
-      if (r.body.job) this.job = r.body.job;
-      // No record: the server restarted (jobs are in-memory) or the id was evicted. Say so rather
-      // than leaving the panel pinned on "running" forever.
-      else if (this.job) this.job = { ...this.job, state: 'failed', error: 'lost the job record — server restarted?' };
-      this.confirmShared = false; // re-arm the guard for the next teardown
-      // Refresh BOTH: the lock is released, so the list's `busy` badge is stale the moment this
-      // job ends — and the operator may already have navigated back to it.
-      this.loadList();
-      if (this.screen === 'detail') this.loadDetail();
+    /** The job is over: re-read the record for `outcome`, and refresh what the lock made stale. */
+    async settle(id) {
+      const r = await this.get(`/api/jobs/${enc(id)}`);
+      if (this.route.view !== 'job' || this.route.jobId !== id) return;
+      if (r.ok && r.body.job) this.job = r.body.job;
+      else if (this.job) {
+        this.job = {
+          ...this.job, state: 'failed',
+          error: 'lost the job record — the server restarted? Job history is in memory only.',
+        };
+      }
+      // The stack lock is released, so both of these are stale the moment the job ends.
+      this.loadDeployments();
+      this.loadJobs();
     },
 
-    scroll() {
-      if (!this.pinned) return;
+    scrollLog() {
+      if (!this.autoscroll) return;
       this.$nextTick(() => {
         const el = this.$refs.logEl;
         if (el) el.scrollTop = el.scrollHeight;
       });
     },
 
-    onScroll(e) {
+    /** Scrolling up is an intent to read; stop fighting it. Returning to the bottom re-arms. */
+    onLogScroll(e) {
       const el = e.target;
-      this.pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      this.autoscroll = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     },
 
-    // ---- submit ----------------------------------------------------------------
-    openSubmit(id) {
-      this.close();
-      this.screen = 'submit';
-      this.submitError = this.submitOk = '';
-      if (id) this.form.id = id;
+    // ---- submit ------------------------------------------------------------------------
+    prepareSubmit(id) {
+      this.submitError = '';
+      this.submitResult = null;
+      // Arriving to replace a DIFFERENT deployment must not carry the previous one's spec across.
+      // There is no route that returns a stored spec, so this form can never pre-fill the body —
+      // and a leftover body is the dangerous case: it is a perfectly valid spec, so a PUT would
+      // replace the wrong deployment's spec and nothing on the server could catch it.
+      if (id && id !== this.form.id) {
+        this.form.spec = '';
+        this.form.compose = '';
+      }
+      if (id) {
+        this.form.id = id;
+        // Seed the env editor from this deployment's saved variables: replacing a spec usually
+        // needs the same ones that resolved it.
+        const saved = this.readVars(id);
+        if (saved.some((e) => e.k)) this.form.env = saved.map((e) => ({ ...e }));
+      }
+      if (!this.form.env.length) this.form.env = [{ k: '', v: '' }];
+    },
+
+    fillExample() {
+      this.form.spec = EXAMPLE_SPEC;
+      if (!this.form.compose.trim()) this.form.compose = EXAMPLE_COMPOSE;
+      if (!this.form.id) this.form.id = 'pr-123';
+      if (!this.form.env.some((e) => e.k)) this.form.env = [{ k: 'PR', v: '123' }];
     },
 
     async submit() {
       this.submitting = true;
-      this.submitError = this.submitOk = '';
+      this.submitError = '';
+      this.submitResult = null;
       const env = {};
-      for (const { k, v } of this.form.env) if (k) env[k] = v;
+      for (const e of this.form.env) if (e.k) env[e.k] = e.v;
       const body = { spec: this.form.spec, env };
       if (this.form.compose.trim()) body.compose = this.form.compose;
 
-      const path = `/api/deployments/${encodeURIComponent(this.form.id)}`;
-      const r = await this.api('PUT', path, body);
+      const id = this.form.id;
+      const r = await this.api('PUT', `/api/deployments/${enc(id)}`, body);
       this.submitting = false;
 
       if (r.status === 200 || r.status === 201) {
-        this.submitOk = this.form.id;
-        this.loadList();
+        this.submitResult = { id: r.body.id || id, stack: r.body.stack || '?', created: r.status === 201 };
+        // Persist the variables that just validated this spec as the deployment's own. This is the
+        // single thing that keeps a later `down` targeting the same stack the `up` created.
+        try {
+          localStorage.setItem(VARS_KEY + id, JSON.stringify(this.form.env.filter((e) => e.k)));
+        } catch { /* ignore */ }
+        this.loadDeployments();
         return;
       }
-      // 400 carries the SpecError, which is the whole point of showing this verbatim: it names the
-      // key, the variable, or the assert that is wrong, and often how to fix it.
-      this.submitError = this.problem(r, `PUT ${path}`);
+      if (r.status === 409) {
+        // A stack with a job in flight cannot have its spec swapped: the eventual `down` would tear
+        // down with different profiles and axes than the `up` created.
+        this.submitError = this.problem(r, `PUT /api/deployments/${id}`);
+        return;
+      }
+      // 400 carries the SpecError verbatim — the whole reason this is a <pre>.
+      this.submitError = this.problem(r, `PUT /api/deployments/${id}`);
     },
 
-    // ---- shared -----------------------------------------------------------------
+    // ---- step states -------------------------------------------------------------------
     /**
      * Four states that must not blur into each other:
-     *   leaked       assert_gone failed — the resource survived teardown. The signal this tool exists for.
-     *   failed       any other non-zero step (including a refused shared `down`).
-     *   unverifiable no assert_gone defined. NOT a pass.
-     *   ok           passed. A `down` step may still carry a "non-fatal:" message: teardown is
-     *                best-effort by design, so the step genuinely did not fail the run.
+     *   leaked        `assert_gone` failed — the resource SURVIVED teardown. The signal this whole
+     *                 tool exists for, and the CLI's distinct exit code 2.
+     *   failed        any other non-zero step, including a refused shared `down`.
+     *   unverifiable  no `assert_gone` defined. NOT a pass. Matched on the message, exactly as the
+     *                 CLI's report() does — `skipped` alone is also true of a dry run.
+     *   ok            passed. A `down` step is ALWAYS ok:true and may still carry a "non-fatal:"
+     *                 message: teardown is best-effort by design, so the step really did pass.
      */
     stepState(s) {
       if (s.message && s.message.startsWith('unverifiable')) return 'unverifiable';
@@ -666,10 +1781,26 @@ createApp({
       return { ok: '✓', unverifiable: '?', leaked: '!', failed: '✗' }[this.stepState(s)];
     },
 
-    hhmmss(ms) { return new Date(ms).toTimeString().slice(0, 8); },
-    /** Local time, ISO-shaped (`sv` renders `2026-07-26 05:17:00`) — sortable, and the same clock
-     *  the log lines use. No zone marker: everything shown here is the viewer's local time. */
+    stepText(s) {
+      if (s.message) return s.message;
+      if (s.skipped) return 'skipped';
+      return this.stepState(s) === 'ok' ? 'ok' : `exit ${s.code}`;
+    },
+
+    // ---- formatting --------------------------------------------------------------------
+    hhmmss(ms) { return ms ? new Date(ms).toTimeString().slice(0, 8) : '--:--:--'; },
+
+    /** Local time, ISO-shaped (`sv` renders `2026-07-28 05:17:00`) — sortable, and the same clock
+     *  the log lines use. No zone marker: everything on this page is the viewer's local time. */
     stamp(ms) { return ms ? new Date(ms).toLocaleString('sv') : '—'; },
+
+    took(j) {
+      if (!j || !j.startedAt) return '—';
+      const end = j.endedAt || Date.now();
+      const s = Math.max(0, Math.round((end - j.startedAt) / 1000));
+      const text = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+      return j.endedAt ? text : `${text}…`;
+    },
   },
 }).mount('#app');
 </script>
