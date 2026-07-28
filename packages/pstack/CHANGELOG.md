@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.0 — 2026-07-29
+
+### Added
+
+- **Named specs.** Store a spec once (`PUT /api/specs/:name`) and reference it from many
+  deployments with `{ specName, vars }`. Previously every deployment carried its own
+  byte-identical copy, so fixing a teardown hook meant re-submitting it per PR. `requiredVars` is
+  detected at store time, so a deployment missing one is rejected up front naming all of them, and
+  deleting a spec that deployments still reference returns 409 — an unresolvable deployment could
+  never be torn down.
+- **Variables are stored with a deployment.** They used to travel as `?query` params on every call,
+  so `up` with `PR=7` and a later `down` with `PR=8` tore down a *different stack* and orphaned the
+  first. `down` now resolves the same stack `up` created with nothing passed. Precedence is
+  process env < stored vars < request vars.
+- **`pstack cloud-init`** — asks for what a host needs and prints a ready-to-boot cloud-config.
+  Flags first, prompts second, `-y` for scripts. Refuses a malformed SSH key (a booted host you
+  cannot log into is the one mistake with no cheap recovery) and escapes every dot in the domain
+  for the fallback router's regexp.
+- **`pstack build-image --ui`** — builds the advanced UI image from the installed
+  `@samyx/preview-stacks-ui` package. No checkout, no registry, same trick as the control image.
+- **`pstack init --ui advanced`** — adds the SPA container to the control stack and repoints
+  `control.<domain>` at it. The default adds no container at all, and the API keeps serving the
+  basic UI on `api.<domain>` either way, so a broken advanced image degrades to a working
+  interface rather than none.
+- **Read-only control-stack view** (`GET /api/control`), **per-deployment logs**
+  (`GET /api/deployments/:id/logs`), and declared variables with **server-side redaction** —
+  secret-looking values are masked before the response leaves the host, so there is nothing for a
+  UI to reveal.
+
+### Changed
+
+- The repository is a Turborepo workspace: `packages/pstack` (this package) and `apps/ui`.
+- The web UI grew from one action panel to five views; the advanced SPA ships separately as
+  `@samyx/preview-stacks-ui`.
+
+### Notes
+
+Both packages are versioned in lockstep. `@samyx/preview-stacks-ui@0.2.0` is its first release.
+
+
 ## 0.1.1 — 2026-07-28
 
 ### Fixed
