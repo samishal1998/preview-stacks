@@ -5,6 +5,8 @@ import { down, up, verify } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
 import { init } from '../src/init.ts';
 import { buildImage } from '../src/image.ts';
+import { SpecStore, findRequiredVars } from '../src/specs.ts';
+import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { shq } from '../src/compose.ts';
 
@@ -534,5 +536,88 @@ describe('build-image — the global install must not be a dead end', () => {
     const r = okRunner();
     await buildImage({ tag: 'pstack:test', runner: r, dryRun: true, distDir: await fakeDist() });
     expect(r.log).toEqual([]);
+  });
+});
+
+describe('named specs — store once, reference many', () => {
+  const tmp = () => `${process.env.TMPDIR ?? '/tmp'}/pstack-specs-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+  const SPEC = [
+    'version: 1',
+    'kind: isolated',
+    'stack: pr-${PR}',
+    'env:',
+    '  TAG: ${GIT_SHA}',
+    'axes:',
+    '  - name: db',
+    '    up: "true"',
+    '    assert_gone: "true"',
+    '',
+  ].join('\n');
+
+  test('reports the variables a caller must supply', () => {
+    // Surfaced up front so a list view can say "this needs PR and GIT_SHA", instead of the caller
+    // discovering them one 400 at a time.
+    expect(findRequiredVars(SPEC)).toEqual(['GIT_SHA', 'PR']);
+  });
+
+  test('required vars are NOT satisfied by the server\'s own environment', () => {
+    // Otherwise a spec would validate on a box where PR happens to be exported and fail on one
+    // where it is not — a works-on-my-box that only appears in production.
+    process.env.PSTACK_TEST_LEAKY = 'set';
+    try {
+      expect(findRequiredVars('version: 1\nstack: s-${PSTACK_TEST_LEAKY}\naxes: []')).toEqual([
+        'PSTACK_TEST_LEAKY',
+      ]);
+    } finally {
+      delete process.env.PSTACK_TEST_LEAKY;
+    }
+  });
+
+  test('stores and reads back a spec with its kind', async () => {
+    const store = new SpecStore(tmp());
+    const stored = await store.put('web', SPEC, { description: 'the web app' });
+    expect(stored.kind).toBe('isolated');
+    expect(stored.requiredVars).toEqual(['GIT_SHA', 'PR']);
+    expect((await store.list()).map((s) => s.name)).toEqual(['web']);
+    expect(await store.source('web')).toBe(SPEC);
+  });
+
+  test('a malformed spec is rejected and nothing is written', async () => {
+    const dir = tmp();
+    const store = new SpecStore(dir);
+    await expect(store.put('bad', 'axes: [oops')).rejects.toThrow(/spec rejected/);
+    expect(await store.get('bad')).toBeNull();
+  });
+
+  test('rejects a name that could escape the store directory', async () => {
+    const store = new SpecStore(tmp());
+    await expect(store.put('../etc', SPEC)).rejects.toThrow(/invalid spec name/);
+  });
+});
+
+describe('deployment variables are stored, not re-passed', () => {
+  test('resolve uses stored vars, and request vars still win', async () => {
+    // The footgun this closes: variables used to travel as query params, so `up` with PR=7 and a
+    // later `down` with PR=8 tore down a DIFFERENT stack and orphaned the first.
+    const dir = `${process.env.TMPDIR ?? '/tmp'}/pstack-reg-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    const reg = new Registry(dir);
+    await reg.put('pr-7', 'version: 1\nstack: pr-${PR}\naxes: []', { vars: { PR: '7' } });
+
+    const stored = await reg.resolve('pr-7');            // no variables supplied at all
+    expect(stored.stack).toBe('pr-7');
+
+    const overridden = await reg.resolve('pr-7', { PR: '9' });
+    expect(overridden.stack).toBe('pr-9');
+  });
+
+  test('a redeploy supplying one variable does not drop the others', async () => {
+    const dir = `${process.env.TMPDIR ?? '/tmp'}/pstack-reg2-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    const reg = new Registry(dir);
+    const spec = 'version: 1\nstack: pr-${PR}\nenv:\n  R: ${REGION}\naxes: []';
+    await reg.put('d', spec, { vars: { PR: '7', REGION: 'eu' } });
+    await reg.put('d', spec, { vars: { PR: '8' } });      // only PR this time
+    const s = await reg.resolve('d');
+    expect(s.stack).toBe('pr-8');
+    expect(s.env.R).toBe('eu');                            // REGION survived
   });
 });

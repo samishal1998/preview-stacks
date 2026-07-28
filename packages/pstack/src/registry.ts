@@ -27,6 +27,23 @@ export type DeploymentMeta = {
   kind: Kind;
   createdAt: number;
   updatedAt: number;
+  /**
+   * The named spec this deployment uses, when it references one instead of carrying its own copy.
+   * Undefined for an inline deployment.
+   */
+  specName?: string;
+  /**
+   * Variables STORED with the deployment.
+   *
+   * This is the fix for a genuine footgun: variables used to travel as `?query` params on every
+   * call, so `up` with `PR=7` and a later `down` with `PR=8` (or none) tore down a DIFFERENT stack
+   * and orphaned the first — the exact leak class this project exists to prevent. Storing them
+   * makes the deployment self-describing: `down` resolves the same stack `up` created, always.
+   *
+   * Request-time variables still override these, so a one-off can still be forced, but nothing
+   * REQUIRES the caller to remember.
+   */
+  vars?: Record<string, string>;
 };
 
 export type Deployment = DeploymentMeta & {
@@ -99,9 +116,21 @@ export class Registry {
   async put(
     id: string,
     specYaml: string,
-    opts: { composeYaml?: string; env?: Record<string, string | undefined> } = {},
+    opts: {
+      composeYaml?: string;
+      env?: Record<string, string | undefined>;
+      /** Recorded so `down` resolves the same stack `up` created. See DeploymentMeta.vars. */
+      vars?: Record<string, string>;
+      /** Set when this deployment references a named spec rather than owning its copy. */
+      specName?: string;
+    } = {},
   ): Promise<Deployment> {
     const dir = this.#dir(id);
+    // Read the existing record FIRST: validation below must see the merged variable set, or a
+    // redeploy that supplies only `PR` fails on the `REGION` it was already created with — the
+    // merge that preserves it happens further down, too late to help.
+    const prev = await this.#readMeta(id).catch(() => null);
+    const mergedVars = { ...(prev?.vars ?? {}), ...(opts.vars ?? {}) };
     await mkdir(dir, { recursive: true });
 
     const specPath = join(dir, 'spec.yml');
@@ -114,7 +143,9 @@ export class Registry {
     try {
       // Validate against the caller's variables; relative paths in the spec resolve from `dir`,
       // which is why compose.yml is written alongside it.
-      spec = await loadSpec(specPath, { ...process.env, ...opts.env });
+      // Same precedence as `resolve`: process env < stored vars < request env. Omitting `vars`
+      // here made `put` reject the exact variables it was about to store.
+      spec = await loadSpec(specPath, { ...process.env, ...mergedVars, ...opts.env });
     } catch (err) {
       // Roll back rather than leave an unusable deployment on disk.
       await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -122,12 +153,14 @@ export class Registry {
     }
 
     const now = Date.now();
-    const prev = await this.#readMeta(id).catch(() => null);
     const meta: DeploymentMeta = {
       id,
       kind: spec.kind,
       createdAt: prev?.createdAt ?? now,
       updatedAt: now,
+      specName: opts.specName ?? prev?.specName,
+      // Already merged above, so validation and storage agree on exactly one variable set.
+      vars: mergedVars,
     };
     await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
     return { ...meta, dir, specPath };
@@ -146,7 +179,10 @@ export class Registry {
   async resolve(id: string, env: Record<string, string | undefined> = {}): Promise<Stack> {
     const dep = await this.get(id);
     if (!dep) throw new RegistryError(`no such deployment: ${id}`);
-    return loadSpec(dep.specPath, { ...process.env, ...env });
+    // Precedence: process env < stored vars < request vars. Stored vars beat the ambient
+    // environment so a stray PR=… in the server's own environment cannot hijack a deployment;
+    // request vars still win so a one-off override is possible.
+    return loadSpec(dep.specPath, { ...process.env, ...(dep.vars ?? {}), ...env });
   }
 
   async #readMeta(id: string): Promise<DeploymentMeta> {

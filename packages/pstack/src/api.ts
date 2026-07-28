@@ -9,6 +9,10 @@
  *   POST   /api/deployments/:id/up        → 202 { job }
  *   POST   /api/deployments/:id/down      → 202 { job }   body: { verify?, force? }
  *   POST   /api/deployments/:id/verify    → 202 { job }
+ *   GET    /api/specs                     named specs (store once, reference from many deployments)
+ *   GET    /api/specs/:name               meta + source
+ *   PUT    /api/specs/:name               store/replace  { spec, compose?, description? }
+ *   DELETE /api/specs/:name               refused while a deployment still references it
  *   GET    /api/control                   READ-ONLY view of the control stack (never actionable)
  *   GET    /api/deployments/:id/logs      recent compose logs for a deployment (redacted)
  *   GET    /api/jobs                      recent job transcripts
@@ -61,6 +65,7 @@ import { composeLogs, shq } from './compose.ts';
 import { createRunner } from './exec.ts';
 import { JobRegistry } from './jobs.ts';
 import { Registry, RegistryError } from './registry.ts';
+import { SpecStore, SpecStoreError } from './specs.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -102,6 +107,7 @@ function coerceEnv(v: unknown): Record<string, string> | null {
 export function createServer(opts: ServerOptions) {
   const jobs = new JobRegistry();
   const registry = new Registry(opts.dataDir);
+  const specs = new SpecStore(opts.dataDir);
   /**
    * For host-level queries that belong to no particular deployment (docker inventory).
    *
@@ -241,13 +247,75 @@ export function createServer(opts: ServerOptions) {
           // PUT is the one route that does not require the deployment to exist yet.
           if (!action && req.method === 'PUT') {
             const body = (await req.json().catch(() => null)) as
-              | { spec?: unknown; compose?: unknown; env?: unknown }
+              | { spec?: unknown; specName?: unknown; vars?: unknown; compose?: unknown; env?: unknown }
               | null;
-            if (!body || typeof body.spec !== 'string' || !body.spec.trim()) {
-              return json({ error: 'body must be { spec: string, compose?: string, env?: object }' }, { status: 400 });
+            if (!body) return json({ error: 'body must be JSON' }, { status: 400 });
+
+            // Two shapes. `specName` points at a stored spec — the common case once you have more
+            // than one PR — and `spec` carries an inline copy for a genuine one-off.
+            const hasInline = typeof body.spec === 'string' && body.spec.trim() !== '';
+            const hasRef = typeof body.specName === 'string' && body.specName.trim() !== '';
+            if (hasInline && hasRef) {
+              return json(
+                { error: 'pass `spec` OR `specName`, not both — one deployment has one source of truth' },
+                { status: 400 },
+              );
             }
-            if (body.compose !== undefined && typeof body.compose !== 'string') {
-              return json({ error: '`compose` must be a string: the compose file contents' }, { status: 400 });
+            if (!hasInline && !hasRef) {
+              return json(
+                {
+                  error:
+                    'body must be { specName: string, vars?: object } to reference a stored spec, ' +
+                    'or { spec: string, compose?: string, env?: object } for an inline one',
+                },
+                { status: 400 },
+              );
+            }
+
+            // `vars` are STORED with the deployment, unlike `env` which only validates an inline
+            // submission. That is the point: a later `down` then resolves the same stack `up`
+            // created without the caller having to remember the variables.
+            const vars = coerceEnv(body.vars);
+            if (!vars) return json({ error: '`vars` must be a mapping of NAME to a string value' }, { status: 400 });
+
+            let specSource: string;
+            let composeSource: string | undefined;
+            let specName: string | undefined;
+            if (hasRef) {
+              specName = (body.specName as string).trim();
+              let stored;
+              try {
+                stored = await specs.get(specName);
+              } catch (err) {
+                if (err instanceof SpecStoreError) return json({ error: err.message }, { status: 400 });
+                throw err;
+              }
+              if (!stored) return json({ error: `no such spec: ${specName}` }, { status: 404 });
+              specSource = await specs.source(specName);
+              // Copy the spec's compose file alongside, so the deployment directory is
+              // self-contained — compose runs with the deployment dir as cwd.
+              const c = Bun.file(`${stored.dir}/compose.yml`);
+              if (await c.exists()) composeSource = await c.text();
+              // Name every variable the spec needs but was not given, instead of failing later
+              // with a parse error that names only the first one.
+              const missing = stored.requiredVars.filter(
+                (v) => vars[v] === undefined && process.env[v] === undefined,
+              );
+              if (missing.length > 0) {
+                return json(
+                  {
+                    error: `spec "${specName}" needs variable(s) not supplied: ${missing.join(', ')}`,
+                    requiredVars: stored.requiredVars,
+                  },
+                  { status: 400 },
+                );
+              }
+            } else {
+              specSource = body.spec as string;
+              if (body.compose !== undefined && typeof body.compose !== 'string') {
+                return json({ error: '`compose` must be a string: the compose file contents' }, { status: 400 });
+              }
+              composeSource = typeof body.compose === 'string' ? body.compose : undefined;
             }
             const env = coerceEnv(body.env);
             if (!env) return json({ error: '`env` must be a mapping of NAME to a string value' }, { status: 400 });
@@ -260,7 +328,7 @@ export function createServer(opts: ServerOptions) {
             // errors are caught here, with the raw SpecError text rather than a wrapped one.
             let parsed: Stack;
             try {
-              parsed = parseSpec(body.spec, { ...process.env, ...env });
+              parsed = parseSpec(specSource, { ...process.env, ...vars, ...env });
             } catch (err) {
               if (err instanceof SpecError) return json({ error: `spec: ${err.message}` }, { status: 400 });
               throw err;
@@ -276,11 +344,13 @@ export function createServer(opts: ServerOptions) {
             }
 
             const existed = (await registry.get(id)) !== null;
-            const dep = await registry.put(id, body.spec, { composeYaml: body.compose, env });
-            // `env` was used to validate, not stored: the registry keeps the spec, not the
-            // variables. Whoever calls up/down later must pass the same ones as ?query params.
+            const dep = await registry.put(id, specSource, { composeYaml: composeSource, env, vars, specName });
+            // `vars` ARE stored (unlike `env`, which only validated this submission), so up/down
+            // need no query params — and a later `down` cannot target a different stack by
+            // forgetting one.
             return json(
-              { id: dep.id, kind: dep.kind, stack: parsed.stack, createdAt: dep.createdAt, updatedAt: dep.updatedAt },
+              { id: dep.id, kind: dep.kind, stack: parsed.stack, specName: dep.specName ?? null,
+                vars: dep.vars ?? {}, createdAt: dep.createdAt, updatedAt: dep.updatedAt },
               { status: existed ? 200 : 201 },
             );
           }
@@ -403,6 +473,74 @@ export function createServer(opts: ServerOptions) {
             );
           }
           return json({ job: { id: job.id, stack: job.stack, action: job.action, state: job.state } }, { status: 202 });
+        }
+
+        // ---- named specs ----------------------------------------------------------------
+        // Store a spec once and point many deployments at it. Before this every deployment carried
+        // its own byte-identical copy, so fixing a teardown hook meant re-submitting it per PR.
+        if (path === '/api/specs' && req.method === 'GET') {
+          return json({ specs: await specs.list() });
+        }
+
+        const sm = /^\/api\/specs\/([^/]+)$/.exec(path);
+        if (sm) {
+          const name = decodeURIComponent(sm[1]!);
+
+          if (req.method === 'PUT') {
+            const body = (await req.json().catch(() => null)) as
+              | { spec?: unknown; compose?: unknown; description?: unknown }
+              | null;
+            if (!body || typeof body.spec !== 'string' || !body.spec.trim()) {
+              return json(
+                { error: 'body must be { spec: string, compose?: string, description?: string }' },
+                { status: 400 },
+              );
+            }
+            if (body.compose !== undefined && typeof body.compose !== 'string') {
+              return json({ error: '`compose` must be a string: the compose file contents' }, { status: 400 });
+            }
+            const existed = (await specs.get(name)) !== null;
+            const stored = await specs.put(name, body.spec, {
+              composeYaml: typeof body.compose === 'string' ? body.compose : undefined,
+              description: typeof body.description === 'string' ? body.description : undefined,
+            });
+            return json({ spec: { ...stored, dir: undefined, specPath: undefined } }, { status: existed ? 200 : 201 });
+          }
+
+          const stored = await specs.get(name);
+          if (!stored) return json({ error: `no such spec: ${name}` }, { status: 404 });
+
+          if (req.method === 'GET') {
+            return json({
+              ...stored,
+              dir: undefined,
+              specPath: undefined,
+              source: await specs.source(name),
+            });
+          }
+
+          if (req.method === 'DELETE') {
+            // Fail closed. A deployment referencing a deleted spec could never be resolved, and a
+            // deployment that cannot be resolved can never be torn down — its containers would
+            // outlive every record of how to remove them.
+            const users = (await registry.list()).filter((d) => d.specName === name);
+            if (users.length > 0) {
+              return json(
+                {
+                  error:
+                    `spec "${name}" is referenced by ${users.length} deployment(s) — deleting it ` +
+                    `would leave them unresolvable, and an unresolvable deployment can never be ` +
+                    `torn down. Remove them first.`,
+                  deployments: users.map((d) => d.id),
+                },
+                { status: 409 },
+              );
+            }
+            await specs.remove(name);
+            return json({ deleted: name });
+          }
+
+          return json({ error: 'use GET, PUT or DELETE' }, { status: 405 });
         }
 
         // ---- the control stack: READ ONLY ------------------------------------------------

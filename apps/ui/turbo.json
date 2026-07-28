@@ -1,0 +1,17 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "//": "The root task's `inputs` list is written for packages/pstack (src, ui, templates, scripts). A Vite app also builds from index.html, vite.config.ts and the tsconfig trio — leave them out and turbo serves a stale cached dist/ after you edit one.",
+      "inputs": ["src/**", "index.html", "vite.config.ts", "tsconfig*.json", "package.json"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "inputs": ["src/**", "vite.config.ts", "tsconfig*.json", "package.json"]
+    }
+  }
+}

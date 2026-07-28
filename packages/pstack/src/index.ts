@@ -29,6 +29,9 @@ export type { Outcome, StepResult } from './stack.ts';
 
 export { composeUp, composeDown, composePs, composeLogs, shq } from './compose.ts';
 
+export { SpecStore, SpecStoreError, assertValidSpecName, findRequiredVars } from './specs.ts';
+export type { SpecMeta, StoredSpec } from './specs.ts';
+
 export { JobRegistry } from './jobs.ts';
 export type { Job, JobAction, JobState } from './jobs.ts';
 
