@@ -97,6 +97,15 @@ export type BuildImageOptions = {
   tag: string;
   runner: Runner;
   dryRun: boolean;
+  /**
+   * Override the directory copied into the build context. Defaults to this process's own `dist/`.
+   *
+   * Exists so the logic here — context assembly, the docker invocation, cleanup — can be tested
+   * without a build artefact present. A unit test that first requires `bun scripts/build.ts` is
+   * order-dependent on a step it does not own, which is exactly how this arrived in CI green
+   * locally and red on a clean checkout.
+   */
+  distDir?: string;
 };
 
 /**
@@ -109,7 +118,7 @@ export type BuildImageOptions = {
  */
 export async function buildImage(opts: BuildImageOptions): Promise<void> {
   const { tag, runner, dryRun } = opts;
-  const dist = await findDist();
+  const dist = opts.distDir ?? (await findDist());
 
   if (dryRun) {
     console.log(`  [dry-run] assemble build context from ${dist}`);

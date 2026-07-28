@@ -490,9 +490,20 @@ describe('build-image — the global install must not be a dead end', () => {
     };
   };
 
+  /**
+   * A stand-in for an installed `dist/`. The real one only exists after `bun scripts/build.ts`, and
+   * a test that depends on a build step it does not run is order-dependent — which is how this
+   * suite passed locally (stale dist present) and failed on a clean CI checkout.
+   */
+  const fakeDist = async (): Promise<string> => {
+    const dir = `${process.env.TMPDIR ?? '/tmp'}/pstack-fakedist-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    await Bun.write(`${dir}/cli.js`, '#!/usr/bin/env bun\nconsole.log("stub");\n');
+    return dir;
+  };
+
   test('builds the configured tag and cleans up its context', async () => {
     const r = okRunner();
-    await buildImage({ tag: 'pstack:test', runner: r, dryRun: false });
+    await buildImage({ tag: 'pstack:test', runner: r, dryRun: false, distDir: await fakeDist() });
     const cmd = r.log.find((c) => c.startsWith('docker build'));
     expect(cmd).toBeDefined();
     expect(cmd).toContain('"pstack:test"');
@@ -514,14 +525,14 @@ describe('build-image — the global install must not be a dead end', () => {
         return { ok: false, code: 1, stdout: '', stderr: 'no space left on device', skipped: false };
       },
     };
-    await expect(buildImage({ tag: 'pstack:test', runner: failing, dryRun: false })).rejects.toThrow(
-      /no space left on device/,
-    );
+    await expect(
+      buildImage({ tag: 'pstack:test', runner: failing, dryRun: false, distDir: await fakeDist() }),
+    ).rejects.toThrow(/no space left on device/);
   });
 
   test('dry-run executes nothing', async () => {
     const r = okRunner();
-    await buildImage({ tag: 'pstack:test', runner: r, dryRun: true });
+    await buildImage({ tag: 'pstack:test', runner: r, dryRun: true, distDir: await fakeDist() });
     expect(r.log).toEqual([]);
   });
 });
