@@ -4,6 +4,7 @@ import { captureOutputs, createRunner, type RunResult, type Runner } from '../sr
 import { down, up, verify } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
 import { init } from '../src/init.ts';
+import { buildImage } from '../src/image.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { shq } from '../src/compose.ts';
 
@@ -470,5 +471,57 @@ describe('redaction — what a browser may see', () => {
   test('redactText masks known secret values wherever they appear', () => {
     const r = redactText('token is supersecrettoken here', ['supersecrettoken']);
     expect(r).not.toContain('supersecrettoken');
+  });
+});
+
+describe('build-image — the global install must not be a dead end', () => {
+  // The bug this closes: the published package ships only `dist/`, so a globally-installed pstack
+  // had no Dockerfile to build the control image from and no registry to pull it from, while
+  // `init` refuses to run without it. The way out is that `dist/` IS the whole application.
+  const okRunner = (): Runner & { log: string[] } => {
+    const log: string[] = [];
+    return {
+      dryRun: false,
+      log,
+      async run(cmd: string) {
+        log.push(cmd);
+        return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+      },
+    };
+  };
+
+  test('builds the configured tag and cleans up its context', async () => {
+    const r = okRunner();
+    await buildImage({ tag: 'pstack:test', runner: r, dryRun: false });
+    const cmd = r.log.find((c) => c.startsWith('docker build'));
+    expect(cmd).toBeDefined();
+    expect(cmd).toContain('"pstack:test"');
+    // --pull, so a stale cached base image cannot silently pin an old Bun runtime.
+    expect(cmd).toContain('--pull');
+    // The context is a temp dir, never the install directory: an install may be read-only or
+    // shared, and writing a Dockerfile into it would mutate an installed dependency.
+    const ctx = /docker build --pull -t "[^"]+" "([^"]+)"/.exec(cmd!)?.[1];
+    expect(ctx).toBeDefined();
+    expect(ctx).toContain('pstack-image-');
+    // Removed even on success — a build context left in /tmp is litter nobody looks for.
+    expect(await Bun.file(`${ctx}/Dockerfile`).exists()).toBe(false);
+  });
+
+  test('a failed build surfaces docker output instead of a bare exit code', async () => {
+    const failing: Runner = {
+      dryRun: false,
+      async run() {
+        return { ok: false, code: 1, stdout: '', stderr: 'no space left on device', skipped: false };
+      },
+    };
+    await expect(buildImage({ tag: 'pstack:test', runner: failing, dryRun: false })).rejects.toThrow(
+      /no space left on device/,
+    );
+  });
+
+  test('dry-run executes nothing', async () => {
+    const r = okRunner();
+    await buildImage({ tag: 'pstack:test', runner: r, dryRun: true });
+    expect(r.log).toEqual([]);
   });
 });

@@ -11,8 +11,7 @@
 # ── WHAT YOU MUST CHANGE (only these) ────────────────────────────────────────────────────────
 #   1. ssh_authorized_keys           your public key
 #   2. ACME_EMAIL below              Let's Encrypt sends expiry warnings here
-#   3. the two `git clone` URLs      this repo, and (optionally) your own config repo
-#   4. CHANGEME_DASHBOARD_PASSWORD   Traefik dashboard basic-auth
+#   3. CHANGEME_DASHBOARD_PASSWORD   Traefik dashboard basic-auth
 # Everything else is already set for preview.hou-clou.dev.
 #
 # ── DNS, BEFORE YOU BOOT ─────────────────────────────────────────────────────────────────────
@@ -137,25 +136,17 @@ runcmd:
   - BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash'
   - /usr/local/bin/bun --version
 
-  # ── 3. pstack, built from a checkout ──────────────────────────────────────────────────────
-  # Build-on-box rather than `bun add -g @samyx/preview-stacks`: the same checkout supplies the
-  # Dockerfile for the control image in step 4, so the image always matches the CLI on this host
-  # and nothing has to be published or pulled.
-  - git clone --depth 1 https://github.com/samishal1998/preview-stacks.git /opt/preview/pstack
-  - cd /opt/preview/pstack && /usr/local/bin/bun install --frozen-lockfile
-  - cd /opt/preview/pstack && /usr/local/bin/bun scripts/build.ts
-  # A symlink, NOT `bun link`: `bun link` registers the package for another project to depend on
-  # but installs no bin shim, so `pstack` would stay unknown to the shell. The bundle carries its
-  # own `#!/usr/bin/env bun` shebang and exec bit, so a symlink is enough — and because it points
-  # INTO the checkout, `git pull && bun scripts/build.ts` later upgrades the CLI in place.
-  - ln -sf /opt/preview/pstack/dist/cli.js /usr/local/bin/pstack
+  # ── 3. pstack, from npm ───────────────────────────────────────────────────────────────────
+  # The CLI is a ~74 KB bundle with no runtime dependencies, so this is a few seconds.
+  - BUN_INSTALL=/usr/local /usr/local/bin/bun install -g @samyx/preview-stacks
   - /usr/local/bin/pstack --help > /dev/null
 
   # ── 4. The control image ──────────────────────────────────────────────────────────────────
-  # `pstack init` requires this image to exist locally and deliberately does NOT pull, so build it.
-  # The tag `pstack:local` is PSTACK_IMAGE's default, which is why the init call below passes no
-  # PSTACK_IMAGE at all. Costs ~1–2 min.
-  - cd /opt/preview/pstack && docker build -t pstack:local .
+  # `pstack init` requires this image to exist locally and deliberately does NOT pull. `build-image`
+  # builds it FROM THE INSTALLED PACKAGE — the published bundle is the whole application, so no
+  # source checkout and no registry are involved. Tags it `pstack:local`, which is PSTACK_IMAGE's
+  # default, which is why the init call below passes no PSTACK_IMAGE. Costs ~1–2 min.
+  - /usr/local/bin/pstack build-image
 
   # ── 5. Traefik dashboard credentials ──────────────────────────────────────────────────────
   # Kept OUT of the watched dynamic directory: the file provider would try to parse an htpasswd

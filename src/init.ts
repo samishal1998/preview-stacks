@@ -162,7 +162,12 @@ export async function init(opts: InitOptions): Promise<void> {
     {
       name: 'control image',
       assert: `docker image inspect ${shq(image)} >/dev/null 2>&1`,
-      hint: `image ${image} not found — build it from the pstack checkout: docker build -t ${image} .`,
+      // Point at the command that needs nothing but this install. Telling an operator to clone
+      // the source is what made a global install a dead end in the first place.
+      hint:
+        `image ${image} not found — build it from this install: \`pstack build-image\`` +
+        `${image === 'pstack:local' ? '' : ` --tag ${image}`}` +
+        ` (or pull it and pass PSTACK_IMAGE=<registry>/<image>)`,
     },
   ]) {
     const r = await runner.run(req.assert, { label: `requires ${req.name}` });

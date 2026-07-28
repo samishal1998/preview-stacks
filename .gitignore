@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 dist/
 *.tgz
+
+# Filled-in cloud-configs: they carry a real ACME email and a dashboard password. Commit the
+# `.tpl.yaml` template instead — a credential in git history cannot be un-committed.
+examples/cloud-init.*.yaml
+!examples/cloud-init.*.tpl.yaml

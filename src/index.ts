@@ -35,6 +35,9 @@ export type { Job, JobAction, JobState } from './jobs.ts';
 export { displayVar, displayDeclared, isSecretName, mask, redactText } from './redact.ts';
 export type { DisplayVar, Visibility } from './redact.ts';
 
+export { buildImage, DEFAULT_IMAGE_TAG } from './image.ts';
+export type { BuildImageOptions } from './image.ts';
+
 export { init, CONTROL_PROJECT } from './init.ts';
 export type { InitOptions } from './init.ts';
 

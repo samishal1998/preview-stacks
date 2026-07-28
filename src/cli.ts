@@ -7,6 +7,7 @@
  *   pstack verify    assert every axis is gone; non-zero exit if anything leaked
  *   pstack status    what is running for this stack
  *   pstack validate  parse the spec, resolve interpolation, report warnings
+ *   pstack build-image  build the control image from this installed package (no checkout needed)
  *   pstack init      stand up the CONTROL stack on this host (traefik + pstack api/ui)
  *   pstack serve     HTTP API + web UI over the deployment registry
  *
@@ -40,6 +41,7 @@ type Parsed = {
   acmeEmail: string;
   dnsProvider: string;
   challenge: 'http01' | 'dns01';
+  tag: string;
 };
 
 function parseArgs(argv: string[]): Parsed {
@@ -57,6 +59,8 @@ function parseArgs(argv: string[]): Parsed {
     // HTTP-01 by default: it needs no DNS credential, so `init` works with nothing but a domain
     // pointed at the box. See the ceiling documented on InitOptions.challenge before scaling PRs.
     challenge: (process.env.PSTACK_CHALLENGE as 'http01' | 'dns01') || 'http01',
+    // Matches init's PSTACK_IMAGE default, so `build-image` then `init` need no flags at all.
+    tag: process.env.PSTACK_IMAGE ?? 'pstack:local',
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -70,6 +74,7 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--domain') p.domain = argv[++i] ?? p.domain;
     else if (a === '--acme-email') p.acmeEmail = argv[++i] ?? p.acmeEmail;
     else if (a === '--dns-provider') p.dnsProvider = argv[++i] ?? p.dnsProvider;
+    else if (a === '--tag') p.tag = argv[++i] ?? p.tag;
     else if (a === '--challenge') {
       const c = argv[++i] ?? '';
       if (c !== 'http01' && c !== 'dns01') fail(`--challenge must be http01 or dns01, got "${c}"`);
@@ -95,7 +100,7 @@ function usage(): void {
     [
       'pstack — declarative lifecycle for ephemeral preview stacks',
       '',
-      'Usage: pstack <up|down|verify|status|validate|init|serve> [flags]',
+      'Usage: pstack <up|down|verify|status|validate|build-image|init|serve> [flags]',
       '',
       'Flags:',
       '  -f, --file <path>   spec file (default: preview.yml)',
@@ -106,6 +111,8 @@ function usage(): void {
       '      --no-verify     down: skip the post-teardown leak check',
       '      --force         down: allow tearing down a `kind: shared` deployment',
       '',
+      '',
+      'build-image: --tag <name:tag>               (default pstack:local, = PSTACK_IMAGE)',
       '',
       'init flags: --domain <preview.example.com>  --acme-email <you@example.com>',
       '            --challenge http01|dns01        (default http01 — no DNS credential needed)',
@@ -132,7 +139,7 @@ if (!args.cmd) {
 
 // `init` and `serve` are control-plane commands: they operate on the HOST and on the registry,
 // not on a single spec file, so neither should fail because ./preview.yml happens to be absent.
-const SPEC_FREE = new Set(['init', 'serve']);
+const SPEC_FREE = new Set(['init', 'serve', 'build-image']);
 
 let spec: Awaited<ReturnType<typeof loadSpec>> | undefined;
 if (!SPEC_FREE.has(args.cmd)) {
@@ -199,6 +206,16 @@ switch (args.cmd) {
     process.exit(EXIT.ok);
   }
 
+  case 'build-image': {
+    const { buildImage } = await import('./image.ts');
+    try {
+      await buildImage({ tag: args.tag, runner, dryRun: args.dryRun });
+    } catch (err) {
+      fail((err as Error).message);
+    }
+    process.exit(EXIT.ok);
+  }
+
   case 'init': {
     const { init } = await import('./init.ts');
     const { dataDir } = await import('./registry.ts');
@@ -251,5 +268,5 @@ switch (args.cmd) {
   }
 
   default:
-    fail(`unknown command "${args.cmd}" (try: up, down, verify, status, validate, init, serve)`);
+    fail(`unknown command "${args.cmd}" (try: up, down, verify, status, validate, build-image, init, serve)`);
 }
