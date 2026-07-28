@@ -1,0 +1,187 @@
+/*
+ * Design tokens: colour, type scale, spacing, motion.
+ *
+ * THEME. Dark is the default. The OS preference flips it, and a manual choice in Settings must beat
+ * the OS preference IN BOTH DIRECTIONS — a media query alone cannot do that, so the manual choice
+ * is stamped on <html data-theme> (in index.html, before first paint) and the attribute selectors
+ * below outrank the media query. The light token block is written twice on purpose; a "clever"
+ * single source would need a preprocessor this app does not have.
+ *
+ * MOTION. Every duration is a custom property so `prefers-reduced-motion` can zero all of them at
+ * once. That is not sufficient on its own — an `animation: … infinite` still runs — so the reduce
+ * block also hard-stops animations. Both are gated on `[data-motion]` so the Settings override
+ * works in both directions, exactly like the theme.
+ */
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0b0d10;
+  --bg-grad: radial-gradient(1200px 600px at 15% -10%, #141a24 0%, #0b0d10 60%);
+  --panel: #14171c;
+  --panel-2: #191d24;
+  --sunk: #090b0e;
+  --line: #252b34;
+  --line-soft: #1c212a;
+
+  --fg: #e7ebf1;
+  --fg-dim: #9aa4b2;
+  --fg-mute: #6d7683;
+
+  --accent: #5b9dff;
+  --accent-soft: rgba(91, 157, 255, 0.14);
+  --ok: #3fb950;
+  --ok-soft: rgba(63, 185, 80, 0.13);
+  --fail: #f85149;
+  --fail-soft: rgba(248, 81, 73, 0.13);
+  --leak: #e3922a;
+  --leak-soft: rgba(227, 146, 42, 0.14);
+  --neutral: #8b949e;
+  --neutral-soft: rgba(139, 148, 158, 0.13);
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
+  --skel: linear-gradient(90deg, #1a1e25 0%, #232833 50%, #1a1e25 100%);
+}
+
+/* The OS preference, only while no manual choice has been made. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --bg: #f6f7f9;
+    --bg-grad: radial-gradient(1200px 600px at 15% -10%, #ffffff 0%, #f6f7f9 60%);
+    --panel: #ffffff;
+    --panel-2: #f3f5f8;
+    --sunk: #f0f2f5;
+    --line: #dde1e7;
+    --line-soft: #e8ebef;
+
+    --fg: #1a1d22;
+    --fg-dim: #5a6472;
+    --fg-mute: #838d9a;
+
+    --accent: #1f6feb;
+    --accent-soft: rgba(31, 111, 235, 0.1);
+    --ok: #1a7f37;
+    --ok-soft: rgba(26, 127, 55, 0.1);
+    --fail: #cf222e;
+    --fail-soft: rgba(207, 34, 46, 0.1);
+    --leak: #9a6700;
+    --leak-soft: rgba(154, 103, 0, 0.12);
+    --neutral: #656d76;
+    --neutral-soft: rgba(101, 109, 118, 0.1);
+
+    --shadow: 0 1px 2px rgba(16, 22, 35, 0.06), 0 8px 24px rgba(16, 22, 35, 0.08);
+    --skel: linear-gradient(90deg, #eceff3 0%, #f7f9fb 50%, #eceff3 100%);
+  }
+}
+
+/* The manual choice. Must beat the media query above, in both directions. */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --bg-grad: radial-gradient(1200px 600px at 15% -10%, #ffffff 0%, #f6f7f9 60%);
+  --panel: #ffffff;
+  --panel-2: #f3f5f8;
+  --sunk: #f0f2f5;
+  --line: #dde1e7;
+  --line-soft: #e8ebef;
+
+  --fg: #1a1d22;
+  --fg-dim: #5a6472;
+  --fg-mute: #838d9a;
+
+  --accent: #1f6feb;
+  --accent-soft: rgba(31, 111, 235, 0.1);
+  --ok: #1a7f37;
+  --ok-soft: rgba(26, 127, 55, 0.1);
+  --fail: #cf222e;
+  --fail-soft: rgba(207, 34, 46, 0.1);
+  --leak: #9a6700;
+  --leak-soft: rgba(154, 103, 0, 0.12);
+  --neutral: #656d76;
+  --neutral-soft: rgba(101, 109, 118, 0.1);
+
+  --shadow: 0 1px 2px rgba(16, 22, 35, 0.06), 0 8px 24px rgba(16, 22, 35, 0.08);
+  --skel: linear-gradient(90deg, #eceff3 0%, #f7f9fb 50%, #eceff3 100%);
+}
+
+:root {
+  /* Type scale — a real one, 1.2-ish, so hierarchy comes from size and not only from weight. */
+  --t-xs: 11px;
+  --t-sm: 12.5px;
+  --t-md: 14px;
+  --t-lg: 16px;
+  --t-xl: 20px;
+  --t-2xl: 26px;
+  --t-3xl: 34px;
+
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Spacing — a 4px grid, named so a component never invents an 11px gap. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --r1: 6px;
+  --r2: 10px;
+  --r3: 14px;
+
+  --rail: 208px;
+
+  /* Motion. Zeroed wholesale below when motion is reduced. */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 280ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  /* Per-item delay for a staggered list. Zeroed too, so a long list appears at once. */
+  --stagger-step: 28ms;
+}
+
+/*
+ * REDUCED MOTION IS NOT OPTIONAL.
+ *
+ * Zeroing the duration tokens is not enough by itself: an `animation … infinite` (the running-job
+ * pulse) would still loop, and a transition set in a component with a literal duration would still
+ * run. So this also hard-caps every animation and transition on the page. The result is that each
+ * animated state change becomes an instant one — the state still changes, it just does not travel.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+    --stagger-step: 0ms;
+  }
+  :root:not([data-motion='full']) *,
+  :root:not([data-motion='full']) *::before,
+  :root:not([data-motion='full']) *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The manual override, which must win over the OS in both directions. */
+:root[data-motion='none'] {
+  --dur-fast: 0ms;
+  --dur: 0ms;
+  --dur-slow: 0ms;
+  --stagger-step: 0ms;
+}
+:root[data-motion='none'] *,
+:root[data-motion='none'] *::before,
+:root[data-motion='none'] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}

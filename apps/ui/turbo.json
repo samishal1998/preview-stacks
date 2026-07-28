@@ -1,17 +1,40 @@
+// Overrides the root pipeline for this Vite app.
+//
+// The root task's `inputs` are written for packages/pstack (src, ui, templates, scripts). A Vite
+// app also builds from index.html, vite.config.ts and the tsconfig trio — leave those out and turbo
+// serves a stale cached dist/ after you edit one, which looks like the build silently not running.
 {
   "$schema": "https://turborepo.com/schema.json",
-  "extends": ["//"],
+  "extends": [
+    "//"
+  ],
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"],
-      "//": "The root task's `inputs` list is written for packages/pstack (src, ui, templates, scripts). A Vite app also builds from index.html, vite.config.ts and the tsconfig trio — leave them out and turbo serves a stale cached dist/ after you edit one.",
-      "inputs": ["src/**", "index.html", "vite.config.ts", "tsconfig*.json", "package.json"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ],
+      "inputs": [
+        "src/**",
+        "index.html",
+        "vite.config.ts",
+        "tsconfig*.json",
+        "package.json"
+      ]
     },
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "outputs": [],
-      "inputs": ["src/**", "vite.config.ts", "tsconfig*.json", "package.json"]
+      "inputs": [
+        "src/**",
+        "vite.config.ts",
+        "tsconfig*.json",
+        "package.json"
+      ]
     }
   }
 }

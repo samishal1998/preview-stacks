@@ -1,0 +1,313 @@
+<script setup lang="ts">
+/**
+ * Submit or replace a deployment.
+ *
+ * The server's 400 is the whole point of this screen. It carries the SpecError verbatim — the key
+ * or variable that is wrong, often the corrected form, and the assert-lint warnings about an
+ * `assert_gone` that fails open. That text is the tool's main teaching surface, so it is rendered
+ * whole, with newlines intact, and never summarised.
+ *
+ * The spec is parsed BEFORE anything touches disk, so a rejected submission leaves nothing behind
+ * and, on a replace, a good record is never destroyed over a typo.
+ */
+import { computed, ref, watch } from 'vue';
+import { api, problem } from '../api/client';
+import type { SpecMeta, SpecsResponse, SubmitResponse, VarPair } from '../api/types';
+import { loadDeployments, rowFor } from '../composables/useControlPlane';
+import { pairsFromRecord, readVars, recordFromPairs, writeVars } from '../composables/useVars';
+import { toast } from '../composables/useToasts';
+import ActionButton from '../components/ActionButton.vue';
+import ErrorNote from '../components/ErrorNote.vue';
+import VarEditor from '../components/VarEditor.vue';
+
+const props = defineProps<{ id?: string }>();
+
+const form = ref({ id: props.id ?? '', spec: '', compose: '' });
+const vars = ref<VarPair[]>([{ k: '', v: '' }]);
+const source = ref<'inline' | 'stored'>('inline');
+const specName = ref('');
+
+const submitting = ref(false);
+const error = ref('');
+const result = ref<{ id: string; stack: string; created: boolean } | null>(null);
+
+/**
+ * Stored specs, when this server has them. A build without `/api/specs` answers 404, which is not
+ * an error here — the picker simply is not offered and inline stays the only shape.
+ */
+const specs = ref<SpecMeta[]>([]);
+void api.get<SpecsResponse>('/api/specs').then((r) => {
+  if (r.ok && Array.isArray(r.body.specs)) specs.value = r.body.specs;
+});
+
+const chosenSpec = computed(() => specs.value.find((s) => s.name === specName.value));
+
+const replacing = computed(() => !!props.id);
+
+/**
+ * Arriving to replace a DIFFERENT deployment must not carry the previous one's body across. There
+ * is no route that returns a stored spec, so this form can never pre-fill the body — and a
+ * leftover body is the dangerous case: it is perfectly valid YAML, so the PUT would succeed and
+ * replace the wrong deployment's spec with nothing on the server able to catch it.
+ */
+watch(
+  () => props.id,
+  (id) => {
+    error.value = '';
+    result.value = null;
+    if (!id) return;
+    if (id !== form.value.id) {
+      form.value.spec = '';
+      form.value.compose = '';
+    }
+    form.value.id = id;
+    // Seed the variables from what this deployment already uses: replacing a spec usually needs
+    // the same ones that resolved it.
+    const stored = rowFor(id)?.vars;
+    const saved = stored ? pairsFromRecord(stored) : readVars(id);
+    if (saved.some((e) => e.k)) vars.value = saved;
+  },
+  { immediate: true },
+);
+
+const canSubmit = computed(
+  () =>
+    !!form.value.id &&
+    (source.value === 'stored' ? !!specName.value : !!form.value.spec.trim()) &&
+    !submitting.value,
+);
+
+async function submit(): Promise<void> {
+  submitting.value = true;
+  error.value = '';
+  result.value = null;
+
+  const id = form.value.id;
+  const record = recordFromPairs(vars.value);
+  /**
+   * `vars` are STORED with the deployment on servers that support it, which makes a later `down`
+   * resolve the same stack `up` created with no query parameters at all. `env` validates this
+   * submission on every server, new or old. Sending both is what keeps this form working against
+   * either build — an older server ignores the key it does not know.
+   */
+  const body: Record<string, unknown> = { vars: record, env: record };
+  if (source.value === 'stored') body.specName = specName.value;
+  else {
+    body.spec = form.value.spec;
+    if (form.value.compose.trim()) body.compose = form.value.compose;
+  }
+
+  const r = await api.put<SubmitResponse>(`/api/deployments/${encodeURIComponent(id)}`, body);
+  submitting.value = false;
+
+  if (r.status === 200 || r.status === 201) {
+    result.value = { id: r.body.id ?? id, stack: r.body.stack ?? '?', created: r.status === 201 };
+    // Persist the variables that just validated this spec. On an older server this is the single
+    // thing keeping a later `down` pointed at the stack the `up` created.
+    writeVars(id, vars.value);
+    void loadDeployments();
+    toast('ok', `${r.status === 201 ? 'Created' : 'Replaced'} ${id} → ${result.value.stack}`, {
+      to: `/deployments/${encodeURIComponent(id)}`,
+      toLabel: 'Open',
+    });
+    return;
+  }
+  // 400 (SpecError), 409 (a job in flight over this stack), 401, 404 — all rendered verbatim.
+  error.value = problem(r, `PUT /api/deployments/${id}`);
+}
+
+const EXAMPLE_SPEC = `version: 1
+kind: isolated
+
+# The stack identity: the compose project name, and $STACK inside every hook.
+# \${PR} is interpolated ONCE, at resolve time, from the variables sent with the request.
+stack: pr-\${PR}
+
+env:
+  PREVIEW_DOMAIN: preview.example.com
+
+compose:
+  file: compose.yml
+  # Every service sits behind a profile so a bare \`up\` starts nothing.
+  # \`down\` always enables ALL of them — otherwise the unselected profiles' network leaks.
+  profiles: [app]
+
+requires:
+  - name: traefik-network
+    assert: docker network inspect traefik >/dev/null 2>&1
+    hint: run \`pstack init\` on the host first
+
+axes:
+  # Hooks run from the deployment directory, which holds only spec.yml and compose.yml —
+  # so use inline shell or absolute paths, never ./hooks/foo.sh.
+  - name: scratch
+    up: mkdir -p /tmp/$STACK
+    assert_live: test -d /tmp/$STACK
+    down: rm -rf /tmp/$STACK
+    # assert_gone MUST FAIL CLOSED. A bare \`! <probe>\` reports "gone" whenever the probe fails
+    # for any reason — a missing CLI, an expired token — turning "I could not tell" into
+    # "it is gone", a false negative on the one thing this tool exists to catch.
+    assert_gone: |
+      test -d /tmp || exit 1
+      ! test -d /tmp/$STACK
+`;
+
+const EXAMPLE_COMPOSE = `services:
+  app:
+    image: nginx:alpine
+    profiles: [app]
+    labels:
+      - traefik.enable=true
+`;
+
+function loadExample(): void {
+  source.value = 'inline';
+  form.value.spec = EXAMPLE_SPEC;
+  if (!form.value.compose.trim()) form.value.compose = EXAMPLE_COMPOSE;
+  if (!form.value.id) form.value.id = 'pr-123';
+  if (!vars.value.some((e) => e.k)) vars.value = [{ k: 'PR', v: '123' }];
+}
+</script>
+
+<template>
+  <div>
+    <div class="page-head">
+      <div>
+        <h1>{{ replacing ? 'Replace a deployment' : 'Submit a deployment' }}</h1>
+        <div class="sub"><code>PUT /api/deployments/:id</code></div>
+      </div>
+      <span class="grow" />
+      <button class="ghost" @click="loadExample">Load example spec</button>
+    </div>
+
+    <section class="panel">
+      <p class="dim" style="font-size: var(--t-sm)">
+        The spec is parsed <em>before</em> anything touches disk, so a rejected submission leaves
+        nothing behind — and on a replace, a good record is never destroyed over a typo.
+        <code>kind</code> is read from the spec, never from this form.
+      </p>
+
+      <!--
+        A `PUT` REPLACES the whole record, and this form cannot pre-fill it: the API has no route
+        that returns a stored spec. Say that out loud, because a half-remembered spec pasted here
+        is still valid YAML — the server will accept it, and the axes the original declared simply
+        stop existing as far as the control plane knows, while whatever they created keeps running.
+      -->
+      <div v-if="replacing" class="banner warn">
+        <b>Replacing <span class="mono">{{ id }}</span>.</b>
+        <p>
+          This form starts <em>empty</em>: the API has no route that hands back a stored spec, so
+          nothing here was loaded from disk. Paste the <b>complete</b> spec you want stored —
+          <code>PUT</code> replaces the record outright, and any axis you leave out stops being
+          tracked while whatever it created keeps running.
+        </p>
+      </div>
+
+      <div class="row" style="margin-bottom: var(--s4)">
+        <div class="field" style="max-width: 280px">
+          <label for="did">deployment id</label>
+          <input
+            id="did"
+            v-model.trim="form.id"
+            type="text"
+            placeholder="pr-123"
+            spellcheck="false"
+            autocomplete="off"
+          />
+        </div>
+        <span class="mono mute" style="align-self: end; padding-bottom: 8px">
+          [a-z0-9][a-z0-9._-]{0,63}
+        </span>
+      </div>
+
+      <!-- Offered only when this server actually has stored specs. -->
+      <div v-if="specs.length" class="row" style="margin-bottom: var(--s4)">
+        <label class="check">
+          <input v-model="source" type="radio" value="inline" /> inline spec
+        </label>
+        <label class="check">
+          <input v-model="source" type="radio" value="stored" /> reference a stored spec
+        </label>
+      </div>
+
+      <template v-if="source === 'stored' && specs.length">
+        <div class="field" style="max-width: 340px">
+          <label for="sn">stored spec</label>
+          <select id="sn" v-model="specName">
+            <option value="">— choose —</option>
+            <option v-for="s in specs" :key="s.name" :value="s.name">
+              {{ s.name }} ({{ s.kind }})
+            </option>
+          </select>
+        </div>
+        <p v-if="chosenSpec" class="hint">
+          <span v-if="chosenSpec.description">{{ chosenSpec.description }} — </span>
+          needs
+          <span v-if="chosenSpec.requiredVars.length" class="mono">
+            {{ chosenSpec.requiredVars.join(', ') }}
+          </span>
+          <span v-else>no variables</span>. A variable the spec needs and is not given is a 400 that
+          names it, never a stack every PR would collide on.
+        </p>
+      </template>
+
+      <template v-else>
+        <div class="field">
+          <label for="spec">spec.yml</label>
+          <textarea
+            id="spec"
+            v-model="form.spec"
+            rows="18"
+            spellcheck="false"
+            placeholder="version: 1&#10;kind: isolated&#10;stack: pr-${PR}&#10;axes: []"
+          />
+        </div>
+
+        <div class="field" style="margin-top: var(--s3)">
+          <label for="compose">compose.yml <span class="mute">(optional)</span></label>
+          <textarea
+            id="compose"
+            v-model="form.compose"
+            rows="8"
+            spellcheck="false"
+            placeholder="written next to spec.yml, so `compose: { file: compose.yml }` resolves"
+          />
+        </div>
+        <p class="hint">
+          Only <code>spec.yml</code> and <code>compose.yml</code> ever live in a deployment
+          directory, and hooks run from there — so a hook must be inline shell or an absolute path.
+          <code>up: ./hooks/db.sh</code> cannot work here.
+        </p>
+      </template>
+
+      <h2 class="section" style="margin: var(--s5) 0 var(--s3)">Variables</h2>
+      <VarEditor v-model="vars" />
+      <p class="hint">
+        These validate the spec now, and are stored with the deployment on a server that supports it
+        — which is what lets a later <code>down</code> resolve the same stack this <code>up</code>
+        creates. They are also saved in this browser, so the actions on the deployment page send the
+        same ones.
+      </p>
+
+      <div class="row" style="margin-top: var(--s5)">
+        <ActionButton variant="primary" :pending="submitting" :disabled="!canSubmit" @click="submit">
+          {{ submitting ? 'submitting…' : 'Submit' }}
+        </ActionButton>
+        <span v-if="result" class="s-ok">
+          {{ result.created ? 'created' : 'replaced' }} — stack
+          <b class="mono">{{ result.stack }}</b>
+          <RouterLink :to="`/deployments/${encodeURIComponent(result.id)}`" style="margin-left: 8px">
+            open →
+          </RouterLink>
+        </span>
+      </div>
+
+      <!--
+        The server's rejection text IS the documentation: it names the key, the variable or the
+        assert that is wrong, and often prints the corrected form. Rendered whole, newlines and
+        indentation intact. Never truncate it, never collapse it, never say "invalid spec".
+      -->
+      <ErrorNote v-if="error" :text="error" title="The server rejected this submission." />
+    </section>
+  </div>
+</template>

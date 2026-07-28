@@ -72,9 +72,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       /* handled by notJson below */
     }
     if (parsed === null && raw) {
-      return { status: res.status, ok: res.ok, body: {} as T, raw, notJson: true };
+      return { status: res.status, ok: res.ok, body: {} as T & { error?: string }, raw, notJson: true };
     }
-    return { status: res.status, ok: res.ok, body: (parsed ?? {}) as T, raw, notJson: false };
+    return { status: res.status, ok: res.ok, body: (parsed ?? {}) as T & { error?: string }, raw, notJson: false };
   } catch (e) {
     // The API being unreachable entirely — wrong base URL, container down, DNS. Status 0 so no
     // caller can mistake it for an answer the server gave.
