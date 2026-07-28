@@ -104,6 +104,19 @@ export type InitOptions = {
    * Start on http01; move to dns01 when PR volume or pre-deploy URLs demand it.
    */
   challenge: 'http01' | 'dns01';
+  /**
+   * Which web UI `control.<domain>` serves.
+   *
+   *   'basic'     DEFAULT. The UI embedded in the API bundle — no extra container, nothing else to
+   *               build or pull. Enough to submit a deployment and watch a job.
+   *   'advanced'  The standalone SPA (@samyx/preview-stacks-ui) as its OWN container, which the
+   *               control stack gains a service for. Richer, but one more image to build and keep
+   *               current, so it is opt-in rather than the default.
+   *
+   * Either way the API keeps serving the basic UI on `api.<domain>`, so a broken advanced image
+   * never leaves the host with no usable interface.
+   */
+  ui: 'basic' | 'advanced';
   /** lego DNS-01 provider code, e.g. `cloudflare`. Required for, and only used by, `dns01`. */
   dnsProvider?: string;
   /**
@@ -127,7 +140,7 @@ function randomToken(): string {
 }
 
 export async function init(opts: InitOptions): Promise<void> {
-  const { dataDir, domain, acmeEmail, dnsProvider, challenge, dryRun, runner } = opts;
+  const { dataDir, domain, acmeEmail, dnsProvider, challenge, ui, dryRun, runner } = opts;
   const image = defaultImage();
   const controlDir = join(dataDir, 'control');
   const composePath = join(controlDir, 'docker-compose.yml');
@@ -196,12 +209,14 @@ export async function init(opts: InitOptions): Promise<void> {
   // renders those two blocks and leaves everything else byte-for-byte.
   const template = CONTROL_TEMPLATE
     .replace('      #__ACME_CHALLENGE__', acmeChallengeArgs(challenge, dnsProvider))
-    .replace('      #__ACME_ROUTER_TLS__', acmeRouterLabels(challenge));
+    .replace('      #__ACME_ROUTER_TLS__', acmeRouterLabels(challenge))
+    .replace('      #__CONTROL_UI_SERVICE__', controlUiService(ui))
+    .replace('#__ADVANCED_UI_SERVICE__', advancedUiService(ui));
   await write(composePath, template, 0o644, dryRun);
 
   await write(
     join(controlDir, '.env'),
-    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken }),
+    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken, ui }),
     // 0600: this file holds PSTACK_TOKEN, and that token drives an API with a read-write Docker
     // socket — i.e. root on this host. Anyone who can read it owns the box.
     0o600,
@@ -234,7 +249,10 @@ export async function init(opts: InitOptions): Promise<void> {
   }
 
   // ── 6. What to do next ──────────────────────────────────────────────────────────────────────
-  const ui = `https://pstack.${domain}`;
+  // control.<domain>, not the long-gone pstack.<domain> — the hostnames split when the API and UI
+  // got their own routers.
+  const uiUrl = `https://control.${domain}`;
+  const apiUrl = `https://api.${domain}`;
   console.log(
     [
       '',
@@ -244,11 +262,11 @@ export async function init(opts: InitOptions): Promise<void> {
       `  networks  ${NET_INGRESS}, ${NET_SHARED}   (declare both as \`external: true\` in every per-PR compose file)`,
       '',
       'next:',
-      `  1. UI          ${ui}`,
+      `  1. UI          ${uiUrl}`,
       `     DNS must already answer for ${domain} and *.${domain}; the wildcard certificate is`,
       `     requested on first request and can take a minute (docs/bootstrap.md §10 if it never arrives).`,
-      `  2. Health      curl -sf ${ui}/api/health`,
-      `  3. Submit      curl -X PUT ${ui}/api/deployments/<id> \\`,
+      `  2. Health      curl -sf ${apiUrl}/api/health`,
+      `  3. Submit      curl -X PUT ${apiUrl}/api/deployments/<id> \\`,
       `                   -H "Authorization: Bearer $PSTACK_TOKEN" \\`,
       `                   -H 'content-type: application/json' \\`,
       `                   -d '{"spec": "<preview.yml>", "compose": "<docker-compose.yml>"}'`,
@@ -295,6 +313,7 @@ async function waitHealthy(runner: Runner): Promise<string> {
 
 /** The values every `${...}` in the compose template reads. Compose loads this from `.env`. */
 function envFile(v: {
+  ui?: 'basic' | 'advanced';
   dataDir: string;
   domain: string;
   acmeEmail: string;
@@ -310,6 +329,9 @@ function envFile(v: {
     '',
     `DATA_DIR=${v.dataDir}`,
     `DOMAIN=${v.domain}`,
+    // Only meaningful with --ui advanced; harmless otherwise, and having it present means
+    // switching modes is a re-run of `init` rather than an .env edit.
+    `PSTACK_UI_IMAGE=${process.env.PSTACK_UI_IMAGE ?? 'pstack-ui:local'}`,
     `ACME_EMAIL=${v.acmeEmail}`,
     `DNS_PROVIDER=${v.dnsProvider}`,
     `PSTACK_IMAGE=${v.image}`,
@@ -384,6 +406,48 @@ function acmeRouterLabels(challenge: 'http01' | 'dns01'): string {
     '      - traefik.http.routers.pstack-ui.tls.domains[0].main=${DOMAIN}',
     '      - traefik.http.routers.pstack-ui.tls.domains[0].sans=*.${DOMAIN}',
     '      - traefik.http.routers.pstack-api.tls=true',
+  ].join('\n');
+}
+
+/**
+ * Which Traefik service `control.<domain>` routes to.
+ *
+ * The ROUTER stays on the pstack container in both modes so the TLS labels render identically;
+ * only its target changes. Traefik happily lets a router declared on one container reference a
+ * loadbalancer service declared on another, which keeps this a one-line swap.
+ */
+function controlUiService(ui: 'basic' | 'advanced'): string {
+  return ui === 'advanced'
+    ? [
+        '      # Advanced UI selected: control.<domain> serves the SPA container below. The API',
+        '      # still serves the basic UI on api.<domain>, so a broken UI image never leaves this',
+        '      # host without an interface.',
+        '      - traefik.http.routers.pstack-ui.service=advanced-ui',
+      ].join('\n')
+    : '      - traefik.http.routers.pstack-ui.service=pstack';
+}
+
+/** The optional advanced-UI container. Omitted entirely in basic mode — not merely disabled. */
+function advancedUiService(ui: 'basic' | 'advanced'): string {
+  if (ui !== 'advanced') return '';
+  return [
+    '',
+    '  # The opt-in advanced UI (`pstack init --ui advanced`). A static SPA behind nginx, which',
+    '  # proxies /api/ back to the pstack container so the browser stays same-origin and needs no',
+    '  # CORS. Build it with `pstack build-image --ui`.',
+    '  advanced-ui:',
+    '    image: ${PSTACK_UI_IMAGE}',
+    '    restart: unless-stopped',
+    '    mem_limit: 128m',
+    '    depends_on: [pstack]',
+    '    networks: [preview-ingress]',
+    '    labels:',
+    '      - traefik.enable=true',
+    '      - traefik.docker.network=preview-ingress',
+    '      # No router here: control.<domain> is declared on the pstack container (so the TLS',
+    '      # labels stay in one place) and points at this service by name.',
+    '      - traefik.http.services.advanced-ui.loadbalancer.server.port=80',
+    '',
   ].join('\n');
 }
 

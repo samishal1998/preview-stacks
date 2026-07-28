@@ -135,14 +135,14 @@ services:
       # callers have a stable, honest name that is not "the UI host".
       - traefik.http.routers.pstack-ui.rule=Host(`control.${DOMAIN}`)
       - traefik.http.routers.pstack-ui.entrypoints=websecure
-      - traefik.http.routers.pstack-ui.service=pstack
+      #__CONTROL_UI_SERVICE__
       - traefik.http.routers.pstack-api.rule=Host(`api.${DOMAIN}`)
       - traefik.http.routers.pstack-api.entrypoints=websecure
       - traefik.http.routers.pstack-api.service=pstack
       #__ACME_ROUTER_TLS__
 
       - traefik.http.services.pstack.loadbalancer.server.port=7878
-
+#__ADVANCED_UI_SERVICE__
 volumes:
   letsencrypt:
 

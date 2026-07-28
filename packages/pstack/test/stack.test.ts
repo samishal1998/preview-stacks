@@ -621,3 +621,57 @@ describe('deployment variables are stored, not re-passed', () => {
     expect(s.env.R).toBe('eu');                            // REGION survived
   });
 });
+
+describe('the advanced UI is opt-in', () => {
+  const okRunner = (): Runner => ({
+    dryRun: false,
+    async run(cmd: string) {
+      return { ok: true, code: 0, stdout: cmd.includes('State.Health.Status') ? 'healthy\n' : '', stderr: '', skipped: false };
+    },
+  });
+  const render = async (ui: 'basic' | 'advanced') => {
+    const dir = `${process.env.TMPDIR ?? '/tmp'}/pstack-ui-${process.pid}-${ui}`;
+    await init({
+      dataDir: dir, domain: 'preview.example.com', acmeEmail: 'o@e.com',
+      challenge: 'http01', ui, dryRun: false, runner: okRunner(),
+    });
+    return Bun.file(`${dir}/control/docker-compose.yml`).text();
+  };
+
+  test('basic adds no container at all', async () => {
+    const yaml = await render('basic');
+    // Absent, not merely disabled — the basic UI is embedded in the API bundle, so there is
+    // nothing extra to run, build or keep current.
+    expect(yaml).not.toContain('advanced-ui');
+    expect(yaml).toContain('routers.pstack-ui.service=pstack');
+  });
+
+  test('advanced adds the container and repoints control.<domain> at it', async () => {
+    const yaml = await render('advanced');
+    expect(yaml).toContain('  advanced-ui:');
+    expect(yaml).toContain('image: ${PSTACK_UI_IMAGE}');
+    expect(yaml).toContain('routers.pstack-ui.service=advanced-ui');
+    expect(yaml).toContain('services.advanced-ui.loadbalancer.server.port=80');
+    // The API keeps api.<domain>, so a broken UI image never leaves the host with no interface.
+    expect(yaml).toContain('routers.pstack-api.rule=Host(`api.${DOMAIN}`)');
+  });
+
+  test('both modes leave no unrendered markers', async () => {
+    for (const ui of ['basic', 'advanced'] as const) {
+      const yaml = await render(ui);
+      expect(yaml).not.toContain('__CONTROL_UI_SERVICE__');
+      expect(yaml).not.toContain('__ADVANCED_UI_SERVICE__');
+    }
+  });
+
+  test('the rendered compose is valid YAML in both modes', async () => {
+    // A marker replacement that broke indentation would otherwise only surface on the host, as a
+    // compose parse error during `init`.
+    for (const ui of ['basic', 'advanced'] as const) {
+      const yaml = await render(ui);
+      const proc = Bun.spawn(['ruby', '-ryaml', '-e', 'YAML.load(STDIN.read)'], { stdin: 'pipe', stderr: 'pipe' });
+      proc.stdin.write(yaml); await proc.stdin.end();
+      expect(await proc.exited).toBe(0);
+    }
+  });
+});

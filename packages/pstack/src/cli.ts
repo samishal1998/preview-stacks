@@ -42,6 +42,7 @@ type Parsed = {
   dnsProvider: string;
   challenge: 'http01' | 'dns01';
   tag: string;
+  ui: 'basic' | 'advanced';
 };
 
 function parseArgs(argv: string[]): Parsed {
@@ -61,6 +62,9 @@ function parseArgs(argv: string[]): Parsed {
     challenge: (process.env.PSTACK_CHALLENGE as 'http01' | 'dns01') || 'http01',
     // Matches init's PSTACK_IMAGE default, so `build-image` then `init` need no flags at all.
     tag: process.env.PSTACK_IMAGE ?? 'pstack:local',
+    // Basic by default: it is embedded in the API bundle, so it costs no extra container and
+    // cannot be out of date relative to the API it talks to.
+    ui: (process.env.PSTACK_UI as 'basic' | 'advanced') || 'basic',
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -75,6 +79,11 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--acme-email') p.acmeEmail = argv[++i] ?? p.acmeEmail;
     else if (a === '--dns-provider') p.dnsProvider = argv[++i] ?? p.dnsProvider;
     else if (a === '--tag') p.tag = argv[++i] ?? p.tag;
+    else if (a === '--ui') {
+      const u = argv[++i] ?? '';
+      if (u !== 'basic' && u !== 'advanced') fail(`--ui must be basic or advanced, got "${u}"`);
+      p.ui = u;
+    }
     else if (a === '--challenge') {
       const c = argv[++i] ?? '';
       if (c !== 'http01' && c !== 'dns01') fail(`--challenge must be http01 or dns01, got "${c}"`);
@@ -116,6 +125,7 @@ function usage(): void {
       '',
       'init flags: --domain <preview.example.com>  --acme-email <you@example.com>',
       '            --challenge http01|dns01        (default http01 — no DNS credential needed)',
+      '            --ui basic|advanced             (default basic — embedded, no extra container)',
       '            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)',
       '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
@@ -231,6 +241,7 @@ switch (args.cmd) {
       acmeEmail: args.acmeEmail,
       dnsProvider: args.dnsProvider || undefined,
       challenge: args.challenge,
+      ui: args.ui,
       token: process.env.PSTACK_DNS_TOKEN,
       dryRun: args.dryRun,
       runner,
