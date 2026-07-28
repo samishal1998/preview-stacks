@@ -1,0 +1,125 @@
+# docker-compose.preview.yml — the per-PR stack referenced by examples/preview.yml.
+#
+# pstack never invents this file; you write it, and the spec points at it. pstack supplies the
+# project name (`-p pr-123`), the profiles, and the environment — everything below is yours.
+#
+#   PR=123 GIT_SHA=abc1234 pstack -f examples/preview.yml up --dry-run
+#
+# ── FIVE RULES, each of which has bitten someone ─────────────────────────────────────────────
+#
+# 1. EVERY service sits behind a `profiles:` entry.
+#    A bare `docker compose up` then starts NOTHING, which is what you want: pstack enables only
+#    the profiles the spec selected. Forget this and a "frontend-only" deploy quietly starts the
+#    backend too.
+#
+# 2. Every image has an `${X_IMAGE:-unset}` default.
+#    Compose fails on an unset variable in some versions and substitutes an empty string in
+#    others. The literal tag `unset` turns "I forgot to pass FRONTEND_IMAGE" into an obvious
+#    `pull access denied for unset` instead of a confusing empty-image error.
+#
+# 3. `${PR_NUMBER}` appears in BOTH the router name and the service name of every Traefik label.
+#    Traefik's router/service namespace is global across the whole Docker daemon. Two PRs that
+#    both define `traefik.http.routers.backend` silently overwrite each other, and one PR's
+#    hostname starts serving the other PR's container.
+#
+# 4. The shared networks are `external: true`.
+#    `pstack init` created them. Declare one non-external and Compose makes a DIFFERENT network
+#    called `pr-123_preview-ingress`: the container is up, healthy, and unreachable, while Traefik
+#    returns 404 for a hostname that looks perfectly configured.
+#
+# 5. Set `mem_limit` on everything.
+#    There is no memory isolation between stacks on a shared host. One PR's runaway heap OOMs
+#    every other preview on the box. The numbers below are conservative starting points.
+#
+# ── TLS: these labels assume HTTP-01 (pstack's default) ──────────────────────────────────────
+# Under HTTP-01 each hostname resolves its OWN certificate, so every per-PR router needs
+# `tls.certresolver=le` — as written below.
+#
+# If you switch the host to `pstack init --challenge dns01`, that INVERTS: one always-on router
+# requests a `*.<domain>` wildcard and every per-PR router must then carry `tls=true` and NOTHING
+# else. Leaving `certresolver` here under dns01 makes each PR order its own certificate and burn
+# the ~50-per-registered-domain-per-week limit. Delete the certresolver lines when you migrate.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── backend ────────────────────────────────────────────────────────────────────────────────
+  api:
+    image: ${BACKEND_IMAGE:-unset}
+    profiles: [backend]
+    restart: unless-stopped
+    mem_limit: 1g
+    networks: [default, preview-ingress, preview-shared]
+    environment:
+      # DATABASE_URL is not hardcoded: the `database` axis in preview.yml prints
+      # `DATABASE_URL=…` on stdout, and pstack captures KEY=VALUE lines from a provision hook
+      # into the environment compose is invoked with. That is how a per-PR database branch
+      # reaches the container without a temp file.
+      DATABASE_URL: ${DATABASE_URL:?the database axis must run before compose}
+      PORT: "3000"
+      PUBLIC_URL: "https://backend-${STACK}.${PREVIEW_DOMAIN}"
+    labels:
+      - traefik.enable=true
+      # Traefik must be told WHICH network to dial, because this container is on three of them.
+      - traefik.docker.network=preview-ingress
+      - traefik.http.routers.backend-${PR_NUMBER}.rule=Host(`backend-${STACK}.${PREVIEW_DOMAIN}`)
+      - traefik.http.routers.backend-${PR_NUMBER}.entrypoints=websecure
+      - traefik.http.routers.backend-${PR_NUMBER}.tls=true
+      # HTTP-01 only — see the TLS note in the header before copying this to a dns01 host.
+      - traefik.http.routers.backend-${PR_NUMBER}.tls.certresolver=le
+      - traefik.http.services.backend-${PR_NUMBER}.loadbalancer.server.port=3000
+    healthcheck:
+      # Only route a ready container. Without this, Traefik forwards to a process still running
+      # migrations and the first preview visitor sees a 502 they will report as "it's broken".
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 60s
+
+  # ── frontend ───────────────────────────────────────────────────────────────────────────────
+  frontend:
+    image: ${FRONTEND_IMAGE:-unset}
+    profiles: [frontend]
+    restart: unless-stopped
+    mem_limit: 512m
+    networks: [default, preview-ingress]
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      # Informational at runtime for most frameworks. If your framework bakes the backend URL at
+      # BUILD time (Next.js `compiler.define`, Vite `import.meta.env`), this value arrives far too
+      # late — it must be a build-arg when CI builds the per-PR image, and this line is then only
+      # documentation. That mismatch is one of the classic preview bugs.
+      BACKEND_URL: "https://backend-${STACK}.${PREVIEW_DOMAIN}"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=preview-ingress
+      - traefik.http.routers.frontend-${PR_NUMBER}.rule=Host(`frontend-${STACK}.${PREVIEW_DOMAIN}`)
+      - traefik.http.routers.frontend-${PR_NUMBER}.entrypoints=websecure
+      - traefik.http.routers.frontend-${PR_NUMBER}.tls=true
+      - traefik.http.routers.frontend-${PR_NUMBER}.tls.certresolver=le
+      - traefik.http.services.frontend-${PR_NUMBER}.loadbalancer.server.port=3000
+    healthcheck:
+      # No curl in most slim Node/Bun images — probe with the runtime itself rather than adding a
+      # package to the image just to satisfy a healthcheck.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+networks:
+  # Created per-project by compose. Intra-PR traffic (api ↔ frontend) stays here, isolated from
+  # every other PR without any naming discipline on your part.
+  default: {}
+  # Both created by `pstack init`. See rule 4.
+  preview-ingress:
+    external: true
+  preview-shared:
+    external: true

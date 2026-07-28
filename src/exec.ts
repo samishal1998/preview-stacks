@@ -35,7 +35,11 @@ export function createRunner(opts: {
     async run(cmd, o = {}) {
       const label = o.label ?? cmd;
       if (opts.dryRun) {
-        if (level !== 'quiet') console.log(`  [dry-run] ${label}`);
+        // Verbose shows the REAL command, not just the label. A dry-run exists to answer "what
+        // exactly would run", and a label like `compose up` cannot answer it — you cannot check
+        // the project name, the profile flags or the file path against a summary.
+        if (level === 'verbose') console.log(`  [dry-run] $ ${cmd}`);
+        else if (level !== 'quiet') console.log(`  [dry-run] ${label}`);
         return { ok: true, code: 0, stdout: '', stderr: '', skipped: true };
       }
       if (level === 'verbose') console.log(`  $ ${cmd}`);
