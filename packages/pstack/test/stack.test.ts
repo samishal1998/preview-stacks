@@ -6,6 +6,7 @@ import { nullSink } from '../src/log.ts';
 import { init } from '../src/init.ts';
 import { buildImage } from '../src/image.ts';
 import { SpecStore, findRequiredVars } from '../src/specs.ts';
+import { renderCloudInit, randomPassword } from '../src/cloudinit.ts';
 import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { shq } from '../src/compose.ts';
@@ -716,5 +717,92 @@ describe('build-image --ui', () => {
     await expect(
       buildImage({ tag: 'x', runner: okRunner(), dryRun: false, ui: true, uiDist: '/nonexistent/dist' }),
     ).rejects.toThrow(/no built UI at/);
+  });
+});
+
+describe('cloud-init generation', () => {
+  const base = {
+    domain: 'preview.example.com',
+    acmeEmail: 'ops@example.com',
+    sshKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest key@host',
+    dashboardPassword: 'deadbeef1234',
+    challenge: 'http01' as const,
+    ui: 'basic' as const,
+  };
+
+  const yamlOk = async (text: string): Promise<boolean> => {
+    const proc = Bun.spawn(['ruby', '-ryaml', '-e', 'YAML.load(STDIN.read)'], { stdin: 'pipe', stderr: 'pipe' });
+    proc.stdin.write(text); await proc.stdin.end();
+    return (await proc.exited) === 0;
+  };
+
+  test('renders valid cloud-config with no placeholders left', async () => {
+    const out = renderCloudInit(base);
+    expect(out.startsWith('#cloud-config')).toBe(true);
+    // Either of these makes cloud-init discard the whole file silently.
+    expect(out).not.toContain('\t');
+    expect(await yamlOk(out)).toBe(true);
+    expect(out.match(/\{\{[A-Z_]+\}\}/g)).toBeNull();
+  });
+
+  test("Docker's own Go templates survive rendering", () => {
+    // `{{.State.Health.Status}}` shares the delimiters. It is left alone because placeholder names
+    // are SHOUT_CASE with no dots — if that ever changes, this breaks first.
+    expect(renderCloudInit(base)).toContain('{{.State.Health.Status}}');
+  });
+
+  test('the fallback regexp escapes every dot in the domain', () => {
+    // Unescaped, `.` matches any character, so the router would also claim
+    // backend-pr-1Xpreview.example.com — a hostname belonging to someone else.
+    expect(renderCloudInit(base)).toContain('preview\\\\.example\\\\.com');
+  });
+
+  /**
+   * The `pstack init` invocation, taken from the PARSED runcmd list.
+   *
+   * Parsed, not regex-scraped: the template's prose explains `--challenge dns01` as the wildcard
+   * upgrade path and mentions `pstack init` several times, so a text match finds documentation
+   * and reports on the wrong thing entirely. Comments do not survive a YAML parse, which is
+   * exactly the property wanted here.
+   */
+  const runcmd = (yaml: string): string[] =>
+    ((Bun.YAML.parse(yaml) as { runcmd?: unknown[] }).runcmd ?? []).map((c) => String(c));
+  const initCall = (yaml: string): string =>
+    runcmd(yaml).find((c) => c.includes('pstack init')) ?? '';
+
+  test('dns01 adds the challenge flags to the init call; http01 adds none', () => {
+    const dns = initCall(renderCloudInit({ ...base, challenge: 'dns01', dnsProvider: 'hetzner' }));
+    expect(dns).toContain('--challenge dns01');
+    expect(dns).toContain('--dns-provider hetzner');
+    expect(initCall(renderCloudInit(base))).not.toContain('--challenge');
+  });
+
+  test('advanced UI adds its install and image build', () => {
+    const adv = renderCloudInit({ ...base, ui: 'advanced' });
+    expect(initCall(adv)).toContain('--ui advanced');
+    expect(runcmd(adv).some((c) => c.includes('build-image --ui'))).toBe(true);
+    expect(runcmd(renderCloudInit(base)).some((c) => c.includes('build-image --ui'))).toBe(false);
+  });
+
+  test('no config repo drops the clone line rather than emitting an empty one', async () => {
+    // `git clone  /opt/preview/config` would fail and abort the rest of cloud-init.
+    const out = renderCloudInit(base);
+    expect(out).not.toMatch(/git clone --depth 1\s+\/opt/);
+    expect(await yamlOk(out)).toBe(true);
+  });
+
+  test('rejects inputs that would produce a broken or locked-out host', () => {
+    expect(() => renderCloudInit({ ...base, domain: 'notadomain' })).toThrow(/hostname/);
+    expect(() => renderCloudInit({ ...base, acmeEmail: 'nope' })).toThrow(/address/);
+    // The one mistake with no cheap recovery: a booted host you cannot log into.
+    expect(() => renderCloudInit({ ...base, sshKey: 'my-key' })).toThrow(/authorized_keys/);
+    expect(() => renderCloudInit({ ...base, challenge: 'dns01' })).toThrow(/provider/);
+    // Interpolated into a single-quoted shell command.
+    expect(() => renderCloudInit({ ...base, dashboardPassword: "a'b" })).toThrow(/single quote/);
+  });
+
+  test('generated passwords are shell-safe', () => {
+    // Hex on purpose: a `$` would be expanded by the shell that hashes it.
+    for (let i = 0; i < 20; i++) expect(randomPassword()).toMatch(/^[0-9a-f]+$/);
   });
 });
