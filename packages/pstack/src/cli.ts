@@ -7,7 +7,7 @@
  *   pstack verify    assert every axis is gone; non-zero exit if anything leaked
  *   pstack status    what is running for this stack
  *   pstack validate  parse the spec, resolve interpolation, report warnings
- *   pstack build-image  build the control image from this installed package (no checkout needed)
+ *   pstack build-image  build the control image from this installed package (--ui for the SPA)
  *   pstack init      stand up the CONTROL stack on this host (traefik + pstack api/ui)
  *   pstack serve     HTTP API + web UI over the deployment registry
  *
@@ -43,6 +43,8 @@ type Parsed = {
   challenge: 'http01' | 'dns01';
   tag: string;
   ui: 'basic' | 'advanced';
+  uiImage: boolean;
+  uiDist: string;
 };
 
 function parseArgs(argv: string[]): Parsed {
@@ -65,6 +67,8 @@ function parseArgs(argv: string[]): Parsed {
     // Basic by default: it is embedded in the API bundle, so it costs no extra container and
     // cannot be out of date relative to the API it talks to.
     ui: (process.env.PSTACK_UI as 'basic' | 'advanced') || 'basic',
+    uiImage: false,
+    uiDist: '',
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -79,10 +83,19 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--acme-email') p.acmeEmail = argv[++i] ?? p.acmeEmail;
     else if (a === '--dns-provider') p.dnsProvider = argv[++i] ?? p.dnsProvider;
     else if (a === '--tag') p.tag = argv[++i] ?? p.tag;
+    else if (a === '--ui-dist') p.uiDist = argv[++i] ?? p.uiDist;
     else if (a === '--ui') {
-      const u = argv[++i] ?? '';
-      if (u !== 'basic' && u !== 'advanced') fail(`--ui must be basic or advanced, got "${u}"`);
-      p.ui = u;
+      // `build-image --ui` is a switch (build the SPA image); `init --ui <mode>` takes a value.
+      // Peek rather than always consuming, so neither form has to be spelled differently.
+      const next = argv[i + 1];
+      if (next === 'basic' || next === 'advanced') {
+        p.ui = next;
+        i++;
+      } else if (next !== undefined && !next.startsWith('-')) {
+        fail(`--ui must be basic or advanced, got "${next}"`);
+      } else {
+        p.uiImage = true;
+      }
     }
     else if (a === '--challenge') {
       const c = argv[++i] ?? '';
@@ -122,6 +135,8 @@ function usage(): void {
       '',
       '',
       'build-image: --tag <name:tag>               (default pstack:local, = PSTACK_IMAGE)',
+      '             --ui                           build the advanced UI image instead',
+      '             --ui-dist <path>               use a built UI dist from a specific path',
       '',
       'init flags: --domain <preview.example.com>  --acme-email <you@example.com>',
       '            --challenge http01|dns01        (default http01 — no DNS credential needed)',
@@ -217,9 +232,18 @@ switch (args.cmd) {
   }
 
   case 'build-image': {
-    const { buildImage } = await import('./image.ts');
+    const { buildImage, DEFAULT_UI_IMAGE_TAG } = await import('./image.ts');
+    // Default the tag to whichever image is being built, so the two never collide when a user
+    // builds both without thinking about tags.
+    const tag = args.uiImage && args.tag === 'pstack:local' ? DEFAULT_UI_IMAGE_TAG : args.tag;
     try {
-      await buildImage({ tag: args.tag, runner, dryRun: args.dryRun });
+      await buildImage({
+        tag,
+        runner,
+        dryRun: args.dryRun,
+        ui: args.uiImage,
+        uiDist: args.uiDist || undefined,
+      });
     } catch (err) {
       fail((err as Error).message);
     }

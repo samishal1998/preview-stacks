@@ -675,3 +675,46 @@ describe('the advanced UI is opt-in', () => {
     }
   });
 });
+
+describe('build-image --ui', () => {
+  const okRunner = (): Runner & { log: string[] } => {
+    const log: string[] = [];
+    return {
+      dryRun: false,
+      log,
+      async run(cmd: string) {
+        log.push(cmd);
+        return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+      },
+    };
+  };
+
+  /** A stand-in for an installed @samyx/preview-stacks-ui: built assets plus the nginx config. */
+  const fakeUiPackage = async (withConf = true): Promise<string> => {
+    const root = `${process.env.TMPDIR ?? '/tmp'}/pstack-uipkg-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    await Bun.write(`${root}/dist/index.html`, '<!doctype html><title>ui</title>');
+    if (withConf) await Bun.write(`${root}/nginx.conf`, 'server { listen 80; }');
+    return `${root}/dist`;
+  };
+
+  test('builds the UI image from a package dist, taking nginx.conf beside it', async () => {
+    const r = okRunner();
+    await buildImage({ tag: 'pstack-ui:test', runner: r, dryRun: false, ui: true, uiDist: await fakeUiPackage() });
+    const cmd = r.log.find((c) => c.startsWith('docker build'));
+    expect(cmd).toContain('"pstack-ui:test"');
+  });
+
+  test('refuses a package with assets but no nginx.conf', async () => {
+    // Without it the image would serve the SPA with no /api proxy and no deep-link fallback —
+    // a container that starts, looks healthy, and is unusable.
+    await expect(
+      buildImage({ tag: 'x', runner: okRunner(), dryRun: false, ui: true, uiDist: await fakeUiPackage(false) }),
+    ).rejects.toThrow(/no nginx.conf beside them/);
+  });
+
+  test('an explicit --ui-dist without built assets fails by name', async () => {
+    await expect(
+      buildImage({ tag: 'x', runner: okRunner(), dryRun: false, ui: true, uiDist: '/nonexistent/dist' }),
+    ).rejects.toThrow(/no built UI at/);
+  });
+});

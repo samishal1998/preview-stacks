@@ -32,11 +32,18 @@ export default {
   /**
    * Single root package, selected BY NAME.
    *
-   * `include` is matched against the package's relative dir OR its name. The root package's
-   * relative dir is the empty string, so no path glob (`.`, `./`, `*`) can ever select it —
-   * matching on the name is the only form that works for a root-level package.
+   * Both publishable packages, selected BY NAME.
+   *
+   * `include` is matched against a package's relative dir OR its name. Name-matching was originally
+   * the only form that worked (a root package's relative dir is the empty string, so no path glob
+   * can select it) and it stays the clearer choice now that the workspace has two: the list reads
+   * as what gets published, not where it happens to live.
+   *
+   * The UI is a genuinely separate release. `pstack build-image --ui` resolves it as an installed
+   * package, so a user opting into the advanced UI installs it explicitly — and until it is
+   * published, that command falls back to a workspace checkout.
    */
-  packages: { include: ['@samyx/preview-stacks'] },
+  packages: { include: ['@samyx/preview-stacks', '@samyx/preview-stacks-ui'] },
 
   dependencies: {
     // Zero runtime dependencies by design — Bun's stdlib covers YAML parsing and HTTP. Everything
@@ -49,9 +56,9 @@ export default {
     dropFields: ['publishConfig', 'workspaces'],
   },
 
-  // `bun scripts/build.ts`, also wired as `prepublishOnly` so a stale or missing bundle cannot be
-  // published even if a release is cut by hand.
-  build: { command: 'bun scripts/build.ts' },
+  // Each package builds itself via its own `prepublishOnly`, so nothing here needs to know that
+  // one is a Bun bundle and the other is a Vite app.
+  build: { skip: true },
 
   /** Re-check the registry after publishing rather than trusting the CLI's exit code. */
   verify: { enabled: true },

@@ -13,9 +13,18 @@ This one is richer — dashboards, tabs, live-following logs, keyboard navigatio
 cost of being a second artefact. So it is opt-in:
 
 ```bash
-docker build -f apps/ui/Dockerfile -t pstack-ui:local .   # from the repo root
+bun install -g @samyx/preview-stacks-ui   # ships the BUILT app, not its source
+pstack build-image --ui                   # generates an nginx Dockerfile around it
 pstack init --ui advanced
 ```
+
+No checkout: the package ships `dist/` already compiled, so `build-image --ui` only has to wrap it
+in nginx — the same trick `pstack build-image` uses for the control image. (`apps/ui/Dockerfile`
+still exists and builds from source; that is what CI uses, and what you want when developing the UI
+itself.)
+
+Docker images are not published yet. When they are, this becomes a `docker pull` and
+`PSTACK_UI_IMAGE=<registry>/…`.
 
 `init` then renders an `advanced-ui` service into the control stack and repoints
 `control.<domain>` at it. **The API keeps serving the basic UI on `api.<domain>` either way**, so a

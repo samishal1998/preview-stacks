@@ -201,6 +201,22 @@ bun src/cli.ts --help        # run from source
 bun run build                # → dist/, then smoke-tests `pstack --help` from the bundle
 ```
 
+## The web UI
+
+Every install has one: the API embeds a basic UI and serves it on any non-`/api` path, so there is
+no extra container and nothing that can drift from the API it talks to.
+
+An advanced SPA is available opt-in, as its own container:
+
+```bash
+bun install -g @samyx/preview-stacks-ui
+pstack build-image --ui          # nginx around the package's prebuilt assets — no checkout
+pstack init --ui advanced        # adds the container, repoints control.<domain> at it
+```
+
+The API keeps serving the basic UI on `api.<domain>` either way, so a missing or broken advanced
+image degrades to a working interface rather than none.
+
 ## Usage
 
 ```
