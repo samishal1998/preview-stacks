@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1 — 2026-07-28
+
+### Fixed
+
+- **`pstack build-image`** — a globally-installed pstack could not produce the control image
+  `pstack init` requires. The package ships only `dist/`, so there was no Dockerfile to build from
+  and no registry to pull from, and `init` deliberately does not pull: the install was a dead end
+  whose only escape was cloning the source. `build-image` assembles a build context from the
+  installed package (the bundle *is* the whole application) and tags `pstack:local`, the same
+  default `PSTACK_IMAGE` uses — so `build-image` then `init` need no flags.
+- `init`'s precondition hint now names `pstack build-image` rather than telling the operator to
+  clone the repository.
+
 ## 0.1.0 — 2026-07-28
 
 First release. Declarative lifecycle for ephemeral per-PR preview stacks.

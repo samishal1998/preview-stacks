@@ -925,7 +925,7 @@ What it does, in order:
 
 | Step | Detail |
 |---|---|
-| 0. Preconditions | Docker socket at `/var/run/docker.sock`, the Compose v2 plugin, and the control image present. Fails by name, before anything is created — `docker build -t pstack:local .` from a pstack checkout if the image is missing |
+| 0. Preconditions | Docker socket at `/var/run/docker.sock`, the Compose v2 plugin, and the control image present. Fails by name, before anything is created — run `pstack build-image` if the image is missing — it builds from the installed package, no checkout needed |
 | 1. State dirs | `<data>/deployments` (the registry) and `<data>/control/traefik-dynamic` (Traefik's file provider, created empty so the mount does not fail) |
 | 2. Networks | `preview-ingress` and `preview-shared`, created idempotently. **Both must be declared `external: true` in every per-PR compose file** — declare one non-external and Compose silently makes `pr-123_preview-ingress` instead, so the container comes up healthy and unreachable |
 | 3. Config | `control/docker-compose.yml` (the template, with the two challenge-dependent blocks rendered), `control/.env` (`0600`, holds `PSTACK_TOKEN`), `control/dns.env` (`0600`, holds the DNS credential; written either way so switching modes needs no extra step) |

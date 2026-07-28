@@ -350,13 +350,16 @@ anything. This is a real gap in the credential-free happy path; pick one of two 
 
 | Option | What you do | Cost |
 |---|---|---|
-| **Build on the host** *(what the cloud-init below does)* | `git clone` this repo, `docker build -t pstack:local .`, then `init` with **no** `PSTACK_IMAGE` — `pstack:local` is already the default | needs a pstack **source checkout** on the box, plus ~1–2 min of build time and some RAM per upgrade |
+| **`pstack build-image`** *(what the cloud-init below does)* | run it once after installing the CLI, then `init` with **no** `PSTACK_IMAGE` — it tags `pstack:local`, which is already the default | ~1–2 min of build time and some RAM per upgrade. **No checkout, no registry**: the published bundle is the whole application, so the build context is assembled from the installed package |
 | **Pull from a registry** | `docker pull <registry>/pstack:<tag>`, then run `init` with `PSTACK_IMAGE=<registry>/pstack:<tag>` | you must publish the image somewhere the box can pull. **No source on the host**, and boots are seconds instead of minutes |
 
-**Build-on-host is the default here** because it needs nothing published: the image always matches
-the source on that box, and the same checkout supplies both the `Dockerfile` and — until the package
-is on a registry — the `pstack` binary itself. The checkout is not wasted; `git pull && bun
-scripts/build.ts` upgrades the CLI, and re-running `docker build` upgrades the control image.
+**Building on the host is the default here** because it needs nothing but the CLI you just
+installed: `pstack build-image` generates its own Dockerfile over the package's `dist/`, so the image
+always matches the CLI on that box. Upgrading is `bun install -g @samyx/preview-stacks` followed by
+`pstack build-image` — no clone, and no image to publish.
+
+(A source checkout still works and is what CI uses — the repo's own `Dockerfile` builds the bundle in
+a multi-stage build. You just no longer need one on a host.)
 
 Switch to a registry pull when build time per boot starts to hurt, or when you want boxes that carry
 no source at all.
@@ -486,12 +489,12 @@ runcmd:
 
   # 4. The control image. `init`'s precondition is `docker image inspect`, which does NOT pull, so
   #    it must be here BEFORE init runs (§4). Registry option shown; the alternative is to clone
-  #    this repo and `docker build -t pstack:local .` — see the table above.
+  #    `pstack build-image` — see the table above.
   #    BUILD ON THE BOX from the checkout above. The tag `pstack:local` is PSTACK_IMAGE's default,
   #    so `init` needs no PSTACK_IMAGE at all — nothing to publish, no registry login, and the
   #    image always matches the source on this host. Costs ~1–2 min of build time per boot; switch
   #    to a registry pull when that matters (§4).
-  - cd /opt/preview/pstack && docker build -t pstack:local .
+  - /usr/local/bin/pstack build-image
 
   # 5. Optional: your preview config, for driving the CLI from the host or from a cron sweep.
   #    Not needed for the API path — a submitted spec travels over HTTP as a string.
@@ -775,12 +778,9 @@ From the host, never over HTTP — the API cannot recreate the stack containing 
 # 1. drain: jobs are in-memory, so an in-flight `up` is truncated by a restart
 curl -s https://api.preview.example.com/api/jobs | jq '[.jobs[] | select(.state == "running")]'
 
-# 2. new pstack CLI + control image, both from the checkout (build-on-host, §4).
-#    /usr/local/bin/pstack is a symlink INTO this checkout, so rebuilding the bundle upgrades the
-#    CLI in place — there is nothing to reinstall.
-cd /opt/preview/pstack && git pull
-bun install --frozen-lockfile && bun scripts/build.ts   # the CLI
-docker build -t pstack:local .                          # the control image
+# 2. new pstack CLI + control image. Neither needs a checkout (§4).
+bun install -g @samyx/preview-stacks     # the CLI
+pstack build-image                       # the control image, from the package you just installed
 
 # 3. re-run init — idempotent, and the ONLY supported way to change any of this.
 #    Re-pass the FULL configuration, including the challenge mode (see the warning below).
