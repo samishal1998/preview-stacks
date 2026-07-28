@@ -1,65 +1,35 @@
 {
-  "name": "@samyx/preview-stacks",
-  "version": "0.1.1",
-  "description": "Declarative lifecycle for ephemeral per-PR preview stacks: isolation axes with provision/destroy/leak-verification, over Docker Compose.",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/samishal1998/preview-stacks.git"
-  },
-  "homepage": "https://github.com/samishal1998/preview-stacks#readme",
-  "bugs": {
-    "url": "https://github.com/samishal1998/preview-stacks/issues"
-  },
+  "name": "preview-stacks-monorepo",
+  "private": true,
   "type": "module",
-  "bin": {
-    "pstack": "./dist/cli.js"
-  },
-  "exports": {
-    ".": "./dist/index.js",
-    "./package.json": "./package.json"
-  },
   "workspaces": [
-    "."
+    "packages/*",
+    "apps/*"
   ],
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.3.12",
+      "onFail": "warn"
+    }
+  },
   "scripts": {
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "check:package": "bun scripts/check-package.ts",
-    "check": "bun test && tsc --noEmit && bun scripts/build.ts && bun scripts/check-package.ts",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "check": "turbo run check",
+    "dev": "turbo run dev",
     "release:plan": "publish-kit plan",
     "release:dry": "publish-kit publish --dry-run",
-    "release:publish": "publish-kit publish",
-    "build": "bun scripts/build.ts",
-    "prepublishOnly": "bun scripts/build.ts"
+    "release:publish": "publish-kit publish"
   },
-  "keywords": [
-    "preview-environments",
-    "ephemeral-environments",
-    "docker-compose",
-    "traefik",
-    "ci-cd",
-    "pull-request",
-    "monorepo",
-    "devops",
-    "bun"
-  ],
   "devDependencies": {
     "@samyx/publish-kit": "^0.0.0-pre.1",
-    "@types/bun": "latest",
-    "typescript": "^5.9.2"
+    "turbo": "^2.5.6"
   },
   "engines": {
     "bun": ">=1.3.0"
   },
   "license": "MIT",
-  "author": "sami.mishal",
-  "publishConfig": {
-    "access": "public"
-  }
+  "author": "sami.mishal"
 }

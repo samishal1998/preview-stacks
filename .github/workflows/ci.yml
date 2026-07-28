@@ -32,11 +32,13 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # Turbo fans these out across the workspace and caches per package, so adding a package
+      # needs no CI change.
       - name: Test
-        run: bun test
+        run: bunx turbo run test
 
       - name: Typecheck
-        run: bunx tsc --noEmit
+        run: bunx turbo run typecheck
 
       # The spec's own linting must hold for the shipped example, or the guide teaches a spec that
       # its own tool would warn about.
@@ -44,12 +46,12 @@ jobs:
         env:
           PR: '1'
           GIT_SHA: ci
-        run: bun src/cli.ts -f examples/preview.yml validate
+        run: cd packages/pstack && bun src/cli.ts -f examples/preview.yml validate
 
       # The published artifact is a BUNDLE, so build it here: a broken bundle (a bad text import, a
       # dropped asset) is invisible to `bun test`, which runs the sources.
-      - name: Build the publishable bundle
-        run: bun scripts/build.ts
+      - name: Build
+        run: bunx turbo run build
 
       # Catch a broken `files`/`exports`/`bin` map before a release does — the failure mode is a
       # published package whose documented entry points throw "Cannot find module".
@@ -58,4 +60,4 @@ jobs:
       # mode, and handing CI a publish token merely to rehearse a publish is a supply-chain risk
       # for no benefit. `bun pm pack` needs no credentials and asserts the same invariant.
       - name: Package entry points are shipped
-        run: bun scripts/check-package.ts
+        run: cd packages/pstack && bun scripts/check-package.ts
