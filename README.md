@@ -44,4 +44,6 @@ bun run release:publish   # requires an npm OTP
 - [Usage](docs/usage.md) — task-oriented guide
 - [Bootstrap](docs/bootstrap.md) — build a host from nothing (Hetzner + cloud-init)
 - [Control plane](docs/control-plane.md) — architecture, registry contract, trust boundary
+- [Secret exposure](docs/secret-exposure.md) — **open, undecided**: unauthenticated job reads
+  publish captured credentials
 - [AGENTS.md](AGENTS.md) — working on this codebase

@@ -919,11 +919,15 @@ on HTTP-01 as long as the rate-limit arithmetic in [§3](#http-01-the-default-an
 ## 9. Hardening checklist
 
 - [ ] **Put auth in front of the control plane.** `control.<domain>` and `api.<domain>` are public
-      and every `GET` is unauthenticated — job transcripts (including hook stderr) and the full
-      deployment list. Add a `basicAuth` or `ipAllowList` middleware in `traefik-dynamic/`, or an
-      SSH-tunnel-only workflow with the hostnames firewalled off. And remember: the pstack container
-      holds a read-write Docker socket, so anyone who can drive the *mutating* API can start a
-      privileged container and own the box.
+      and every `GET` is unauthenticated. Treat this as **required, not advisory**: `GET /api/jobs`
+      needs no id and returns every retained job transcript, including `outcome.outputs` — the
+      documented channel for passing a provisioned resource's **connection string** to a later axis —
+      plus the first line of any failed hook's stderr. A reader who never had the token can come away
+      with database credentials. (Measured, with options weighed and the decision deferred:
+      [`secret-exposure.md`](secret-exposure.md).) Add a `basicAuth` or `ipAllowList` middleware in
+      `traefik-dynamic/`, or an SSH-tunnel-only workflow with the hostnames firewalled off. And
+      remember: the pstack container holds a read-write Docker socket, so anyone who can drive the
+      *mutating* API can start a privileged container and own the box.
 - [ ] **Firewall down to 80 / 443 / 22.**
       ```bash
       hcloud firewall create --name preview-host

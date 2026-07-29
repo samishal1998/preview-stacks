@@ -425,7 +425,19 @@ Three guards follow, two of which are enforced in code:
 |---|---|---|
 | Bearer token on every mutating route | `src/api.ts` | `POST`/`DELETE` without `Authorization: Bearer <PSTACK_TOKEN>` → `401` |
 | Loopback interlock | `src/cli.ts`, `serve` | with no `PSTACK_TOKEN` the host is forced to `127.0.0.1`, **and** an explicit non-loopback `PSTACK_HOST` is a hard exit `3` rather than a silent downgrade |
-| Ingress auth | yours | **`GET`s are unauthenticated even when a token is set.** `GET /api/jobs/:id` returns a whole job transcript, including the first line of a failed hook's stderr; `GET /api/deployments` enumerates every deployment on the box. Writes are double-gated; reads are gated only by whatever sits in front. |
+| Ingress auth | yours | **`GET`s are unauthenticated even when a token is set.** `GET /api/jobs` — no id needed — returns every retained job transcript, including `outcome.outputs`, which holds **captured credentials by design**, and the first line of a failed hook's stderr; `GET /api/deployments` enumerates every deployment on the box. Writes are double-gated; reads are gated only by whatever sits in front. |
+
+### The read side does not yet match this rule
+
+The intended line is: an unauthenticated read may expose the **shape** of a deployment, never a value
+that lets the reader authenticate to something. `GET /api/specs/:name` was brought in line in 0.2.4
+(source needs a token; metadata does not). The **job reads have not been** — `outcome.outputs` is the
+documented channel for passing a freshly-provisioned resource's connection string to a later axis, and
+it is serialised in full to anyone who can reach the port.
+
+Measured, options weighed, **decision deliberately deferred**:
+[`secret-exposure.md`](secret-exposure.md). Until it is settled, the posture below is not merely
+recommended — it is what the read side is relying on.
 
 The default posture should be *not reachable from the internet*: keep `PSTACK_HOST=127.0.0.1`, set
 `PSTACK_TOKEN` anyway (it protects against everything else already on the host), and tunnel:
