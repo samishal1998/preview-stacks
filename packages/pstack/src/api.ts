@@ -10,7 +10,7 @@
  *   POST   /api/deployments/:id/down      → 202 { job }   body: { verify?, force? }
  *   POST   /api/deployments/:id/verify    → 202 { job }
  *   GET    /api/specs                     named specs (store once, reference from many deployments)
- *   GET    /api/specs/:name               meta + source
+ *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
  *   PUT    /api/specs/:name               store/replace  { spec, compose?, description? }
  *   DELETE /api/specs/:name               refused while a deployment still references it
  *   GET    /api/control                   READ-ONLY view of the control stack (never actionable)
@@ -511,11 +511,26 @@ export function createServer(opts: ServerOptions) {
           if (!stored) return json({ error: `no such spec: ${name}` }, { status: 404 });
 
           if (req.method === 'GET') {
+            // THE SOURCE IS A SECRET, THE METADATA IS NOT.
+            //
+            // Reads are otherwise unauthenticated on this API by design — an operator should be able
+            // to see what is running before pasting a token. But a spec's source is the one read
+            // that cannot follow that rule: hook bodies are shell strings, and a hook routinely
+            // carries a registry password or an API token inline. The resolved-spec view already
+            // withholds hook bodies for exactly this reason; serving the whole file unauthenticated
+            // handed them out anyway, one route over.
+            //
+            // So: metadata always (name, kind, description, the NAMES of required variables — none
+            // of which is a credential), and the source only with a token. It is withheld
+            // EXPLICITLY rather than sent empty, so a page can say why instead of rendering a blank
+            // editor that looks like an empty spec.
+            const mayReadSource = authed(req);
             return json({
               ...stored,
               dir: undefined,
               specPath: undefined,
-              source: await specs.source(name),
+              source: mayReadSource ? await specs.source(name) : undefined,
+              sourceWithheld: mayReadSource ? undefined : true,
             });
           }
 
@@ -649,6 +664,10 @@ export function createServer(opts: ServerOptions) {
         // offending variable/field in their message — 400 with that text beats a 500 with none.
         if (err instanceof SpecError) return json({ error: `spec: ${err.message}` }, { status: 400 });
         if (err instanceof RegistryError) return json({ error: err.message }, { status: 400 });
+        // Also the caller's problem: a spec that will not parse, or a name that cannot be a
+        // directory. Mapped here as well as in the deployments branch, because PUT /api/specs/:name
+        // has no local catch and was answering 500 for a malformed spec.
+        if (err instanceof SpecStoreError) return json({ error: err.message }, { status: 400 });
         return json({ error: (err as Error).message }, { status: 500 });
       }
     },

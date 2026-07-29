@@ -10,6 +10,7 @@ import { renderCloudInit, randomPassword } from '../src/cloudinit.ts';
 import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { shq } from '../src/compose.ts';
+import { createServer } from '../src/api.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
 function fakeRunner(fail: (cmd: string) => boolean = () => false, stdout = ''): Runner & { log: string[] } {
@@ -927,5 +928,109 @@ describe('init refuses a missing advanced-UI image', () => {
       dryRun: false,
       runner,
     });
+  });
+});
+
+describe('a spec source is a secret; its metadata is not', () => {
+  /*
+   * Reads are unauthenticated on this API by design — see the note on the route. A spec's SOURCE is
+   * the one read that cannot follow that rule: hook bodies are shell strings, and a hook routinely
+   * carries a credential inline. The resolved-spec view already withholds hook bodies, so serving
+   * the whole file unauthenticated handed them out one route over.
+   *
+   * This boots the real server rather than calling a handler, because the thing under test is the
+   * authorization decision on a live request — a unit test of `specs.source()` would pass either way.
+   */
+  const TOKEN = 'test-token-value';
+  const SECRET = 'hunter2-registry-password';
+  const SPEC = [
+    'version: 1',
+    'kind: isolated',
+    'stack: web-${PR}',
+    'axes:',
+    '  - name: registry',
+    `    up: "docker login -u ci -p ${SECRET}"`,
+    '    assert_gone: "docker info >/dev/null 2>&1 || exit 1; ! docker login-check"',
+    '',
+  ].join('\n');
+
+  const boot = async () => {
+    const dataDir = `${process.env.TMPDIR ?? '/tmp'}/pstack-api-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    // Port 0 lets the OS pick, so a busy 7878 (a dev server on the same machine) cannot fail this.
+    const server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: TOKEN });
+    const base = `http://127.0.0.1:${server.port}`;
+    const put = await fetch(`${base}/api/specs/web`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ spec: SPEC, description: 'the web app' }),
+    });
+    expect(put.status).toBe(201);
+    return { server, base };
+  };
+
+  test('without a token the source is withheld — and the secret appears nowhere', async () => {
+    const { server, base } = await boot();
+    try {
+      const r = await fetch(`${base}/api/specs/web`);
+      // NOT a 401: the metadata is genuinely public, and failing the whole request would mean a
+      // token is needed just to see that a spec exists.
+      expect(r.status).toBe(200);
+      const raw = await r.text();
+      // The whole response body, not just the field: a leak anywhere in it is a leak.
+      expect(raw).not.toContain(SECRET);
+      expect(raw).not.toContain('docker login');
+
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      expect(body.source).toBeUndefined();
+      // Explicit, so a page says "needs a token" instead of rendering a blank editor that reads as
+      // an empty spec.
+      expect(body.sourceWithheld).toBe(true);
+      // Metadata still served, including the NAMES of required variables — not credentials.
+      expect(body.name).toBe('web');
+      expect(body.kind).toBe('isolated');
+      expect(body.description).toBe('the web app');
+      expect(body.requiredVars).toEqual(['PR']);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('with a token the source is served in full', async () => {
+    const { server, base } = await boot();
+    try {
+      const r = await fetch(`${base}/api/specs/web`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { source?: string; sourceWithheld?: boolean };
+      expect(body.source).toContain(SECRET);
+      expect(body.sourceWithheld).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a wrong token is treated as no token, not as an error', async () => {
+    // Same shape as the unauthenticated case: metadata, no source. A 401 here would let someone
+    // probe token validity against a route that is otherwise public.
+    const { server, base } = await boot();
+    try {
+      const r = await fetch(`${base}/api/specs/web`, { headers: { authorization: 'Bearer wrong' } });
+      expect(r.status).toBe(200);
+      expect(await r.text()).not.toContain(SECRET);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('the LIST route never carried a source to begin with', async () => {
+    const { server, base } = await boot();
+    try {
+      const raw = await (await fetch(`${base}/api/specs`)).text();
+      expect(raw).not.toContain(SECRET);
+      expect(JSON.parse(raw).specs).toHaveLength(1);
+    } finally {
+      server.stop(true);
+    }
   });
 });

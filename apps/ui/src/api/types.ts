@@ -154,6 +154,17 @@ export type DeploymentsResponse = { deployments: DeploymentRow[] };
 export type JobsResponse = { jobs: Job[] };
 export type JobResponse = { job: Job };
 export type SpecsResponse = { specs: SpecMeta[] };
+
+/**
+ * `GET /api/specs/:name`. The metadata is always served; `source` only with a token, because hook
+ * bodies are shell strings that routinely carry a credential inline. When it is held back the server
+ * says so EXPLICITLY rather than sending an empty string — otherwise a page cannot tell "no access"
+ * apart from "an empty spec".
+ */
+export type SpecDetail = SpecMeta & {
+  source?: string;
+  sourceWithheld?: true;
+};
 export type LogsResponse = { stack: string; tail: number; ok: boolean; text: string };
 export type ActionResponse = { job: JobStub };
 export type SubmitResponse = { id: string; kind: Kind; stack: string; specName?: string | null };

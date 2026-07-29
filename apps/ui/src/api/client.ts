@@ -51,12 +51,25 @@ function url(path: string): string {
   return base ? base + path : path;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  /**
+   * Send the token on a GET. Off by default because reads are unauthenticated on this API — the
+   * dashboard must render before anyone pastes a token. The one exception is a spec's SOURCE: hook
+   * bodies are shell strings that routinely carry a credential inline, so the server withholds them
+   * without a token. That read has to opt in.
+   */
+  authedGet = false,
+): Promise<ApiResult<T>> {
   const headers: Record<string, string> = {};
   if (method !== 'GET') {
     headers['content-type'] = 'application/json';
     // PUT and DELETE destroy just as thoroughly as POST, so all three carry the token.
     if (settings.token) headers.authorization = `Bearer ${settings.token}`;
+  } else if (authedGet && settings.token) {
+    headers.authorization = `Bearer ${settings.token}`;
   }
   try {
     const res = await fetch(url(path), {
@@ -90,6 +103,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
+  /** A GET that carries the token — for a read the server deliberately restricts. See `authedGet`. */
+  getAuthed: <T>(path: string) => request<T>('GET', path, undefined, true),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),

@@ -707,6 +707,21 @@ pre.raw {
   color: var(--fail);
   max-height: 420px;
 }
+/* Neutral source listing — same box as `pre.raw` without the error colour. */
+pre.code {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  padding: var(--s3);
+  margin: 0;
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre;
+  color: var(--fg-dim);
+}
 pre.log {
   max-height: 460px;
   color: var(--fg-dim);
@@ -1074,25 +1089,28 @@ kbd {
   margin-inline-start: var(--s1);
 }
 
+/*
+ * A bare icon, not a bordered pill: the lucide glyph already draws its own circle, so a border
+ * around it produced a ring inside a ring. Colour alone carries the hover/pinned state.
+ */
 .hint-btn {
-  width: 17px;
-  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   min-height: 0;
   padding: 0;
+  border: 0;
   border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
+  background: none;
   color: var(--fg-mute);
-  font: 600 11px / 1 var(--sans);
-  font-style: italic;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .hint-btn:hover,
 .hint-btn.on {
   color: var(--accent);
-  border-color: var(--accent);
   background: var(--accent-soft);
 }
 

@@ -14,8 +14,12 @@
  *
  * Not the `title` attribute: it waits a second, cannot be styled, cannot hold a link, and never
  * appears on touch at all.
+ *
+ * The trigger is lucide's `Info` glyph rather than a typed letter `i`. A text glyph inherits font
+ * metrics and italics, so it never sits centred in its own circle and reads as a stray character.
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { Info } from 'lucide-vue-next';
 
 const props = defineProps<{
   /** Accessible name for the trigger — say what the hint is about, e.g. "about leaked axes". */
@@ -62,7 +66,7 @@ onBeforeUnmount(() => {
       @focus="hovered = true"
       @blur="hovered = false"
     >
-      i
+      <Info :size="15" :stroke-width="2" aria-hidden="true" />
     </button>
     <Transition name="hint">
       <span

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.4 — 2026-07-29
+
+### Security
+
+- **`GET /api/specs/:name` served a spec's source to anyone who asked.** Reads are unauthenticated on
+  this API by design, but a spec's hook bodies are shell strings that routinely carry a registry
+  password or an API token inline — and the resolved-spec view already withholds hook bodies for
+  exactly that reason, so serving the whole file one route over handed them out anyway.
+
+  The metadata (name, kind, description, and the *names* of required variables — none of them a
+  credential) is still public; `source` now requires a token, and is withheld **explicitly** via
+  `sourceWithheld: true` rather than sent empty, so a page can say why instead of rendering a blank
+  editor that reads as an empty spec. A wrong token is treated as no token rather than a 401, so this
+  route cannot be used to probe token validity. Covered by tests that boot the real server and assert
+  the credential appears nowhere in the unauthenticated response body.
+
+  The deployment reads were checked and are clean — they carry hook *names* only.
+
+### Added
+
+- **Specs pages in the advanced UI**: a list (kind, required variables, which deployments use each
+  one, last updated, search) and a detail view. “Used by” is joined from the deployment list already
+  in memory, and it is the fact you need *before* trying to delete a spec — that is refused while a
+  deployment still references it. The detail view is also where the withheld-source notice appears.
+  Storing and deleting a spec are still API-only.
+
+### Changed
+
+- **Icons come from lucide** (`lucide-vue-next`, per-glyph imports so only what is used ships)
+  instead of six hand-drawn SVG paths. The info affordance was a typed letter `i` — a text glyph
+  inherits font metrics and italics, so it never sat centred in its own circle; it is now lucide's
+  `Info`, with no border of its own, since the glyph already draws a circle.
+
+### Fixed
+
+- `PUT /api/specs/:name` answered **500** for a malformed spec. `SpecStoreError` was mapped to 400
+  only inside the deployments branch, so the spec route fell through to the generic handler — a
+  caller's bad input reported as a server fault.
+
 ## 0.2.3 — 2026-07-29
 
 ### Changed
