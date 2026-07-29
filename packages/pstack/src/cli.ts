@@ -25,6 +25,8 @@
  * errored", which are different problems with different owners.
  */
 
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { loadSpec, SpecError, warnings } from './spec.ts';
 import { createRunner, type LogLevel } from './exec.ts';
 import { down, report, status, up, verify } from './stack.ts';
@@ -396,7 +398,24 @@ switch (args.cmd) {
       process.exit(EXIT.usage);
     }
 
-    createServer({ dataDir: dataDir(), port, host, token });
+    // In the control container Traefik's directory is mounted at /etc/traefik/dynamic, which is the
+    // default. Run on the HOST — `pstack serve` in a terminal — that path does not exist, and the
+    // same directory is at <dataDir>/control/traefik-dynamic. PSTACK_ROUTING_DIR overrides both, for
+    // an unusual layout or to switch the feature off by pointing it somewhere unwritable.
+    const isDir = async (p: string): Promise<boolean> => {
+      try {
+        return (await stat(p)).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+    const routingDir =
+      process.env.PSTACK_ROUTING_DIR ??
+      ((await isDir('/etc/traefik/dynamic'))
+        ? '/etc/traefik/dynamic'
+        : join(dataDir(), 'control', 'traefik-dynamic'));
+
+    createServer({ dataDir: dataDir(), port, host, token, routingDir });
     console.log(`pstack api  http://${host}:${port}`);
     console.log(`  registry: ${dataDir()}/deployments`);
     console.log(

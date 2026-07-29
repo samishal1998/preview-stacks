@@ -23,6 +23,7 @@ import {
   Package,
   Plus,
   Settings2,
+  Waypoints,
 } from 'lucide-vue-next';
 
 const { sheetOpen } = useShortcuts();
@@ -71,6 +72,11 @@ const tokenMissing = computed(() => state.health?.authEnforced === true && !sett
         <RouterLink to="/specs" class="navlink">
           <FileCode2 :size="17" aria-hidden="true" />
           <span>Specs</span>
+        </RouterLink>
+
+        <RouterLink to="/routing" class="navlink">
+          <Waypoints :size="17" aria-hidden="true" />
+          <span>Routing</span>
         </RouterLink>
 
         <RouterLink to="/jobs" class="navlink" title="g j">

@@ -39,6 +39,9 @@ export {
 } from './subdomains.ts';
 export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
 
+export { RoutingStore, RoutingError, assertValidRoutingName, validateRoutingContent } from './routing.ts';
+export type { RoutingFile } from './routing.ts';
+
 export { SpecStore, SpecStoreError, assertValidSpecName, findRequiredVars } from './specs.ts';
 export type { SpecMeta, StoredSpec } from './specs.ts';
 

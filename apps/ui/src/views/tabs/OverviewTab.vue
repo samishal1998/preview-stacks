@@ -15,7 +15,13 @@ const kindBlurb = computed(() =>
 
 <template>
   <section class="panel">
-    <h2 class="section" style="margin-bottom: var(--s3)">Resolved spec</h2>
+    <div class="phead">
+      <h2 class="section">Resolved spec</h2>
+      <span class="grow" />
+      <RouterLink v-if="dep.detail" :to="`/submit/${encodeURIComponent(dep.id)}`">
+        Edit spec &amp; compose →
+      </RouterLink>
+    </div>
 
     <SkeletonList v-if="!dep.detail && !dep.error" :rows="5" />
     <p v-else-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>

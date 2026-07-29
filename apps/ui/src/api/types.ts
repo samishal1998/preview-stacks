@@ -171,6 +171,32 @@ export type JobsResponse = { jobs: Job[] };
 export type JobResponse = { job: Job };
 export type SpecsResponse = { specs: SpecMeta[] };
 
+/** One file in Traefik's watched dynamic-config directory. */
+export type RoutingFile = { name: string; size: number; updatedAt: number };
+export type RoutingListResponse = {
+  dir: string;
+  /** False on a control stack that predates the API's mount — the fix is `pstack init`. */
+  writable: boolean;
+  files: RoutingFile[];
+};
+/** Content only with a token: these files hold basic-auth hashes and forward-auth URLs. */
+export type RoutingReadResponse = { name: string; content?: string; sourceWithheld?: true };
+/** `previous` is the in-session undo — there is no history on disk, by design. */
+export type RoutingWriteResponse = { name?: string; deleted?: string; previous: string | null };
+
+/**
+ * `GET /api/deployments/:id/source` — the stored spec and compose file, so replacing is editing
+ * rather than retyping. Restricted for the same reason a named spec's source is.
+ */
+export type DeploymentSourceResponse = {
+  id: string;
+  /** Set when this deployment references a stored spec — editing this copy forks from it. */
+  specName: string | null;
+  spec?: string;
+  compose?: string | null;
+  sourceWithheld?: true;
+};
+
 /**
  * `GET /api/specs/:name`. The metadata is always served; `source` only with a token, because hook
  * bodies are shell strings that routinely carry a credential inline. When it is held back the server

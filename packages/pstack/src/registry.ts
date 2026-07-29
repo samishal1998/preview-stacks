@@ -107,6 +107,28 @@ export class Registry {
   }
 
   /**
+   * The stored source: the spec, and the compose file when one was submitted with it.
+   *
+   * WHY IT EXISTS. Without this the UI's "replace" form opened EMPTY, because nothing could hand back
+   * what was stored. Replacing is whole-record, so an operator re-typing a spec from memory silently
+   * dropped whatever they forgot — the axes stopped being tracked while the resources they created
+   * kept running. Being unable to read your own submission is what made that a likely mistake rather
+   * than a careless one.
+   *
+   * Restricted like a named spec's source, for the same reason: hook bodies are shell strings that
+   * routinely carry a credential inline. The caller decides; this only reads.
+   */
+  async source(id: string): Promise<{ spec: string; compose: string | null }> {
+    const dep = await this.get(id);
+    if (!dep) throw new RegistryError(`no such deployment: ${id}`);
+    return {
+      spec: await readFile(dep.specPath, 'utf8'),
+      // Absent whenever the submission had no compose section — not an error.
+      compose: await readFile(join(dep.dir, 'compose.yml'), 'utf8').catch(() => null),
+    };
+  }
+
+  /**
    * Create or replace a deployment.
    *
    * The spec is parsed before anything is written, so a malformed submission is rejected without

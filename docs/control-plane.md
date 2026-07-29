@@ -442,6 +442,40 @@ correctness — and it clears the per-stack busy locks, which is the desired beh
 
 ---
 
+## 4b. Traefik's dynamic configuration
+
+Traefik reads two providers: **docker** (labels on containers — every per-PR router) and **file**, a
+watched *directory*. The file provider is where everything that is not a container lives: middleware
+(basicAuth, rate limits, IP allow-lists), TLS options, the catch-all fallback router, and routes to
+something running outside compose. Several files rather than one is the point of watching a directory
+— one file per concern, each editable on its own.
+
+`init` creates the directory; from **0.4.0** the API also mounts it read-write, so it can be managed
+from the UI (`GET/PUT/DELETE /api/routing[/:name]`) instead of over SSH. An existing host picks the
+mount up by re-running `pstack init`, and until it does the API reports `writable: false` and the UI
+says so rather than failing one write at a time.
+
+### The blast radius, and the one thing it cannot touch
+
+Traefik's documented behaviour: **an unparseable file is a parse error for the whole directory**, and
+the rest of the directory can be discarded with it. So the symptom of a careless edit is not the file
+you were editing — it is *other* routes disappearing. Three defences, all in `src/routing.ts`:
+
+| Defence | Why |
+|---|---|
+| Parse + require a known top-level section before writing | `htttp:` is valid YAML that configures nothing, and Traefik will not tell you. A typo'd section is refused with the list of real ones. |
+| Write a temp file and `rename` it into place | `writeFile` truncates then fills, and the watcher can fire in between. `rename` is atomic within a filesystem, so Traefik only ever sees a whole file. |
+| Nothing but dynamic config in that directory — no `.bak`, no leftover temp | Traefik would try to parse it. This is why there is **no on-disk history**: the obvious place to keep it is the one place it must not go. A write returns the previous content instead, as an in-session undo. |
+
+**It cannot lock you out.** `control.<domain>` and `api.<domain>` are docker labels on the pstack
+container, not file config — so no file written here can break the surface you would use to undo it.
+That is a property worth preserving deliberately, not a coincidence.
+
+Reads of a file's *contents* need the token (basicAuth hashes, forwardAuth URLs); the file *list* does
+not, so the page renders before you authenticate.
+
+---
+
 ## 5. Trust boundary
 
 **Accepting a spec over HTTP is accepting arbitrary shell, by design.**

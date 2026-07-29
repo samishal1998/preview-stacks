@@ -11,6 +11,11 @@
  *   POST   /api/deployments/:id/verify    → 202 { job }
  *   GET    /api/specs                     named specs (store once, reference from many deployments)
  *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
+ *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
+ *   GET    /api/routing                   Traefik dynamic config: the file list + whether it is writable
+ *   GET    /api/routing/:name             one file's contents, token required
+ *   PUT    /api/routing/:name             validate + atomically replace  { content }
+ *   DELETE /api/routing/:name             remove it
  *   PUT    /api/specs/:name               store/replace  { spec, compose?, description? }
  *   DELETE /api/specs/:name               refused while a deployment still references it
  *   GET    /api/control                   READ-ONLY view of the control stack (never actionable)
@@ -66,6 +71,7 @@ import { createRunner } from './exec.ts';
 import { JobRegistry } from './jobs.ts';
 import { Registry, RegistryError } from './registry.ts';
 import { SpecStore, SpecStoreError } from './specs.ts';
+import { RoutingError, RoutingStore } from './routing.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -77,6 +83,11 @@ export type ServerOptions = {
   port: number;
   host: string;
   token?: string;
+  /**
+   * Traefik's dynamic-config directory. Defaults to the in-container mount path
+   * (`/etc/traefik/dynamic`); on a host-side run point it at `<dataDir>/control/traefik-dynamic`.
+   */
+  routingDir?: string;
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -108,6 +119,12 @@ export function createServer(opts: ServerOptions) {
   const jobs = new JobRegistry();
   const registry = new Registry(opts.dataDir);
   const specs = new SpecStore(opts.dataDir);
+  /**
+   * Traefik's watched directory, at the path it has INSIDE this container — the control stack mounts
+   * `./traefik-dynamic` to the same place for both services. Overridable for tests and for a CLI run
+   * on the host, where the path is `<dataDir>/control/traefik-dynamic` instead.
+   */
+  const routing = new RoutingStore(opts.routingDir ?? '/etc/traefik/dynamic');
   /**
    * For host-level queries that belong to no particular deployment (docker inventory).
    *
@@ -627,6 +644,73 @@ export function createServer(opts: ServerOptions) {
           return json({ stack: spec.stack, tail, ok: r.ok, text });
         }
 
+        // ---- a deployment's stored source ----------------------------------------------
+        // Restricted exactly like a named spec's source: hook bodies are shell strings that routinely
+        // carry a credential inline, so metadata is public and the file is not. Withheld EXPLICITLY,
+        // because a form pre-filled with an empty string is indistinguishable from an empty spec —
+        // and this response exists to stop someone re-typing a spec from memory.
+        const srcm = /^\/api\/deployments\/([^/]+)\/source$/.exec(path);
+        if (srcm && req.method === 'GET') {
+          const id = decodeURIComponent(srcm[1]!);
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          if (!authed(req)) return json({ id, specName: dep.specName ?? null, sourceWithheld: true });
+          const src = await registry.source(id);
+          return json({
+            id,
+            // Named-spec references keep their own copy of the source, so editing it here DIVERGES
+            // from the stored spec every other deployment still shares. Surfaced so a UI can say so
+            // rather than letting the fork happen silently.
+            specName: dep.specName ?? null,
+            spec: src.spec,
+            compose: src.compose,
+          });
+        }
+
+        // ---- Traefik dynamic configuration --------------------------------------------
+        // The file provider watches a directory, so this is a directory of files rather than one
+        // file: middleware, TLS options, the fallback router, routes to things outside compose.
+        // Nothing here can lock you out — control.<domain> and api.<domain> are docker labels on
+        // this container, not file-provider config (see init.ts).
+        if (path === '/api/routing' && req.method === 'GET') {
+          return json({
+            dir: routing.dir,
+            // False on a control stack that predates the mount; the UI turns this into "re-run
+            // `pstack init`" rather than letting every write fail one at a time.
+            writable: await routing.writable(),
+            files: await routing.list(),
+          });
+        }
+
+        const rm2 = /^\/api\/routing\/([^/]+)$/.exec(path);
+        if (rm2) {
+          const name = decodeURIComponent(rm2[1]!);
+
+          if (req.method === 'GET') {
+            // Authenticated: dynamic config holds basicAuth hashes, forwardAuth URLs and custom
+            // headers — the same secret class as a spec's hooks.
+            if (!authed(req)) return json({ name, sourceWithheld: true });
+            return json({ name, content: await routing.read(name) });
+          }
+
+          if (req.method === 'PUT') {
+            const body = (await req.json().catch(() => null)) as { content?: unknown } | null;
+            if (!body || typeof body.content !== 'string') {
+              return json({ error: 'body must be { content: string }' }, { status: 400 });
+            }
+            // `previous` is the undo: there is deliberately no on-disk history, because the only
+            // obvious place to keep it is the one directory that must contain nothing but config.
+            const previous = await routing.write(name, body.content);
+            return json({ name, previous }, { status: previous === null ? 201 : 200 });
+          }
+
+          if (req.method === 'DELETE') {
+            return json({ deleted: name, previous: await routing.remove(name) });
+          }
+
+          return json({ error: 'use GET, PUT or DELETE' }, { status: 405 });
+        }
+
         // ---- jobs -------------------------------------------------------------------
         if (path === '/api/jobs') return json({ jobs: jobs.list() });
 
@@ -671,6 +755,9 @@ export function createServer(opts: ServerOptions) {
         // offending variable/field in their message — 400 with that text beats a 500 with none.
         if (err instanceof SpecError) return json({ error: `spec: ${err.message}` }, { status: 400 });
         if (err instanceof RegistryError) return json({ error: err.message }, { status: 400 });
+        // A rejected routing file, a bad filename, or a directory that is not mounted — all the
+        // caller's to fix, and every message names what to do about it.
+        if (err instanceof RoutingError) return json({ error: err.message }, { status: 400 });
         // Also the caller's problem: a spec that will not parse, or a name that cannot be a
         // directory. Mapped here as well as in the deployments branch, because PUT /api/specs/:name
         // has no local catch and was answering 500 for a malformed spec.

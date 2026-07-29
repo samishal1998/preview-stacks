@@ -198,7 +198,7 @@ async function onConflict(body: ConflictBody): Promise<void> {
             {{ isShared ? 'Tear down (force)' : 'Tear down' }}
           </ActionButton>
           <span class="grow" />
-          <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Replace spec →</RouterLink>
+          <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Edit spec &amp; compose →</RouterLink>
         </div>
 
         <p v-if="busy" class="hint">

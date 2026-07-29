@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.4.0 — 2026-07-29
+
+### ⚠️ Upgrading an existing host
+
+**Re-run `pstack init`.** The control stack now mounts Traefik's dynamic-config directory into the API
+container, and that mount is what the routing editor needs. `init` is idempotent; it rewrites the
+compose file and recreates the control containers. Until you do, the API reports the directory as
+`writable: false` and the UI says exactly that, rather than failing one save at a time.
+
+### Added
+
+- **Traefik dynamic config is editable from the UI** — a *Routing* page over
+  `GET /api/routing`, `GET|PUT|DELETE /api/routing/:name`. The file provider watches a *directory*, so
+  this is a list of files, one per concern: middleware (basicAuth, rate limits, IP allow-lists), TLS
+  options, the fallback router, routes to anything running outside compose. Previously that directory
+  was created by `init` and then only reachable over SSH.
+
+  It is the highest-blast-radius surface in the product, so the guards are the feature:
+
+  - **Validated before anything is written.** Not just "is it YAML" — the top-level keys must be
+    Traefik's (`http`, `tcp`, `udp`, `tls`). `htttp:` is perfectly good YAML that configures nothing,
+    and Traefik will not tell you; it is now refused by name with the real sections listed.
+  - **Atomic writes.** `writeFile` truncates then fills and the watcher can fire in between, so the
+    content goes to a temp file and is `rename`d into place — Traefik only ever sees a whole file.
+  - **Nothing but config in that directory**, since Traefik parses whatever is there. Hence **no
+    on-disk history**: the obvious place to keep it is the one place it must not go. A write returns
+    the previous content instead, and the UI offers it back as an in-session undo.
+  - **It cannot lock you out.** `control.<domain>` and `api.<domain>` are docker labels on the pstack
+    container, not file config, so no save here can break the page you would use to undo it. The UI
+    says so, because "this can break everything" without that just makes people avoid the page.
+
+  Why it matters: Traefik's documented behaviour is that one unparseable file is a parse error for the
+  whole *directory*, and the rest can be discarded with it — the symptom is *other* routes
+  disappearing, not the file you edited.
+
+- **`GET /api/deployments/:id/source`** returns a deployment's stored spec and compose file, so the
+  **Edit form pre-fills instead of opening empty**. That was a real footgun: replacing is
+  whole-record, so retyping a spec from memory silently dropped whatever you forgot — and a dropped
+  axis stops being tracked while the resources it created keep running. Being unable to read your own
+  submission is what made that likely rather than careless. This is the "edit a shared service" path:
+  add via Submit, edit here, remove via Tear down + Forget.
+
+  Restricted like a named spec's source, and for a wider reason — a `kind: shared` deployment declares
+  no axes, so its credentials live in the **compose file** (`POSTGRES_PASSWORD`, …). Both files are
+  withheld without a token, explicitly, so a pre-filled-empty form is never mistaken for an empty
+  spec. If the deployment references a stored spec, the form now **warns that saving forks it** from
+  the spec every other deployment shares, and links to the spec instead.
+
+- Editing is reachable from a deployment's **Overview** tab, not only from the bottom of *Danger* —
+  and the link reads "Edit spec & compose", because that is now what it does.
+
+### Fixed
+
+- `RoutingError` was mapped to 400 inside the *deployments* branch instead of the global handler, so a
+  rejected routing file answered **500**. Caught by a test asserting the status, not by review — the
+  anchor line it was inserted after appears twice in `api.ts`.
+- The `serve` command probed for the in-container Traefik path with `Bun.file(dir).exists()`, which is
+  **`false` for a directory** (verified). That would have sent the containerised process to the
+  host-side path, where the directory does not exist — the feature would have reported itself
+  unavailable on exactly the deployment it exists for. It uses `stat().isDirectory()` now.
+
 ## 0.3.0 — 2026-07-29
 
 ### Added

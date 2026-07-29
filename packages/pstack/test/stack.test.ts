@@ -12,6 +12,7 @@ import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.t
 import { composeDown, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer } from '../src/api.ts';
+import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
 function fakeRunner(fail: (cmd: string) => boolean = () => false, stdout = ''): Runner & { log: string[] } {
@@ -1224,5 +1225,269 @@ axes: []
       await composeDown(s(), runner);
       expect(seen[0]!.PSTACK_WILD_BACKEND).toBeDefined();
     });
+  });
+});
+
+describe("Traefik dynamic config — one bad write must not take down other people's routes", () => {
+  /*
+   * Traefik's documented behaviour: an unparseable file in the watched directory is a parse error for
+   * the DIRECTORY, and the rest of it can be discarded with it. So the failure mode is not "my new
+   * middleware is broken", it is routes elsewhere vanishing. Everything below defends that.
+   */
+  const tmp = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-routing-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  const store = async (): Promise<RoutingStore> => {
+    const dir = tmp();
+    await Bun.write(`${dir}/.keep`, '');
+    return new RoutingStore(dir);
+  };
+
+  const VALID = 'http:\n  middlewares:\n    dashboard-auth:\n      basicAuth:\n        users:\n          - "admin:$apr1$x"\n';
+
+  describe('validation happens before anything touches disk', () => {
+    test('unparseable YAML is refused', () => {
+      expect(() => validateRoutingContent('http:\n  - [unclosed')).toThrow(RoutingError);
+      expect(() => validateRoutingContent('http:\n  - [unclosed')).toThrow(/not valid YAML/);
+    });
+
+    test('a typo in a top-level section is refused, not silently ignored', () => {
+      // The insidious case: `htttp:` is perfectly good YAML, so Traefik loads the file and applies
+      // nothing. Without this check the symptom is "I added the middleware and nothing happened".
+      expect(() => validateRoutingContent('htttp:\n  middlewares: {}')).toThrow(/unknown top-level/);
+      // Same shape: middlewares belong UNDER http, and at the top level they do nothing at all.
+      expect(() => validateRoutingContent('middlewares:\n  a:\n    basicAuth: {}')).toThrow(
+        /unknown top-level/,
+      );
+    });
+
+    test('empty, non-mapping and section-less content are all refused', () => {
+      expect(() => validateRoutingContent('   ')).toThrow(/empty/);
+      expect(() => validateRoutingContent('- a\n- b')).toThrow(/must be a mapping/);
+      expect(() => validateRoutingContent('{}')).toThrow(/no sections/);
+    });
+
+    test('every real Traefik section is accepted', () => {
+      for (const s of ['http', 'tcp', 'udp', 'tls']) {
+        expect(() => validateRoutingContent(`${s}:\n  routers: {}`)).not.toThrow();
+      }
+    });
+  });
+
+  describe('filenames', () => {
+    test('traversal and separators are refused', async () => {
+      const s = await store();
+      for (const bad of ['../evil.yml', 'a/b.yml', '..%2Fx.yml', '.hidden.yml']) {
+        await expect(s.write(bad, VALID)).rejects.toThrow(/invalid filename/);
+      }
+    });
+
+    test('a non-YAML extension is refused — Traefik would not read it anyway', async () => {
+      const s = await store();
+      await expect(s.write('middleware.txt', VALID)).rejects.toThrow(/invalid filename/);
+      await expect(s.write('middleware', VALID)).rejects.toThrow(/invalid filename/);
+    });
+
+    test('.yml and .yaml both work', async () => {
+      const s = await store();
+      await s.write('a.yml', VALID);
+      await s.write('b.yaml', VALID);
+      expect((await s.list()).map((f) => f.name)).toEqual(['a.yml', 'b.yaml']);
+    });
+  });
+
+  describe('writing', () => {
+    test('a rejected file is never created', async () => {
+      const s = await store();
+      await expect(s.write('bad.yml', 'htttp: {}')).rejects.toThrow(RoutingError);
+      expect(await s.list()).toEqual([]);
+    });
+
+    test('write returns the previous content, so a caller can offer an undo', async () => {
+      // There is deliberately NO on-disk history: the obvious place to keep it is the one directory
+      // that must contain nothing but dynamic config.
+      const s = await store();
+      expect(await s.write('m.yml', VALID)).toBeNull(); // new
+      const next = 'http:\n  routers: {}\n';
+      expect(await s.write('m.yml', next)).toBe(VALID); // replaced
+      expect(await s.read('m.yml')).toBe(next);
+    });
+
+    test('it leaves no temp file behind — anything in that directory gets parsed', async () => {
+      const s = await store();
+      await s.write('m.yml', VALID);
+      const { readdir } = await import('node:fs/promises');
+      const entries = await readdir(s.dir);
+      expect(entries.filter((e) => e.includes('pstack-tmp'))).toEqual([]);
+    });
+
+    test('list only reports files Traefik would actually read', async () => {
+      const s = await store();
+      await s.write('good.yml', VALID);
+      await Bun.write(`${s.dir}/notes.txt`, 'ignore me');
+      await Bun.write(`${s.dir}/.hidden.yml`, VALID);
+      expect((await s.list()).map((f) => f.name)).toEqual(['good.yml']);
+    });
+
+    test('a missing directory reads as not-writable rather than throwing', async () => {
+      // The pre-0.4.0 control stack does not mount this into the API at all, and the answer has to be
+      // "re-run pstack init", not an ENOENT on every request.
+      const s = new RoutingStore(`${tmp()}/definitely-absent`);
+      expect(await s.writable()).toBe(false);
+      expect(await s.list()).toEqual([]);
+      await expect(s.write('m.yml', VALID)).rejects.toThrow(/re-run `pstack init`/);
+    });
+  });
+
+  test('delete returns what it removed', async () => {
+    const s = await store();
+    await s.write('m.yml', VALID);
+    expect(await s.remove('m.yml')).toBe(VALID);
+    expect(await s.list()).toEqual([]);
+    await expect(s.remove('m.yml')).rejects.toThrow(/no such routing file/);
+  });
+
+  describe('over HTTP', () => {
+    const TOKEN = 'routing-token-value';
+    const boot = async () => {
+      const dataDir = tmp();
+      const routingDir = `${dataDir}-dynamic`;
+      await Bun.write(`${routingDir}/.keep`, '');
+      const server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: TOKEN, routingDir });
+      return { server, base: `http://127.0.0.1:${server.port}`, routingDir };
+    };
+
+    test('content needs a token; the file list does not', async () => {
+      const { server, base } = await boot();
+      try {
+        const put = await fetch(`${base}/api/routing/auth.yml`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ content: VALID }),
+        });
+        expect(put.status).toBe(201);
+
+        // The list renders without a token — it is filenames, not configuration.
+        const list = (await (await fetch(`${base}/api/routing`)).json()) as {
+          files: Array<{ name: string }>;
+          writable: boolean;
+        };
+        expect(list.files.map((f) => f.name)).toEqual(['auth.yml']);
+        expect(list.writable).toBe(true);
+
+        // The CONTENT does not: dynamic config holds basicAuth hashes and forwardAuth URLs.
+        const raw = await (await fetch(`${base}/api/routing/auth.yml`)).text();
+        expect(raw).not.toContain('apr1');
+        expect(JSON.parse(raw).sourceWithheld).toBe(true);
+
+        const authedRead = (await (
+          await fetch(`${base}/api/routing/auth.yml`, { headers: { authorization: `Bearer ${TOKEN}` } })
+        ).json()) as { content: string };
+        expect(authedRead.content).toBe(VALID);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('a write without a token is refused, and changes nothing', async () => {
+      const { server, base, routingDir } = await boot();
+      try {
+        const r = await fetch(`${base}/api/routing/nope.yml`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ content: VALID }),
+        });
+        expect(r.status).toBe(401);
+        const { readdir } = await import('node:fs/promises');
+        expect((await readdir(routingDir)).filter((f) => f.endsWith('.yml'))).toEqual([]);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('a rejected file answers 400 with the reason, not 500', async () => {
+      const { server, base } = await boot();
+      try {
+        const r = await fetch(`${base}/api/routing/bad.yml`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ content: 'htttp: {}' }),
+        });
+        expect(r.status).toBe(400);
+        expect(((await r.json()) as { error: string }).error).toMatch(/unknown top-level/);
+      } finally {
+        server.stop(true);
+      }
+    });
+  });
+});
+
+describe("a deployment's stored source — so replacing is editing, not retyping", () => {
+  const TOKEN = 'src-token-value';
+  const SECRET = 'deploy-hook-secret-value';
+  const SPEC = ['version: 1', 'kind: shared', 'stack: shared-ingress', 'axes: []', ''].join('\n');
+  const COMPOSE = [
+    'services:',
+    '  postgres:',
+    '    image: postgres:17',
+    '    environment:',
+    `      POSTGRES_PASSWORD: ${SECRET}`,
+    '',
+  ].join('\n');
+
+  const boot = async () => {
+    const dataDir = `${process.env.TMPDIR ?? '/tmp'}/pstack-src-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    const server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: TOKEN });
+    const base = `http://127.0.0.1:${server.port}`;
+    const put = await fetch(`${base}/api/deployments/ingress`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ spec: SPEC, compose: COMPOSE }),
+    });
+    expect(put.status).toBe(201);
+    return { server, base };
+  };
+
+  test('with a token it returns the spec and the compose file verbatim', async () => {
+    // The point: the replace form can pre-fill. Retyping a spec from memory drops whatever you
+    // forget, and a dropped axis stops being tracked while what it created keeps running.
+    const { server, base } = await boot();
+    try {
+      const r = await fetch(`${base}/api/deployments/ingress/source`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { spec: string; compose: string | null; specName: string | null };
+      expect(body.spec).toBe(SPEC);
+      expect(body.compose).toBe(COMPOSE);
+      expect(body.specName).toBeNull();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('without a token it is withheld, and the hook secret does not leak', async () => {
+    const { server, base } = await boot();
+    try {
+      const raw = await (await fetch(`${base}/api/deployments/ingress/source`)).text();
+      expect(raw).not.toContain(SECRET);
+      const body = JSON.parse(raw);
+      expect(body.sourceWithheld).toBe(true);
+      expect(body.spec).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('an unknown deployment is a 404', async () => {
+    const { server, base } = await boot();
+    try {
+      const r = await fetch(`${base}/api/deployments/nope/source`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(r.status).toBe(404);
+    } finally {
+      server.stop(true);
+    }
   });
 });

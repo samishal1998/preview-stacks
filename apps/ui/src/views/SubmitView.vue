@@ -13,7 +13,13 @@
 import { computed, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
 import InfoHint from '../components/InfoHint.vue';
-import type { SpecMeta, SpecsResponse, SubmitResponse, VarPair } from '../api/types';
+import type {
+  DeploymentSourceResponse,
+  SpecMeta,
+  SpecsResponse,
+  SubmitResponse,
+  VarPair,
+} from '../api/types';
 import { loadDeployments, rowFor } from '../composables/useControlPlane';
 import { pairsFromRecord, readVars, recordFromPairs, writeVars } from '../composables/useVars';
 import { toast } from '../composables/useToasts';
@@ -46,16 +52,53 @@ const chosenSpec = computed(() => specs.value.find((s) => s.name === specName.va
 const replacing = computed(() => !!props.id);
 
 /**
- * Arriving to replace a DIFFERENT deployment must not carry the previous one's body across. There
- * is no route that returns a stored spec, so this form can never pre-fill the body — and a
- * leftover body is the dangerous case: it is perfectly valid YAML, so the PUT would succeed and
- * replace the wrong deployment's spec with nothing on the server able to catch it.
+ * Replacing now PRE-FILLS from what is stored.
+ *
+ * It used to start empty, because nothing could hand the source back. Replacing is whole-record, so
+ * an operator retyping a spec from memory silently dropped whatever they forgot — and a dropped axis
+ * stops being tracked while the resources it created keep running. Being unable to read your own
+ * submission is what made that a likely mistake rather than a careless one.
+ *
+ * The body is still cleared FIRST, on every id change. A leftover body from another deployment is the
+ * dangerous case: it is perfectly valid YAML, so the PUT would succeed and overwrite the wrong
+ * deployment with nothing able to catch it. Clearing first means a failed or withheld fetch leaves the
+ * form empty rather than holding someone else's spec.
  */
+const sourceState = ref<'idle' | 'loading' | 'loaded' | 'withheld' | 'failed'>('idle');
+/** Set when this deployment tracks a stored spec — editing this copy forks it from the original. */
+const forkWarning = ref<string | null>(null);
+
+async function loadSource(id: string): Promise<void> {
+  sourceState.value = 'loading';
+  forkWarning.value = null;
+  const r = await api.getAuthed<DeploymentSourceResponse>(
+    `/api/deployments/${encodeURIComponent(id)}/source`,
+  );
+  // A build of the API without the route answers 404; that is a capability difference, not an error,
+  // and it must land on the old empty-form behaviour rather than an alarming banner.
+  if (r.status === 404 || !r.ok) {
+    sourceState.value = 'failed';
+    return;
+  }
+  if (r.body.sourceWithheld) {
+    sourceState.value = 'withheld';
+    if (r.body.specName) forkWarning.value = r.body.specName;
+    return;
+  }
+  // Only fill if the user has not started typing — a slow fetch must never overwrite their edit.
+  if (!form.value.spec) form.value.spec = r.body.spec ?? '';
+  if (!form.value.compose) form.value.compose = r.body.compose ?? '';
+  if (r.body.specName) forkWarning.value = r.body.specName;
+  sourceState.value = 'loaded';
+}
+
 watch(
   () => props.id,
   (id) => {
     error.value = '';
     result.value = null;
+    sourceState.value = 'idle';
+    forkWarning.value = null;
     if (!id) return;
     if (id !== form.value.id) {
       form.value.spec = '';
@@ -67,6 +110,7 @@ watch(
     const stored = rowFor(id)?.vars;
     const saved = stored ? pairsFromRecord(stored) : readVars(id);
     if (saved.some((e) => e.k)) vars.value = saved;
+    void loadSource(id);
   },
   { immediate: true },
 );
@@ -174,9 +218,9 @@ function loadExample(): void {
   <div>
     <div class="page-head">
       <div>
-        <h1>{{ replacing ? 'Replace a deployment' : 'Submit a deployment' }}</h1>
+        <h1>{{ replacing ? 'Edit a deployment' : 'Submit a deployment' }}</h1>
         <div class="sub">
-          {{ replacing ? 'Stores a new spec over the existing record' : 'Stores a spec so it can be deployed' }}
+          {{ replacing ? 'Loaded from what is stored; saving replaces the record' : 'Stores a spec so it can be deployed' }}
         </div>
       </div>
       <span class="grow" />
@@ -199,12 +243,37 @@ function loadExample(): void {
         is still valid YAML — the server will accept it, and the axes the original declared simply
         stop existing as far as the control plane knows, while whatever they created keeps running.
       -->
-      <div v-if="replacing" class="banner warn">
+      <div v-if="replacing" class="banner" :class="sourceState === 'loaded' ? 'info' : 'warn'">
         <b>Replacing {{ id }}.</b>
+        <p v-if="sourceState === 'loading'">Loading what is stored…</p>
+        <p v-else-if="sourceState === 'loaded'">
+          Loaded from the stored record — edit it and save. Saving replaces the record outright, so
+          anything you delete here stops being tracked while whatever it created keeps running.
+        </p>
+        <p v-else-if="sourceState === 'withheld'">
+          The stored spec was not loaded: reading it needs an access token, because hooks routinely
+          carry a credential inline. <RouterLink to="/settings">Add your token</RouterLink> to edit
+          in place — otherwise paste the <b>complete</b> spec, since anything you leave out stops
+          being tracked.
+        </p>
+        <p v-else>
+          The stored spec could not be loaded, so this form is empty. Paste the <b>complete</b> spec
+          you want stored — anything you leave out stops being tracked while whatever it created keeps
+          running.
+        </p>
+      </div>
+
+      <!--
+        A deployment that references a stored spec keeps its own copy of the source. Editing that copy
+        forks it: the stored spec every other deployment shares is untouched, and this one stops
+        following it. Silent forks are the kind of thing discovered months later.
+      -->
+      <div v-if="forkWarning" class="banner warn">
+        <b>This deployment tracks the stored spec “{{ forkWarning }}”.</b>
         <p>
-          Paste the <b>complete</b> spec you want stored. This form starts empty and nothing was
-          loaded from the existing record, so anything you leave out stops being tracked — while
-          whatever it created keeps running.
+          Saving here writes a private copy and stops it following that spec. To change every
+          deployment using it, edit
+          <RouterLink :to="`/specs/${encodeURIComponent(forkWarning)}`">the spec</RouterLink> instead.
         </p>
       </div>
 

@@ -109,6 +109,17 @@ services:
       # Only the registry, not all of ${DATA_DIR}: the DNS provider token in ./dns.env is Traefik's
       # business, and the API has no reason to be able to read it.
       - ${DATA_DIR}/deployments:/data/deployments
+      # Traefik's dynamic config, READ-WRITE here and `:ro` on Traefik above — this is the API's
+      # writing hand for middleware, TLS options and the fallback router. Same container path as
+      # Traefik's so the two agree about what a filename means.
+      #
+      # The blast radius is real: an unparseable file makes Traefik log a parse error for the whole
+      # DIRECTORY and it can discard the rest with it, so the symptom is other people's routes
+      # disappearing. src/routing.ts validates before writing and renames into place so the watcher
+      # never sees a partial file. What it CANNOT break is control.<domain> and api.<domain> — those
+      # are docker labels on this container, so the surface you would use to undo a bad edit survives
+      # one. Keep it that way.
+      - ./traefik-dynamic:/etc/traefik/dynamic
     environment:
       # Bearer token for mutating routes. Note GETs are NOT gated — /api/jobs/:id returns full hook
       # transcripts — so the ingress in front of this is the only protection on reads.

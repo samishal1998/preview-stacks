@@ -28,6 +28,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'danger', name: 'd.danger', component: () => import('./views/tabs/DangerTab.vue') },
     ],
   },
+  { path: '/routing', name: 'routing', component: () => import('./views/RoutingView.vue') },
   { path: '/specs', name: 'specs', component: () => import('./views/SpecsView.vue') },
   { path: '/specs/:name', name: 'spec', component: () => import('./views/SpecDetailView.vue'), props: true },
   { path: '/submit/:id?', name: 'submit', component: () => import('./views/SubmitView.vue'), props: true },
