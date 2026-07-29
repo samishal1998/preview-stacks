@@ -4,7 +4,7 @@ import { captureOutputs, createRunner, type RunResult, type Runner } from '../sr
 import { down, up, verify } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
 import { init } from '../src/init.ts';
-import { buildImage } from '../src/image.ts';
+import { buildImage, controlDockerfile, uiDockerfile } from '../src/image.ts';
 import { SpecStore, findRequiredVars } from '../src/specs.ts';
 import { renderCloudInit, randomPassword } from '../src/cloudinit.ts';
 import { Registry } from '../src/registry.ts';
@@ -794,15 +794,110 @@ describe('cloud-init generation', () => {
   test('rejects inputs that would produce a broken or locked-out host', () => {
     expect(() => renderCloudInit({ ...base, domain: 'notadomain' })).toThrow(/hostname/);
     expect(() => renderCloudInit({ ...base, acmeEmail: 'nope' })).toThrow(/address/);
-    // The one mistake with no cheap recovery: a booted host you cannot log into.
+    // Optional — but a MALFORMED one is still refused, because it produces a booted host nobody
+    // can log into, the one failure here with no cheap recovery.
     expect(() => renderCloudInit({ ...base, sshKey: 'my-key' })).toThrow(/authorized_keys/);
     expect(() => renderCloudInit({ ...base, challenge: 'dns01' })).toThrow(/provider/);
     // Interpolated into a single-quoted shell command.
     expect(() => renderCloudInit({ ...base, dashboardPassword: "a'b" })).toThrow(/single quote/);
   });
 
+  test('omitting the ssh key omits the whole key list, not an empty one', async () => {
+    // `ssh_authorized_keys:` with nothing under it parses fine and yields a user with no way in
+    // and no error — worse than not writing the block at all. Providers inject their own key.
+    const out = renderCloudInit({ ...base, sshKey: undefined });
+    expect(out).not.toContain('ssh_authorized_keys');
+    expect(await yamlOk(out)).toBe(true);
+  });
+
+  test('/opt/preview is created before it is chowned', () => {
+    // It failed on a real boot: with no config repo there was no clone, so the directory the chown
+    // targeted never existed and the step errored.
+    const cmds = runcmd(renderCloudInit(base));
+    const mk = cmds.findIndex((c) => c.includes('mkdir -p /opt/preview'));
+    const ch = cmds.findIndex((c) => c.includes('chown -R preview:preview /opt/preview'));
+    expect(mk).toBeGreaterThanOrEqual(0);
+    expect(mk).toBeLessThan(ch);
+  });
+
   test('generated passwords are shell-safe', () => {
     // Hex on purpose: a `$` would be expanded by the shell that hashes it.
     for (let i = 0; i < 20; i++) expect(randomPassword()).toMatch(/^[0-9a-f]+$/);
+  });
+});
+
+describe('generated Dockerfiles build with no host state', () => {
+  test('both install the published package rather than copying local files', () => {
+    // The bug this fixes: the UI image needed the UI package installed ON THE HOST, so a host where
+    // `bun install -g` fails turned an optional UI into a boot failure. It is a BUILD input; the
+    // Dockerfile fetches it.
+    for (const df of [controlDockerfile('9.9.9'), uiDockerfile('9.9.9')]) {
+      expect(df).toContain('@9.9.9');           // pinned to the CLI that rendered it
+      expect(df).not.toContain('COPY dist');    // nothing from the host
+    }
+  });
+
+  test('the control image runs the package entry, not a global bin', () => {
+    // `bun install -g` needs a writable global dir that not every host provides; when it is missing
+    // the failure is an opaque "No global directory found".
+    expect(controlDockerfile()).toContain('node_modules/@samyx/preview-stacks/dist/cli.js');
+  });
+
+  test('the UI image takes both the assets and the nginx config from the package', () => {
+    const df = uiDockerfile();
+    expect(df).toContain('/nginx.conf /etc/nginx/conf.d/default.conf');
+    expect(df).toContain('/dist /usr/share/nginx/html');
+  });
+});
+
+describe('init refuses a missing advanced-UI image', () => {
+  test('fails by name instead of letting compose try to pull it', async () => {
+    // What actually happened on a real host: the UI image was absent, compose tried to PULL
+    // `pstack-ui:local`, got "pull access denied", and took the WHOLE control stack down with it —
+    // Traefik included. An optional UI must not be able to kill the host.
+    const runner: Runner = {
+      dryRun: false,
+      async run(cmd: string) {
+        const missing = cmd.includes('image inspect') && cmd.includes('pstack-ui:local');
+        return {
+          ok: !missing,
+          code: missing ? 1 : 0,
+          stdout: cmd.includes('State.Health.Status') ? 'healthy\n' : '',
+          stderr: '',
+          skipped: false,
+        };
+      },
+    };
+    await expect(
+      init({
+        dataDir: `${process.env.TMPDIR ?? '/tmp'}/pstack-uipre-${process.pid}`,
+        domain: 'preview.example.com',
+        acmeEmail: 'o@e.com',
+        challenge: 'http01',
+        ui: 'advanced',
+        dryRun: false,
+        runner,
+      }),
+    ).rejects.toThrow(/advanced UI image.*build-image --ui/s);
+  });
+
+  test('the basic default never checks for it', async () => {
+    const runner: Runner = {
+      dryRun: false,
+      async run(cmd: string) {
+        // Fail the UI inspect if it is ever attempted — it must not be.
+        if (cmd.includes('pstack-ui:local')) return { ok: false, code: 1, stdout: '', stderr: '', skipped: false };
+        return { ok: true, code: 0, stdout: cmd.includes('State.Health.Status') ? 'healthy\n' : '', stderr: '', skipped: false };
+      },
+    };
+    await init({
+      dataDir: `${process.env.TMPDIR ?? '/tmp'}/pstack-uipre2-${process.pid}`,
+      domain: 'preview.example.com',
+      acmeEmail: 'o@e.com',
+      challenge: 'http01',
+      ui: 'basic',
+      dryRun: false,
+      runner,
+    });
   });
 });

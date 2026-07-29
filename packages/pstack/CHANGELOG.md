@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.1 — 2026-07-29
+
+### Fixed
+
+- **A missing advanced-UI image no longer takes the whole host down.** Compose does not fail fast
+  on an absent image: it tries to *pull* `pstack-ui:local`, gets "pull access denied", and aborts
+  the entire control stack — Traefik included. `init --ui advanced` now checks the image as a
+  precondition and names `pstack build-image --ui` in the error. An optional UI must not be able to
+  kill the host.
+- **`build-image` no longer needs anything installed on the host.** The generated Dockerfiles now
+  install the published package *inside the build*, with an empty context, so the UI package does
+  not have to be globally installed just to build an image that was going to fetch it anyway —
+  which mattered because `bun install -g` can fail outright ("No global directory found") and that
+  turned an optional UI into a boot failure. `--dist-dir` / `--ui-dist` still build from local
+  files for unpublished work.
+- **The control image runs the package entry point rather than a global bin**, for the same reason:
+  `bun install -g` needs a writable global directory that not every image or host provides.
+- **`cloud-init` no longer requires an SSH key.** Providers inject their own at boot
+  (`hcloud server create --ssh-key`), so demanding a second copy was friction. Given one, it is
+  still validated. Omitted, the key list is left out entirely rather than emitted empty — an empty
+  `ssh_authorized_keys:` parses fine and yields a user nobody can log in as.
+- **`/opt/preview` is created before it is chowned.** With no config repo there was no clone, so
+  the directory never existed and the step failed on a real boot.
+
+### Added
+
+- **`pstack dockerfile [--ui]`** — prints the image Dockerfile for you to build, tag, push or edit.
+  `build-image` runs exactly this through `docker build -`, so what it prints is what it builds.
+
+
 ## 0.2.0 — 2026-07-29
 
 ### Added

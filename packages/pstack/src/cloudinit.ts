@@ -19,7 +19,8 @@ import CLOUD_INIT_TEMPLATE from '../templates/cloud-init.tpl.yaml' with { type: 
 export type CloudInitAnswers = {
   domain: string;
   acmeEmail: string;
-  sshKey: string;
+  /** Optional: most providers inject their own key at boot (hcloud --ssh-key). */
+  sshKey?: string;
   dashboardPassword: string;
   challenge: 'http01' | 'dns01';
   dnsProvider?: string;
@@ -44,9 +45,11 @@ function validate(a: CloudInitAnswers): void {
   if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(a.acmeEmail)) {
     throw new CloudInitError(`acme email "${a.acmeEmail}" does not look like an address`);
   }
-  // A wrong key here is a locked-out host that has already booted — the one mistake with no cheap
-  // recovery, so it is checked rather than trusted.
-  if (!/^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+) \S+/.test(a.sshKey)) {
+  // Optional, because a provider usually injects one already (`hcloud server create --ssh-key`) and
+  // demanding a second copy just to render a file is friction. But if one IS given it is checked:
+  // a malformed key produces a booted host you cannot log into, which is the one failure here with
+  // no cheap recovery.
+  if (a.sshKey && !/^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+) \S+/.test(a.sshKey)) {
     throw new CloudInitError(
       'ssh key must be an authorized_keys line, e.g. "ssh-ed25519 AAAA… you@laptop"',
     );
@@ -76,7 +79,13 @@ export function renderCloudInit(a: CloudInitAnswers): string {
     // would match `backend-pr-1Xpreview.example.com` too.
     DOMAIN_RE: a.domain.replace(/\./g, '\\\\.'),
     ACME_EMAIL: a.acmeEmail,
-    SSH_KEY: a.sshKey,
+    // Omit the key list entirely rather than emit an empty one: cloud-init would accept
+    // `ssh_authorized_keys:` with nothing under it, and the result is a user with no way in and no
+    // error to explain it. With the block absent, the provider's own injected key is the only one,
+    // which is the normal case.
+    SSH_BLOCK: a.sshKey
+      ? `    ssh_authorized_keys:\n      - ${a.sshKey}\n`
+      : '    # No key here: the provider injects its own at boot (e.g. `hcloud server create --ssh-key`).\n',
     DASHBOARD_PASSWORD: a.dashboardPassword,
     // Continuation lines: the init call is a YAML folded scalar, so each flag goes on its own line
     // at the same indentation.

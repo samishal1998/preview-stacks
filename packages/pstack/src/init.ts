@@ -142,6 +142,7 @@ function randomToken(): string {
 export async function init(opts: InitOptions): Promise<void> {
   const { dataDir, domain, acmeEmail, dnsProvider, challenge, ui, dryRun, runner } = opts;
   const image = defaultImage();
+  const uiImage = process.env.PSTACK_UI_IMAGE ?? 'pstack-ui:local';
   const controlDir = join(dataDir, 'control');
   const composePath = join(controlDir, 'docker-compose.yml');
 
@@ -182,6 +183,22 @@ export async function init(opts: InitOptions): Promise<void> {
         `${image === 'pstack:local' ? '' : ` --tag ${image}`}` +
         ` (or pull it and pass PSTACK_IMAGE=<registry>/<image>)`,
     },
+    // Only when the advanced UI is selected. Compose does not fail-fast on a missing image: it
+    // tries to PULL `pstack-ui:local`, gets "pull access denied", and takes the WHOLE control stack
+    // down with it — Traefik included. So an optional UI turned into a dead host. Check it here,
+    // where the message can name the command that fixes it.
+    ...(ui === 'advanced'
+      ? [
+          {
+            name: 'advanced UI image',
+            assert: `docker image inspect ${shq(uiImage)} >/dev/null 2>&1`,
+            hint:
+              `image ${uiImage} not found — build it with \`pstack build-image --ui\`` +
+              `${uiImage === 'pstack-ui:local' ? '' : ` --tag ${uiImage}`}, ` +
+              `or re-run without --ui advanced to use the basic UI embedded in the API.`,
+          },
+        ]
+      : []),
   ]) {
     const r = await runner.run(req.assert, { label: `requires ${req.name}` });
     if (!r.ok) throw new Error(`${req.name}: ${req.hint}`);
@@ -216,7 +233,7 @@ export async function init(opts: InitOptions): Promise<void> {
 
   await write(
     join(controlDir, '.env'),
-    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken, ui }),
+    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken, ui, uiImage }),
     // 0600: this file holds PSTACK_TOKEN, and that token drives an API with a read-write Docker
     // socket — i.e. root on this host. Anyone who can read it owns the box.
     0o600,
@@ -314,6 +331,7 @@ async function waitHealthy(runner: Runner): Promise<string> {
 /** The values every `${...}` in the compose template reads. Compose loads this from `.env`. */
 function envFile(v: {
   ui?: 'basic' | 'advanced';
+  uiImage?: string;
   dataDir: string;
   domain: string;
   acmeEmail: string;
@@ -331,7 +349,7 @@ function envFile(v: {
     `DOMAIN=${v.domain}`,
     // Only meaningful with --ui advanced; harmless otherwise, and having it present means
     // switching modes is a re-run of `init` rather than an .env edit.
-    `PSTACK_UI_IMAGE=${process.env.PSTACK_UI_IMAGE ?? 'pstack-ui:local'}`,
+    `PSTACK_UI_IMAGE=${v.uiImage ?? 'pstack-ui:local'}`,
     `ACME_EMAIL=${v.acmeEmail}`,
     `DNS_PROVIDER=${v.dnsProvider}`,
     `PSTACK_IMAGE=${v.image}`,

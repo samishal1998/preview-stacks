@@ -1,6 +1,6 @@
 #cloud-config
 #
-# preview-host for *.{{DOMAIN}}  —  CONTROL STACK ONLY, no shared services.
+# preview-host for *.preview.hou-clou.dev  —  CONTROL STACK ONLY, no shared services.
 #
 #   hcloud server create --name preview-host --type cx32 --image ubuntu-24.04 \
 #     --ssh-key <your-key> --user-data-from-file user-data.yaml
@@ -9,18 +9,18 @@
 #   hcloud server ssh preview-host -- tail -40 /var/log/cloud-init-output.log
 #
 # ── GENERATED ────────────────────────────────────────────────────────────────────────────────
-# Rendered by `pstack cloud-init` for {{DOMAIN}}. Every value below is already filled in; read
+# Rendered by `pstack cloud-init` for preview.hou-clou.dev. Every value below is already filled in; read
 # it before booting a host with it, but there are no placeholders left to substitute.
 #
 # ── DNS, BEFORE YOU BOOT ─────────────────────────────────────────────────────────────────────
 # Two A records at your DNS provider, both pointing at the server's IPv4:
 #
-#     {{DOMAIN}}.       A   <server-ip>
-#     *.{{DOMAIN}}.     A   <server-ip>
+#     preview.hou-clou.dev.       A   <server-ip>
+#     *.preview.hou-clou.dev.     A   <server-ip>
 #
-# The wildcard is what makes per-PR hostnames free — `backend-pr-7.{{DOMAIN}}` resolves
-# with no per-PR DNS work. Note it matches ONE label: `backend-pr-7.{{DOMAIN}}` is
-# covered, `backend.pr-7.{{DOMAIN}}` is NOT. Flatten per-PR hostnames with dashes.
+# The wildcard is what makes per-PR hostnames free — `backend-pr-7.preview.hou-clou.dev` resolves
+# with no per-PR DNS work. Note it matches ONE label: `backend-pr-7.preview.hou-clou.dev` is
+# covered, `backend.pr-7.preview.hou-clou.dev` is NOT. Flatten per-PR hostnames with dashes.
 #
 # ── TLS: HTTP-01, so there is no DNS credential anywhere in this file ────────────────────────
 # Traefik answers the challenge on port 80, so **port 80 must be reachable from the internet** —
@@ -71,7 +71,9 @@ users:
     groups: [docker]
     sudo: 'ALL=(ALL) NOPASSWD:ALL'
     lock_passwd: true
-{{SSH_BLOCK}}
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDHGaW5us9vo8/QIFOPIQlcBMWGH0lafdVwmDbzNztaTAQ46KCl67cxeL4gbyqgCGQLyFm1yzFiJK8g+a97mYufeMWwW9u0DcXvy2OmoRy43a5DXWoCM/qmP1vqiH2VysLtHEZEQCsewDY2Z5cTVo1M8tekpo2MDo/xq4khO13VVfidO0l3EfaGHmmPTxXP6JsdC3jLRsi5a9kSzD4MnXeTZeH8ve68tqVrH37wBMgnIoA84GEcpGelJz3Hho/GmtvO0ibR/90hp4UZO8zFh9czgMwwshFOb3shIEXQ3jPWWdllFmHkbtrN99YJJCKNjVvsbAmyJC7kFIjOgDOHD/zfy0gxYpFrjcGKIcdoTZBRebk8yRbosMPpl5B/HGAKCrO7flWnzvVEhovu/8rq8M2k6f90lqDJvprxmyEypttmqBQwU9D2a2Dzs66acfK1WUT4TyNrtkX9tbpBLauiCQY6Z0iMhk1/M++9t50TujbZKH+hRE1RY+tlozX31Z7Mi8M= samimishal@Samis-MacBook-Pro.local
+
 package_update: true
 packages:
   - ca-certificates
@@ -99,7 +101,7 @@ write_files:
         routers:
           preview-fallback:
             # Anchored Go regexp, escaped dots. Traefik v3 dropped v2's `{name:...}` syntax.
-            rule: "HostRegexp(`^[a-z0-9-]+-pr-[0-9]+\\.{{DOMAIN_RE}}$`)"
+            rule: "HostRegexp(`^[a-z0-9-]+-pr-[0-9]+\\.preview\\.hou-clou\\.dev$`)"
             priority: 1
             entryPoints: [websecure]
             service: preview-gone
@@ -142,19 +144,19 @@ runcmd:
   # builds it FROM THE INSTALLED PACKAGE — the published bundle is the whole application, so no
   # source checkout and no registry are involved. Tags it `pstack:local`, which is PSTACK_IMAGE's
   # default, which is why the init call below passes no PSTACK_IMAGE. Costs ~1–2 min.
-  - /usr/local/bin/pstack build-image{{UI_IMAGE_STEP}}
+  - /usr/local/bin/pstack build-image
+  # The advanced UI is opt-in and needs its own image; --ui builds it from the
+  # installed @samyx/preview-stacks-ui package.
+  - /usr/local/bin/bun install -g @samyx/preview-stacks-ui
+  - /usr/local/bin/pstack build-image --ui
 
   # ── 5. Traefik dashboard credentials ──────────────────────────────────────────────────────
   # Kept OUT of the watched dynamic directory: the file provider would try to parse an htpasswd
   # file as configuration and log a parse error for the whole directory.
   - mkdir -p /etc/traefik/auth
-  - bash -c 'echo "admin:$(openssl passwd -apr1 {{DASHBOARD_PASSWORD}})" > /etc/traefik/auth/dashboard.htpasswd'
+  - bash -c 'echo "admin:$(openssl passwd -apr1 123456789qwerty)" > /etc/traefik/auth/dashboard.htpasswd'
   - chmod 0640 /etc/traefik/auth/dashboard.htpasswd
 
-  # ── 6. Optional: your own preview config, for driving the CLI from the host or a cron sweep ──
-  # Not needed for the API path — a submitted spec travels over HTTP as a string.
-  - mkdir -p /opt/preview
-  - git clone --depth 1 {{CONFIG_REPO}} /opt/preview/config || true
   - chown -R preview:preview /opt/preview
 
   # ── 7. Stand up the control stack — FROM THE HOST ─────────────────────────────────────────
@@ -176,8 +178,9 @@ runcmd:
   # carry `tls=true` alone, or each PR orders a separate certificate and burns the weekly limit.
   - >
     /usr/local/bin/pstack init
-    --domain {{DOMAIN}}
-    --acme-email {{ACME_EMAIL}}{{INIT_EXTRA_FLAGS}}
+    --domain preview.hou-clou.dev
+    --acme-email sami@housing.cloud
+    --ui advanced
 
   # ── 8. Verify before walking away ─────────────────────────────────────────────────────────
   # Host-local only: there is no published host port (pstack is reached through Traefik), and
@@ -192,9 +195,9 @@ runcmd:
 final_message: |
   preview-host is up after $UPTIME seconds.
 
-    UI       https://control.{{DOMAIN}}
-    API      https://api.{{DOMAIN}}/api/health
-    Traefik  https://traefik.{{DOMAIN}}   (admin / the password you set)
+    UI       https://control.preview.hou-clou.dev
+    API      https://api.preview.hou-clou.dev/api/health
+    Traefik  https://traefik.preview.hou-clou.dev   (admin / the password you set)
 
   The API bearer token was generated by `pstack init` and printed above in this log
   (/var/log/cloud-init-output.log). Save it now — it is also in
