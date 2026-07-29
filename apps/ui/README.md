@@ -13,15 +13,15 @@ This one is richer — dashboards, tabs, live-following logs, keyboard navigatio
 cost of being a second artefact. So it is opt-in:
 
 ```bash
-bun install -g @samyx/preview-stacks-ui   # ships the BUILT app, not its source
-pstack build-image --ui                   # generates an nginx Dockerfile around it
+pstack build-image --ui   # nginx around this package, fetched from npm inside the build
 pstack init --ui advanced
 ```
 
-No checkout: the package ships `dist/` already compiled, so `build-image --ui` only has to wrap it
-in nginx — the same trick `pstack build-image` uses for the control image. (`apps/ui/Dockerfile`
-still exists and builds from source; that is what CI uses, and what you want when developing the UI
-itself.)
+Nothing to install on the host: the package ships `dist/` already compiled, and the generated
+Dockerfile `bun add`s it *inside* the build — the same trick `pstack build-image` uses for the
+control image. This package being a BUILD-time input is the whole point; requiring it on the host
+too once turned an optional UI into a boot failure. (`apps/ui/Dockerfile` still exists and builds
+from source; that is what CI uses, and what you want when developing the UI itself.)
 
 Docker images are not published yet. When they are, this becomes a `docker pull` and
 `PSTACK_UI_IMAGE=<registry>/…`.

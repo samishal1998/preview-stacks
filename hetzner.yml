@@ -145,9 +145,7 @@ runcmd:
   # source checkout and no registry are involved. Tags it `pstack:local`, which is PSTACK_IMAGE's
   # default, which is why the init call below passes no PSTACK_IMAGE. Costs ~1–2 min.
   - /usr/local/bin/pstack build-image
-  # The advanced UI is opt-in and needs its own image; --ui builds it from the
-  # installed @samyx/preview-stacks-ui package.
-  - /usr/local/bin/bun install -g @samyx/preview-stacks-ui
+  # The advanced UI is opt-in and needs its own image.
   - /usr/local/bin/pstack build-image --ui
 
   # ── 5. Traefik dashboard credentials ──────────────────────────────────────────────────────

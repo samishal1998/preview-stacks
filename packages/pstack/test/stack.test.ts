@@ -521,6 +521,34 @@ describe('build-image — the global install must not be a dead end', () => {
     expect(await Bun.file(`${ctx}/Dockerfile`).exists()).toBe(false);
   });
 
+  test('the Dockerfile reaches docker byte-for-byte, never through a shell', async () => {
+    // The regression: the default path built `printf '%s' <json> | docker build -`. JSON escaping
+    // is not shell escaping — in double quotes `\n` stays two literal characters and every backtick
+    // in the Dockerfile's own comments is command substitution, so `docker compose`'s help text got
+    // spliced into line 37 and the build died on `unknown instruction: Define`.
+    //
+    // So: assert the file docker is handed is identical to what we generated, and that the command
+    // does not carry the document at all.
+    let written = '';
+    const r: Runner = {
+      dryRun: false,
+      async run(cmd: string) {
+        const ctx = /docker build --pull -t "[^"]+" "([^"]+)"/.exec(cmd)?.[1];
+        expect(ctx).toBeDefined();
+        expect(cmd).not.toContain('FROM'); // the document is not on the command line
+        written = await Bun.file(`${ctx}/Dockerfile`).text();
+        return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+      },
+    };
+
+    await buildImage({ tag: 'pstack:test', runner: r, dryRun: false });
+    expect(written).toBe(controlDockerfile());
+    expect(written).toContain('`docker compose`'); // the backticks that caused it, intact
+
+    await buildImage({ tag: 'pstack-ui:test', runner: r, dryRun: false, ui: true });
+    expect(written).toBe(uiDockerfile());
+  });
+
   test('a failed build surfaces docker output instead of a bare exit code', async () => {
     const failing: Runner = {
       dryRun: false,

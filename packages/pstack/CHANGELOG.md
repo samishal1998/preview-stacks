@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.2 — 2026-07-29
+
+### Fixed
+
+- **`build-image` produced a corrupt Dockerfile and could not build anything.** 0.2.1 passed the
+  generated Dockerfile to a shell as `printf '%s' <json-quoted> | docker build -`. JSON escaping is
+  not shell escaping: inside double quotes `\n` stays two literal characters, and every backtick in
+  the Dockerfile's own comments is command substitution — so `` `docker compose` `` ran and its help
+  text was spliced into the file, which then died on `unknown instruction: Define`. With the control
+  image unbuildable, `init` correctly refused and the host came up with nothing.
+
+  The Dockerfile is now **written into the build context** and never interpolated into a command. A
+  build context is a directory; docker gets a directory. A test asserts the file docker is handed is
+  byte-identical to what was generated, and that the command line does not contain the document.
+- **`cloud-init --ui advanced` no longer installs the UI package on the host.** It is a build-time
+  input fetched inside the image (see 0.2.1), so the extra `bun install -g @samyx/preview-stacks-ui`
+  step was left over — and it failed with "No global directory found", because unlike the pstack
+  install above it lacked the `BUN_INSTALL=/usr/local` prefix. Same fix in the README examples.
+
 ## 0.2.1 — 2026-07-29
 
 ### Fixed
@@ -27,7 +46,7 @@
 ### Added
 
 - **`pstack dockerfile [--ui]`** — prints the image Dockerfile for you to build, tag, push or edit.
-  `build-image` runs exactly this through `docker build -`, so what it prints is what it builds.
+  `build-image` writes exactly this into its build context, so what it prints is what it builds.
 
 
 ## 0.2.0 — 2026-07-29

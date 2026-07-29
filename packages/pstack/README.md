@@ -209,8 +209,7 @@ no extra container and nothing that can drift from the API it talks to.
 An advanced SPA is available opt-in, as its own container:
 
 ```bash
-bun install -g @samyx/preview-stacks-ui
-pstack build-image --ui          # nginx around the package's prebuilt assets — no checkout
+pstack build-image --ui          # nginx around the published UI package, fetched in the build
 pstack init --ui advanced        # adds the container, repoints control.<domain> at it
 ```
 

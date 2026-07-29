@@ -90,12 +90,13 @@ export function renderCloudInit(a: CloudInitAnswers): string {
     // Continuation lines: the init call is a YAML folded scalar, so each flag goes on its own line
     // at the same indentation.
     INIT_EXTRA_FLAGS: initFlags.length ? '\n    ' + initFlags.join('\n    ') : '',
-    // The advanced UI needs its own image built before `init --ui advanced` can find it.
+    // The advanced UI needs its own image built before `init --ui advanced` can find it. Only the
+    // build — the UI package is a build-time input fetched INSIDE the image, so installing it on
+    // the host as well was gratuitous, and on a host where `bun install -g` fails it turned an
+    // optional UI into a boot failure.
     UI_IMAGE_STEP:
       a.ui === 'advanced'
-        ? '\n  # The advanced UI is opt-in and needs its own image; --ui builds it from the\n' +
-          '  # installed @samyx/preview-stacks-ui package.\n' +
-          '  - /usr/local/bin/bun install -g @samyx/preview-stacks-ui\n' +
+        ? '\n  # The advanced UI is opt-in and needs its own image.\n' +
           '  - /usr/local/bin/pstack build-image --ui'
         : '',
     CONFIG_REPO: a.configRepo ?? '',
