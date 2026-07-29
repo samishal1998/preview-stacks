@@ -9,6 +9,7 @@
  */
 import { dep, isShared, unverifiableAxes } from '../../composables/useDeployment';
 import type { HookName } from '../../api/types';
+import InfoHint from '../../components/InfoHint.vue';
 
 /** In the order `up` and `verify` actually use them. */
 const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
@@ -22,17 +23,19 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
 
     <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
     <template v-else>
-      <p class="hint" style="margin: 0 0 var(--s3)">
-        <code>up</code> provision · <code>assert_live</code> it exists · <code>down</code> destroy ·
-        <code>assert_gone</code> proven gone. Hook <em>bodies</em> are never sent to this page — a
-        hook is a shell string that routinely carries a token inline.
-      </p>
-
       <table class="cards">
         <thead>
           <tr>
             <th>axis</th>
-            <th>hooks</th>
+            <th>
+              hooks
+              <InfoHint label="what the four hooks do">
+                <code>up</code> provisions · <code>assert_live</code> checks it exists ·
+                <code>down</code> destroys · <code>assert_gone</code> proves it is gone. Hook
+                <em>bodies</em> are never sent to this page — a hook is a shell string that routinely
+                carries a token inline.
+              </InfoHint>
+            </th>
             <th>teardown provable?</th>
           </tr>
         </thead>
@@ -43,7 +46,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
               <span
                 v-for="h in HOOKS"
                 :key="h"
-                class="badge mono"
+                class="badge"
                 :class="{ off: !a.hooks.includes(h) }"
                 style="margin-right: 4px"
                 >{{ h }}</span
@@ -70,22 +73,21 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
       </table>
 
       <div v-if="unverifiableAxes.length" class="banner warn">
-        <b>{{ unverifiableAxes.length }} axis/axes cannot be verified:</b>
-        <span class="mono">{{ unverifiableAxes.join(', ') }}</span
-        >.
+        <b>
+          {{ unverifiableAxes.length === 1 ? '1 axis cannot' : `${unverifiableAxes.length} axes cannot` }}
+          be verified: {{ unverifiableAxes.join(', ') }}.
+        </b>
         <p>
           They define no <code>assert_gone</code>, so a green <code>verify</code> is
           <em>silence</em> about them, not proof they are gone. Add an <code>assert_gone</code> that
-          <b>fails closed</b> — probe that the check itself can work, then assert absence:
-        </p>
-        <pre
-          class="raw"
-          style="color: var(--fg-dim)"
-        >&lt;probe-is-usable&gt; || exit 1
-! &lt;probe-for-this-resource&gt;</pre>
-        <p>
-          A bare <code>! &lt;probe&gt;</code> exits 0 whenever the probe itself fails — a missing
-          CLI, an expired token — which turns “I could not tell” into “it is gone”.
+          <b>fails closed</b>.
+          <InfoHint label="how to write an assert_gone that fails closed">
+            Check the probe can work, <em>then</em> assert absence:
+            <code>&lt;probe-is-usable&gt; || exit 1</code>, then
+            <code>! &lt;probe-for-this-resource&gt;</code>. A bare <code>! &lt;probe&gt;</code> exits
+            0 whenever the probe itself fails — a missing CLI, an expired token — turning “I could not
+            tell” into “it is gone”.
+          </InfoHint>
         </p>
       </div>
     </template>

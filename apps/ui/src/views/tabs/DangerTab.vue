@@ -23,8 +23,10 @@ import { dep, isShared, varsQuery } from '../../composables/useDeployment';
 import { loadDeployments, state } from '../../composables/useControlPlane';
 import { settings } from '../../composables/useSettings';
 import { toast } from '../../composables/useToasts';
+import { actionLabel } from '../../composables/useFormat';
 import ActionButton from '../../components/ActionButton.vue';
 import ConflictNote from '../../components/ConflictNote.vue';
+import InfoHint from '../../components/InfoHint.vue';
 import ErrorNote from '../../components/ErrorNote.vue';
 
 const router = useRouter();
@@ -36,6 +38,19 @@ const conflictJobId = ref('');
 const downVerify = ref(true);
 const forceTyped = ref('');
 const forgetArmed = ref(false);
+
+/**
+ * The variables these actions will send, as prose. Which variables are set decides which stack is
+ * touched, so the NAMES are worth stating — the URL-encoded query string they become is not.
+ */
+const varsSummary = computed(() => {
+  const names = dep.vars.filter((v) => v.k).map((v) => v.k);
+  // NOT "no variables": with none set here the server resolves the ones stored with the deployment,
+  // and claiming otherwise would have an operator hunting for variables that are already in place.
+  return names.length
+    ? `Sending ${names.join(', ')} with every action.`
+    : 'Using the variables saved with this deployment.';
+});
 
 /** Exact match against the resolved stack name. Nothing looser — no trim-insensitive, no prefix. */
 const forceArmed = computed(
@@ -76,7 +91,7 @@ async function act(action: 'up' | 'verify' | 'down'): Promise<void> {
   if (r.status === 202) {
     const job = r.body.job;
     if (job?.id) {
-      toast('info', `${action} started on ${job.stack}`, {
+      toast('info', `${actionLabel(action)} started on ${job.stack}`, {
         to: `/jobs/${encodeURIComponent(job.id)}`,
         toLabel: 'Follow',
       });
@@ -84,13 +99,13 @@ async function act(action: 'up' | 'verify' | 'down'): Promise<void> {
       void router.push(`/jobs/${encodeURIComponent(job.id)}`);
       return;
     }
-    actionError.value = '202 accepted, but the response carried no job id — nothing to follow.';
+    actionError.value = 'The action was accepted, but the response carried nothing to follow.';
     return;
   }
   if (r.status === 409) return onConflict(r.body);
 
-  actionError.value = problem(r, `POST ${action}`);
-  toast('error', `${action} was refused.`);
+  actionError.value = problem(r, actionLabel(action).toLowerCase());
+  toast('error', `${actionLabel(action)} was refused.`);
 }
 
 async function forget(): Promise<void> {
@@ -111,7 +126,7 @@ async function forget(): Promise<void> {
     return;
   }
   if (r.status === 409) return onConflict(r.body);
-  actionError.value = problem(r, 'DELETE deployment');
+  actionError.value = problem(r, 'forget this deployment');
 }
 
 /**
@@ -139,8 +154,8 @@ async function onConflict(body: ConflictBody): Promise<void> {
       <h2 class="section" style="margin-bottom: var(--s3)">Lifecycle</h2>
 
       <p v-if="!dep.detail" class="mute">
-        Actions are unavailable until the spec resolves — the server cannot act on a deployment
-        whose stack name it cannot compute. Fix the variables under
+        Actions are unavailable until this deployment's variables are filled in — without them its
+        stack has no name to act on. Set them under
         <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">
           Config &amp; variables </RouterLink
         >first.
@@ -148,10 +163,10 @@ async function onConflict(body: ConflictBody): Promise<void> {
 
       <template v-else>
         <div v-if="tokenMissing" class="banner warn">
-          <b>No token set.</b>
+          <b>No access token set.</b>
           <p>
-            Every action below is a mutating request and will be refused with <code>401</code>. Add
-            <code>PSTACK_TOKEN</code> under <RouterLink to="/settings">Settings</RouterLink>.
+            Every action below will be refused. Add your token under
+            <RouterLink to="/settings">Settings</RouterLink>.
           </p>
         </div>
 
@@ -163,7 +178,7 @@ async function onConflict(body: ConflictBody): Promise<void> {
             :title="whyDisabled('up')"
             @click="act('up')"
           >
-            up
+            {{ actionLabel('up') }}
           </ActionButton>
           <ActionButton
             :pending="pending === 'verify'"
@@ -171,7 +186,7 @@ async function onConflict(body: ConflictBody): Promise<void> {
             :title="whyDisabled('verify')"
             @click="act('verify')"
           >
-            verify
+            {{ actionLabel('verify') }}
           </ActionButton>
           <ActionButton
             variant="danger"
@@ -180,32 +195,33 @@ async function onConflict(body: ConflictBody): Promise<void> {
             :title="whyDisabled('down')"
             @click="act('down')"
           >
-            {{ isShared ? 'down (force)' : 'down' }}
+            {{ isShared ? 'Tear down (force)' : 'Tear down' }}
           </ActionButton>
           <span class="grow" />
-          <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">replace spec →</RouterLink>
+          <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Replace spec →</RouterLink>
         </div>
 
         <p v-if="busy" class="hint">
-          A job is in flight for <b class="mono">{{ dep.detail.stack }}</b
-          >. One job per stack, deliberately not queued — a <code>down</code> racing an
-          <code>up</code> over the same database branch is corruption, not contention.
+          Something is already running on <b>{{ dep.detail.stack }}</b>.
+          <InfoHint label="why actions wait">
+            One action at a time per stack, and they are not queued. A teardown racing a deploy over
+            the same database would corrupt it, so the second request is refused rather than delayed.
+          </InfoHint>
         </p>
         <p class="hint">
-          Sent with <span class="mono">{{ varsQuery || 'no request variables' }}</span
-          >.
+          {{ varsSummary }}
           <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">change</RouterLink>
         </p>
 
         <div class="row" style="margin-top: var(--s3)">
           <label class="check">
             <input v-model="downVerify" type="checkbox" />
-            run <code>verify</code> after <code>down</code>
+            Check for leftovers afterwards
           </label>
         </div>
         <p v-if="!downVerify" class="hint">
-          Teardown will not check for leaks. A teardown that silently half-worked is the exact
-          failure this tool exists to catch — run <code>verify</code> yourself afterwards.
+          Nothing will check that teardown actually finished. A teardown that silently half-worked is
+          the exact failure this tool exists to catch — run <b>Verify</b> yourself afterwards.
         </p>
 
         <!--
@@ -213,18 +229,19 @@ async function onConflict(body: ConflictBody): Promise<void> {
           name is a decision.
         -->
         <div v-if="isShared" class="banner leaked">
-          <b>SHARED — read this before tearing down.</b>
+          <b>Shared — read this before tearing down.</b>
           <p>
-            <code>down</code> runs <code>docker compose down -v</code>, and <code>-v</code> removes
-            <b>volumes</b>. On a shared deployment that destroys state every tenant depends on — the
-            TLS certificate store, the shared database or queue, admin credentials. Nothing here
-            recreates them: <b>every preview on this host breaks</b> until someone rebuilds the
-            singleton by hand. It is the identical verb that is routine on a preview.
+            Tearing this down <b>deletes its stored data</b>: the TLS certificates, the shared
+            database or queue, admin credentials. Nothing here recreates them, so
+            <b>every preview on this host breaks</b> until someone rebuilds it by hand. The button is
+            the same one that is routine on a single preview.
+            <InfoHint label="what tearing down runs">
+              <code>docker compose down -v</code> — the <code>-v</code> is what removes the volumes.
+            </InfoHint>
           </p>
           <div class="field" style="margin-top: var(--s3); max-width: 380px">
             <label :for="`confirm-${dep.id}`">
-              Type the stack name <b class="mono">{{ dep.detail.stack }}</b> to send
-              <code>force: true</code>
+              Type the stack name <b>{{ dep.detail.stack }}</b> to confirm
             </label>
             <input
               :id="`confirm-${dep.id}`"
@@ -235,8 +252,8 @@ async function onConflict(body: ConflictBody): Promise<void> {
               autocomplete="off"
             />
           </div>
-          <p v-if="forceTyped && !forceArmed" class="mono">
-            does not match — <code>down</code> stays disabled
+          <p v-if="forceTyped && !forceArmed" class="s-failed">
+            That does not match, so tearing down stays disabled.
           </p>
         </div>
 
@@ -250,20 +267,18 @@ async function onConflict(body: ConflictBody): Promise<void> {
       <h2 class="section" style="margin-bottom: var(--s3)">Forget this deployment</h2>
 
       <p v-if="!dep.detail" class="mute">
-        Unavailable until the spec resolves — the server counts this stack's containers before it
-        will forget the record, and it cannot name the stack without its variables.
+        Unavailable until the variables are filled in: this stack's containers are counted before the
+        record can be forgotten, and that needs its name.
       </p>
       <template v-else>
-        <p class="dim" style="font-size: var(--t-sm)">
-          <code>DELETE</code> removes the <em>record</em> — the stored <code>spec.yml</code>,
-          <code>compose.yml</code> and <code>meta.json</code>. <b>It never tears anything down.</b>
-          The server refuses with <code>409</code> while any container for this stack still exists,
-          and refuses just as firmly when docker did not answer: “cannot confirm” is not evidence of
-          absence.
-        </p>
-        <p class="hint">
-          After forgetting, this deployment disappears from the control plane. If a resource one of
-          its axes created is still alive, nothing here knows how to remove it any more.
+        <p class="dim">
+          This removes the <em>record only</em> — <b>it never tears anything down</b>. Afterwards
+          nothing here knows how to remove whatever this deployment created.
+          <InfoHint label="when forgetting is refused">
+            Refused while any container for this stack still exists — and refused just as firmly when
+            docker cannot be reached, because “cannot confirm” is not evidence of absence. What is
+            deleted is the stored spec, compose file and metadata.
+          </InfoHint>
         </p>
         <div class="row" style="margin-top: var(--s3)">
           <label class="check">

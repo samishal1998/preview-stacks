@@ -91,7 +91,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
           <tbody class="stagger">
             <tr v-for="(d, i) in rows" :key="d.id" :style="{ '--i': i }">
               <td data-label="id">
-                <RouterLink :to="`/deployments/${encodeURIComponent(d.id)}`" class="mono">
+                <RouterLink :to="`/deployments/${encodeURIComponent(d.id)}`">
                   {{ d.id }}
                 </RouterLink>
                 <div v-if="d.specName" class="mute" style="font-size: var(--t-xs)">
@@ -110,7 +110,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
                 </span>
               </td>
               <td data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" /></td>
-              <td class="dim mono nowrap" data-label="updated">{{ stamp(d.updatedAt) }}</td>
+              <td class="dim nowrap" data-label="updated">{{ stamp(d.updatedAt) }}</td>
             </tr>
             <tr v-if="!rows.length">
               <td colspan="5" class="mute">
@@ -128,7 +128,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
 
         <!-- One message per unresolved row, verbatim: it names the missing variable. -->
         <div v-for="d in unresolvedRows" :key="`u-${d.id}`" class="banner warn">
-          <b class="mono">{{ d.id }}</b> could not be resolved:
+          <b>{{ d.id }}</b> could not be resolved:
           <span class="mono">{{ d.unresolved }}</span>
           <p>
             This listing resolves every spec with the <em>same</em> (empty) request variables, so a

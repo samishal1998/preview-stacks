@@ -13,35 +13,41 @@
  * works in both directions, exactly like the theme.
  */
 
+/*
+ * DARK IS LIFTED AND SATURATED ON PURPOSE. Near-black panels on a near-black page read as one flat
+ * sheet: every surface boundary then has to be carried by a border, and the status colours go muddy
+ * against it. So the greys start above #0f and step up per layer (page → panel → raised), and the
+ * status hues are the vivid end of each family rather than the desaturated one. Dark, not dim.
+ */
 :root,
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0b0d10;
-  --bg-grad: radial-gradient(1200px 600px at 15% -10%, #141a24 0%, #0b0d10 60%);
-  --panel: #14171c;
-  --panel-2: #191d24;
-  --sunk: #090b0e;
-  --line: #252b34;
-  --line-soft: #1c212a;
+  --bg: #0f1217;
+  --bg-grad: radial-gradient(1200px 600px at 15% -10%, #1b2331 0%, #0f1217 62%);
+  --panel: #191e26;
+  --panel-2: #222833;
+  --sunk: #12161c;
+  --line: #303845;
+  --line-soft: #252c37;
 
-  --fg: #e7ebf1;
-  --fg-dim: #9aa4b2;
-  --fg-mute: #6d7683;
+  --fg: #eef2f8;
+  --fg-dim: #a8b3c2;
+  --fg-mute: #7d8898;
 
-  --accent: #5b9dff;
-  --accent-soft: rgba(91, 157, 255, 0.14);
-  --ok: #3fb950;
-  --ok-soft: rgba(63, 185, 80, 0.13);
-  --fail: #f85149;
-  --fail-soft: rgba(248, 81, 73, 0.13);
-  --leak: #e3922a;
-  --leak-soft: rgba(227, 146, 42, 0.14);
-  --neutral: #8b949e;
-  --neutral-soft: rgba(139, 148, 158, 0.13);
+  --accent: #4a9dff;
+  --accent-soft: rgba(74, 157, 255, 0.18);
+  --ok: #35d17e;
+  --ok-soft: rgba(53, 209, 126, 0.17);
+  --fail: #ff6159;
+  --fail-soft: rgba(255, 97, 89, 0.17);
+  --leak: #ffa62b;
+  --leak-soft: rgba(255, 166, 43, 0.18);
+  --neutral: #95a2b3;
+  --neutral-soft: rgba(149, 162, 179, 0.16);
 
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
-  --skel: linear-gradient(90deg, #1a1e25 0%, #232833 50%, #1a1e25 100%);
+  --skel: linear-gradient(90deg, #212733 0%, #2b323f 50%, #212733 100%);
 }
 
 /* The OS preference, only while no manual choice has been made. */
@@ -109,14 +115,18 @@
 }
 
 :root {
-  /* Type scale — a real one, 1.2-ish, so hierarchy comes from size and not only from weight. */
-  --t-xs: 11px;
-  --t-sm: 12.5px;
-  --t-md: 14px;
-  --t-lg: 16px;
-  --t-xl: 20px;
-  --t-2xl: 26px;
-  --t-3xl: 34px;
+  /*
+   * Type scale — a real one, 1.2-ish, so hierarchy comes from size and not only from weight.
+   * Body sits at 15px: this is a tool people read for minutes at a time on a big screen, and 14 was
+   * a hair too tight for that. Nothing here is below 12px.
+   */
+  --t-xs: 12px;
+  --t-sm: 13.5px;
+  --t-md: 15px;
+  --t-lg: 17px;
+  --t-xl: 22px;
+  --t-2xl: 28px;
+  --t-3xl: 36px;
 
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
@@ -130,11 +140,18 @@
   --s6: 32px;
   --s7: 48px;
 
-  --r1: 6px;
-  --r2: 10px;
-  --r3: 14px;
+  /*
+   * Radii — one step per nesting level, so a rounded thing inside a rounded thing never looks
+   * pinched. r1 controls, r2 grouped boxes, r3 panels, r4 the shell's own floating surfaces.
+   */
+  --r1: 10px;
+  --r2: 14px;
+  --r3: 18px;
+  --r4: 22px;
 
-  --rail: 208px;
+  --rail: 216px;
+  /* The gutter the shell's floating panels sit in. */
+  --gap-shell: 12px;
 
   /* Motion. Zeroed wholesale below when motion is reduced. */
   --dur-fast: 120ms;

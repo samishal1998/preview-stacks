@@ -11,7 +11,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
 import type { Job, LogEvent } from '../api/types';
 import { leakedAxes, countUnverifiable } from '../composables/useSteps';
-import { stamp, took } from '../composables/useFormat';
+import { actionLabel, stamp, took } from '../composables/useFormat';
 import StepList from '../components/StepList.vue';
 import StateBadge from '../components/StateBadge.vue';
 import ErrorNote from '../components/ErrorNote.vue';
@@ -116,7 +116,7 @@ onBeforeUnmount(closeStream);
       <div>
         <h1>
           <RouterLink to="/jobs" class="mute">Jobs</RouterLink>
-          <span class="mute"> / </span>{{ job?.action ?? '…' }}
+          <span class="mute"> / </span>{{ job ? actionLabel(job.action) : '…' }}
         </h1>
         <div class="sub">
           <template v-if="job">

@@ -4,6 +4,7 @@ import { computed } from 'vue';
 import { dep, isShared, row } from '../../composables/useDeployment';
 import { stamp } from '../../composables/useFormat';
 import SkeletonList from '../../components/SkeletonList.vue';
+import InfoHint from '../../components/InfoHint.vue';
 
 const kindBlurb = computed(() =>
   isShared.value
@@ -22,7 +23,14 @@ const kindBlurb = computed(() =>
     <template v-else>
       <ul class="kvlist">
         <li>
-          <span class="k">stack</span>
+          <span class="k">
+            stack
+            <InfoHint label="the difference between id and stack">
+              The <b>id</b> is what you named this deployment. The <b>stack</b> is what its spec
+              resolved to once the variables were filled in — the compose project name, the hostname
+              label, and <code>$STACK</code> inside every hook.
+            </InfoHint>
+          </span>
           <span class="v mono">{{ dep.detail.stack || '—' }}</span>
         </li>
         <li>
@@ -34,10 +42,10 @@ const kindBlurb = computed(() =>
         </li>
         <li v-if="row?.specName">
           <span class="k">spec</span>
-          <span class="v mono">
-            {{ row.specName }}
+          <span class="v">
+            <b>{{ row.specName }}</b>
             <span class="mute" style="font-size: var(--t-sm)">
-              — a stored spec, shared with any other deployment that references it
+              — stored, and shared with any other deployment using it
             </span>
           </span>
         </li>
@@ -60,8 +68,8 @@ const kindBlurb = computed(() =>
         </li>
         <li v-if="dep.detail.compose">
           <span class="k">overlays</span>
-          <span class="v mono">
-            <span v-for="o in dep.detail.compose.overlays" :key="o" style="margin-right: 8px">{{ o }}</span>
+          <span class="v">
+            <span v-for="o in dep.detail.compose.overlays" :key="o" class="mono" style="margin-right: 8px">{{ o }}</span>
             <span v-if="!dep.detail.compose.overlays.length" class="mute">none</span>
           </span>
         </li>
@@ -78,15 +86,9 @@ const kindBlurb = computed(() =>
           <span class="k">requires</span>
           <span class="v">{{ dep.detail.requires.length }}</span>
         </li>
-        <li><span class="k">created</span><span class="v mono">{{ stamp(dep.detail.createdAt) }}</span></li>
-        <li><span class="k">updated</span><span class="v mono">{{ stamp(dep.detail.updatedAt) }}</span></li>
+        <li><span class="k">created</span><span class="v">{{ stamp(dep.detail.createdAt) }}</span></li>
+        <li><span class="k">updated</span><span class="v">{{ stamp(dep.detail.updatedAt) }}</span></li>
       </ul>
-
-      <p class="hint">
-        <code>id</code> is the registry id — a directory name, and what every route addresses.
-        <code>stack</code> is what the spec resolved to: the compose project name, the hostname
-        label, and <code>$STACK</code> inside every hook.
-      </p>
     </template>
   </section>
 </template>

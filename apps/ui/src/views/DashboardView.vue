@@ -10,9 +10,10 @@ import { api, problem } from '../api/client';
 import type { Control } from '../api/types';
 import { leakedJobs, state, summary } from '../composables/useControlPlane';
 import { usePolling } from '../composables/usePolling';
-import { ago, took } from '../composables/useFormat';
+import { actionLabel, ago, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import InfoHint from '../components/InfoHint.vue';
 
 const control = ref<Control | null>(null);
 const controlError = ref('');
@@ -22,7 +23,7 @@ async function loadControl(): Promise<void> {
   const r = await api.get<Control>('/api/control');
   controlLoaded.value = true;
   if (!r.ok) {
-    controlError.value = problem(r, 'GET /api/control');
+    controlError.value = problem(r, 'load the control stack');
     return;
   }
   controlError.value = '';
@@ -50,7 +51,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
     <div class="page-head">
       <div>
         <h1>Dashboard</h1>
-        <div class="sub">One host, one Docker socket, one registry.</div>
+        <div class="sub">Everything running on this host.</div>
       </div>
     </div>
 
@@ -59,11 +60,13 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
       on the page. Nothing else will clean up what survived a teardown.
     -->
     <div v-if="leakedJobs.length" class="banner leaked land">
-      <b>{{ leakedJobs.length }} job(s) ended LEAKED.</b>
+      <b>{{ leakedJobs.length }} teardown(s) left something behind.</b>
       <p>
-        Teardown ran and something survived it. <code>compose down -v</code> removed containers,
-        volumes and networks; whatever is left is outside compose's reach and nothing else will
-        remove it.
+        Something survived being torn down, and nothing else is going to remove it.
+        <InfoHint label="what was already cleaned up">
+          <code>compose down -v</code> removed the containers, volumes and networks — whatever is
+          left is outside compose's reach.
+        </InfoHint>
         <RouterLink
           v-for="j in leakedJobs.slice(0, 3)"
           :key="j.id"
@@ -79,7 +82,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
       <section class="panel">
         <div class="phead">
           <h2 class="section">Control stack</h2>
-          <span v-if="control?.project" class="badge mono">{{ control.project }}</span>
+          <span v-if="control?.project" class="badge">{{ control.project }}</span>
           <span class="grow" />
           <button class="sm ghost" @click="loadControl">Refresh</button>
         </div>
@@ -93,22 +96,24 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             a lie an operator acts on.
           -->
           <div v-if="!control.reachable" class="banner warn">
-            <b>docker did not answer.</b>
+            <b>Docker did not answer.</b>
             <p>
-              This is <em>not</em> the same as “nothing is running” — the control stack may be
-              perfectly healthy while this process cannot reach the socket. Check the daemon and the
-              socket mount, then refresh.
+              Check Docker is running, then refresh.
+              <InfoHint label="why this is not the same as nothing running">
+                This is <em>not</em> the same as “nothing is running”: the control stack may be
+                perfectly healthy while this process cannot reach the Docker socket.
+              </InfoHint>
             </p>
           </div>
           <div v-else-if="control.parseError" class="banner warn">
-            <b>docker answered, but the output could not be parsed.</b>
+            <b>Docker's answer could not be read.</b>
             <p>Service state is unknown for this refresh; the stack itself may be fine.</p>
           </div>
           <div v-else-if="!control.services.length" class="banner failed">
-            <b>no containers in this project.</b>
+            <b>Nothing is running in this project.</b>
             <p>
-              docker answered clearly, so the control stack really is down — yet you are reading a
-              page it serves. You are most likely reaching the API by some other route.
+              Docker answered clearly, so the control stack really is down — yet you are reading a
+              page it serves. You are most likely reaching it by some other route.
             </p>
           </div>
 
@@ -154,10 +159,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
                 'The control stack is not managed through this API: the process serving this request runs inside it.'
               }}
             </p>
-            <p v-if="control.managedBy" class="mute">
-              Managed by <code>{{ control.managedBy }}</code
-              >.
-            </p>
+            <p v-if="control.managedBy" class="mute">Managed by {{ control.managedBy }}.</p>
           </div>
         </template>
       </section>
@@ -192,13 +194,15 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             </div>
 
             <p v-if="summary.unresolved" class="hint">
-              {{ summary.unresolved }} deployment(s) could not be resolved in this listing — their
-              spec needs <code>${VAR}</code> values.
-              <RouterLink to="/deployments">Open one and set its variables.</RouterLink>
+              {{ summary.unresolved }} deployment(s) are missing variables.
+              <RouterLink to="/deployments">Open one and set them.</RouterLink>
             </p>
             <p v-else-if="summary.unknown" class="hint">
-              “unknown” means the server could not determine <code>busy</code> or
-              <code>running</code> for that row, <em>not</em> that it is idle.
+              “Unknown” means it could not be determined
+              <InfoHint label="what unknown means">
+                — <em>not</em> that the deployment is idle. An unknown is never counted as a zero,
+                which is how a live stack gets reported as torn down.
+              </InfoHint>
             </p>
           </template>
         </section>
@@ -216,8 +220,8 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             <li v-for="(j, i) in recentJobs" :key="j.id" :style="{ '--i': i }">
               <span class="k"><StateBadge :state="j.state" /></span>
               <span class="v">
-                <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`" class="mono">
-                  {{ j.action }} {{ j.stack }}
+                <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
+                  {{ actionLabel(j.action) }} {{ j.stack }}
                 </RouterLink>
                 <span class="mute" style="font-size: var(--t-xs)">
                   · {{ ago(j.startedAt) }} · {{ took(j.startedAt, j.endedAt) }}
@@ -225,8 +229,11 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
               </span>
             </li>
             <li v-if="!recentJobs.length" class="mute">
-              No jobs yet — job history is held in memory, so a server restart clears it. A job
-              record is the transcript of an attempt, not the truth about what exists.
+              No jobs yet.
+              <InfoHint label="how long job history is kept">
+                History is held in memory, so restarting the server clears it. A job record is the
+                transcript of an attempt, not the truth about what exists now.
+              </InfoHint>
             </li>
           </ul>
         </section>

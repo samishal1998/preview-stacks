@@ -12,6 +12,7 @@
  */
 import { computed, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
+import InfoHint from '../components/InfoHint.vue';
 import type { SpecMeta, SpecsResponse, SubmitResponse, VarPair } from '../api/types';
 import { loadDeployments, rowFor } from '../composables/useControlPlane';
 import { pairsFromRecord, readVars, recordFromPairs, writeVars } from '../composables/useVars';
@@ -113,7 +114,7 @@ async function submit(): Promise<void> {
     return;
   }
   // 400 (SpecError), 409 (a job in flight over this stack), 401, 404 — all rendered verbatim.
-  error.value = problem(r, `PUT /api/deployments/${id}`);
+  error.value = problem(r, 'save this deployment');
 }
 
 const EXAMPLE_SPEC = `version: 1
@@ -174,17 +175,22 @@ function loadExample(): void {
     <div class="page-head">
       <div>
         <h1>{{ replacing ? 'Replace a deployment' : 'Submit a deployment' }}</h1>
-        <div class="sub"><code>PUT /api/deployments/:id</code></div>
+        <div class="sub">
+          {{ replacing ? 'Stores a new spec over the existing record' : 'Stores a spec so it can be deployed' }}
+        </div>
       </div>
       <span class="grow" />
       <button class="ghost" @click="loadExample">Load example spec</button>
     </div>
 
     <section class="panel">
-      <p class="dim" style="font-size: var(--t-sm)">
-        The spec is parsed <em>before</em> anything touches disk, so a rejected submission leaves
-        nothing behind — and on a replace, a good record is never destroyed over a typo.
-        <code>kind</code> is read from the spec, never from this form.
+      <p class="dim">
+        Nothing is saved until the spec is valid.
+        <InfoHint label="what happens on a rejected submission">
+          The spec is checked before anything is written, so a rejected submission leaves nothing
+          behind — and a replace never destroys a good record over a typo. Whether the deployment is
+          shared or isolated comes from the spec, not from this form.
+        </InfoHint>
       </p>
 
       <!--
@@ -194,18 +200,17 @@ function loadExample(): void {
         stop existing as far as the control plane knows, while whatever they created keeps running.
       -->
       <div v-if="replacing" class="banner warn">
-        <b>Replacing <span class="mono">{{ id }}</span>.</b>
+        <b>Replacing {{ id }}.</b>
         <p>
-          This form starts <em>empty</em>: the API has no route that hands back a stored spec, so
-          nothing here was loaded from disk. Paste the <b>complete</b> spec you want stored —
-          <code>PUT</code> replaces the record outright, and any axis you leave out stops being
-          tracked while whatever it created keeps running.
+          Paste the <b>complete</b> spec you want stored. This form starts empty and nothing was
+          loaded from the existing record, so anything you leave out stops being tracked — while
+          whatever it created keeps running.
         </p>
       </div>
 
       <div class="row" style="margin-bottom: var(--s4)">
         <div class="field" style="max-width: 280px">
-          <label for="did">deployment id</label>
+          <label for="did">Deployment id</label>
           <input
             id="did"
             v-model.trim="form.id"
@@ -215,8 +220,12 @@ function loadExample(): void {
             autocomplete="off"
           />
         </div>
-        <span class="mono mute" style="align-self: end; padding-bottom: 8px">
-          [a-z0-9][a-z0-9._-]{0,63}
+        <span class="mute" style="align-self: end; padding-bottom: 10px">
+          Lower case
+          <InfoHint label="allowed characters in a deployment id">
+            Starts with a letter or digit, then letters, digits, dot, dash or underscore. Up to 64
+            characters — <code>[a-z0-9][a-z0-9._-]{0,63}</code>.
+          </InfoHint>
         </span>
       </div>
 
@@ -232,7 +241,7 @@ function loadExample(): void {
 
       <template v-if="source === 'stored' && specs.length">
         <div class="field" style="max-width: 340px">
-          <label for="sn">stored spec</label>
+          <label for="sn">Stored spec</label>
           <select id="sn" v-model="specName">
             <option value="">— choose —</option>
             <option v-for="s in specs" :key="s.name" :value="s.name">
@@ -243,11 +252,12 @@ function loadExample(): void {
         <p v-if="chosenSpec" class="hint">
           <span v-if="chosenSpec.description">{{ chosenSpec.description }} — </span>
           needs
-          <span v-if="chosenSpec.requiredVars.length" class="mono">
-            {{ chosenSpec.requiredVars.join(', ') }}
-          </span>
-          <span v-else>no variables</span>. A variable the spec needs and is not given is a 400 that
-          names it, never a stack every PR would collide on.
+          <b v-if="chosenSpec.requiredVars.length">{{ chosenSpec.requiredVars.join(', ') }}</b>
+          <span v-else>no variables</span>.
+          <InfoHint label="why variables are required">
+            A missing variable is refused by name. It is never filled in with a blank, which would
+            silently give every deployment the same stack name.
+          </InfoHint>
         </p>
       </template>
 
@@ -270,23 +280,27 @@ function loadExample(): void {
             v-model="form.compose"
             rows="8"
             spellcheck="false"
-            placeholder="written next to spec.yml, so `compose: { file: compose.yml }` resolves"
+            placeholder="Written next to spec.yml, so a compose file named compose.yml resolves"
           />
         </div>
         <p class="hint">
-          Only <code>spec.yml</code> and <code>compose.yml</code> ever live in a deployment
-          directory, and hooks run from there — so a hook must be inline shell or an absolute path.
-          <code>up: ./hooks/db.sh</code> cannot work here.
+          Hooks must be inline shell or an absolute path.
+          <InfoHint label="why a relative script path does not work">
+            A deployment directory only ever holds <code>spec.yml</code> and
+            <code>compose.yml</code>, and hooks run from there — so
+            <code>up: ./hooks/db.sh</code> has nothing to find.
+          </InfoHint>
         </p>
       </template>
 
       <h2 class="section" style="margin: var(--s5) 0 var(--s3)">Variables</h2>
       <VarEditor v-model="vars" />
       <p class="hint">
-        These validate the spec now, and are stored with the deployment on a server that supports it
-        — which is what lets a later <code>down</code> resolve the same stack this <code>up</code>
-        creates. They are also saved in this browser, so the actions on the deployment page send the
-        same ones.
+        Saved with the deployment, so tearing it down later targets the same stack.
+        <InfoHint label="how variables are remembered">
+          They are stored on the server where it supports that, and in this browser either way — so
+          the actions on the deployment page send exactly these values.
+        </InfoHint>
       </p>
 
       <div class="row" style="margin-top: var(--s5)">
@@ -294,8 +308,8 @@ function loadExample(): void {
           {{ submitting ? 'submitting…' : 'Submit' }}
         </ActionButton>
         <span v-if="result" class="s-ok">
-          {{ result.created ? 'created' : 'replaced' }} — stack
-          <b class="mono">{{ result.stack }}</b>
+          {{ result.created ? 'Created' : 'Replaced' }} — stack
+          <b>{{ result.stack }}</b>
           <RouterLink :to="`/deployments/${encodeURIComponent(result.id)}`" style="margin-left: 8px">
             open →
           </RouterLink>

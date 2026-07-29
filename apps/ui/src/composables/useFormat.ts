@@ -33,3 +33,22 @@ export function ago(ms: number | undefined): string {
   if (h < 24) return `${h}h ago`;
   return `${Math.round(h / 24)}d ago`;
 }
+
+/**
+ * The user-facing name of an action.
+ *
+ * The API's verbs (`up`, `down`, `verify`) are the CLI's and the spec's vocabulary, and they stay in
+ * both. But a BUTTON should say what it does, so the same mapping is used everywhere a person reads
+ * an action — buttons, the job list, a job's own heading — rather than only on the buttons, which
+ * would leave someone clicking "Tear down" and then reading about a job called `down`.
+ */
+const ACTION_LABELS: Record<string, string> = {
+  up: 'Deploy',
+  down: 'Tear down',
+  verify: 'Verify',
+};
+
+export function actionLabel(action: string | undefined): string {
+  if (!action) return '—';
+  return ACTION_LABELS[action] ?? action;
+}

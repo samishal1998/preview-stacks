@@ -2,7 +2,7 @@
 /** Job history. Polled by the shell already, so this view only filters what is in memory. */
 import { computed, ref } from 'vue';
 import { state } from '../composables/useControlPlane';
-import { stamp, took } from '../composables/useFormat';
+import { actionLabel, stamp, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import type { JobState } from '../api/types';
@@ -74,12 +74,12 @@ const rows = computed(() => {
                 <StateBadge :state="j.state" />
               </RouterLink>
             </td>
-            <td class="mono" data-label="action">{{ j.action }}</td>
+            <td data-label="action">{{ actionLabel(j.action) }}</td>
             <td class="name" data-label="stack">
               <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">{{ j.stack }}</RouterLink>
             </td>
-            <td class="mono dim nowrap" data-label="started">{{ stamp(j.startedAt) }}</td>
-            <td class="mono dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
+            <td class="dim nowrap" data-label="started">{{ stamp(j.startedAt) }}</td>
+            <td class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
             <td class="dim" data-label="steps">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
           </tr>
           <tr v-if="!rows.length">

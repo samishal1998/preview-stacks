@@ -13,6 +13,7 @@ import { useShortcuts } from './composables/useShortcuts';
 import { usePolling } from './composables/usePolling';
 import { loadDeployments, loadHealth, loadJobs, state } from './composables/useControlPlane';
 import { settings } from './composables/useSettings';
+import InfoHint from './components/InfoHint.vue';
 
 const { sheetOpen } = useShortcuts();
 
@@ -102,15 +103,20 @@ const tokenMissing = computed(() => state.health?.authEnforced === true && !sett
 
       <div class="foot">
         <div v-if="tokenMissing">
-          <RouterLink to="/settings" class="badge warn">token required</RouterLink>
+          <RouterLink to="/settings" class="badge warn">Token required</RouterLink>
         </div>
-        <div v-else-if="state.health?.authEnforced === false" class="mute">
-          auth not enforced — loopback-only
+        <div v-if="state.healthError" class="s-failed">Can't reach the server</div>
+        <div v-else-if="state.health" class="row" style="gap: 2px">
+          <span>v{{ state.health.version }}</span>
+          <InfoHint label="server details" side="top">
+            Data is stored in <code>{{ state.health.dataDir }}</code> on the host.
+            <template v-if="state.health.authEnforced === false">
+              This server accepts connections from this machine only, so it does not ask for a
+              token.
+            </template>
+          </InfoHint>
         </div>
-        <div v-if="state.health">v{{ state.health.version }}</div>
-        <div v-if="state.health" class="mono">{{ state.health.dataDir }}</div>
-        <div v-if="state.healthError" class="s-failed">API unreachable</div>
-        <div><button class="ghost sm" @click="sheetOpen = true">? shortcuts</button></div>
+        <div><button class="ghost sm" @click="sheetOpen = true">Shortcuts</button></div>
       </div>
     </aside>
 

@@ -29,7 +29,7 @@ async function fetchLogs(): Promise<void> {
   if (dep.id !== id) return; // navigated away mid-flight
   if (!r.ok) {
     logs.value = null;
-    error.value = problem(r, 'GET logs');
+    error.value = problem(r, 'load the logs');
     return;
   }
   logs.value = { ...r.body, ok: r.body.ok !== false, text: r.body.text ?? '' };

@@ -583,7 +583,7 @@ export function createServer(opts: ServerOptions) {
             actionable: false,
             note:
               'The control stack is not managed through this API: the process serving this request ' +
-              'runs inside it. Upgrade with `pstack init` on the host.',
+              'runs inside it. Upgrade it with pstack init on the host.',
           });
         }
 

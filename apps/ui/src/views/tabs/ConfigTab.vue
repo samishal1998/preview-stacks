@@ -69,14 +69,14 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
       </p>
       <ul class="kvlist" style="margin-top: var(--s3)">
         <li v-for="[k, v] in storedList" :key="k">
-          <span class="k mono">{{ k }}</span>
+          <span class="k"><b>{{ k }}</b></span>
           <span class="v mono">{{ v }}</span>
         </li>
       </ul>
 
       <div v-if="clashes.length" class="banner warn">
         <b>Your request variables disagree with the stored ones:</b>
-        <span class="mono">{{ clashes.join(', ') }}</span
+        <b>{{ clashes.join(', ') }}</b
         >.
         <p>
           Both resolve, so nothing will error — they simply resolve to <em>different stacks</em>.
@@ -119,7 +119,7 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
                 var is the interesting case: declared, never set — usually a hook about to fail on
                 an empty credential.
               -->
-              <td class="dim mono" data-label="length">
+              <td class="dim" data-label="length">
                 {{ e.length }} chars
                 <span v-if="e.length === 0" class="badge warn" style="margin-left: 6px">never set</span>
               </td>

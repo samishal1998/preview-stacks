@@ -18,7 +18,7 @@ defineProps<{ conflict: Conflict; jobId?: string }>();
 
 <template>
   <div class="banner" :class="conflict.kind === 'shared' ? 'leaked' : 'info'" role="alert">
-    <b>409 — refused, and nothing was started.</b>
+    <b>Refused — nothing was started.</b>
     <pre class="raw" style="color: var(--fg-dim); max-height: 200px">{{ conflict.text }}</pre>
 
     <p v-if="conflict.kind === 'shared'">
@@ -30,14 +30,12 @@ defineProps<{ conflict: Conflict; jobId?: string }>();
       tear them down.
     </p>
     <p v-else-if="conflict.kind === 'referenced'">
-      These deployments still point at this spec:
-      <span class="mono">{{ conflict.deployments.join(', ') }}</span
-      >. Deleting it would leave them unresolvable — and a deployment that cannot be resolved can
-      never be torn down.
+      These deployments still use this spec: <strong>{{ conflict.deployments.join(', ') }}</strong>.
+      Deleting it would leave them with no way to be torn down.
     </p>
     <p v-else-if="jobId">
       <RouterLink :to="`/jobs/${encodeURIComponent(jobId)}`">Follow the running job →</RouterLink>
     </p>
-    <p v-else>Nothing was retried. Wait for the lock to clear, then try again.</p>
+    <p v-else>Nothing was retried. Wait for the current work to finish, then try again.</p>
   </div>
 </template>

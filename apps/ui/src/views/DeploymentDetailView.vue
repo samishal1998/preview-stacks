@@ -11,6 +11,7 @@ import { watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { dep, isShared, openDeployment } from '../composables/useDeployment';
 import ErrorNote from '../components/ErrorNote.vue';
+import InfoHint from '../components/InfoHint.vue';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -45,10 +46,10 @@ watch(
         <div class="mute" style="font-size: var(--t-sm)">
           <RouterLink to="/deployments">← deployments</RouterLink>
         </div>
-        <h1 class="mono" style="font-size: var(--t-xl)">{{ id }}</h1>
+        <h1 style="font-size: var(--t-xl)">{{ id }}</h1>
         <div class="sub">
           <span v-if="dep.detail">
-            stack <span class="mono">{{ dep.detail.stack }}</span>
+            stack <b>{{ dep.detail.stack }}</b>
           </span>
           <span v-else-if="dep.error">unresolved</span>
           <span v-else>loading…</span>
@@ -72,19 +73,20 @@ watch(
     </ErrorNote>
     <p v-if="dep.error" class="hint">
       If that message names a variable, add it under <b>Config &amp; variables</b> and press
-      <b>Apply &amp; reload</b>. Everything else on this page stays unavailable until the spec
-      resolves — the server cannot tell us the stack name without it, and every action needs the
-      stack name.
+      <b>Apply &amp; reload</b>.
+      <InfoHint label="why the rest of the page is unavailable">
+        Until the spec resolves there is no stack name, and every action on this deployment needs one.
+      </InfoHint>
     </p>
 
-    <div v-if="isShared" class="banner warn">
-      <b>This is a <code>kind: shared</code> deployment.</b>
-      <p>
-        A host singleton that previews borrow — a database, a queue, a registry mirror. It declares
-        no axes, and its <code>down</code> is refused without an explicit force, because
-        <code>compose down -v</code> here destroys state every other deployment depends on.
-      </p>
-    </div>
+    <p v-if="isShared" class="hint" style="margin-bottom: var(--s4)">
+      Shared with every preview on this host.
+      <InfoHint label="what a shared deployment is">
+        A host singleton that previews borrow — a database, a queue, a registry mirror. It declares no
+        axes, and tearing it down needs an explicit confirmation, because doing so destroys state
+        every other deployment depends on.
+      </InfoHint>
+    </p>
 
     <RouterView v-slot="{ Component }">
       <Transition name="view" mode="out-in">

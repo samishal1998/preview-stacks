@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.3 — 2026-07-29
+
+### Changed
+
+- **The UI says what things do, not which request it sends.** HTTP verbs, status codes and route
+  paths are the tool's internals, not the operator's vocabulary, so they are gone from the page:
+  buttons read **Deploy / Verify / Tear down**, a refusal reads “Refused — nothing was started”, and
+  error notices name the intent (“load the logs”) rather than the call. The spec's own vocabulary —
+  `up`, `down`, `assert_gone`, axes, hooks — stays, because anyone on those screens writes a spec.
+- **Detail moved behind an `i` hint instead of crowding the page.** A new `InfoHint` reveals context
+  on hover, focus or click (click pins it, Escape closes) — so the “why” is one character of layout
+  instead of a permanent paragraph. Roughly a dozen always-on explanations moved into one, and the
+  duplicate shared-deployment warning at the top of a detail page collapsed to a single line, since
+  the warning that matters lives beside the button that does the damage.
+- **Dark theme is lifted and saturated.** Panels were near-black on a near-black page, which read as
+  one flat sheet and left the status colours muddy: the greys now start above `#0f` and step up per
+  layer, and the status hues are the vivid end of each family. Body type is 15px (was 14), the whole
+  scale moved up with it, and radii went up one step per nesting level.
+- **The sidebar is a floating panel** — rounded on all four corners and inset from the viewport edge,
+  rather than a flush rail with a divider. On mobile the bottom bar floats the same way.
+- **Monospace is for code again**, not for names, dates, durations or action words — it stays on
+  logs, YAML, hooks, paths and encoded values, which is what it was for.
+
+### Fixed
+
+- A hint anchored near the bottom of the viewport (the sidebar footer) opened downward and was
+  clipped off-screen; it opens upward there now.
+- The control-stack note and the compose-file placeholder showed their markdown backticks literally.
+- “1 axis/axes cannot be verified:dns” — a missing space (Vue's `condense` whitespace mode drops a
+  whitespace-only text node containing a newline between two elements) and an unpluralised count.
+- The teardown panel claimed “no variables” whenever none were set in the browser, when the server
+  actually falls back to the ones stored with the deployment — it now says so.
+
 ## 0.2.2 — 2026-07-29
 
 ### Fixed

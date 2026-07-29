@@ -9,6 +9,7 @@ import { computed, ref } from 'vue';
 import { settings } from '../composables/useSettings';
 import { state, loadHealth } from '../composables/useControlPlane';
 import { toast } from '../composables/useToasts';
+import InfoHint from '../components/InfoHint.vue';
 
 const checking = ref(false);
 
@@ -51,30 +52,30 @@ async function recheck(): Promise<void> {
           placeholder="(same origin)"
         />
         <div class="mute hint">
-          Leave empty for same-origin, which is how this UI is served in the control stack — nginx
-          proxies <code>/api/</code> to the pstack container, so the browser never makes a
-          cross-origin request and no CORS configuration exists to get wrong. Set an absolute URL
-          only for a dev session against a tunnelled host.
+          Leave it empty unless you are pointing this page at another host.
+          <InfoHint label="about the API base URL">
+            Empty means same-origin, which is how the control stack serves this page — the browser
+            never makes a cross-origin request, so there is no CORS to configure. Set an absolute
+            URL only for a development session against a remote host.
+          </InfoHint>
         </div>
       </div>
 
       <div class="field">
-        <label for="token">Bearer token</label>
+        <label for="token">Access token</label>
         <input
           id="token"
           v-model.trim="settings.token"
           type="password"
           autocomplete="off"
           spellcheck="false"
-          placeholder="PSTACK_TOKEN"
+          placeholder="paste the token from pstack init"
         />
         <div class="mute hint">
-          Attached to <strong>POST, PUT and DELETE</strong> only — the routes that change or destroy
-          something. Reads are unauthenticated, so the dashboard works before you paste one.
+          Needed to deploy, tear down or delete. Viewing works without one.
           <template v-if="authEnforced === false">
-            <br />
-            This server reports <code>authEnforced: false</code>: it is bound to loopback and accepts
-            mutations without a token. A token here is harmless but unnecessary.
+            This server is not asking for one — it only accepts connections from this machine, so a
+            token here is harmless but unnecessary.
           </template>
         </div>
       </div>
@@ -84,7 +85,11 @@ async function recheck(): Promise<void> {
           {{ checking ? 'Checking…' : 'Test connection' }}
         </button>
         <span v-if="state.health" class="mute">
-          pstack {{ state.health.version }} · registry {{ state.health.dataDir }}
+          Connected to pstack {{ state.health.version }}
+          <InfoHint label="where data is stored">
+            Deployment records and stored specs live in
+            <code>{{ state.health.dataDir }}</code> on the host.
+          </InfoHint>
         </span>
         <span v-else-if="state.healthError" class="bad">{{ state.healthError }}</span>
       </div>
@@ -110,9 +115,8 @@ async function recheck(): Promise<void> {
           <option value="none">Reduce motion</option>
         </select>
         <div class="mute hint">
-          “Follow the system” honours <code>prefers-reduced-motion</code>. The explicit options
-          override it in both directions, because an OS-level preference is not always the right
-          answer for one app on one screen.
+          “Follow the system” uses your device's reduce-motion setting. The other two override it,
+          in either direction.
         </div>
       </div>
     </section>
