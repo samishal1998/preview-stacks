@@ -10,6 +10,9 @@
  *    Declare dependencies before dependents (database before the app that migrates it).
  */
 
+import { SpecError } from './errors.ts';
+import { parseSubdomains, resolveSubdomains, type SubdomainRoute } from './subdomains.ts';
+
 export type Axis = {
   name: string;
   /** Provision. Must be idempotent — `up` is re-run on every redeploy. */
@@ -63,6 +66,13 @@ export type ComposeSpec = {
   profiles: string[];
   /** Extra `-f` overlay files, applied in order after `file`. */
   overlays?: string[];
+  /**
+   * Wildcard subdomain routing per profile: anything under `<profile>-<stack>.<domain>` reaches the
+   * same service the bare host does. Resolved into `PSTACK_WILD_<PROFILE>` env vars for your own
+   * router labels to interpolate — see subdomains.ts, which also documents the DNS and TLS ceilings
+   * (`depth: any` is routing-only; no certificate can cover it).
+   */
+  subdomains?: SubdomainRoute[];
 };
 
 export type Stack = {
@@ -92,7 +102,9 @@ export type Stack = {
   declaredEnv: string[];
 };
 
-export class SpecError extends Error {}
+// Declared in errors.ts and re-exported here so that `subdomains.ts` can throw it without an
+// import cycle. Every existing `import { SpecError } from './spec.ts'` still resolves.
+export { SpecError } from './errors.ts';
 
 /** Non-fatal spec observations, surfaced by `pstack validate`. Reset per `loadSpec`. */
 export const warnings: string[] = [];
@@ -220,15 +232,29 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     if (!Array.isArray(profiles)) throw new SpecError('`compose.profiles` must be a list');
     const overlays = cm.overlays === undefined ? [] : cm.overlays;
     if (!Array.isArray(overlays)) throw new SpecError('`compose.overlays` must be a list');
+    const resolvedProfiles = profiles.map((p, i) =>
+      interpolate(asString(p, `compose.profiles[${i}]`), vars, `compose.profiles[${i}]`),
+    );
     compose = {
       file: interpolate(asString(cm.file, 'compose.file'), vars, 'compose.file'),
-      profiles: profiles.map((p, i) =>
-        interpolate(asString(p, `compose.profiles[${i}]`), vars, `compose.profiles[${i}]`),
-      ),
+      profiles: resolvedProfiles,
       overlays: overlays.map((o, i) =>
         interpolate(asString(o, `compose.overlays[${i}]`), vars, `compose.overlays[${i}]`),
       ),
     };
+    // After the profiles, because a subdomain naming a profile that is never started is dead config
+    // and worth refusing; and after `vars`, so `host:` can interpolate ${STACK} / ${DOMAIN}.
+    const subConfigs = parseSubdomains(cm.subdomains, 'compose.subdomains', (v, at) =>
+      interpolate(v, vars, at),
+    );
+    if (subConfigs.length > 0) {
+      compose.subdomains = resolveSubdomains({
+        configs: subConfigs,
+        stack,
+        profiles: resolvedProfiles,
+        domain: vars.DOMAIN,
+      });
+    }
   }
 
   const rawRequires = raw.requires === undefined ? [] : raw.requires;

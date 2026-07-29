@@ -86,7 +86,23 @@ export type Deployment = {
   updatedAt: number;
   stack: string;
   busy: boolean | null;
-  compose: { file: string; profiles: string[]; overlays: string[] } | null;
+  compose: {
+    file: string;
+    profiles: string[];
+    overlays: string[];
+    /**
+     * Wildcard subdomain routes, when the spec declares any. `depth: 'any'` is routing-only — no TLS
+     * certificate can cover more than one label, so those hosts serve over HTTP and not HTTPS.
+     * Absent on a server built before the feature, hence optional.
+     */
+    subdomains?: Array<{
+      profile: string;
+      host: string;
+      depth: 'one' | 'any';
+      varName: string;
+      rule: string;
+    }>;
+  } | null;
   requires: Requirement[];
   axes: Axis[];
   /** The variables the spec DECLARES, redacted by name. Not the resolved environment. */

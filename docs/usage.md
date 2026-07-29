@@ -631,6 +631,81 @@ Now you have evidence, not hope: you've seen this axis's `assert_gone` return bo
 
 ---
 
+## 5b. Route a whole subtree at one profile
+
+An app that dispatches on subdomain — a tenant per host, a branch per host — wants every name under
+its surface, not one router per tenant. Declare it per profile:
+
+```yaml
+compose:
+  file: docker-compose.preview.yml
+  profiles: [backend, frontend]
+  subdomains: [backend]
+```
+
+`validate` shows what that resolved to:
+
+```console
+$ PR=123 pstack validate
+stack: pr-123
+✓ spec parses — kind: isolated, 1 axis/axes, stack "pr-123"
+  compose: docker-compose.preview.yml [backend, frontend]
+  subdomains: *.backend-pr-123.preview.example.com → backend  (one label)
+              PSTACK_WILD_BACKEND — interpolate it into a router label
+  - db: up, assert_gone
+```
+
+Check that hostname. pstack derived it from the profile, the stack and `DOMAIN`, so a wrong domain
+here is a router that parses, deploys, and never matches anything.
+
+pstack does not write your Traefik labels — your compose file owns them — so it hands you the rule in
+an environment variable and you spend it on a router:
+
+```yaml
+  backend:
+    profiles: [backend]
+    labels:
+      - traefik.enable=true
+      # Your existing exact host. Unchanged, and it still wins: Traefik's default priority is the
+      # rule's LENGTH, so this scores in the dozens against the wildcard's 2.
+      - traefik.http.routers.backend.rule=Host(`backend-${STACK}.${DOMAIN}`)
+      - traefik.http.routers.backend.tls=true
+      # The wildcard. Same service, lower priority.
+      - traefik.http.routers.backend-wild.rule=${PSTACK_WILD_BACKEND}
+      - traefik.http.routers.backend-wild.priority=2
+      - traefik.http.routers.backend-wild.service=backend
+      - traefik.http.routers.backend-wild.tls=true
+      - traefik.http.services.backend.loadbalancer.server.port=3000
+```
+
+No `$$` escaping: compose interpolates the *file* from its environment and does not re-scan what it
+substituted, so the rule's backticks and its `$` anchor reach Traefik intact.
+
+The variable is exported on **every** compose subcommand, not just `up`. Compose interpolates the file
+each time, so on `down` an unset variable would substitute empty and compose would be reasoning about
+a differently-labelled project than the one it created.
+
+### Before you promise anyone this works
+
+Routing is the easy third. `subdomains: [backend]` defaults to **one label** — `api.backend-pr-123.…`
+yes, `a.b.backend-pr-123.…` no — because that is the depth DNS and TLS can deliver:
+
+- **DNS:** you need `*.backend-pr-123.<domain>` to resolve. A wildcard record covers exactly one
+  label, so a single `*.<domain>` record does **not** cover this — you need a wildcard at that level,
+  or a resolver you control.
+- **TLS:** you need a certificate for `*.backend-pr-123.<domain>`. That is **DNS-01 only** (HTTP-01
+  cannot issue wildcards) and it is **one certificate per PR**, against Let's Encrypt's ~50 per
+  registered domain per week — the same ceiling described in
+  [control-plane.md](control-plane.md#why-the-ceiling-is-the-reason-to-move-to-dns-01).
+
+`{ backend: any }` matches any depth. Traefik will route it, and **no certificate can ever cover it**
+— `*.*.host` is not a legal SAN. That is HTTP-only, permanently, by construction rather than by
+omission. Use it for a host whose DNS you control and where plain HTTP is fine; reach for it because
+a wildcard "should" be recursive and you get hostnames that resolve, route, and then fail the
+handshake, which is the most confusing of the three failures to debug.
+
+---
+
 ## 6. Run the API and UI
 
 `pstack serve` exposes the same core over HTTP, with a single-page dashboard. Use it when a human

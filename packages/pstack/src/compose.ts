@@ -18,6 +18,7 @@
 
 import type { Stack } from './spec.ts';
 import type { Runner, RunResult } from './exec.ts';
+import { subdomainEnv } from './subdomains.ts';
 
 function fileArgs(spec: Stack): string {
   const c = spec.compose!;
@@ -34,6 +35,23 @@ function profileArgs(profiles: string[]): string {
   return profiles.map((p) => `--profile ${shq(p)}`).join(' ');
 }
 
+/**
+ * The environment every compose subcommand runs with.
+ *
+ * The wildcard-subdomain rules go in here rather than only into `up` because compose interpolates the
+ * compose FILE on every subcommand. A label that reads `${PSTACK_WILD_BACKEND}` would otherwise make
+ * `down`, `logs` and `ps` warn about an unset variable and substitute an empty string — and on `down`
+ * that means compose is reasoning about a *differently-labelled* project than the one `up` created.
+ */
+function composeEnv(spec: Stack, extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...spec.env,
+    ...subdomainEnv(spec.compose?.subdomains ?? []),
+    ...extra,
+    STACK: spec.stack,
+  };
+}
+
 export async function composeUp(
   spec: Stack,
   runner: Runner,
@@ -44,17 +62,14 @@ export async function composeUp(
     `${base(spec)} ${profileArgs(c.profiles)} up -d --remove-orphans`;
   // --remove-orphans drops services that were in a previous deploy but are not selected now, so a
   // relabel from "backend+frontend" to "backend" actually stops the frontend instead of orphaning it.
-  return runner.run(cmd, {
-    env: { ...spec.env, ...extraEnv, STACK: spec.stack },
-    label: 'compose up',
-  });
+  return runner.run(cmd, { env: composeEnv(spec, extraEnv), label: 'compose up' });
 }
 
 export async function composeDown(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
   // EVERY profile — see the file header.
   const cmd = `${base(spec)} ${profileArgs(c.profiles)} down -v --remove-orphans`;
-  return runner.run(cmd, { env: { ...spec.env, STACK: spec.stack }, label: 'compose down' });
+  return runner.run(cmd, { env: composeEnv(spec), label: 'compose down' });
 }
 
 /**
@@ -68,14 +83,14 @@ export async function composeLogs(spec: Stack, runner: Runner, tail: number): Pr
   if (!c) return { ok: true, code: 0, stdout: '', stderr: '(no compose section in spec)', skipped: false };
   return runner.run(
     `${base(spec)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}`,
-    { env: { ...spec.env, STACK: spec.stack }, label: 'compose logs' },
+    { env: composeEnv(spec), label: 'compose logs' },
   );
 }
 
 export async function composePs(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
   return runner.run(`${base(spec)} ${profileArgs(c.profiles)} ps`, {
-    env: { ...spec.env, STACK: spec.stack },
+    env: composeEnv(spec),
     label: 'compose ps',
   });
 }

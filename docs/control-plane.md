@@ -80,6 +80,7 @@ and the API must not touch it.
 | `api.<domain>` | the HTTP API — CI, `curl`, scripts | the control stack (`…routers.pstack-api`) |
 | `<service-name>.<domain>` | a shared service's own hostname, by convention | the shared deployment's own compose labels |
 | `<surface>-pr-<n>.<domain>` | one surface of one PR | the isolated deployment's own compose labels |
+| `*.<surface>-pr-<n>.<domain>` | a whole subtree at one profile — **opt-in**, see below | your labels, using a rule pstack computes |
 
 **Two routers, one container.** `control.` and `api.` both point at the same `pstack` service,
 because the API process serves the UI. The routers are separate only so that external callers get an
@@ -98,6 +99,53 @@ record — matches exactly **one** label: `backend-pr-1.<domain>` is covered, `b
 is not. Nesting the labels is a silent break, because DNS resolves and only TLS fails.
 
 *(The pre-0.1 UI hostname `pstack.<domain>` is gone.)*
+
+### Wildcard subdomains under a surface
+
+An app that routes by subdomain — per-tenant hosts, a preview inside a preview — needs everything
+under `backend-pr-123.<domain>` to reach the backend. Declare it per profile:
+
+```yaml
+compose:
+  file: docker-compose.preview.yml
+  profiles: [backend, frontend]
+  subdomains: [backend]            # or: { backend: any }, or { backend: { host: … } }
+```
+
+pstack does not write your Traefik labels — your compose file owns those — so what this produces is
+an **environment variable holding the rule**, which your own label interpolates:
+
+```yaml
+    labels:
+      - traefik.http.routers.backend-wild.rule=${PSTACK_WILD_BACKEND}
+      - traefik.http.routers.backend-wild.priority=2
+      - traefik.http.routers.backend-wild.service=backend
+```
+
+Why an env var and not a generated overlay, a file-provider drop-in, or a sidecar: the reasoning is
+in `src/subdomains.ts`. Short version — this seam needs no new mount, no re-`init`, and nothing
+pstack writes can break another deployment's routing.
+
+**A hardcoded host always wins.** Traefik's default router priority is the rule's *length*, so an
+exact `Host(…)` scores in the dozens against the wildcard's pinned `2`. `2` rather than `1` so it also
+clears the `preview-fallback` catch-all.
+
+#### The two ceilings, which are not pstack's to lift
+
+`depth` defaults to `one` — a single label — because that is what the rest of the stack can actually
+deliver. `any` matches any depth and is available deliberately, but:
+
+| | `depth: one` | `depth: any` |
+|---|---|---|
+| Traefik routing | works | works |
+| **DNS** | a normal `*.<host>` record | needs a resolver that answers at arbitrary depth. `*.*.<host>` is **not a valid record** — most managed DNS cannot do this at all; a self-hosted authoritative server can |
+| **TLS** | needs a cert for `*.backend-pr-123.<domain>` → **DNS-01 only** (HTTP-01 cannot issue wildcards), and **one cert per PR** against the ~50/registered-domain/week ceiling | **impossible.** `*.*.<host>` is not a legal SAN, so no certificate can ever cover it |
+| Net result | HTTPS, at a real per-PR certificate cost | **HTTP only, permanently** |
+
+So `any` is for a host whose DNS you control and where plain HTTP is acceptable. Reaching for it
+because the wildcard "should" be recursive gets you hostnames that resolve, route, and then fail the
+TLS handshake — the most confusing of the three failures to diagnose, because two thirds of the path
+looks healthy.
 
 ---
 

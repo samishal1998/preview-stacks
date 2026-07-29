@@ -216,6 +216,15 @@ switch (args.cmd) {
     for (const r of spec!.requires) console.log(`  requires: ${r.name}`);
     if (spec!.compose) {
       console.log(`  compose: ${spec!.compose.file} [${spec!.compose.profiles.join(', ') || 'no profiles'}]`);
+      // The resolved hostname, because the whole point of declaring these in the spec is that pstack
+      // derives the host — so seeing what it derived is how you catch a wrong domain before Traefik
+      // silently never matches. `any` is called out as HTTP-only here too: a certificate cannot cover
+      // it, and finding that out from a failed handshake is the expensive way.
+      for (const s of spec!.compose.subdomains ?? []) {
+        const depth = s.depth === 'any' ? 'any depth — HTTP only, no cert can cover it' : 'one label';
+        console.log(`  subdomains: *.${s.host} → ${s.profile}  (${depth})`);
+        console.log(`              ${s.varName} — interpolate it into a router label`);
+      }
     }
     for (const a of spec!.axes) {
       const has = (['up', 'down', 'assert_gone', 'assert_live'] as const)

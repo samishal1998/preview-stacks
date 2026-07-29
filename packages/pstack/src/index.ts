@@ -29,6 +29,16 @@ export type { Outcome, StepResult } from './stack.ts';
 
 export { composeUp, composeDown, composePs, composeLogs, shq } from './compose.ts';
 
+export {
+  escapeHostRegexp,
+  parseSubdomains,
+  resolveSubdomains,
+  subdomainEnv,
+  subdomainVarName,
+  wildcardRule,
+} from './subdomains.ts';
+export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
+
 export { SpecStore, SpecStoreError, assertValidSpecName, findRequiredVars } from './specs.ts';
 export type { SpecMeta, StoredSpec } from './specs.ts';
 

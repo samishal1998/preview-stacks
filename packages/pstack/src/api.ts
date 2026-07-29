@@ -371,7 +371,14 @@ export function createServer(opts: ServerOptions) {
                 stack: spec.stack,
                 busy: jobs.isBusy(spec.stack),
                 compose: spec.compose
-                  ? { file: spec.compose.file, profiles: spec.compose.profiles, overlays: spec.compose.overlays ?? [] }
+                  ? {
+                      file: spec.compose.file,
+                      profiles: spec.compose.profiles,
+                      overlays: spec.compose.overlays ?? [],
+                      // Hostnames and the rule that matches them — no credential, and the pattern is
+                      // the thing an operator actually needs when a subdomain is not resolving.
+                      subdomains: spec.compose.subdomains ?? [],
+                    }
                   : null,
                 // Requirement NAMES and hints. A hint is authored guidance ("run `pstack init`
                 // first"), not a credential; the `assert` command stays server-side for the same

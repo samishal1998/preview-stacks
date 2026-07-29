@@ -109,6 +109,7 @@ env:
 compose:
   file: docker-compose.preview.yml
   profiles: [backend, frontend]   # up enables these; down enables ALL of them
+  subdomains: [backend]           # *.backend-<stack>.<domain> → backend, via ${PSTACK_WILD_BACKEND}
 
 requires:                  # checked BEFORE anything is created — fails by name, not deep in a hook
   - name: ingress-network

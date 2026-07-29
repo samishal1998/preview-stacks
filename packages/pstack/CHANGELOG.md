@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.3.0 — 2026-07-29
+
+### Added
+
+- **`compose.subdomains` — wildcard subdomain routing per profile.** Anything under
+  `<profile>-<stack>.<domain>` reaches the same service the bare host does, for apps that dispatch on
+  subdomain (a tenant per host, a branch per host) instead of one hand-written router per name.
+
+  ```yaml
+  compose:
+    profiles: [backend, frontend]
+    subdomains: [backend]          # or { backend: any }, or { backend: { host: … } }
+  ```
+
+  pstack does not own your Traefik labels — your compose file does — so this exports the rule as
+  **`PSTACK_WILD_<PROFILE>`** for a label of yours to interpolate:
+
+  ```yaml
+  - traefik.http.routers.backend-wild.rule=${PSTACK_WILD_BACKEND}
+  - traefik.http.routers.backend-wild.priority=2
+  - traefik.http.routers.backend-wild.service=backend
+  ```
+
+  No new mount, no re-`init`, no capability added to the API, and nothing pstack writes can break
+  another deployment's routing. `src/subdomains.ts` records the three designs rejected to get there.
+
+  **A hardcoded host always wins**: Traefik's default priority is the rule's length, so an exact
+  `Host(…)` scores in the dozens against the wildcard's pinned `2` (`2`, not `1`, so it also clears the
+  `preview-fallback` catch-all).
+
+  The variable is exported on **every** compose subcommand, not just `up` — compose interpolates the
+  file each time, and an unset variable on `down` would have it reasoning about a differently-labelled
+  project than the one it created.
+
+  **`depth` defaults to `one` because that is what DNS and TLS can deliver.** `any` matches any depth,
+  and is honest about being routing-only: a DNS wildcard covers exactly one label (`*.*.host` is not a
+  valid record), and **no certificate can ever cover `any`** — `*.*.host` is not a legal SAN. Even
+  `depth: one` needs DNS-01 and one certificate per PR, against Let's Encrypt's ~50 per registered
+  domain per week. All of it is tabulated in
+  [`control-plane.md`](../../docs/control-plane.md#wildcard-subdomains-under-a-surface) and worked
+  through in [`usage.md`](../../docs/usage.md).
+
+- `pstack validate` prints the resolved wildcard host, its profile, the depth and the variable name —
+  because pstack derives the hostname, so seeing what it derived is how a wrong `DOMAIN` gets caught
+  before Traefik silently never matches. The resolved spec over HTTP carries the same, and the
+  advanced UI shows it on a deployment's Overview.
+
+### Changed
+
+- `SpecError` moved to `src/errors.ts` and is **re-exported from `src/spec.ts`**, so every existing
+  import and `instanceof` check is unaffected. `subdomains.ts` throws it and `spec.ts` calls into
+  `subdomains.ts`; keeping the class in `spec.ts` would have been an import cycle over a `class`
+  binding, which is not hoisted — it would have "worked" only for as long as every use stayed inside a
+  function body.
+
 ## 0.2.4 — 2026-07-29
 
 ### Security

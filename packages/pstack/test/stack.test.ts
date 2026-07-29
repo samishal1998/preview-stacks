@@ -9,7 +9,8 @@ import { SpecStore, findRequiredVars } from '../src/specs.ts';
 import { renderCloudInit, randomPassword } from '../src/cloudinit.ts';
 import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
-import { shq } from '../src/compose.ts';
+import { composeDown, composeUp, shq } from '../src/compose.ts';
+import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer } from '../src/api.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
@@ -1032,5 +1033,196 @@ describe('a spec source is a secret; its metadata is not', () => {
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe('wildcard subdomains — routing a whole subtree at one profile', () => {
+  /*
+   * The rule is a Go regexp Traefik matches every request against, so "roughly right" is not a
+   * category: too loose routes someone else's hostname into this PR, too tight silently never fires.
+   * These tests exercise it as a regexp rather than string-comparing the output.
+   */
+  const HOST = 'backend-pr-123.preview.example.com';
+
+  /** Extract the pattern from `HostRegexp(`…`)` and match it the way Traefik would. */
+  const re = (rule: string): RegExp => {
+    const m = /^HostRegexp\(`(.+)`\)$/.exec(rule);
+    expect(m).not.toBeNull();
+    return new RegExp(m![1]!);
+  };
+
+  test('depth "one" matches exactly one extra label', () => {
+    const r = re(wildcardRule(HOST, 'one'));
+    expect(r.test(`api.${HOST}`)).toBe(true);
+    expect(r.test(`tenant-a.${HOST}`)).toBe(true);
+    // Deeper must NOT match: DNS and TLS cannot cover it, so routing it would produce a host that
+    // resolves, routes, and then fails the handshake — the worst of the three outcomes to debug.
+    expect(r.test(`a.b.${HOST}`)).toBe(false);
+    // And the bare host is left to the exact-host router that already owns it.
+    expect(r.test(HOST)).toBe(false);
+  });
+
+  test('depth "any" matches any depth', () => {
+    const r = re(wildcardRule(HOST, 'any'));
+    expect(r.test(`api.${HOST}`)).toBe(true);
+    expect(r.test(`a.b.${HOST}`)).toBe(true);
+    expect(r.test(`a.b.c.d.${HOST}`)).toBe(true);
+    expect(r.test(HOST)).toBe(false);
+  });
+
+  test('the host is regexp-escaped, so a dot cannot act as a wildcard', () => {
+    const r = re(wildcardRule(HOST, 'one'));
+    // The bug an unescaped `.` produces: someone registers `backend-pr-123Xpreview.example.com`
+    // and Traefik hands them this PR's backend.
+    expect(r.test('api.backend-pr-123Xpreview.example.com')).toBe(false);
+    expect(wildcardRule(HOST, 'one')).toContain('backend-pr-123\\.preview\\.example\\.com');
+  });
+
+  test('it is anchored at both ends', () => {
+    const r = re(wildcardRule(HOST, 'one'));
+    // Unanchored, this would match — a suffix attack in the first case, a prefix one in the second.
+    expect(r.test(`api.${HOST}.evil.test`)).toBe(false);
+    expect(r.test(`prefix-api.${HOST}`)).toBe(true); // a legitimate single label
+    expect(r.test(`api/${HOST}`)).toBe(false);
+  });
+
+  test('a profile name becomes a usable env var name', () => {
+    expect(subdomainVarName('backend')).toBe('PSTACK_WILD_BACKEND');
+    // A dash cannot appear in an environment variable name.
+    expect(subdomainVarName('admin-api')).toBe('PSTACK_WILD_ADMIN_API');
+  });
+
+  describe('spec parsing', () => {
+    const withSubs = (subs: string, extra = '') => `
+version: 1
+stack: pr-\${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [backend, frontend]
+  subdomains: ${subs}
+${extra}axes: []
+`;
+
+    test('the short list form derives the host from profile and stack', () => {
+      const s = spec(withSubs('[backend]'));
+      expect(s.compose!.subdomains).toEqual([
+        {
+          profile: 'backend',
+          host: 'backend-pr-7.preview.example.com',
+          depth: 'one',
+          varName: 'PSTACK_WILD_BACKEND',
+          rule: wildcardRule('backend-pr-7.preview.example.com', 'one'),
+        },
+      ]);
+    });
+
+    test('the mapping form takes a depth, and an explicit host may interpolate', () => {
+      const s = spec(`
+version: 1
+stack: pr-\${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [backend, frontend]
+  subdomains:
+    backend: any
+    frontend:
+      host: app-\${STACK}.\${DOMAIN}
+axes: []
+`);
+      const [backend, frontend] = s.compose!.subdomains!;
+      expect(backend!.depth).toBe('any');
+      // ${STACK} resolves inside an explicit host — it is interpolated with everything else.
+      expect(frontend!.host).toBe('app-pr-7.preview.example.com');
+      expect(frontend!.depth).toBe('one');
+    });
+
+    test('a subdomain for a profile that is never started is refused', () => {
+      // Dead config, and the likeliest cause is a typo in one of the two lists.
+      expect(() => spec(withSubs('[nope]'))).toThrow(/not in compose.profiles/);
+    });
+
+    test('no DOMAIN is a hard error, not a rule that matches nothing', () => {
+      expect(() =>
+        spec('version: 1\nstack: s\ncompose:\n  file: dc.yml\n  profiles: [backend]\n  subdomains: [backend]\naxes: []', {}),
+      ).toThrow(/needs a domain/);
+    });
+
+    test('two profiles colliding on one env var name is refused', () => {
+      // `admin-api` and `admin_api` both become PSTACK_WILD_ADMIN_API, so one rule would silently
+      // overwrite the other and that profile would route nothing.
+      expect(() =>
+        spec(`
+version: 1
+stack: s
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [admin-api, admin_api]
+  subdomains: [admin-api, admin_api]
+axes: []
+`),
+      ).toThrow(/both map to PSTACK_WILD_ADMIN_API/);
+    });
+
+    test('an unknown depth names the two valid ones', () => {
+      expect(() => spec(withSubs('{ backend: deep }'))).toThrow(/must be "one".*or "any"/s);
+    });
+
+    test('subdomains are absent from the spec unless asked for', () => {
+      const s = spec('version: 1\nstack: s\ncompose:\n  file: dc.yml\n  profiles: [backend]\naxes: []');
+      expect(s.compose!.subdomains).toBeUndefined();
+    });
+  });
+
+  describe('compose invocation', () => {
+    /** Capture the env a compose subcommand runs with. */
+    const envRunner = () => {
+      const seen: Array<Record<string, string | undefined>> = [];
+      return {
+        seen,
+        runner: {
+          dryRun: false,
+          async run(_cmd: string, opts?: { env?: Record<string, string | undefined> }) {
+            seen.push(opts?.env ?? {});
+            return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+          },
+        } as Runner,
+      };
+    };
+
+    const s = () =>
+      spec(`
+version: 1
+stack: pr-\${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [backend]
+  subdomains: [backend]
+axes: []
+`);
+
+    test('up exports the rule for a label to interpolate', async () => {
+      const { seen, runner } = envRunner();
+      await composeUp(s(), runner, {});
+      expect(seen[0]!.PSTACK_WILD_BACKEND).toBe(
+        wildcardRule('backend-pr-7.preview.example.com', 'one'),
+      );
+    });
+
+    test('DOWN exports it too — the reason this is not only on `up`', async () => {
+      // Compose interpolates the compose FILE on every subcommand. Without the variable here, a
+      // label referencing it substitutes empty, so `down` reasons about a differently-labelled
+      // project than `up` created.
+      const { seen, runner } = envRunner();
+      await composeDown(s(), runner);
+      expect(seen[0]!.PSTACK_WILD_BACKEND).toBeDefined();
+    });
   });
 });

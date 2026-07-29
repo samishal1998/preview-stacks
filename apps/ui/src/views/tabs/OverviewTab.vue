@@ -66,6 +66,27 @@ const kindBlurb = computed(() =>
             </span>
           </span>
         </li>
+        <li v-if="dep.detail.compose?.subdomains?.length">
+          <span class="k">
+            subdomains
+            <InfoHint label="how wildcard subdomains work">
+              Anything one label under these hosts reaches the same service the bare host does.
+              An exact hostname you route yourself always wins over the wildcard.
+              <template v-if="dep.detail.compose.subdomains.some((s) => s.depth === 'any')">
+                A route marked <b>any depth</b> works over HTTP only — no TLS certificate can cover
+                more than one label.
+              </template>
+            </InfoHint>
+          </span>
+          <span class="v">
+            <div v-for="s in dep.detail.compose.subdomains" :key="s.profile">
+              <span class="mono">*.{{ s.host }}</span>
+              <span class="mute" style="font-size: var(--t-sm)">
+                → {{ s.profile }}<template v-if="s.depth === 'any'"> · any depth, HTTP only</template>
+              </span>
+            </div>
+          </span>
+        </li>
         <li v-if="dep.detail.compose">
           <span class="k">overlays</span>
           <span class="v">
