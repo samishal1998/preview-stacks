@@ -171,6 +171,25 @@ export type JobsResponse = { jobs: Job[] };
 export type JobResponse = { job: Job };
 export type SpecsResponse = { specs: SpecMeta[] };
 
+/**
+ * `GET /api/registries`. Hostnames and usernames only — a docker `auths` entry is reversible base64, so
+ * there is no read path for the secret anywhere in the API and nothing here to reveal.
+ */
+export type RegistryEntry = {
+  registry: string;
+  username: string | null;
+  /** Served by a credential helper, which does not exist inside the control container. */
+  viaHelper: boolean;
+};
+export type RegistriesResponse = {
+  dir: string;
+  /** False on a control stack that predates the DOCKER_CONFIG mount — the fix is `pstack init`. */
+  writable: boolean;
+  entries: RegistryEntry[];
+  /** `credsStore` / `credHelpers` found in the file; present means "these will not work here". */
+  helpers: string[];
+};
+
 /** `GET /api/deployments/:id/runtime` — what is running and what Traefik was told about it. */
 export type RuntimeContainer = {
   id: string;

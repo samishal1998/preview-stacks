@@ -15,6 +15,13 @@ import { createServer } from '../src/api.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
 import { deploymentRuntime, hostsFromRule, routesFromLabels } from '../src/inspect.ts';
 import {
+  RegistryAuthStore,
+  RegistryAuthError,
+  decodeUsername,
+  normalizeRegistry,
+  DOCKER_HUB_KEY,
+} from '../src/registries.ts';
+import {
   augmentComposeDoc,
   labelsToMap,
   materializeCompose,
@@ -2016,6 +2023,212 @@ axes: []
         challenge: 'http01',
       });
       expect(r.file).toBe('docker-compose.yml');
+    });
+  });
+});
+
+describe('private registry credentials — the client authenticates the pull, not the daemon', () => {
+  const tmp = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-reg-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+  const PASSWORD = 'ghp-super-secret-registry-token';
+
+  test('Docker Hub aliases collapse to the canonical key docker login writes', () => {
+    // The trap: a credential stored under "docker.io" is silently never used for `nginx:alpine`,
+    // because docker looks it up under https://index.docker.io/v1/.
+    for (const alias of ['docker.io', 'index.docker.io', 'registry-1.docker.io', 'https://docker.io']) {
+      expect(normalizeRegistry(alias)).toBe(DOCKER_HUB_KEY);
+    }
+    expect(normalizeRegistry('ghcr.io')).toBe('ghcr.io');
+    expect(normalizeRegistry('registry.example.com:5000')).toBe('registry.example.com:5000');
+    expect(normalizeRegistry(' ghcr.io/ ')).toBe('ghcr.io');
+  });
+
+  test('something that is not a registry host is refused', () => {
+    for (const bad of ['', 'ghcr.io/owner/image', 'not a host', 'http://x/y']) {
+      expect(() => normalizeRegistry(bad)).toThrow(RegistryAuthError);
+    }
+  });
+
+  test('a stored credential is listed by host and username, never by secret', async () => {
+    const store = new RegistryAuthStore(tmp());
+    await store.put('ghcr.io', 'sami', PASSWORD);
+    const state = await store.state();
+
+    expect(state.entries).toEqual([{ registry: 'ghcr.io', username: 'sami', viaHelper: false }]);
+    // The whole state object, not just the field: base64 is reversible, so a leak anywhere is a leak.
+    expect(JSON.stringify(state)).not.toContain(PASSWORD);
+    expect(JSON.stringify(state)).not.toContain(Buffer.from(`sami:${PASSWORD}`).toString('base64'));
+  });
+
+  test('the file docker reads is the real thing, 0600, with the secret in `auth` only', async () => {
+    const dir = tmp();
+    const store = new RegistryAuthStore(dir);
+    await store.put('ghcr.io', 'sami', PASSWORD);
+
+    const cfg = JSON.parse(await Bun.file(`${dir}/config.json`).text());
+    expect(cfg.auths['ghcr.io'].auth).toBe(Buffer.from(`sami:${PASSWORD}`).toString('base64'));
+    // Not also as separate plaintext fields, which docker accepts but which stores it twice.
+    expect(cfg.auths['ghcr.io'].username).toBeUndefined();
+    expect(cfg.auths['ghcr.io'].password).toBeUndefined();
+
+    const { stat } = await import('node:fs/promises');
+    expect((await stat(`${dir}/config.json`)).mode & 0o777).toBe(0o600);
+  });
+
+  test('storing a second credential preserves the first, and everything else in the file', async () => {
+    const dir = tmp();
+    // A file that already has a helper and an unrelated key — docker writes both.
+    await Bun.write(
+      `${dir}/config.json`,
+      JSON.stringify({ credHelpers: { 'gcr.io': 'gcloud' }, currentContext: 'default' }),
+    );
+    const store = new RegistryAuthStore(dir);
+    await store.put('ghcr.io', 'a', 'p1');
+    await store.put('registry.example.com', 'b', 'p2');
+
+    const cfg = JSON.parse(await Bun.file(`${dir}/config.json`).text());
+    expect(Object.keys(cfg.auths).sort()).toEqual(['ghcr.io', 'registry.example.com']);
+    expect(cfg.credHelpers).toEqual({ 'gcr.io': 'gcloud' });
+    expect(cfg.currentContext).toBe('default');
+  });
+
+  test('credential helpers are reported, because they do not work in this container', async () => {
+    // Copying a laptop's config.json is the trap: on Docker Desktop it carries credsStore and NO
+    // auths, the secrets being in the OS keychain. Inside the container that binary does not exist,
+    // so every pull fails with `error getting credentials` and an empty auths looks like the cause.
+    const dir = tmp();
+    await Bun.write(`${dir}/config.json`, JSON.stringify({ credsStore: 'desktop', auths: {} }));
+    const state = await new RegistryAuthStore(dir).state();
+    expect(state.helpers).toEqual(['credsStore: desktop']);
+  });
+
+  test('a corrupt config reads as no credentials rather than failing closed forever', async () => {
+    // Failing the request would leave no way to fix the file from the API.
+    const dir = tmp();
+    await Bun.write(`${dir}/config.json`, '{not json');
+    const state = await new RegistryAuthStore(dir).state();
+    expect(state.entries).toEqual([]);
+    // And a write repairs it.
+    await new RegistryAuthStore(dir).put('ghcr.io', 'sami', 'p');
+    expect((await new RegistryAuthStore(dir).state()).entries).toHaveLength(1);
+  });
+
+  test('removing reports whether there was anything to remove', async () => {
+    const store = new RegistryAuthStore(tmp());
+    await store.put('ghcr.io', 'sami', 'p');
+    expect(await store.remove('ghcr.io')).toBe(true);
+    expect(await store.remove('ghcr.io')).toBe(false);
+    // Aliases resolve on the way out too, so you can delete what you created.
+    await store.put('docker.io', 'sami', 'p');
+    expect(await store.remove('index.docker.io')).toBe(true);
+  });
+
+  test('a missing username or password is refused', async () => {
+    const store = new RegistryAuthStore(tmp());
+    await expect(store.put('ghcr.io', '  ', 'p')).rejects.toThrow(/username is required/);
+    await expect(store.put('ghcr.io', 'sami', '')).rejects.toThrow(/password or token is required/);
+  });
+
+  test('decodeUsername returns only the username half', () => {
+    expect(decodeUsername(Buffer.from('sami:pw').toString('base64'))).toBe('sami');
+    expect(decodeUsername(undefined)).toBeNull();
+    expect(decodeUsername('not-base64-@@@')).toBeNull();
+  });
+
+  describe('over HTTP', () => {
+    const TOKEN = 'reg-token-value';
+    const boot = async () => {
+      const dataDir = tmp();
+      const registryDir = `${dataDir}-docker`;
+      const server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: TOKEN, registryDir });
+      return { server, base: `http://127.0.0.1:${server.port}`, registryDir };
+    };
+
+    test('stored with a token; listed without one; the secret is never in a response', async () => {
+      const { server, base } = await boot();
+      try {
+        const put = await fetch(`${base}/api/registries/ghcr.io`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'sami', password: PASSWORD }),
+        });
+        expect(put.status).toBe(200);
+        // The normalized key is echoed, since it can differ from what was sent.
+        expect(((await put.json()) as { registry: string }).registry).toBe('ghcr.io');
+
+        const raw = await (await fetch(`${base}/api/registries`)).text();
+        expect(raw).not.toContain(PASSWORD);
+        expect(raw).not.toContain(Buffer.from(`sami:${PASSWORD}`).toString('base64'));
+        const body = JSON.parse(raw) as {
+          entries: Array<{ registry: string; username: string; viaHelper: boolean }>;
+        };
+        expect(body.entries).toEqual([{ registry: 'ghcr.io', username: 'sami', viaHelper: false }]);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('an unauthenticated write is refused and stores nothing', async () => {
+      const { server, base, registryDir } = await boot();
+      try {
+        const r = await fetch(`${base}/api/registries/ghcr.io`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'sami', password: PASSWORD }),
+        });
+        expect(r.status).toBe(401);
+        expect(await Bun.file(`${registryDir}/config.json`).exists()).toBe(false);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('docker.io is stored under the canonical key, and can be deleted by alias', async () => {
+      const { server, base } = await boot();
+      try {
+        const put = await fetch(`${base}/api/registries/docker.io`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'sami', password: 'p' }),
+        });
+        expect(((await put.json()) as { registry: string }).registry).toBe(DOCKER_HUB_KEY);
+
+        const del = await fetch(`${base}/api/registries/${encodeURIComponent('index.docker.io')}`, {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(del.status).toBe(200);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('deleting something that is not stored is a 404, not a silent success', async () => {
+      const { server, base } = await boot();
+      try {
+        const r = await fetch(`${base}/api/registries/ghcr.io`, {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(r.status).toBe(404);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('a malformed host answers 400 with the reason', async () => {
+      const { server, base } = await boot();
+      try {
+        const r = await fetch(`${base}/api/registries/${encodeURIComponent('not a host')}`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'a', password: 'b' }),
+        });
+        expect(r.status).toBe(400);
+        expect(((await r.json()) as { error: string }).error).toMatch(/does not look like a registry/);
+      } finally {
+        server.stop(true);
+      }
     });
   });
 });

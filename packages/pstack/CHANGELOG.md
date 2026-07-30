@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.7.0 — 2026-07-30
+
+### ⚠️ Upgrading an existing host
+
+**Re-run `pstack init`** if you pull from a private registry. The control stack now mounts a
+`DOCKER_CONFIG` directory into the API container, which is where the credentials live. `init` is
+idempotent. Until then the Registries page reports the directory as not writable and says so.
+
+### Added
+
+- **Private registry credentials** — a *Registries* page over `GET /api/registries`,
+  `PUT|DELETE /api/registries/:host`.
+
+  The answer to "are the daemon's creds mounted" was **no**, and the reason it matters is
+  counterintuitive: **an image pull is authenticated by the client, not the daemon.** `docker pull`
+  reads its *own* `config.json` and hands the credential over in an `X-Registry-Auth` header; the daemon
+  never consults the client's config. pstack shells out to compose from *inside* the control container,
+  so a `docker login` on the host writes a file that client cannot see — and a private image fails with
+  `pull access denied` on a host that is demonstrably logged in, with nothing in the error pointing at
+  why.
+
+  The control stack now mounts `<DATA_DIR>/control/docker` → `/docker-config` with `DOCKER_CONFIG` set.
+  Add credentials from the host (`docker login --config <DATA_DIR>/control/docker <registry>`) or over
+  the API — both land in the same file.
+
+  **On demand, with no restart:** the CLI re-reads `config.json` on every invocation, so a credential
+  added now applies to the next pull. Nothing to recreate and no cache to bust.
+
+  **Write-only.** A `config.json` entry is `base64("user:password")` — reversible, not encrypted — so
+  there is no read path for it anywhere in the API. `GET /api/registries` returns hostnames and
+  usernames only, and nothing in `src/registries.ts` can return a password. The file is written `0600`
+  and atomically, because compose may read it at any moment and a truncated config parses as *no*
+  credentials.
+
+  Two traps handled explicitly:
+
+  - **Docker Hub's key is `https://index.docker.io/v1/`**, not `docker.io` — a credential stored under
+    the friendly name is silently never used for `nginx:alpine`. Every alias normalizes to the canonical
+    key on the way in *and* on the way out, so you can delete what you created.
+  - **Credential helpers do not transplant.** A `config.json` copied from a laptop usually carries
+    `credsStore: "desktop"` and **no** `auths`, the secrets being in the OS keychain. That binary does
+    not exist in the container, so pulls fail with `error getting credentials` while an empty `auths`
+    looks like the cause. Helpers found in the file are reported, and the UI says they will not work.
+
+- `docs/control-plane.md` §4c covers all of the above.
+
+### Fixed
+
+- `init` applies an explicit mode to the credential directory rather than relying on `mkdir`'s, which is
+  masked by the process umask — a 0700 request could land as 0755 on a directory holding credentials.
+
 ## 0.6.0 — 2026-07-30
 
 No host change needed. Upgrade the CLI, rebuild the images.

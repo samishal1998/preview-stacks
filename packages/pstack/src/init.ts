@@ -209,6 +209,9 @@ export async function init(opts: InitOptions): Promise<void> {
   // is the file provider's watched directory, created empty so the mount does not fail.
   await ensureDir(join(dataDir, 'deployments'), dryRun);
   await ensureDir(join(controlDir, 'traefik-dynamic'), dryRun);
+  // DOCKER_CONFIG for the API's docker client. 0700 because config.json holds registry credentials as
+  // reversible base64 — see src/registries.ts.
+  await ensureDir(join(controlDir, 'docker'), dryRun, 0o700);
 
   // ── 2. External networks ────────────────────────────────────────────────────────────────────
   // `network create` exits non-zero when the network exists, and this must be re-runnable, so the
@@ -503,12 +506,15 @@ function dnsEnvFile(provider: string, token: string | undefined): string {
 }
 
 /** mkdir -p, or say what it would have made. A dry run that creates directories is not a dry run. */
-async function ensureDir(path: string, dryRun: boolean): Promise<void> {
+async function ensureDir(path: string, dryRun: boolean, mode?: number): Promise<void> {
   if (dryRun) {
     console.log(`  [dry-run] mkdir -p ${path}`);
     return;
   }
   await mkdir(path, { recursive: true });
+  // Applied separately: `mkdir`'s mode is masked by the process umask, so a 0700 request can land as
+  // 0755 — and this directory holds registry credentials.
+  if (mode !== undefined) await chmod(path, mode).catch(() => {});
 }
 
 /**

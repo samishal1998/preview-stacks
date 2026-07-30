@@ -120,7 +120,20 @@ services:
       # are docker labels on this container, so the surface you would use to undo a bad edit survives
       # one. Keep it that way.
       - ./traefik-dynamic:/etc/traefik/dynamic
+      # PRIVATE REGISTRY CREDENTIALS. An image pull is authenticated by the CLIENT, not the daemon:
+      # `docker pull` reads its own config.json and hands the credential to the daemon in an
+      # X-Registry-Auth header. pstack shells out to compose from INSIDE this container, so a
+      # `docker login` on the host writes a file this client cannot see — and a private image fails
+      # with `pull access denied` on a host that is logged in.
+      #
+      # The CLI re-reads this on every invocation, so a credential added now applies to the next pull
+      # with nothing to restart. Add one from the host with
+      # `docker login --config <DATA_DIR>/control/docker <registry>`, or through the API.
+      - ./docker:/docker-config
     environment:
+      # Where the docker CLI looks for config.json — the mount above. Without this it would look in
+      # /root/.docker, which is inside the image and empty.
+      DOCKER_CONFIG: /docker-config
       # Bearer token for mutating routes. Note GETs are NOT gated — /api/jobs/:id returns full hook
       # transcripts — so the ingress in front of this is the only protection on reads.
       PSTACK_TOKEN: ${PSTACK_TOKEN}

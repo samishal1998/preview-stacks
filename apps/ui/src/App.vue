@@ -19,6 +19,7 @@ import {
   Boxes,
   ClockFading,
   FileCode2,
+  KeyRound,
   LayoutDashboard,
   Package,
   Plus,
@@ -77,6 +78,11 @@ const tokenMissing = computed(() => state.health?.authEnforced === true && !sett
         <RouterLink to="/routing" class="navlink">
           <Waypoints :size="17" aria-hidden="true" />
           <span>Routing</span>
+        </RouterLink>
+
+        <RouterLink to="/registries" class="navlink">
+          <KeyRound :size="17" aria-hidden="true" />
+          <span>Registries</span>
         </RouterLink>
 
         <RouterLink to="/jobs" class="navlink" title="g j">

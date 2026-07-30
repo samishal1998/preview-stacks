@@ -547,6 +547,51 @@ not, so the page renders before you authenticate.
 
 ---
 
+## 4c. Private registries — the client authenticates the pull
+
+An image pull is authenticated by the **client**, not the daemon. `docker pull` reads its *own*
+`config.json`, finds the entry for that registry, and hands it to the daemon in an `X-Registry-Auth`
+header; the daemon never consults the client's config.
+
+pstack shells out to `docker compose` from **inside the control container**, so the client that matters
+is the docker CLI in there. A `docker login` on the host writes the *host's* `config.json`, which that
+container cannot see — so a private image fails with `pull access denied` on a host that is
+demonstrably logged in, and nothing in the error points at why.
+
+From **0.7.0** the control stack mounts a `DOCKER_CONFIG` directory (`<DATA_DIR>/control/docker` →
+`/docker-config`) into the API. Two ways in, both landing in the same file:
+
+```bash
+# from the host
+docker login --config /var/lib/pstack/control/docker ghcr.io
+
+# or over the API / the Registries page
+curl -X PUT https://api.<domain>/api/registries/ghcr.io \
+  -H "Authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' \
+  -d '{"username":"…","password":"…"}'
+```
+
+**On demand, with no restart.** The CLI re-reads `config.json` on every invocation, so a credential
+added now applies to the next pull. Nothing to recreate, no cache to bust.
+
+**Write-only.** A `config.json` entry is `base64("user:password")` — reversible, not encrypted. So
+there is no read path for it anywhere in the API: `GET /api/registries` returns hostnames and
+usernames only, and nothing in `src/registries.ts` can return a password. The file is written `0600`,
+atomically (compose may read it at any moment, and a truncated config parses as *no* credentials).
+
+Two traps it handles explicitly:
+
+- **Docker Hub's key is `https://index.docker.io/v1/`**, not `docker.io`. A credential stored under the
+  friendly name is silently never used for `nginx:alpine`, so every alias is normalized to the
+  canonical key on the way in *and* on the way out.
+- **Credential helpers do not transplant.** A `config.json` copied from a laptop usually carries
+  `credsStore: "desktop"` or `"osxkeychain"` and **no** `auths`, because the secrets live in the OS
+  keychain. That helper binary does not exist in the container, so every pull fails with `error getting
+  credentials` while an empty `auths` looks like the cause. Helpers found in the file are reported so
+  the UI can say so.
+
+---
+
 ## 5. Trust boundary
 
 **Accepting a spec over HTTP is accepting arbitrary shell, by design.**

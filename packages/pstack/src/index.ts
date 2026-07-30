@@ -40,6 +40,15 @@ export {
 export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
 
 export {
+  RegistryAuthStore,
+  RegistryAuthError,
+  normalizeRegistry,
+  decodeUsername,
+  DOCKER_HUB_KEY,
+} from './registries.ts';
+export type { RegistryEntry, RegistryState } from './registries.ts';
+
+export {
   augmentComposeDoc,
   labelsToMap,
   materializeCompose,

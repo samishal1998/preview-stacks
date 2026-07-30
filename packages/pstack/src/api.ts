@@ -13,6 +13,9 @@
  *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
  *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
+ *   GET    /api/registries                private-registry credentials: hosts + usernames, NEVER secrets
+ *   PUT    /api/registries/:host           store one  { username, password }  (write-only)
+ *   DELETE /api/registries/:host           forget one
  *   GET    /api/routing/live               every route Traefik has, from container labels
  *   GET    /api/routing                   Traefik dynamic config: the file list + whether it is writable
  *   GET    /api/routing/:name             one file's contents, token required
@@ -75,6 +78,7 @@ import { Registry, RegistryError } from './registry.ts';
 import { SpecStore, SpecStoreError } from './specs.ts';
 import { RoutingError, RoutingStore } from './routing.ts';
 import { allTraefikRouters, deploymentRuntime, detectChallenge } from './inspect.ts';
+import { RegistryAuthError, RegistryAuthStore } from './registries.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -91,6 +95,8 @@ export type ServerOptions = {
    * (`/etc/traefik/dynamic`); on a host-side run point it at `<dataDir>/control/traefik-dynamic`.
    */
   routingDir?: string;
+  /** DOCKER_CONFIG directory holding private-registry credentials. Defaults to `/docker-config`. */
+  registryDir?: string;
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -128,6 +134,14 @@ export function createServer(opts: ServerOptions) {
    * on the host, where the path is `<dataDir>/control/traefik-dynamic` instead.
    */
   const routing = new RoutingStore(opts.routingDir ?? '/etc/traefik/dynamic');
+  /**
+   * DOCKER_CONFIG for the docker client this process shells out to. Defaults to the in-container mount
+   * path; `DOCKER_CONFIG` itself is honoured so the CLI and this module can never disagree about which
+   * file a credential lands in.
+   */
+  const registries = new RegistryAuthStore(
+    opts.registryDir ?? process.env.DOCKER_CONFIG ?? '/docker-config',
+  );
   /**
    * For host-level queries that belong to no particular deployment (docker inventory).
    *
@@ -747,6 +761,41 @@ export function createServer(opts: ServerOptions) {
           return json({ error: 'use GET, PUT or DELETE' }, { status: 405 });
         }
 
+        // ---- private registry credentials ----------------------------------------------
+        // An image pull is authenticated by the CLIENT: `docker pull` reads its own config.json and
+        // hands the credential to the daemon. pstack's client runs in this container, so a
+        // `docker login` on the host is invisible to it — hence a place to put them here.
+        //
+        // THERE IS NO READ PATH FOR THE SECRET. `auths` is base64, not encryption, so the response
+        // carries hostnames and usernames only. Nothing in registries.ts can return a password.
+        if (path === '/api/registries' && req.method === 'GET') {
+          return json(await registries.state());
+        }
+
+        const regm = /^\/api\/registries\/(.+)$/.exec(path);
+        if (regm) {
+          const host = decodeURIComponent(regm[1]!);
+          if (req.method === 'PUT') {
+            const body = (await req.json().catch(() => null)) as
+              | { username?: unknown; password?: unknown }
+              | null;
+            if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') {
+              return json({ error: 'body must be { username: string, password: string }' }, { status: 400 });
+            }
+            const registry = await registries.put(host, body.username, body.password);
+            // The normalized key is echoed because it may differ from what was sent — `docker.io`
+            // becomes Docker Hub's canonical key, and a credential stored under the friendly name
+            // would silently never be used.
+            return json({ registry, stored: true });
+          }
+          if (req.method === 'DELETE') {
+            const removed = await registries.remove(host);
+            if (!removed) return json({ error: `no credential stored for ${host}` }, { status: 404 });
+            return json({ deleted: host });
+          }
+          return json({ error: 'use PUT or DELETE' }, { status: 405 });
+        }
+
         // ---- jobs -------------------------------------------------------------------
         if (path === '/api/jobs') return json({ jobs: jobs.list() });
 
@@ -794,6 +843,8 @@ export function createServer(opts: ServerOptions) {
         // A rejected routing file, a bad filename, or a directory that is not mounted — all the
         // caller's to fix, and every message names what to do about it.
         if (err instanceof RoutingError) return json({ error: err.message }, { status: 400 });
+        // A malformed registry host, a missing username, or a directory that is not mounted.
+        if (err instanceof RegistryAuthError) return json({ error: err.message }, { status: 400 });
         // Also the caller's problem: a spec that will not parse, or a name that cannot be a
         // directory. Mapped here as well as in the deployments branch, because PUT /api/specs/:name
         // has no local catch and was answering 500 for a malformed spec.

@@ -448,7 +448,14 @@ switch (args.cmd) {
         ? '/etc/traefik/dynamic'
         : join(dataDir(), 'control', 'traefik-dynamic'));
 
-    createServer({ dataDir: dataDir(), port, host, token, routingDir });
+    // Same reasoning as routingDir: in the control container the mount is at /docker-config; a
+    // host-side `pstack serve` finds the same directory under <dataDir>/control/docker. DOCKER_CONFIG
+    // wins if set, so the CLI and the API cannot disagree about which file a credential lands in.
+    const registryDir =
+      process.env.DOCKER_CONFIG ??
+      ((await isDir('/docker-config')) ? '/docker-config' : join(dataDir(), 'control', 'docker'));
+
+    createServer({ dataDir: dataDir(), port, host, token, routingDir, registryDir });
     console.log(`pstack api  http://${host}:${port}`);
     console.log(`  registry: ${dataDir()}/deployments`);
     console.log(
