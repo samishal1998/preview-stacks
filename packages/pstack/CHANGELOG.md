@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.1 — 2026-07-30
+
+### Fixed
+
+- **`PREVIEW_DOMAIN` is now the variable generated hostnames read.** `compose.subdomains` (0.3.0) and
+  the generated labels (0.6.0) looked only at `DOMAIN` — which is the **control stack's** variable,
+  written to `control/.env` to interpolate the control compose file, and carried into the *deployment
+  spec* surface by mistake. Every example, doc, the skill and the basic UI in this repo use
+  `PREVIEW_DOMAIN`, so a spec copied from `examples/preview.yml` was refused with "needs a domain to
+  anchor its rules to".
+
+  `DOMAIN` is still accepted, so a spec written against 0.3.0–0.7.0 keeps working. Precedence, most
+  specific first:
+
+  1. `PREVIEW_DOMAIN` declared by the spec's own `env:`
+  2. `DOMAIN` declared by the spec's own `env:`
+  3. ambient `PREVIEW_DOMAIN`
+  4. ambient `DOMAIN`
+
+  **A declaration beating an ambient value is the part that matters.** A spec's `env` is seeded from the
+  whole process environment before its own `env:` is layered on, so a stray exported `DOMAIN` could
+  otherwise anchor every generated hostname — silently, on the wrong domain, producing a router that
+  deploys and never matches. `DOMAIN` is generic enough for that to happen by accident; `PREVIEW_DOMAIN`
+  is not, which is the other reason it is preferred.
+
+  Both set and disagreeing is a **warning**, not an error: an ambient `DOMAIN` beside a declared
+  `PREVIEW_DOMAIN` is a normal accident and refusing to parse over it would be hostile. `validate`
+  prints it and names which one was used.
+
+- Docs, the minimal example and the label snippet in the UI corrected to `PREVIEW_DOMAIN`; the two
+  error messages now name it and say `DOMAIN` is a legacy alias.
+
 ## 0.7.0 — 2026-07-30
 
 ### ⚠️ Upgrading an existing host

@@ -655,8 +655,9 @@ stack: pr-123
   - db: up, assert_gone
 ```
 
-Check that hostname. pstack derived it from the profile, the stack and `DOMAIN`, so a wrong domain
-here is a router that parses, deploys, and never matches anything.
+Check that hostname. pstack derived it from the profile, the stack and `PREVIEW_DOMAIN`, so a wrong
+domain here is a router that parses, deploys, and never matches anything. (`DOMAIN` is accepted as a
+legacy alias; a name declared in the spec beats either one picked up from the ambient environment.)
 
 pstack does not write your Traefik labels — your compose file owns them — so it hands you the rule in
 an environment variable and you spend it on a router:
@@ -668,7 +669,7 @@ an environment variable and you spend it on a router:
       - traefik.enable=true
       # Your existing exact host. Unchanged, and it still wins: Traefik's default priority is the
       # rule's LENGTH, so this scores in the dozens against the wildcard's 2.
-      - traefik.http.routers.backend.rule=Host(`backend-${STACK}.${DOMAIN}`)
+      - traefik.http.routers.backend.rule=Host(`backend-${STACK}.${PREVIEW_DOMAIN}`)
       - traefik.http.routers.backend.tls=true
       # The wildcard. Same service, lower priority.
       - traefik.http.routers.backend-wild.rule=${PSTACK_WILD_BACKEND}

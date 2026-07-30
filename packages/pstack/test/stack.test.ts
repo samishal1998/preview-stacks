@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseSpec, SpecError, interpolate, warnings } from '../src/spec.ts';
+import { parseSpec, SpecError, interpolate, resolvePreviewDomain, warnings } from '../src/spec.ts';
 import { captureOutputs, createRunner, type RunResult, type Runner } from '../src/exec.ts';
 import { down, up, verify } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
@@ -1918,15 +1918,33 @@ axes: []
       );
     });
 
-    test('no DOMAIN and no explicit host is refused', () => {
+    test('no domain at all and no explicit host is refused, naming PREVIEW_DOMAIN', () => {
       const noDomain = spec('version: 1\nstack: s\ncompose:\n  file: dc.yml\n  profiles: [app]\naxes: []', {});
-      expect(() =>
+      const attempt = () =>
         augmentComposeDoc({
           doc: doc({ app: { image: 'x', labels: ['pstack.routing.port=80'] } }),
           spec: noDomain,
           challenge: 'http01',
-        }),
-      ).toThrow(/no DOMAIN/);
+        });
+      expect(attempt).toThrow(/no domain to build a hostname from/);
+      // It names the variable to declare, and says the legacy one still works.
+      expect(attempt).toThrow(/PREVIEW_DOMAIN/);
+    });
+
+    test('the legacy DOMAIN alias still produces a hostname', () => {
+      // 0.3.0–0.7.0 read only DOMAIN, so a spec written against those must keep working.
+      const legacy = spec(
+        'version: 1\nstack: s\nenv:\n  DOMAIN: legacy.example.com\ncompose:\n  file: dc.yml\n  profiles: [app]\naxes: []',
+        {},
+      );
+      const r = augmentComposeDoc({
+        doc: doc({ app: { image: 'x', labels: ['pstack.routing.port=80'] } }),
+        spec: legacy,
+        challenge: 'http01',
+      });
+      expect((r.doc.services as any).app.labels).toContain(
+        'traefik.http.routers.app-s.rule=Host(`app-s.legacy.example.com`)',
+      );
     });
   });
 
@@ -2230,5 +2248,78 @@ describe('private registry credentials — the client authenticates the pull, no
         server.stop(true);
       }
     });
+  });
+});
+
+describe('PREVIEW_DOMAIN vs DOMAIN — one thing, two names', () => {
+  /*
+   * PREVIEW_DOMAIN is what every example, doc and the skill in this repo use. DOMAIN is accepted only
+   * because 0.3.0–0.7.0 read nothing else — it is the CONTROL stack's variable and was carried into the
+   * spec surface by mistake. A spec written against those versions has to keep working.
+   */
+  test('a declaration beats an ambient value, and PREVIEW_DOMAIN beats DOMAIN', () => {
+    // The bug this closes: `vars` is seeded from the whole process environment, so a stray exported
+    // DOMAIN would anchor every generated hostname — silently, on the wrong domain.
+    expect(resolvePreviewDomain({ PREVIEW_DOMAIN: 'declared.example', DOMAIN: 'ambient.example' }, ['PREVIEW_DOMAIN']))
+      .toBe('declared.example');
+    // A spec that declared DOMAIN (as the 0.3.0–0.7.0 docs said to) still wins over an ambient
+    // PREVIEW_DOMAIN.
+    expect(resolvePreviewDomain({ PREVIEW_DOMAIN: 'ambient.example', DOMAIN: 'declared.example' }, ['DOMAIN']))
+      .toBe('declared.example');
+    // Neither declared: the specific name wins.
+    expect(resolvePreviewDomain({ PREVIEW_DOMAIN: 'a.example', DOMAIN: 'b.example' }, [])).toBe('a.example');
+    // Only the legacy name, anywhere: still works.
+    expect(resolvePreviewDomain({ DOMAIN: 'b.example' }, [])).toBe('b.example');
+    expect(resolvePreviewDomain({}, [])).toBeUndefined();
+  });
+
+  test('both set and disagreeing warns rather than refusing to parse', () => {
+    // A normal accident — an ambient DOMAIN beside a declared PREVIEW_DOMAIN — so failing would be
+    // hostile. But the ambiguity has to be visible.
+    warnings.length = 0;
+    resolvePreviewDomain({ PREVIEW_DOMAIN: 'a.example', DOMAIN: 'b.example' }, ['PREVIEW_DOMAIN']);
+    expect(warnings.join()).toMatch(/both PREVIEW_DOMAIN .* and DOMAIN .* are set and differ/);
+    // Agreeing is not worth a word.
+    warnings.length = 0;
+    resolvePreviewDomain({ PREVIEW_DOMAIN: 'same.example', DOMAIN: 'same.example' }, []);
+    expect(warnings.join()).not.toMatch(/differ/);
+  });
+
+  test('the repo\'s own example spec shape now works end to end', () => {
+    // This is what was broken: a spec copied from examples/preview.yml declares PREVIEW_DOMAIN, and
+    // subdomains refused it with "needs a domain to anchor its rules to".
+    const s = spec(`
+version: 1
+stack: pr-\${PR}
+env:
+  PREVIEW_DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [backend]
+  subdomains: [backend]
+axes: []
+`);
+    expect(s.compose!.subdomains![0]!.host).toBe('backend-pr-7.preview.example.com');
+  });
+
+  test('generated labels use PREVIEW_DOMAIN too, so the two features cannot disagree', () => {
+    const s = spec(`
+version: 1
+stack: pr-\${PR}
+env:
+  PREVIEW_DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [app]
+axes: []
+`);
+    const r = augmentComposeDoc({
+      doc: { services: { app: { image: 'x', labels: ['pstack.routing.port=80'] } } },
+      spec: s,
+      challenge: 'http01',
+    });
+    expect((r.doc.services as any).app.labels).toContain(
+      'traefik.http.routers.app-pr-7.rule=Host(`app-pr-7.preview.example.com`)',
+    );
   });
 });

@@ -106,6 +106,48 @@ export type Stack = {
 // import cycle. Every existing `import { SpecError } from './spec.ts'` still resolves.
 export { SpecError } from './errors.ts';
 
+/**
+ * The domain generated hostnames are anchored to.
+ *
+ * TWO NAMES, ONE THING. `PREVIEW_DOMAIN` is what every example, doc and the skill in this repo use,
+ * and it is the name a spec should declare. `DOMAIN` is accepted because 0.3.0–0.7.0 read only that
+ * (an oversight: it is the CONTROL stack's variable, written to `control/.env` to interpolate the
+ * control compose file, and it was carried into the spec surface by mistake) and a spec written against
+ * those versions must keep working.
+ *
+ * PRECEDENCE, most specific first:
+ *
+ *   1. `PREVIEW_DOMAIN` declared by the spec's own `env:`
+ *   2. `DOMAIN` declared by the spec's own `env:`
+ *   3. ambient `PREVIEW_DOMAIN`
+ *   4. ambient `DOMAIN`
+ *
+ * A DECLARATION BEATS AN AMBIENT VALUE, which is the part that matters. `vars` is seeded from the whole
+ * process environment before the spec's `env:` is layered on, so a stray `DOMAIN` exported in a shell
+ * would otherwise anchor every generated rule — silently, on a wrong domain, producing a router that
+ * deploys and never matches. `DOMAIN` is a generic enough name for that to happen by accident;
+ * `PREVIEW_DOMAIN` is not, which is the other reason it is preferred.
+ *
+ * Both set and disagreeing is a warning rather than an error: it is a normal accident (an ambient
+ * `DOMAIN` next to a declared `PREVIEW_DOMAIN`) and refusing to parse over it would be hostile.
+ */
+export function resolvePreviewDomain(
+  vars: Record<string, string>,
+  declaredEnv: readonly string[],
+): string | undefined {
+  const declared = (k: string) => (declaredEnv.includes(k) ? vars[k] : undefined);
+  const chosen =
+    declared('PREVIEW_DOMAIN') ?? declared('DOMAIN') ?? vars.PREVIEW_DOMAIN ?? vars.DOMAIN;
+
+  if (vars.PREVIEW_DOMAIN && vars.DOMAIN && vars.PREVIEW_DOMAIN !== vars.DOMAIN) {
+    warnings.push(
+      `both PREVIEW_DOMAIN (${vars.PREVIEW_DOMAIN}) and DOMAIN (${vars.DOMAIN}) are set and differ; ` +
+        `generated hostnames use "${chosen}". Declare PREVIEW_DOMAIN in the spec to be unambiguous.`,
+    );
+  }
+  return chosen || undefined;
+}
+
 /** Non-fatal spec observations, surfaced by `pstack validate`. Reset per `loadSpec`. */
 export const warnings: string[] = [];
 
@@ -252,7 +294,7 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
         configs: subConfigs,
         stack,
         profiles: resolvedProfiles,
-        domain: vars.DOMAIN,
+        domain: resolvePreviewDomain(vars, declaredEnv),
       });
     }
   }

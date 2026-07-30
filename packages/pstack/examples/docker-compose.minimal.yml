@@ -1,7 +1,7 @@
 # docker-compose.minimal.yml — the same two services as docker-compose.preview.yml, with pstack
 # generating the Traefik labels and the network wiring.
 #
-#   PR=123 DOMAIN=preview.example.com pstack -f examples/preview.yml up
+#   PR=123 PREVIEW_DOMAIN=preview.example.com pstack -f examples/preview.yml up
 #
 # ── WHAT YOU DECLARE ─────────────────────────────────────────────────────────────────────────
 #

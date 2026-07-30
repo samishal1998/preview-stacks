@@ -171,7 +171,7 @@ const running = computed(() => rt.value?.containers.filter((c) => c.state === 'r
             <pre class="code">labels:
   - traefik.enable=true                     # the host runs exposedbydefault=false
   - traefik.docker.network=preview-ingress  # which network Traefik should dial
-  - traefik.http.routers.&lt;name&gt;-${STACK}.rule=Host(`&lt;name&gt;-${STACK}.${DOMAIN}`)
+  - traefik.http.routers.&lt;name&gt;-${STACK}.rule=Host(`&lt;name&gt;-${STACK}.${PREVIEW_DOMAIN}`)
   - traefik.http.services.&lt;name&gt;-${STACK}.loadbalancer.server.port=80
 networks: [default, preview-ingress]        # and preview-ingress: { external: true }</pre>
             <p class="mute">

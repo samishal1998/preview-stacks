@@ -189,11 +189,11 @@ export function parseSubdomains(
 /**
  * Resolve every configured subdomain into a concrete route.
  *
- * `domain` is required and comes from the spec's own `env: DOMAIN:` — the same variable a per-PR
- * compose file already interpolates for its exact-host routers, so there is nothing new to declare
- * in the usual case. It is a HARD error when missing rather than a rule anchored on an empty
- * suffix: `HostRegexp(^[a-z0-9-]+\.$)` matches nothing at all, and a router that silently never
- * fires is worse than a spec that refuses to parse.
+ * `domain` is resolved by `resolvePreviewDomain` — `PREVIEW_DOMAIN`, which is the name every example
+ * and doc uses and the one a per-PR compose file already interpolates, with `DOMAIN` accepted as a
+ * legacy alias. It is a HARD error when missing rather than a rule anchored on an empty suffix:
+ * `HostRegexp(^[a-z0-9-]+\.$)` matches nothing at all, and a router that silently never fires is worse
+ * than a spec that refuses to parse.
  */
 export function resolveSubdomains(args: {
   configs: SubdomainConfig[];
@@ -207,8 +207,8 @@ export function resolveSubdomains(args: {
   if (!domain) {
     throw new SpecError(
       '`compose.subdomains` needs a domain to anchor its rules to. Declare it in the spec ' +
-        '(`env:\n  DOMAIN: preview.example.com`) or give each entry an explicit `host:`. ' +
-        'Without it the generated rule would match nothing.',
+        '(`env:\n  PREVIEW_DOMAIN: preview.example.com`) or give each entry an explicit `host:`. ' +
+        '`DOMAIN` is accepted as a legacy alias. Without it the generated rule would match nothing.',
     );
   }
 

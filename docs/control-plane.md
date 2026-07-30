@@ -491,6 +491,11 @@ services:
       # - pstack.routing.host=custom.example.com  # optional; overrides the convention
 ```
 
+The domain comes from **`PREVIEW_DOMAIN`** in the spec's `env:` — the name every example here uses.
+`DOMAIN` is accepted as a legacy alias (0.3.0–0.7.0 read only that), and a name *declared* by the spec
+beats one picked up from the ambient environment, so a stray exported `DOMAIN` cannot silently anchor
+your hostnames.
+
 pstack writes `traefik.enable`, `traefik.docker.network`, the router rule for
 `<name>-<stack>.<domain>`, the entrypoint, `tls` (plus `certresolver` **only** on an HTTP-01 host —
 read from the running Traefik, so it cannot disagree), the `loadbalancer.server.port`, the wildcard

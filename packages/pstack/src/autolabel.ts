@@ -47,7 +47,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Runner } from './exec.ts';
 import { SpecError } from './errors.ts';
-import type { Stack } from './spec.ts';
+import { resolvePreviewDomain, type Stack } from './spec.ts';
 import { detectChallenge } from './inspect.ts';
 import { wildcardRule } from './subdomains.ts';
 
@@ -175,12 +175,14 @@ export function augmentComposeDoc(args: {
       continue;
     }
 
-    const domain = args.domain ?? spec.env.DOMAIN;
+    // Same resolution as the spec's own, so a hostname generated here and one generated for
+    // `compose.subdomains` can never be anchored to different domains.
+    const domain = args.domain ?? resolvePreviewDomain(spec.env, spec.declaredEnv ?? []);
     if (!req.host && !domain) {
       throw new SpecError(
-        `service "${name}" asks for routing but there is no DOMAIN to build a hostname from. ` +
-          `Declare it in the spec (env:\\n  DOMAIN: preview.example.com) or set ` +
-          `pstack.routing.host on the service.`,
+        `service "${name}" asks for routing but there is no domain to build a hostname from. ` +
+          `Declare it in the spec (env:\\n  PREVIEW_DOMAIN: preview.example.com) or set ` +
+          `pstack.routing.host on the service. DOMAIN is accepted as a legacy alias.`,
       );
     }
 
