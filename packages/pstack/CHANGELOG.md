@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0 — 2026-07-30
+
+No host change needed. Upgrade the CLI, rebuild the images.
+
+### Added
+
+- **Logs for one container.** `GET /api/deployments/:id/logs?service=<name>` narrows to a single compose
+  service, and the Logs tab gets a picker. On a stack with a chatty sidecar the interleaved output is
+  unreadable and the lines you want are already past the tail — narrowing spends the whole tail on the
+  service you care about. The picker is built from what is actually **running** rather than from the
+  compose file, because a declared-but-never-started service has no logs and offering it would produce
+  an empty pane that reads like a bug. The service name is validated against compose's own alphabet
+  before it reaches a shell, and shell-quoted after that.
+
+- **Duplicate a deployment** — `/submit?from=<id>`, reachable from a deployment's Overview. Copies the
+  spec, the compose file and the variables into a **new** submission with an empty id, so nothing is
+  written over.
+
+  With a guard, because duplicating has one sharp edge: copy a spec whose `stack:` is a literal and two
+  records drive the *same* compose project — `down` on either stops the other's containers and `verify`
+  on either reports the other's leaks. Two defences: the form says so before you submit, and the server
+  independently resolves every other deployment and reports `stackSharedWith` on a new submission. It is
+  a **warning, not a refusal** — it can be deliberate, the check cannot know, and refusing over a guess
+  would be worse. Absent rather than `[]` when there is no clash, so "checked and clear" cannot be
+  confused with "not checked".
+
+### Fixed
+
+- The Logs tab's service picker never appeared: its watcher ran `immediate` and touched a `const`
+  declared further down the file, which is a temporal-dead-zone `ReferenceError` during setup — so the
+  whole tab failed to render, not just the picker. It also now waits for the *resolved* deployment
+  rather than only the id, since the tab mounts before the parent has resolved it.
+
 ## 0.7.1 — 2026-07-30
 
 ### Fixed

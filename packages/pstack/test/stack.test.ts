@@ -9,7 +9,7 @@ import { SpecStore, findRequiredVars } from '../src/specs.ts';
 import { renderCloudInit, randomPassword } from '../src/cloudinit.ts';
 import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
-import { composeDown, composeUp, shq } from '../src/compose.ts';
+import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer } from '../src/api.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
@@ -2321,5 +2321,148 @@ axes: []
     expect((r.doc.services as any).app.labels).toContain(
       'traefik.http.routers.app-pr-7.rule=Host(`app-pr-7.preview.example.com`)',
     );
+  });
+});
+
+describe('per-service logs, and duplicating a deployment', () => {
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-ls-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  describe('compose logs for one service', () => {
+    const s = () =>
+      spec(`
+version: 1
+stack: pr-\${PR}
+compose:
+  file: dc.yml
+  profiles: [app, worker]
+axes: []
+`);
+
+    const recorder = () => {
+      const cmds: string[] = [];
+      return {
+        cmds,
+        runner: {
+          dryRun: false,
+          async run(cmd: string) {
+            cmds.push(cmd);
+            return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+          },
+        } as Runner,
+      };
+    };
+
+    test('no service reads the whole stack, exactly as before', async () => {
+      const { cmds, runner } = recorder();
+      await composeLogs(s(), runner, 200);
+      expect(cmds[0]).toContain('logs --no-color --tail 200');
+      // Nothing appended, so compose reads every service in the enabled profiles.
+      expect(cmds[0]!.trimEnd().endsWith('--tail 200')).toBe(true);
+    });
+
+    test('a service is appended, and shell-quoted', async () => {
+      const { cmds, runner } = recorder();
+      await composeLogs(s(), runner, 50, 'worker');
+      expect(cmds[0]).toContain(`--tail 50 ${shq('worker')}`);
+    });
+
+    test('a hostile service name cannot break out of the command', async () => {
+      // The API validates the name first; this is the second line of defence, and the one that holds if
+      // a future caller forgets. Asserted via shq itself rather than a hand-written escape, so the test
+      // cannot drift from the quoting it is checking.
+      const hostile = "a'; rm -rf /; echo '";
+      const { cmds, runner } = recorder();
+      await composeLogs(s(), runner, 50, hostile);
+      expect(cmds[0]).toContain(shq(hostile));
+      // The raw form — the one that would actually execute — never appears.
+      expect(cmds[0]).not.toContain(`--tail 50 ${hostile}`);
+    });
+
+    test('over HTTP: an invalid service name is refused before it reaches a shell', async () => {
+      const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: 'tok' });
+      const base = `http://127.0.0.1:${server.port}`;
+      try {
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: { authorization: 'Bearer tok', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            spec: 'version: 1\nstack: s\ncompose:\n  file: dc.yml\n  profiles: [app]\naxes: []\n',
+          }),
+        });
+        const r = await fetch(`${base}/api/deployments/d/logs?service=${encodeURIComponent('a; rm -rf /')}`);
+        expect(r.status).toBe(400);
+        expect(((await r.json()) as { error: string }).error).toMatch(/not a valid compose service name/);
+      } finally {
+        server.stop(true);
+      }
+    });
+  });
+
+  describe('two deployments on one stack', () => {
+    /*
+     * The hazard duplicating introduces: copy a spec whose `stack:` is a literal, give it a new id, and
+     * two records drive the same compose project — `down` on either stops the other's containers.
+     * Reported, not refused: it can be deliberate, and refusing over a guess would be worse.
+     */
+    const LITERAL = 'version: 1\nkind: shared\nstack: shared-ingress\naxes: []\n';
+
+    const boot = () => {
+      const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: 'tok' });
+      return { server, base: `http://127.0.0.1:${server.port}` };
+    };
+    const put = (base: string, id: string, body: Record<string, unknown>) =>
+      fetch(`${base}/api/deployments/${id}`, {
+        method: 'PUT',
+        headers: { authorization: 'Bearer tok', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    test('a new deployment sharing a stack is reported, naming the other id', async () => {
+      const { server, base } = boot();
+      try {
+        const first = (await (await put(base, 'ingress', { spec: LITERAL })).json()) as {
+          stackSharedWith?: string[];
+        };
+        // Absent rather than an empty array, so "checked and found none" cannot be confused with
+        // "not checked".
+        expect(first.stackSharedWith).toBeUndefined();
+
+        const second = (await (await put(base, 'ingress-copy', { spec: LITERAL })).json()) as {
+          stackSharedWith?: string[];
+        };
+        expect(second.stackSharedWith).toEqual(['ingress']);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('a stack that interpolates a variable does not collide', async () => {
+      const { server, base } = boot();
+      try {
+        const VAR = 'version: 1\nstack: pr-${PR}\naxes: []\n';
+        await put(base, 'pr-1', { spec: VAR, vars: { PR: '1' } });
+        const other = (await (await put(base, 'pr-2', { spec: VAR, vars: { PR: '2' } })).json()) as {
+          stackSharedWith?: string[];
+        };
+        // Different values, different stacks — which is what makes duplicating such a spec safe.
+        expect(other.stackSharedWith).toBeUndefined();
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('REPLACING a deployment is not reported as colliding with itself', async () => {
+      const { server, base } = boot();
+      try {
+        await put(base, 'ingress', { spec: LITERAL });
+        const again = (await (await put(base, 'ingress', { spec: LITERAL })).json()) as {
+          stackSharedWith?: string[];
+        };
+        expect(again.stackSharedWith).toBeUndefined();
+      } finally {
+        server.stop(true);
+      }
+    });
   });
 });

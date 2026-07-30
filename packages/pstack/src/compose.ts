@@ -104,12 +104,27 @@ export async function composeDown(spec: Stack, runner: Runner): Promise<RunResul
  * megabytes into a tab. Every profile is enabled for the same reason `down` enables them: compose
  * treats an unenabled profile's services as absent, so their logs would silently be missing.
  */
-export async function composeLogs(spec: Stack, runner: Runner, tail: number): Promise<RunResult> {
+export async function composeLogs(
+  spec: Stack,
+  runner: Runner,
+  tail: number,
+  /**
+   * One compose SERVICE to read, instead of the whole stack. On a stack with a chatty sidecar the
+   * interleaved output is unreadable and the interesting lines are already past the tail, so narrowing
+   * is often the difference between finding the error and not.
+   *
+   * Shell-quoted, because it arrives from a query parameter and is interpolated into a command.
+   */
+  service?: string,
+): Promise<RunResult> {
   const c = spec.compose;
   if (!c) return { ok: true, code: 0, stdout: '', stderr: '(no compose section in spec)', skipped: false };
+  // `logs [SERVICE...]` — an unknown name makes compose exit non-zero with its own message, which is
+  // better than anything this layer could invent.
+  const only = service ? ` ${shq(service)}` : '';
   return runner.run(
-    `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}`,
-    { env: composeEnv(spec), label: 'compose logs' },
+    `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}${only}`,
+    { env: composeEnv(spec), label: service ? `compose logs ${service}` : 'compose logs' },
   );
 }
 

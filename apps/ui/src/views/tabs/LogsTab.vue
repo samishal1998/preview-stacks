@@ -6,27 +6,70 @@
  * `docker compose logs` — the same host that is running everyone else's previews. The tail is
  * clamped to 1–2000 by the server for the same reason.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { api, problem, query } from '../../api/client';
-import type { LogsResponse } from '../../api/types';
+import type { LogsResponse, RuntimeResponse } from '../../api/types';
 import { dep } from '../../composables/useDeployment';
+import InfoHint from '../../components/InfoHint.vue';
 
 const tail = ref(200);
+/** '' means the whole stack. */
+const service = ref('');
+/**
+ * The services to choose from, taken from what is actually RUNNING rather than from the compose file.
+ * A service the spec declares but never started has no logs, and offering it would produce an
+ * empty pane that reads like a bug.
+ */
+const services = ref<string[]>([]);
+
+async function loadServices(): Promise<void> {
+  const r = await api.get<RuntimeResponse>(
+    `/api/deployments/${encodeURIComponent(dep.id)}/runtime${query(dep.vars)}`,
+  );
+  if (!r.ok) return; // the picker is a convenience; without it the whole-stack read still works
+  services.value = [
+    ...new Set(r.body.containers.map((c) => c.service).filter((s): s is string => !!s)),
+  ].sort();
+}
+
 const filter = ref('');
 const logs = ref<LogsResponse | null>(null);
 const error = ref('');
 const loading = ref(false);
+
+watch(
+  () => [dep.id, !!dep.detail?.compose] as const,
+  ([id, hasCompose], prev) => {
+    if (!prev || prev[0] !== id) {
+      services.value = [];
+      service.value = '';
+      logs.value = null;
+    }
+    // Gated on the RESOLVED spec, not just the id: this component mounts before the parent has
+    // resolved the deployment, so an id-only watcher saw `dep.detail === undefined` and the service
+    // picker never appeared.
+    if (hasCompose && services.value.length === 0) void loadServices();
+  },
+  { immediate: true },
+);
 
 async function fetchLogs(): Promise<void> {
   if (!dep.detail?.compose) return;
   const id = dep.id;
   loading.value = true;
   error.value = '';
+  const chosen = service.value;
   const r = await api.get<LogsResponse>(
-    `/api/deployments/${encodeURIComponent(id)}/logs${query(dep.vars, { tail: tail.value })}`,
+    `/api/deployments/${encodeURIComponent(id)}/logs${query(dep.vars, {
+      tail: tail.value,
+      ...(chosen ? { service: chosen } : {}),
+    })}`,
   );
   loading.value = false;
   if (dep.id !== id) return; // navigated away mid-flight
+  // A slow response for the previously-selected service must not land in a pane now labelled with a
+  // different one.
+  if (r.ok && (r.body.service ?? '') !== chosen) return;
   if (!r.ok) {
     logs.value = null;
     error.value = problem(r, 'load the logs');
@@ -50,6 +93,13 @@ const shown = computed(() => {
     <div class="phead">
       <h2 class="section">Compose logs</h2>
       <span class="grow" />
+      <div v-if="services.length > 1" class="field">
+        <label for="svc" class="mute" style="font-size: var(--t-xs)">service</label>
+        <select id="svc" v-model="service">
+          <option value="">all services</option>
+          <option v-for="s in services" :key="s" :value="s">{{ s }}</option>
+        </select>
+      </div>
       <div class="field">
         <label for="tail" class="mute" style="font-size: var(--t-xs)">tail</label>
         <select id="tail" v-model.number="tail">
@@ -103,9 +153,17 @@ const shown = computed(() => {
         <input id="lf" v-model="filter" data-search type="search" placeholder="substring" spellcheck="false" />
       </div>
 
+      <div v-if="logs && logs.service" class="hint" style="margin-top: var(--s3)">
+        Showing <b>{{ logs.service }}</b> only.
+        <InfoHint label="why narrowing helps">
+          On a stack with a chatty sidecar the interleaved output is unreadable, and the lines you want
+          are often already past the tail. Narrowing spends the whole tail on one service.
+        </InfoHint>
+      </div>
+
       <pre v-if="logs" class="log">{{ shown || '(no output)' }}</pre>
       <p v-else-if="!loading" class="mute" style="margin-top: var(--s3)">
-        Press <b>Fetch</b> to read the last {{ tail }} lines.
+        Press <b>Fetch</b> to read the last {{ tail }} lines{{ service ? ` of ${service}` : '' }}.
       </p>
 
       <p v-if="logs" class="hint">

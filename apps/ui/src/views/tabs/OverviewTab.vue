@@ -18,6 +18,10 @@ const kindBlurb = computed(() =>
     <div class="phead">
       <h2 class="section">Resolved spec</h2>
       <span class="grow" />
+      <RouterLink v-if="dep.detail" :to="`/submit?from=${encodeURIComponent(dep.id)}`">
+        Duplicate
+      </RouterLink>
+      <span v-if="dep.detail" class="mute">·</span>
       <RouterLink v-if="dep.detail" :to="`/submit/${encodeURIComponent(dep.id)}`">
         Edit spec &amp; compose →
       </RouterLink>

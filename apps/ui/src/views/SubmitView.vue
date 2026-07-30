@@ -11,6 +11,7 @@
  * and, on a replace, a good record is never destroyed over a typo.
  */
 import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { api, problem } from '../api/client';
 import InfoHint from '../components/InfoHint.vue';
 import type {
@@ -36,7 +37,13 @@ const specName = ref('');
 
 const submitting = ref(false);
 const error = ref('');
-const result = ref<{ id: string; stack: string; created: boolean } | null>(null);
+const result = ref<{
+  id: string;
+  stack: string;
+  created: boolean;
+  /** Other deployments resolving to the same stack — reported by the server on a new deployment. */
+  stackSharedWith?: string[];
+} | null>(null);
 
 /**
  * Stored specs, when this server has them. A build without `/api/specs` answers 404, which is not
@@ -50,6 +57,22 @@ void api.get<SpecsResponse>('/api/specs').then((r) => {
 const chosenSpec = computed(() => specs.value.find((s) => s.name === specName.value));
 
 const replacing = computed(() => !!props.id);
+
+/**
+ * Duplicate mode: `/submit?from=<id>` copies an existing deployment's spec, compose and variables into
+ * a NEW submission. Distinct from replacing — the id starts empty so you name the new one, and nothing
+ * is written over.
+ *
+ * The `stack:` line is the thing to watch, which is why the banner says so: copy a spec whose stack is a
+ * literal and both deployments drive the same compose project, so `down` on either stops the other's
+ * containers. A spec whose stack interpolates a variable (`pr-${PR}`) just needs a different value. The
+ * server independently reports a collision at submit time — see `stackSharedWith`.
+ */
+const route = useRoute();
+const copyFrom = computed(() => {
+  const v = route.query.from;
+  return typeof v === 'string' && v ? v : null;
+});
 
 /**
  * Replacing now PRE-FILLS from what is stored.
@@ -91,6 +114,25 @@ async function loadSource(id: string): Promise<void> {
   if (r.body.specName) forkWarning.value = r.body.specName;
   sourceState.value = 'loaded';
 }
+
+// Duplicate: same fetch, but the id stays empty and the variables come across too, since a copied
+// spec interpolates the same names.
+watch(
+  copyFrom,
+  async (from) => {
+    if (!from || props.id) return;
+    error.value = '';
+    result.value = null;
+    form.value.spec = '';
+    form.value.compose = '';
+    const saved = rowFor(from)?.vars;
+    if (saved) vars.value = pairsFromRecord(saved);
+    await loadSource(from);
+    // A copied record's own id is not a name for the new one; the operator picks that.
+    form.value.id = '';
+  },
+  { immediate: true },
+);
 
 watch(
   () => props.id,
@@ -146,7 +188,12 @@ async function submit(): Promise<void> {
   submitting.value = false;
 
   if (r.status === 200 || r.status === 201) {
-    result.value = { id: r.body.id ?? id, stack: r.body.stack ?? '?', created: r.status === 201 };
+    result.value = {
+      id: r.body.id ?? id,
+      stack: r.body.stack ?? '?',
+      created: r.status === 201,
+      stackSharedWith: r.body.stackSharedWith,
+    };
     // Persist the variables that just validated this spec. On an older server this is the single
     // thing keeping a later `down` pointed at the stack the `up` created.
     writeVars(id, vars.value);
@@ -218,9 +265,17 @@ function loadExample(): void {
   <div>
     <div class="page-head">
       <div>
-        <h1>{{ replacing ? 'Edit a deployment' : 'Submit a deployment' }}</h1>
+        <h1>
+          {{ replacing ? 'Edit a deployment' : copyFrom ? 'Duplicate a deployment' : 'Submit a deployment' }}
+        </h1>
         <div class="sub">
-          {{ replacing ? 'Loaded from what is stored; saving replaces the record' : 'Stores a spec so it can be deployed' }}
+          {{
+            replacing
+              ? 'Loaded from what is stored; saving replaces the record'
+              : copyFrom
+                ? `Copied from ${copyFrom} — give it a new id, then edit`
+                : 'Stores a spec so it can be deployed'
+          }}
         </div>
       </div>
       <span class="grow" />
@@ -243,6 +298,24 @@ function loadExample(): void {
         is still valid YAML — the server will accept it, and the axes the original declared simply
         stop existing as far as the control plane knows, while whatever they created keeps running.
       -->
+      <!--
+        The one thing that makes duplicating dangerous, said before the form rather than after the
+        submission: two records resolving to one stack drive the same compose project.
+      -->
+      <div v-if="copyFrom && !replacing" class="banner warn">
+        <b>Change the stack, not just the id.</b>
+        <p>
+          Two deployments that resolve to the same <code>stack</code> drive the same compose project —
+          <code>down</code> on either stops the other's containers. If the stack interpolates a variable
+          (<code>pr-${PR}</code>) give it a different value below; if it is a literal, edit the
+          <code>stack:</code> line.
+          <template v-if="sourceState === 'withheld'">
+            The spec could not be copied without an access token —
+            <RouterLink to="/settings">add yours</RouterLink>.
+          </template>
+        </p>
+      </div>
+
       <div v-if="replacing" class="banner" :class="sourceState === 'loaded' ? 'info' : 'warn'">
         <b>Replacing {{ id }}.</b>
         <p v-if="sourceState === 'loading'">Loading what is stored…</p>
@@ -390,6 +463,23 @@ function loadExample(): void {
         assert that is wrong, and often prints the corrected form. Rendered whole, newlines and
         indentation intact. Never truncate it, never collapse it, never say "invalid spec".
       -->
+      <!--
+        Reported by the server, which resolved every other deployment to check. Shown after the fact
+        because it can only be known once the spec has resolved — and it is a warning, not a rejection:
+        it can be deliberate, and refusing over a guess would be worse than saying so.
+      -->
+      <div v-if="result?.stackSharedWith?.length" class="banner warn">
+        <b>Another deployment already resolves to stack “{{ result.stack }}”.</b>
+        <p>
+          <template v-for="(o, i) in result.stackSharedWith" :key="o">
+            <RouterLink :to="`/deployments/${encodeURIComponent(o)}`">{{ o }}</RouterLink
+            ><span v-if="i < result.stackSharedWith.length - 1">, </span> </template
+          >— both records now drive the same compose project, so <code>down</code> on either stops the
+          other's containers and <code>verify</code> on either reports the other's leaks. If that was not
+          intended, change this one's <code>stack</code> and save again.
+        </p>
+      </div>
+
       <ErrorNote v-if="error" :text="error" title="The server rejected this submission." />
     </section>
   </div>

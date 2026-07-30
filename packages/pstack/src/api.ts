@@ -12,6 +12,7 @@
  *   GET    /api/specs                     named specs (store once, reference from many deployments)
  *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
+ *   GET    /api/deployments/:id/logs?service=  compose logs, optionally for ONE service
  *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
  *   GET    /api/registries                private-registry credentials: hosts + usernames, NEVER secrets
  *   PUT    /api/registries/:host           store one  { username, password }  (write-only)
@@ -378,13 +379,39 @@ export function createServer(opts: ServerOptions) {
             }
 
             const existed = (await registry.get(id)) !== null;
+
+            /**
+             * Does another deployment already resolve to this stack?
+             *
+             * Two ids sharing one stack means two records driving the SAME compose project: `down` on
+             * either stops the other's containers, and `verify` on either reports the other's leaks.
+             * The way to get there is duplicating a deployment and not changing the `stack:` line (or
+             * the variable it interpolates) — which is exactly what the new "duplicate" flow makes
+             * easy, so it is worth naming at the moment it happens.
+             *
+             * A WARNING, NOT A REFUSAL. It can be deliberate (a second record for a stack managed
+             * elsewhere), the check cannot know, and refusing a submission over a guess would be worse
+             * than saying so. Only for a NEW deployment: on a replace the id already owns the stack.
+             */
+            const stackSharedWith: string[] = [];
+            if (!existed) {
+              for (const other of await registry.list()) {
+                if (other.id === id) continue;
+                // Resolved with the other deployment's own stored vars, which is what its up/down use.
+                const s = await registry.resolve(other.id, {}).catch(() => null);
+                if (s?.stack === parsed.stack) stackSharedWith.push(other.id);
+              }
+            }
+
             const dep = await registry.put(id, specSource, { composeYaml: composeSource, env, vars, specName });
             // `vars` ARE stored (unlike `env`, which only validated this submission), so up/down
             // need no query params — and a later `down` cannot target a different stack by
             // forgetting one.
             return json(
               { id: dep.id, kind: dep.kind, stack: parsed.stack, specName: dep.specName ?? null,
-                vars: dep.vars ?? {}, createdAt: dep.createdAt, updatedAt: dep.updatedAt },
+                vars: dep.vars ?? {}, createdAt: dep.createdAt, updatedAt: dep.updatedAt,
+                // Omitted when empty, so a client cannot mistake `[]` for "not checked".
+                ...(stackSharedWith.length ? { stackSharedWith } : {}) },
               { status: existed ? 200 : 201 },
             );
           }
@@ -653,12 +680,19 @@ export function createServer(opts: ServerOptions) {
           // Bounded: an unbounded tail on a chatty stack would stream megabytes into a browser tab.
           const tailRaw = Number(url.searchParams.get('tail') ?? 200);
           const tail = Number.isFinite(tailRaw) ? Math.min(Math.max(tailRaw, 1), 2000) : 200;
-          const r = await composeLogs(spec, runnerFor(spec, dep.dir), tail);
+          // A compose service name, restricted to what compose itself allows. Validated rather than
+          // trusted: it reaches a shell, and `shq` is the second line of defence, not the first.
+          const svcRaw = url.searchParams.get('service');
+          if (svcRaw !== null && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(svcRaw)) {
+            return json({ error: `"${svcRaw}" is not a valid compose service name` }, { status: 400 });
+          }
+          const r = await composeLogs(spec, runnerFor(spec, dep.dir), tail, svcRaw ?? undefined);
           // Application logs are the one place a secret shows up as free text — an app echoing its
           // own config, a hook printing a connection string. Redact by content before it leaves the
           // host, and mask this process's own token explicitly since it is the worst thing to leak.
           const text = redactText(r.stdout + (r.stderr ? `\n${r.stderr}` : ''), [opts.token ?? '']);
-          return json({ stack: spec.stack, tail, ok: r.ok, text });
+          // `service` echoed so a UI can tell a stale response from a current one after a switch.
+          return json({ stack: spec.stack, tail, service: svcRaw ?? null, ok: r.ok, text });
         }
 
         // ---- a deployment's stored source ----------------------------------------------

@@ -268,9 +268,28 @@ export type SpecDetail = SpecMeta & {
   source?: string;
   sourceWithheld?: true;
 };
-export type LogsResponse = { stack: string; tail: number; ok: boolean; text: string };
+export type LogsResponse = {
+  stack: string;
+  tail: number;
+  /** The service the output is for, or null for the whole stack. Echoed so a stale response is
+   *  detectable after switching services. */
+  service?: string | null;
+  ok: boolean;
+  text: string;
+};
 export type ActionResponse = { job: JobStub };
-export type SubmitResponse = { id: string; kind: Kind; stack: string; specName?: string | null };
+export type SubmitResponse = {
+  id: string;
+  kind: Kind;
+  stack: string;
+  specName?: string | null;
+  /**
+   * Other deployment ids that resolve to this same stack. Present only on a NEW deployment and only
+   * when non-empty, so `[]` can never be mistaken for "not checked". Two records on one stack drive the
+   * same compose project.
+   */
+  stackSharedWith?: string[];
+};
 
 /**
  * A 409 body. Which 409 it is must be decided on payload SHAPE, never on the message text:
