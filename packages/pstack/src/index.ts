@@ -40,6 +40,15 @@ export {
 export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
 
 export {
+  augmentComposeDoc,
+  labelsToMap,
+  materializeCompose,
+  readRoutingRequest,
+  GENERATED_COMPOSE,
+} from './autolabel.ts';
+export type { AugmentResult, RoutingRequest } from './autolabel.ts';
+
+export {
   allTraefikRouters,
   deploymentRuntime,
   detectChallenge,

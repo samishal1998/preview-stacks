@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.6.0 — 2026-07-30
+
+No host change needed. Upgrade the CLI, rebuild the images.
+
+### Added
+
+- **`pstack.routing.port` — pstack generates the Traefik labels and network wiring.** A reachable
+  preview service needed four labels and two network declarations, all boilerplate differing only by
+  name and port, and every one with a silent failure mode. Now:
+
+  ```yaml
+  services:
+    app:
+      image: nginx:alpine
+      profiles: [app]
+      labels:
+        - pstack.routing.port=80              # the port INSIDE the container
+        # - pstack.routing.service_name=web   # optional; defaults to the compose service name
+        # - pstack.routing.host=…             # optional; overrides the convention
+  ```
+
+  generates `traefik.enable=true`, `traefik.docker.network=preview-ingress`, the router rule for
+  `<name>-<stack>.<domain>`, the entrypoint, `tls`, the `loadbalancer.server.port`, the wildcard router
+  when `compose.subdomains` names that profile, and the networks — on the service *and* at the file
+  root, with `external: true`.
+
+  `tls.certresolver` is included **only** when the host is not DNS-01, read from the running Traefik's
+  own flags rather than a setting, so the generated labels cannot disagree with the host they land on.
+  The stack is in every router and service id because Traefik's namespace is global across the daemon.
+
+  **It never overrides you.** A service with *any* `traefik.*` label is left completely alone — labels,
+  networks and all. The presence of your own label *is* the opt-out; there is no flag to remember. A
+  service with neither kind of label is also left alone, because a database should not get a hostname.
+
+  **A derived file, not an overlay.** pstack reads the submitted file and writes a complete
+  `compose.generated.yml` beside it — your file is never modified. An overlay would put Compose's merge
+  semantics for list-form `labels` in charge of whether *your* routers survive a merge, and getting that
+  wrong deletes them silently. The derived file is **JSON**, which is valid YAML 1.2 and what every
+  parser agrees on; emitting YAML would mean trusting a stringifier's quoting to match Go's parser on
+  values like `` Host(`app.example.com`) `` — a mismatch that would only surface on your host.
+  Regenerated on every compose subcommand, so `up` and `down` cannot disagree about a router's name.
+
+- `pstack validate` prints the hostname and container port it would generate per service — pstack
+  derives the hostname, so seeing what it derived is how a wrong `DOMAIN` is caught before Traefik
+  silently never matches.
+- **`examples/docker-compose.minimal.yml`** — the same stack as the hand-written example with the
+  boilerplate gone, including a `postgres` that is deliberately *not* routed.
+
+### Changed
+
+- `Runner` now exposes its `cwd`. Compose needs it to find the submitted file and write the derived one;
+  the alternative was threading a `dir` argument through `up`/`down`/`verify` and four compose helpers.
+- A dry run writes no derived file — a dry run must have no side effects.
+
 ## 0.5.0 — 2026-07-30
 
 No host change needed — 0.4.0's `pstack init` is enough. Upgrade the CLI, rebuild the images.

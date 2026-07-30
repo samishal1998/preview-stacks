@@ -26,7 +26,8 @@
  */
 
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { augmentComposeDoc } from './autolabel.ts';
 import { loadSpec, SpecError, warnings } from './spec.ts';
 import { createRunner, type LogLevel } from './exec.ts';
 import { down, report, status, up, verify } from './stack.ts';
@@ -222,6 +223,38 @@ switch (args.cmd) {
       // derives the host — so seeing what it derived is how you catch a wrong domain before Traefik
       // silently never matches. `any` is called out as HTTP-only here too: a certificate cannot cover
       // it, and finding that out from a failed handshake is the expensive way.
+      // What the generated labels would be. Read-only — `validate` must not write the derived file —
+      // and shown because pstack derives the hostname: seeing what it derived is how a wrong DOMAIN
+      // gets caught before Traefik silently never matches.
+      try {
+        const dir = dirname(resolve(args.file));
+        const raw = await Bun.file(join(dir, spec!.compose.file)).text();
+        if (raw.includes('pstack.routing.')) {
+          const parsed = Bun.YAML.parse(raw);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            // 'unknown' rather than probing docker: `validate` is offline by contract, and unknown
+            // errs toward including the certresolver, which is the cheaper mistake.
+            const aug = augmentComposeDoc({
+              doc: parsed as Record<string, unknown>,
+              spec: spec!,
+              challenge: 'unknown',
+            });
+            for (const [svc, added] of Object.entries(aug.generated)) {
+              const rule = added.find((l) => l.includes('.rule=Host('));
+              const host = rule ? /Host\(`([^`]+)`\)/.exec(rule)?.[1] : undefined;
+              const port = added.find((l) => l.includes('loadbalancer.server.port'))?.split('=')[1];
+              console.log(`  generated: ${svc} → https://${host ?? '?'} (container port ${port ?? '?'})`);
+            }
+            for (const [svc, why] of Object.entries(aug.skipped)) {
+              if (why.includes('own traefik')) console.log(`  generated: ${svc} skipped — ${why}`);
+            }
+          }
+        }
+      } catch (err) {
+        // A compose file that cannot be read is compose's problem to report, not validate's.
+        if (err instanceof SpecError) console.log(`  ! ${err.message}`);
+      }
+
       for (const s of spec!.compose.subdomains ?? []) {
         const depth = s.depth === 'any' ? 'any depth — HTTP only, no cert can cover it' : 'one label';
         console.log(`  subdomains: *.${s.host} → ${s.profile}  (${depth})`);

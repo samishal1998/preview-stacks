@@ -19,16 +19,43 @@
 import type { Stack } from './spec.ts';
 import type { Runner, RunResult } from './exec.ts';
 import { subdomainEnv } from './subdomains.ts';
+import { materializeCompose } from './autolabel.ts';
 
 function fileArgs(spec: Stack): string {
   const c = spec.compose!;
   return [c.file, ...(c.overlays ?? [])].map((f) => `-f ${shq(f)}`).join(' ');
 }
 
-function base(spec: Stack): string {
-  // `-p <stack>` is the namespacing primitive: it prefixes containers, networks and volumes, so two
-  // stacks from the same compose file never collide.
-  return `docker compose -p ${shq(spec.stack)} ${fileArgs(spec)}`;
+/**
+ * The prefix every subcommand shares.
+ *
+ * `-p <stack>` is the namespacing primitive: it prefixes containers, networks and volumes, so two
+ * stacks from the same compose file never collide. The `-f` list comes from `fileArgsFor`, which
+ * substitutes the augmented file when the submitted one asked for generated labels.
+ */
+async function baseFor(spec: Stack, runner: Runner): Promise<string> {
+  return `docker compose -p ${shq(spec.stack)} ${await fileArgsFor(spec, runner)}`;
+}
+
+/**
+ * Resolve which compose file to pass to `-f`, generating the augmented one when the submitted file
+ * asks for it with `pstack.routing.*` labels.
+ *
+ * Called by EVERY subcommand, not just `up`. The generated labels are derived from the resolved spec,
+ * so regenerating each time is what stops `up` and `down` disagreeing about what a router was called —
+ * and compose reads the file on every subcommand anyway.
+ *
+ * `runner.cwd` is the deployment directory (the registry sets it) or the spec's own directory (the
+ * CLI). With neither there is nowhere to write, so the submitted file is used unchanged.
+ */
+async function fileArgsFor(spec: Stack, runner: Runner): Promise<string> {
+  const c = spec.compose!;
+  const dir = runner.cwd;
+  // Nothing is written under --dry-run: a dry run must not have side effects, and the point of it is
+  // to show what WOULD happen.
+  if (!dir || runner.dryRun) return fileArgs(spec);
+  const { file } = await materializeCompose({ dir, spec, runner });
+  return [file, ...(c.overlays ?? [])].map((f) => `-f ${shq(f)}`).join(' ');
 }
 
 function profileArgs(profiles: string[]): string {
@@ -58,8 +85,7 @@ export async function composeUp(
   extraEnv: Record<string, string>,
 ): Promise<RunResult> {
   const c = spec.compose!;
-  const cmd =
-    `${base(spec)} ${profileArgs(c.profiles)} up -d --remove-orphans`;
+  const cmd = `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} up -d --remove-orphans`;
   // --remove-orphans drops services that were in a previous deploy but are not selected now, so a
   // relabel from "backend+frontend" to "backend" actually stops the frontend instead of orphaning it.
   return runner.run(cmd, { env: composeEnv(spec, extraEnv), label: 'compose up' });
@@ -68,7 +94,7 @@ export async function composeUp(
 export async function composeDown(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
   // EVERY profile — see the file header.
-  const cmd = `${base(spec)} ${profileArgs(c.profiles)} down -v --remove-orphans`;
+  const cmd = `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} down -v --remove-orphans`;
   return runner.run(cmd, { env: composeEnv(spec), label: 'compose down' });
 }
 
@@ -82,14 +108,14 @@ export async function composeLogs(spec: Stack, runner: Runner, tail: number): Pr
   const c = spec.compose;
   if (!c) return { ok: true, code: 0, stdout: '', stderr: '(no compose section in spec)', skipped: false };
   return runner.run(
-    `${base(spec)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}`,
+    `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}`,
     { env: composeEnv(spec), label: 'compose logs' },
   );
 }
 
 export async function composePs(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
-  return runner.run(`${base(spec)} ${profileArgs(c.profiles)} ps`, {
+  return runner.run(`${await baseFor(spec, runner)} ${profileArgs(c.profiles)} ps`, {
     env: composeEnv(spec),
     label: 'compose ps',
   });

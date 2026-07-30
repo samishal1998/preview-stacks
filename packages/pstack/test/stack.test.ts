@@ -14,6 +14,13 @@ import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer } from '../src/api.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
 import { deploymentRuntime, hostsFromRule, routesFromLabels } from '../src/inspect.ts';
+import {
+  augmentComposeDoc,
+  labelsToMap,
+  materializeCompose,
+  readRoutingRequest,
+  GENERATED_COMPOSE,
+} from '../src/autolabel.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
 function fakeRunner(fail: (cmd: string) => boolean = () => false, stdout = ''): Runner & { log: string[] } {
@@ -1723,6 +1730,292 @@ describe('runtime inspection — why the hostname does not work', () => {
       expect(blob).not.toContain('super-secret-token-value');
       expect(blob).not.toContain('postgres://u:p@h/db');
       expect(blob).not.toContain('DATABASE_URL');
+    });
+  });
+});
+
+describe('generated Traefik labels — six pieces of boilerplate from one', () => {
+  const SPEC = `
+version: 1
+stack: pr-\${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: docker-compose.yml
+  profiles: [app]
+axes: []
+`;
+  const s = () => spec(SPEC);
+
+  const doc = (services: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    services,
+    ...extra,
+  });
+
+  test('labels are read from both compose forms', () => {
+    expect(labelsToMap(['a=1', 'b=2', 'flag'])).toEqual({ a: '1', b: '2', flag: '' });
+    expect(labelsToMap({ a: 1, b: 'two' })).toEqual({ a: '1', b: 'two' });
+    expect(labelsToMap(undefined)).toEqual({});
+    // A value containing '=' keeps all of it — a Traefik rule is full of them.
+    expect(labelsToMap(['r=Host(`a.b`) && Path(`/x=1`)'])).toEqual({ r: 'Host(`a.b`) && Path(`/x=1`)' });
+  });
+
+  test('one label produces every piece a reachable service needs', () => {
+    const r = augmentComposeDoc({
+      doc: doc({ app: { image: 'nginx:alpine', labels: ['pstack.routing.port=80'] } }),
+      spec: s(),
+      challenge: 'http01',
+    });
+    const labels = (r.doc.services as any).app.labels as string[];
+
+    expect(labels).toContain('traefik.enable=true');
+    expect(labels).toContain('traefik.docker.network=preview-ingress');
+    // The stack is in the router id: Traefik's namespace is global across the daemon.
+    expect(labels).toContain('traefik.http.routers.app-pr-7.rule=Host(`app-pr-7.preview.example.com`)');
+    expect(labels).toContain('traefik.http.services.app-pr-7.loadbalancer.server.port=80');
+    expect(labels).toContain('traefik.http.routers.app-pr-7.service=app-pr-7');
+    // HTTP-01: every hostname resolves its own certificate, so the router needs a resolver.
+    expect(labels).toContain('traefik.http.routers.app-pr-7.tls.certresolver=le');
+    // The user's own label survives, so the file stays self-describing.
+    expect(labels).toContain('pstack.routing.port=80');
+
+    // Networks, on the service and at the root — `external: true` is the whole point.
+    expect((r.doc.services as any).app.networks).toEqual(['default', 'preview-ingress']);
+    expect(r.doc.networks).toEqual({
+      default: {},
+      'preview-ingress': { external: true },
+      'preview-shared': { external: true },
+    });
+  });
+
+  test('DNS-01 inverts the certresolver rule', () => {
+    // One always-on router holds the wildcard there; a per-router resolver makes each PR order its own
+    // certificate and burn the ~50-per-week limit.
+    const r = augmentComposeDoc({
+      doc: doc({ app: { image: 'x', labels: ['pstack.routing.port=80'] } }),
+      spec: s(),
+      challenge: 'dns01',
+    });
+    const labels = (r.doc.services as any).app.labels as string[];
+    expect(labels).toContain('traefik.http.routers.app-pr-7.tls=true');
+    expect(labels.some((l) => l.includes('certresolver'))).toBe(false);
+  });
+
+  test('a service with its own traefik labels is left completely alone', () => {
+    // The escape hatch, and it must be total: no labels appended, no networks touched.
+    const original = {
+      image: 'x',
+      labels: ['traefik.enable=true', 'traefik.http.routers.mine.rule=Host(`mine.example.com`)'],
+    };
+    const r = augmentComposeDoc({
+      doc: doc({ app: { ...original } }),
+      spec: s(),
+      challenge: 'http01',
+    });
+    expect((r.doc.services as any).app).toEqual(original);
+    expect(r.generated).toEqual({});
+    expect(r.skipped.app).toContain('its own traefik.* labels');
+    // And with nothing routed, the root networks are not invented either.
+    expect(r.doc.networks).toBeUndefined();
+  });
+
+  test('a service that asks for nothing is left alone — a database needs no hostname', () => {
+    const r = augmentComposeDoc({
+      doc: doc({ db: { image: 'postgres:17' } }),
+      spec: s(),
+      challenge: 'http01',
+    });
+    expect((r.doc.services as any).db.labels).toBeUndefined();
+    expect(r.skipped.db).toContain('not routed');
+  });
+
+  test('service_name overrides the hostname, and an explicit host overrides both', () => {
+    const r = augmentComposeDoc({
+      doc: doc({
+        web: { image: 'x', labels: ['pstack.routing.port=3000', 'pstack.routing.service_name=frontend'] },
+        api: { image: 'x', labels: ['pstack.routing.port=8080', 'pstack.routing.host=custom.example.com'] },
+      }),
+      spec: s(),
+      challenge: 'http01',
+    });
+    const web = (r.doc.services as any).web.labels as string[];
+    expect(web).toContain('traefik.http.routers.frontend-pr-7.rule=Host(`frontend-pr-7.preview.example.com`)');
+    const api = (r.doc.services as any).api.labels as string[];
+    expect(api).toContain('traefik.http.routers.api-pr-7.rule=Host(`custom.example.com`)');
+  });
+
+  test('existing service networks are appended to, never replaced', () => {
+    const r = augmentComposeDoc({
+      doc: doc(
+        { app: { image: 'x', labels: ['pstack.routing.port=80'], networks: ['default', 'preview-shared'] } },
+        { networks: { default: {}, 'preview-shared': { external: true } } },
+      ),
+      spec: s(),
+      challenge: 'http01',
+    });
+    expect((r.doc.services as any).app.networks).toEqual([
+      'default',
+      'preview-shared',
+      'preview-ingress',
+    ]);
+  });
+
+  test("a user's own root network definition is never overwritten", () => {
+    const mine = { driver: 'bridge', name: 'i-meant-this' };
+    const r = augmentComposeDoc({
+      doc: doc({ app: { image: 'x', labels: ['pstack.routing.port=80'] } }, { networks: { default: mine } }),
+      spec: s(),
+      challenge: 'http01',
+    });
+    expect((r.doc.networks as any).default).toEqual(mine);
+  });
+
+  test('a wildcard subdomain router is generated when the spec asked for one', () => {
+    const withSubs = spec(`
+version: 1
+stack: pr-\${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: docker-compose.yml
+  profiles: [app]
+  subdomains: [app]
+axes: []
+`);
+    const r = augmentComposeDoc({
+      doc: doc({ app: { image: 'x', labels: ['pstack.routing.port=80'] } }),
+      spec: withSubs,
+      challenge: 'http01',
+    });
+    const labels = (r.doc.services as any).app.labels as string[];
+    expect(labels.some((l) => l.startsWith('traefik.http.routers.app-pr-7-wild.rule=HostRegexp('))).toBe(
+      true,
+    );
+    // Lower priority than the exact host, which scores on rule length.
+    expect(labels).toContain('traefik.http.routers.app-pr-7-wild.priority=2');
+    // Same backend as the exact router.
+    expect(labels).toContain('traefik.http.routers.app-pr-7-wild.service=app-pr-7');
+  });
+
+  describe('refusals', () => {
+    test('a port that is not a port is refused, not skipped', () => {
+      // Skipping silently is how "I added the label and nothing happened" happens.
+      expect(() => readRoutingRequest('app', { 'pstack.routing.port': 'web' })).toThrow(/not a port/);
+      expect(() => readRoutingRequest('app', { 'pstack.routing.port': '0' })).toThrow(/not a port/);
+      expect(() => readRoutingRequest('app', { 'pstack.routing.port': '70000' })).toThrow(/not a port/);
+    });
+
+    test('pstack.routing.* without a port is refused', () => {
+      expect(() => readRoutingRequest('app', { 'pstack.routing.service_name': 'web' })).toThrow(
+        /no pstack.routing.port/,
+      );
+    });
+
+    test('no DOMAIN and no explicit host is refused', () => {
+      const noDomain = spec('version: 1\nstack: s\ncompose:\n  file: dc.yml\n  profiles: [app]\naxes: []', {});
+      expect(() =>
+        augmentComposeDoc({
+          doc: doc({ app: { image: 'x', labels: ['pstack.routing.port=80'] } }),
+          spec: noDomain,
+          challenge: 'http01',
+        }),
+      ).toThrow(/no DOMAIN/);
+    });
+  });
+
+  describe('materializing the file', () => {
+    const tmpdir = () =>
+      `${process.env.TMPDIR ?? '/tmp'}/pstack-auto-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    const quiet: Runner = {
+      dryRun: false,
+      async run() {
+        return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+      },
+    };
+
+    test('a compose file with no pstack.routing.* is used unchanged, with nothing written', async () => {
+      const dir = tmpdir();
+      await Bun.write(`${dir}/docker-compose.yml`, 'services:\n  app:\n    image: nginx\n');
+      const r = await materializeCompose({ dir, spec: s(), runner: quiet, challenge: 'http01' });
+      expect(r.file).toBe('docker-compose.yml');
+      expect(await Bun.file(`${dir}/${GENERATED_COMPOSE}`).exists()).toBe(false);
+    });
+
+    test('the derived file is written beside the original, which is untouched', async () => {
+      const dir = tmpdir();
+      const submitted = 'services:\n  app:\n    image: nginx:alpine\n    labels:\n      - pstack.routing.port=80\n';
+      await Bun.write(`${dir}/docker-compose.yml`, submitted);
+      const r = await materializeCompose({ dir, spec: s(), runner: quiet, challenge: 'http01' });
+      expect(r.file).toBe(GENERATED_COMPOSE);
+      // Your file is never modified — the edit form must still show what you submitted.
+      expect(await Bun.file(`${dir}/docker-compose.yml`).text()).toBe(submitted);
+
+      // JSON, which every YAML parser reads identically — including Go's, which compose uses and
+      // which is not the one available to test here.
+      const generated = await Bun.file(`${dir}/${GENERATED_COMPOSE}`).text();
+      const parsed = Bun.YAML.parse(generated) as any;
+      expect(JSON.parse(generated)).toEqual(parsed);
+      expect(parsed.services.app.labels).toContain('traefik.enable=true');
+      expect(parsed.networks['preview-ingress']).toEqual({ external: true });
+    });
+
+    test('regenerating produces an identical file — up and down cannot disagree', async () => {
+      const dir = tmpdir();
+      await Bun.write(
+        `${dir}/docker-compose.yml`,
+        'services:\n  app:\n    image: x\n    labels:\n      - pstack.routing.port=80\n',
+      );
+      const first = await materializeCompose({ dir, spec: s(), runner: quiet, challenge: 'http01' });
+      const a = await Bun.file(`${dir}/${first.file}`).text();
+      await materializeCompose({ dir, spec: s(), runner: quiet, challenge: 'http01' });
+      expect(await Bun.file(`${dir}/${first.file}`).text()).toBe(a);
+    });
+
+    test('composeUp and composeDown both pass the DERIVED file to -f', async () => {
+      // The integration point. If `down` used the submitted file it would compute a different project
+      // shape than `up` created — which is the whole reason the file is regenerated per subcommand
+      // rather than only at deploy time.
+      const dir = tmpdir();
+      await Bun.write(
+        `${dir}/docker-compose.yml`,
+        'services:\n  app:\n    image: x\n    labels:\n      - pstack.routing.port=80\n',
+      );
+      const cmds: string[] = [];
+      const recording: Runner = {
+        dryRun: false,
+        cwd: dir,
+        async run(cmd: string) {
+          cmds.push(cmd);
+          return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+        },
+      };
+      await composeUp(s(), recording, {});
+      await composeDown(s(), recording);
+      const composeCmds = cmds.filter((c) => c.startsWith('docker compose'));
+      expect(composeCmds).toHaveLength(2);
+      for (const c of composeCmds) expect(c).toContain(`-f '${GENERATED_COMPOSE}'`);
+    });
+
+    test('a dry run writes nothing — it must have no side effects', async () => {
+      const dir = tmpdir();
+      await Bun.write(
+        `${dir}/docker-compose.yml`,
+        'services:\n  app:\n    image: x\n    labels:\n      - pstack.routing.port=80\n',
+      );
+      await composeUp(s(), { dryRun: true, cwd: dir, async run() {
+        return { ok: true, code: 0, stdout: '', stderr: '', skipped: true };
+      } } as Runner, {});
+      expect(await Bun.file(`${dir}/${GENERATED_COMPOSE}`).exists()).toBe(false);
+    });
+
+    test('an unreadable compose file falls back to the original rather than guessing', async () => {
+      const r = await materializeCompose({
+        dir: `${tmpdir()}/absent`,
+        spec: s(),
+        runner: quiet,
+        challenge: 'http01',
+      });
+      expect(r.file).toBe('docker-compose.yml');
     });
   });
 });

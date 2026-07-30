@@ -475,6 +475,44 @@ Three consequences follow directly:
 A deployment's **Containers & routes** tab renders exactly this chain, with the address Traefik
 assembled in a `forwards to` column, and names whichever step is missing.
 
+### Generated labels: declare the port, not the boilerplate
+
+All six pieces above are boilerplate that differs only by service name and port, and each has a silent
+failure mode. So declare the part that is actually yours:
+
+```yaml
+services:
+  app:
+    image: nginx:alpine
+    profiles: [app]
+    labels:
+      - pstack.routing.port=80            # the port INSIDE the container
+      # - pstack.routing.service_name=web # optional; defaults to the compose service name
+      # - pstack.routing.host=custom.example.com  # optional; overrides the convention
+```
+
+pstack writes `traefik.enable`, `traefik.docker.network`, the router rule for
+`<name>-<stack>.<domain>`, the entrypoint, `tls` (plus `certresolver` **only** on an HTTP-01 host —
+read from the running Traefik, so it cannot disagree), the `loadbalancer.server.port`, the wildcard
+router when `compose.subdomains` names that profile, and the network wiring on both the service and
+the file root — with `external: true`, which is the part that otherwise bites.
+
+**It never overrides you.** A service carrying *any* `traefik.*` label is left completely alone —
+labels, networks and all. That is the escape hatch for anything this cannot express, and the presence
+of your own label *is* the opt-out; there is no flag. A service with neither kind of label is also left
+alone, because a database should not get a hostname.
+
+**It writes a derived file, not an overlay.** pstack reads the submitted compose file and writes a
+complete `compose.generated.yml` beside it, which compose then reads on its own. An overlay would put
+Compose's merge semantics for list-form `labels` in charge of whether *your* routers survive — and
+getting that wrong deletes them silently. The derived file is JSON (valid YAML 1.2, and what every YAML
+parser agrees on: emitting YAML would mean trusting a stringifier's quoting to match Go's parser on
+values like ``Host(`app.example.com`)``). **Your file is never modified.** It is regenerated on every
+compose subcommand, so `up` and `down` cannot disagree about what a router was called.
+
+`pstack validate` prints what would be generated, and `examples/docker-compose.minimal.yml` is the same
+stack as the hand-written example with the boilerplate removed.
+
 ## 4b. Traefik's dynamic configuration
 
 Traefik reads two providers: **docker** (labels on containers — every per-PR router) and **file**, a

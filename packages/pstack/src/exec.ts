@@ -19,6 +19,15 @@ export type RunResult = {
 export type Runner = {
   run(cmd: string, opts?: { env?: Record<string, string>; label?: string }): Promise<RunResult>;
   readonly dryRun: boolean;
+  /**
+   * The directory commands run in — the deployment directory for a registry-driven run, the spec's
+   * own directory for a CLI one.
+   *
+   * Exposed (not just used internally) because compose needs it: pstack writes a derived compose file
+   * next to the submitted one and passes that to `-f`, and the alternative to reading it from here was
+   * threading a `dir` argument through `up`/`down`/`verify` and four compose helpers.
+   */
+  readonly cwd?: string;
 };
 
 export type LogLevel = 'quiet' | 'normal' | 'verbose';
@@ -32,6 +41,7 @@ export function createRunner(opts: {
   const level = opts.level ?? 'normal';
   return {
     dryRun: opts.dryRun,
+    cwd: opts.cwd,
     async run(cmd, o = {}) {
       const label = o.label ?? cmd;
       if (opts.dryRun) {
