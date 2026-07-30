@@ -171,6 +171,48 @@ export type JobsResponse = { jobs: Job[] };
 export type JobResponse = { job: Job };
 export type SpecsResponse = { specs: SpecMeta[] };
 
+/** `GET /api/deployments/:id/runtime` — what is running and what Traefik was told about it. */
+export type RuntimeContainer = {
+  id: string;
+  name: string;
+  service: string | null;
+  image: string;
+  state: string;
+  health: string | null;
+  networks: string[];
+  /** The container's IP on `preview-ingress` — the address Traefik actually dials. */
+  ingressIp: string | null;
+  ports: Array<{ containerPort: number; protocol: string; hostPort?: string }>;
+  traefikLabels: Record<string, string>;
+};
+export type RuntimeRoute = {
+  router: string;
+  container: string;
+  rule: string;
+  hosts: string[];
+  service: string | null;
+  port: number | null;
+  entrypoints: string | null;
+  tls: boolean;
+  certresolver: string | null;
+  priority: string | null;
+  /** `<ingress-ip>:<container-port>` — null when either half is missing. */
+  target: string | null;
+  /** Only on the host-wide list. */
+  project?: string | null;
+};
+export type RuntimeResponse = {
+  id: string;
+  stack: string;
+  containers: RuntimeContainer[];
+  routes: RuntimeRoute[];
+  findings: Array<{ level: 'error' | 'warn' | 'info'; message: string }>;
+  challenge: 'http01' | 'dns01' | 'unknown';
+  /** False means "could not determine", never "nothing is running". */
+  reachable: boolean;
+};
+export type LiveRoutesResponse = { reachable: boolean; routes: RuntimeRoute[] };
+
 /** One file in Traefik's watched dynamic-config directory. */
 export type RoutingFile = { name: string; size: number; updatedAt: number };
 export type RoutingListResponse = {

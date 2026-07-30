@@ -12,6 +12,8 @@
  *   GET    /api/specs                     named specs (store once, reference from many deployments)
  *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
+ *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
+ *   GET    /api/routing/live               every route Traefik has, from container labels
  *   GET    /api/routing                   Traefik dynamic config: the file list + whether it is writable
  *   GET    /api/routing/:name             one file's contents, token required
  *   PUT    /api/routing/:name             validate + atomically replace  { content }
@@ -72,6 +74,7 @@ import { JobRegistry } from './jobs.ts';
 import { Registry, RegistryError } from './registry.ts';
 import { SpecStore, SpecStoreError } from './specs.ts';
 import { RoutingError, RoutingStore } from './routing.ts';
+import { allTraefikRouters, deploymentRuntime, detectChallenge } from './inspect.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -665,6 +668,39 @@ export function createServer(opts: ServerOptions) {
             spec: src.spec,
             compose: src.compose,
           });
+        }
+
+        // ---- what is actually running, and what Traefik was told about it ---------------
+        // The registry knows what was submitted and `compose ps` knows what is running; the reason a
+        // hostname 404s is in neither — it is in the container's Traefik LABELS, which pstack never
+        // writes. Reading them here is what turns "the URL does not work" into a named finding.
+        const rtm = /^\/api\/deployments\/([^/]+)\/runtime$/.exec(path);
+        if (rtm && req.method === 'GET') {
+          const id = decodeURIComponent(rtm[1]!);
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          const spec = await registry.resolve(id, vars);
+          // Gathered once and passed in: the router-name collision check is global across the daemon
+          // (Traefik's router namespace is), so it cannot be answered from this stack alone.
+          const all = await allTraefikRouters(host);
+          return json({
+            id,
+            ...(await deploymentRuntime({
+              stack: spec.stack,
+              runner: host,
+              challenge: await detectChallenge(host),
+              allRouters: all.byName,
+            })),
+          });
+        }
+
+        // ---- every route Traefik has, from container labels -----------------------------
+        // The file provider (below) is only half of Traefik's configuration and not the half that
+        // carries per-PR routes. A page called "routing" that showed only files was answering a
+        // question nobody asked.
+        if (path === '/api/routing/live' && req.method === 'GET') {
+          const all = await allTraefikRouters(host);
+          return json({ reachable: all.reachable, routes: all.routes });
         }
 
         // ---- Traefik dynamic configuration --------------------------------------------

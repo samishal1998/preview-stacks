@@ -13,6 +13,7 @@ import { composeDown, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer } from '../src/api.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
+import { deploymentRuntime, hostsFromRule, routesFromLabels } from '../src/inspect.ts';
 
 /** A runner that records commands and returns scripted results — for ordering/flow assertions. */
 function fakeRunner(fail: (cmd: string) => boolean = () => false, stdout = ''): Runner & { log: string[] } {
@@ -1489,5 +1490,239 @@ describe("a deployment's stored source — so replacing is editing, not retyping
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe('runtime inspection — why the hostname does not work', () => {
+  test('hostnames come out of a rule, including several in one Host()', () => {
+    expect(hostsFromRule('Host(`app-pr-1.example.com`)')).toEqual(['app-pr-1.example.com']);
+    expect(hostsFromRule('Host(`a.example.com`,`b.example.com`)')).toEqual([
+      'a.example.com',
+      'b.example.com',
+    ]);
+    // A regexp is shown as a pattern rather than pretended to be a hostname you can click.
+    expect(hostsFromRule('HostRegexp(`^[a-z]+\\.app-pr-1\\.example\\.com$`)')).toEqual([
+      '(pattern) ^[a-z]+\\.app-pr-1\\.example\\.com$',
+    ]);
+    expect(hostsFromRule('PathPrefix(`/api`)')).toEqual([]);
+  });
+
+  test('a router is joined to its service port, and the target Traefik dials is assembled', () => {
+    const labels = {
+      'traefik.enable': 'true',
+      'traefik.http.routers.app-pr1.rule': 'Host(`app-pr-1.example.com`)',
+      'traefik.http.routers.app-pr1.service': 'app-pr1',
+      'traefik.http.services.app-pr1.loadbalancer.server.port': '80',
+    };
+    const [r] = routesFromLabels('pr-1-app-1', labels, '172.20.0.5');
+    expect(r!.hosts).toEqual(['app-pr-1.example.com']);
+    expect(r!.port).toBe(80);
+    // The answer to "which URL maps to which app port": an IP on the ingress network plus the
+    // container-internal port. Not service_name:port — the docker provider resolves an IP.
+    expect(r!.target).toBe('172.20.0.5:80');
+  });
+
+  test('a service label named after the router is picked up without an explicit .service', () => {
+    const [r] = routesFromLabels('c', {
+      'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+      'traefik.http.services.app.loadbalancer.server.port': '3000',
+    }, '10.0.0.2');
+    expect(r!.port).toBe(3000);
+    expect(r!.target).toBe('10.0.0.2:3000');
+  });
+
+  test('an empty .service label does not become a port of ""', () => {
+    // `service && map.get(service)` yields '' for an empty label, and `??` does not catch '' — the
+    // typechecker caught this, and it would have rendered a target of "10.0.0.2:".
+    const [r] = routesFromLabels('c', {
+      'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+      'traefik.http.routers.app.service': '',
+      'traefik.http.services.app.loadbalancer.server.port': '8080',
+    }, '10.0.0.2');
+    expect(r!.service).toBeNull();
+    expect(r!.port).toBe(8080);
+    expect(r!.target).toBe('10.0.0.2:8080');
+  });
+
+  test('no ingress IP means no target, rather than a half-built one', () => {
+    const [r] = routesFromLabels('c', {
+      'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+      'traefik.http.services.app.loadbalancer.server.port': '80',
+    }, null);
+    expect(r!.port).toBe(80);
+    expect(r!.target).toBeNull();
+  });
+
+  describe('findings', () => {
+    /** A runner that answers `docker ps -aq` and `docker inspect` from a fixture. */
+    const dockerRunner = (containers: unknown[], ids = ['abc123']): Runner => ({
+      dryRun: false,
+      async run(cmd: string) {
+        if (cmd.startsWith('docker ps -aq')) {
+          return { ok: true, code: 0, stdout: ids.join('\n'), stderr: '', skipped: false };
+        }
+        if (cmd.startsWith('docker inspect')) {
+          return { ok: true, code: 0, stdout: JSON.stringify(containers), stderr: '', skipped: false };
+        }
+        return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
+      },
+    });
+
+    const container = (over: Record<string, unknown> = {}) => ({
+      Id: 'abc123def456',
+      Name: '/pr-1-app-1',
+      Config: {
+        Image: 'nginx:alpine',
+        Labels: { 'com.docker.compose.service': 'app', ...((over.labels as object) ?? {}) },
+      },
+      State: { Status: 'running' },
+      NetworkSettings: {
+        Networks: (over.networks as object) ?? { 'preview-ingress': { IPAddress: '172.20.0.5' } },
+        Ports: { '80/tcp': null },
+      },
+    });
+
+    const run = async (over: Record<string, unknown> = {}, challenge: 'http01' | 'dns01' = 'http01') =>
+      deploymentRuntime({
+        stack: 'pr-1',
+        runner: dockerRunner([container(over)]),
+        challenge,
+      });
+
+    test('a container with NO Traefik labels is named as unreachable', async () => {
+      // The reported case: a dummy stack with one nginx service and no labels. Traefik was never
+      // told about it, so the hostname 404s with nothing logged anywhere.
+      const rt = await run();
+      expect(rt.reachable).toBe(true);
+      expect(rt.routes).toEqual([]);
+      const f = rt.findings.find((x) => x.message.includes('no Traefik labels'));
+      expect(f).toBeDefined();
+      expect(f!.message).toContain('traefik.enable=true');
+    });
+
+    test('labels without traefik.enable=true is an error, because exposedbydefault is false', async () => {
+      const rt = await run({
+        labels: {
+          'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+          'traefik.http.services.app.loadbalancer.server.port': '80',
+        },
+      });
+      expect(rt.findings.some((f) => f.level === 'error' && f.message.includes('exposedbydefault'))).toBe(
+        true,
+      );
+    });
+
+    test("compose's own look-alike network is called out by name", async () => {
+      // Declaring the network without `external: true` makes compose create `pr-1_preview-ingress`.
+      // The container is healthy and unreachable, and every listing looks right.
+      const rt = await run({
+        labels: { 'traefik.enable': 'true' },
+        networks: { 'pr-1_preview-ingress': { IPAddress: '172.30.0.2' } },
+      });
+      const f = rt.findings.find((x) => x.message.includes('pr-1_preview-ingress'));
+      expect(f).toBeDefined();
+      expect(f!.level).toBe('error');
+      expect(f!.message).toContain('external: true');
+    });
+
+    test('TLS without a certresolver is an error on an HTTP-01 host, and fine on DNS-01', async () => {
+      const labels = {
+        'traefik.enable': 'true',
+        'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+        'traefik.http.routers.app.tls': 'true',
+        'traefik.http.services.app.loadbalancer.server.port': '80',
+      };
+      const onHttp01 = await run({ labels }, 'http01');
+      expect(onHttp01.findings.some((f) => f.message.includes('HTTP-01'))).toBe(true);
+
+      const onDns01 = await run({ labels }, 'dns01');
+      expect(onDns01.findings.some((f) => f.message.includes('HTTP-01'))).toBe(false);
+    });
+
+    test('a certresolver on a DNS-01 host warns about the rate limit', async () => {
+      const rt = await run(
+        {
+          labels: {
+            'traefik.enable': 'true',
+            'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+            'traefik.http.routers.app.tls': 'true',
+            'traefik.http.routers.app.tls.certresolver': 'le',
+            'traefik.http.services.app.loadbalancer.server.port': '80',
+          },
+        },
+        'dns01',
+      );
+      expect(rt.findings.some((f) => f.message.includes('50-per-week'))).toBe(true);
+    });
+
+    test('a duplicate router name across the host is an error — the namespace is global', async () => {
+      const rt = await deploymentRuntime({
+        stack: 'pr-1',
+        runner: dockerRunner([
+          container({
+            labels: {
+              'traefik.enable': 'true',
+              'traefik.http.routers.app.rule': 'Host(`a.example.com`)',
+              'traefik.http.services.app.loadbalancer.server.port': '80',
+              'traefik.http.routers.app.tls.certresolver': 'le',
+              'traefik.http.routers.app.tls': 'true',
+            },
+          }),
+        ]),
+        challenge: 'http01',
+        allRouters: new Map([['app', ['pr-1-app-1', 'pr-2-app-1']]]),
+      });
+      const f = rt.findings.find((x) => x.message.includes('namespace is global'));
+      expect(f).toBeDefined();
+      expect(f!.level).toBe('error');
+    });
+
+    test('docker not answering reports unreachable, never "nothing running"', async () => {
+      const rt = await deploymentRuntime({
+        stack: 'pr-1',
+        runner: {
+          dryRun: false,
+          async run() {
+            return { ok: false, code: 1, stdout: '', stderr: 'cannot connect', skipped: false };
+          },
+        },
+        challenge: 'unknown',
+      });
+      expect(rt.reachable).toBe(false);
+      expect(rt.containers).toEqual([]);
+      // No findings invented from an absence — "I could not tell" is not "it is broken".
+      expect(rt.findings).toEqual([]);
+    });
+
+    test('the container environment is never included, and label values are redacted', async () => {
+      const rt = await deploymentRuntime({
+        stack: 'pr-1',
+        runner: dockerRunner([
+          {
+            ...container({
+              labels: {
+                'traefik.enable': 'true',
+                'traefik.http.middlewares.a.basicauth.users': 'admin:PLAINTEXT_PASSWORD_TOKEN=abcdefgh',
+              },
+            }),
+            // docker inspect really does return this, and it is where the secrets are.
+            Config: {
+              Image: 'nginx:alpine',
+              Labels: {
+                'com.docker.compose.service': 'app',
+                'traefik.enable': 'true',
+                'traefik.http.middlewares.a.basicauth.users': 'admin:x',
+              },
+              Env: ['DATABASE_URL=postgres://u:p@h/db', 'API_TOKEN=super-secret-token-value'],
+            },
+          },
+        ]),
+        challenge: 'http01',
+      });
+      const blob = JSON.stringify(rt);
+      expect(blob).not.toContain('super-secret-token-value');
+      expect(blob).not.toContain('postgres://u:p@h/db');
+      expect(blob).not.toContain('DATABASE_URL');
+    });
   });
 });

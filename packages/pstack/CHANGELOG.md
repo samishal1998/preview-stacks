@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.5.0 — 2026-07-30
+
+No host change needed — 0.4.0's `pstack init` is enough. Upgrade the CLI, rebuild the images.
+
+### Added
+
+- **`Containers & routes` tab on a deployment** (`GET /api/deployments/:id/runtime`) — the tab that
+  answers "the hostname does not work", which nothing here could answer before. The registry knows
+  what you *submitted* and the logs know what the container *says*; the reason a request 404s is in
+  neither. It is in the container's Traefik **labels**, which pstack writes none of and until now read
+  none of, so the answer was always "SSH in and run `docker inspect`".
+
+  Shows containers with their state, health, **container-internal ports**, networks and ingress IP;
+  and a routing table whose `forwards to` column is the address Traefik actually assembled —
+  `<ingress-ip>:<port>`. That column *is* the URL→port mapping, and a missing half shows as
+  "no port declared" or "not on the ingress network" instead of being inferred.
+
+  Each of the five rules in `examples/docker-compose.preview.yml` became a finding, so the prose
+  nobody re-reads is now on the page:
+
+  - **no Traefik labels at all** → nothing routes here, with the four labels needed;
+  - **labels but no `traefik.enable=true`** → the host runs `exposedbydefault=false`, so Traefik
+    ignores the container entirely and the hostname 404s silently;
+  - **on `<project>_preview-ingress` instead of `preview-ingress`** → the compose file is missing
+    `external: true`; the container is healthy and unreachable and every listing looks correct;
+  - **several networks and no `traefik.docker.network`** → Traefik has to guess which to dial;
+  - **`tls` with no `certresolver` on an HTTP-01 host** (and the inverse on DNS-01) → the route exists
+    and the handshake fails. The challenge mode is read from the running Traefik's own flags, so the
+    check cannot disagree with the host;
+  - **a router name declared by two containers** → Traefik's router namespace is global across the
+    daemon, so they overwrite each other and one hostname serves the wrong container. That one cannot
+    be seen from a single deployment, so the check reads every container on the host.
+
+- **The Routing page shows live routes**, from container labels, above the config files. Previously it
+  showed only Traefik's *file* provider — so a deployment could go up, its hostname appear, and
+  nothing on the page called "Routing" would change. Per-PR routers are the *docker* provider; both
+  are now on the page, and each live route links to its deployment.
+
+- `docs/control-plane.md` §4a spells out how a URL reaches a port — including the step that surprises
+  people: Traefik does **not** resolve `service_name:port` over compose DNS. Its docker provider reads
+  the container's IP on `preview-ingress` and dials `<ip>:<container-port>`, which is why the ingress
+  attachment matters, why the port is the internal one, and why publishing a host port does nothing
+  for routing.
+
+### Security
+
+- `docker inspect` returns `Config.Env` — the container's whole environment, where database passwords
+  live. Nothing in the new code passes an inspect payload through: fields are picked out by name, only
+  `traefik.*` labels are kept, and their values go through `redactText` (a
+  `middlewares.*.basicauth.users` label is a credential too). A test plants a secret in `Env` and
+  asserts it appears nowhere in the response.
+
+### Notes
+
+- "Docker did not answer" stays distinct from "nothing is running" throughout: `reachable: false` with
+  no findings invented from an absence. Collapsing those is how a UI reports a live stack as torn down.
+
 ## 0.4.0 — 2026-07-29
 
 ### ⚠️ Upgrading an existing host

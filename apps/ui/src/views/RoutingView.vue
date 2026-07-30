@@ -22,7 +22,14 @@
  */
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
-import type { RoutingFile, RoutingListResponse, RoutingReadResponse, RoutingWriteResponse } from '../api/types';
+import type {
+  LiveRoutesResponse,
+  RoutingFile,
+  RoutingListResponse,
+  RoutingReadResponse,
+  RoutingWriteResponse,
+  RuntimeRoute,
+} from '../api/types';
 import { settings } from '../composables/useSettings';
 import { stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
@@ -30,6 +37,17 @@ import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+
+/**
+ * The live routes, from container labels.
+ *
+ * This page used to show only the file provider, and the reported confusion was exactly right: a
+ * deployment goes up, its hostname appears, and nothing here changes — because per-PR routers are
+ * DOCKER labels and the files below are Traefik's *other* provider. Showing both is what makes the
+ * page match what "routing" means to whoever opened it.
+ */
+const live = ref<RuntimeRoute[]>([]);
+const liveReachable = ref<boolean | null>(null);
 
 const files = ref<RoutingFile[]>([]);
 const dir = ref('');
@@ -77,7 +95,18 @@ async function loadList(): Promise<void> {
   writable.value = r.body.writable ?? false;
 }
 
+async function loadLive(): Promise<void> {
+  const r = await api.get<LiveRoutesResponse>('/api/routing/live');
+  if (!r.ok) {
+    liveReachable.value = false;
+    return;
+  }
+  liveReachable.value = r.body.reachable;
+  live.value = r.body.routes ?? [];
+}
+
 void loadList();
+void loadLive();
 
 async function open(name: string): Promise<void> {
   openName.value = name;
@@ -173,7 +202,7 @@ async function remove(): Promise<void> {
       <div>
         <h1>Routing</h1>
         <div class="sub">
-          Traefik configuration that is not a container label
+          Every route on this host, and the config files behind them
           <InfoHint label="what belongs in these files">
             Middleware (basic auth, rate limits, IP allow-lists), TLS options, the catch-all fallback
             router, and routes to anything running outside compose. Per-PR routers are not here —
@@ -187,40 +216,6 @@ async function remove(): Promise<void> {
 
     <ErrorNote v-if="listError" :text="listError" title="Could not load the routing files." />
 
-    <!--
-      The blast radius, stated once and up front — and the reassurance alongside it, because "this can
-      break everything" without "you will still be able to fix it" just makes people avoid the page.
-    -->
-    <div class="banner warn">
-      <b>A bad file here affects every preview on this host.</b>
-      <p>
-        Traefik reads this directory as a whole: one unparseable file and it logs a parse error for the
-        <em>directory</em>, so the symptom is other routes disappearing. Saves are checked before they
-        are written and land atomically, so a rejected file never reaches Traefik.
-        <InfoHint label="what this page cannot break">
-          This page and the API are routed by container labels, not by these files — so no save here
-          can lock you out of the page you would use to undo it.
-        </InfoHint>
-      </p>
-    </div>
-
-    <div v-if="writable === false" class="banner failed">
-      <b>Read-only: the API cannot write to this directory.</b>
-      <p>
-        The control stack mounts it into the API from 0.4.0 onward. Re-run
-        <code>pstack init</code> on the host to pick up the mount — it is idempotent, and it recreates
-        the control containers.
-      </p>
-    </div>
-
-    <div v-else-if="!settings.token" class="banner info">
-      <b>Viewing needs a token too.</b>
-      <p>
-        These files hold basic-auth hashes and forward-auth URLs, so their contents are not served
-        unauthenticated. <RouterLink to="/settings">Add your token</RouterLink>.
-      </p>
-    </div>
-
     <div v-if="undo" class="banner info">
       <b>Replaced {{ undo.name }}.</b>
       <p>
@@ -229,13 +224,112 @@ async function remove(): Promise<void> {
       </p>
     </div>
 
+    <!-- ============================ live routes ============================ -->
     <section class="panel">
       <div class="phead">
-        <h2 class="section">Files</h2>
+        <h2 class="section">Live routes</h2>
+        <span class="grow" />
+        <span class="mute" style="font-size: var(--t-sm)">
+          from container labels
+          <InfoHint label="why routes are not in the files below" align="end">
+            Traefik reads two providers. Per-PR routers are <b>labels on containers</b>, written by each
+            deployment's own compose file — so deploying a stack changes this list and never the files.
+            The files are the other provider: middleware, TLS options, the fallback router.
+          </InfoHint>
+        </span>
+      </div>
+
+      <div v-if="liveReachable === false" class="banner warn">
+        <b>Docker did not answer.</b>
+        <p>Routes could not be listed — which is not the same as there being none.</p>
+      </div>
+
+      <table v-else-if="live.length" class="cards">
+        <thead>
+          <tr>
+            <th>url</th>
+            <th>forwards to</th>
+            <th>deployment</th>
+            <th>router</th>
+          </tr>
+        </thead>
+        <tbody class="stagger">
+          <tr v-for="(r, i) in live" :key="`${r.container}-${r.router}`" :style="{ '--i': i }">
+            <td data-label="url">
+              <div v-for="h in r.hosts" :key="h">
+                <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
+                  {{ h }}
+                </a>
+                <span v-else class="mono mute">{{ h }}</span>
+              </div>
+              <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
+            </td>
+            <td data-label="forwards to">
+              <span v-if="r.target" class="mono">{{ r.target }}</span>
+              <span v-else class="s-failed">
+                {{ r.port === null ? 'no port declared' : 'not on the ingress network' }}
+              </span>
+            </td>
+            <td data-label="deployment">
+              <RouterLink v-if="r.project" :to="`/deployments/${encodeURIComponent(r.project)}/runtime`">
+                {{ r.project }}
+              </RouterLink>
+              <span v-else class="mute">—</span>
+            </td>
+            <td class="dim" data-label="router">{{ r.router }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p v-else class="mute">
+        No container on this host declares a Traefik router. A deployment's routes come from labels in
+        its own compose file — open a deployment's <b>Containers &amp; routes</b> tab to see what is
+        missing.
+      </p>
+    </section>
+
+    <!-- ============================ config files ============================ -->
+    <section class="panel">
+      <div class="phead">
+        <h2 class="section">Config files</h2>
         <span class="grow" />
         <span v-if="dir" class="mute" style="font-size: var(--t-sm)">
           <code>{{ dir }}</code>
         </span>
+      </div>
+
+    <!--
+        The blast radius, stated once and up front — and the reassurance alongside it, because "this can
+        break everything" without "you will still be able to fix it" just makes people avoid the page.
+      -->
+      <div class="banner warn">
+        <b>A bad file here affects every preview on this host.</b>
+        <p>
+          Traefik reads this directory as a whole: one unparseable file and it logs a parse error for the
+          <em>directory</em>, so the symptom is other routes disappearing. Saves are checked before they
+          are written and land atomically, so a rejected file never reaches Traefik.
+          <InfoHint label="what this page cannot break">
+            This page and the API are routed by container labels, not by these files — so no save here
+            can lock you out of the page you would use to undo it.
+          </InfoHint>
+        </p>
+      </div>
+
+      <div v-if="writable === false" class="banner failed">
+        <b>Read-only: the API cannot write to this directory.</b>
+        <p>
+          The control stack mounts it into the API from 0.4.0 onward. Re-run
+          <code>pstack init</code> on the host to pick up the mount — it is idempotent, and it recreates
+          the control containers.
+        </p>
+      </div>
+
+      <div v-else-if="!settings.token" class="banner info">
+        <b>Viewing needs a token too.</b>
+        <p>
+          These files hold basic-auth hashes and forward-auth URLs, so their contents are not served
+          unauthenticated. <RouterLink to="/settings">Add your token</RouterLink>.
+        </p>
       </div>
 
       <SkeletonList v-if="!loaded" :rows="3" />

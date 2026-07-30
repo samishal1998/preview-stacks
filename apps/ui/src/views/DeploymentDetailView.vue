@@ -18,6 +18,9 @@ const router = useRouter();
 
 const TABS = [
   { to: 'overview', label: 'Overview' },
+  // Second, not buried: "the hostname does not work" is the most common question, and this is the
+  // only tab that can answer it.
+  { to: 'runtime', label: 'Containers & routes' },
   { to: 'config', label: 'Config & variables' },
   { to: 'axes', label: 'Axes' },
   { to: 'requires', label: 'Requires' },

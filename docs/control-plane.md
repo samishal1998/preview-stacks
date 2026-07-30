@@ -442,6 +442,39 @@ correctness — and it clears the per-stack busy locks, which is the desired beh
 
 ---
 
+## 4a. How a URL reaches a container port
+
+Worth spelling out, because every "the hostname does not work" traces to one of these four steps.
+
+Traefik's **docker provider** watches the socket and reads labels off every container. A request is
+served by walking labels, not by DNS:
+
+| Step | What decides it |
+|---|---|
+| 1. Is this container visible at all? | `traefik.enable=true`. The control stack runs `--providers.docker.exposedbydefault=false`, so **without it the container is invisible** — the hostname 404s with nothing logged. |
+| 2. Which URL? | `traefik.http.routers.<r>.rule=Host(…)` — the router. |
+| 3. Which backend? | `traefik.http.routers.<r>.service=<s>`, and `traefik.http.services.<s>.loadbalancer.server.port=<port>`. |
+| 4. What address does it dial? | **The container's IP on a docker network, plus that port.** |
+
+Step 4 is the one that surprises people: Traefik does **not** resolve `service_name:port` over compose
+DNS. The docker provider reads the container's IP from its network attachments and dials
+`http://<ip>:<port>`. Which network is chosen comes from `--providers.docker.network=preview-ingress`
+(set in the control stack), overridable per container with `traefik.docker.network`.
+
+Three consequences follow directly:
+
+- **The service must be attached to `preview-ingress`**, or there is no IP for Traefik to dial. Not
+  attached ⇒ up, healthy, and unreachable. And if the compose file declares that network without
+  `external: true`, compose makes `<project>_preview-ingress` instead — which looks right everywhere.
+- **The port is the container-internal one.** `loadbalancer.server.port=80` means port 80 *inside* the
+  container. Publishing a host port (`ports:`) is unnecessary and does nothing for routing.
+- **Router and service names are global across the daemon**, not scoped per compose project. Two
+  deployments both naming a router `app` overwrite each other and one hostname serves the other's
+  container — which is why the names carry `${STACK}`.
+
+A deployment's **Containers & routes** tab renders exactly this chain, with the address Traefik
+assembled in a `forwards to` column, and names whichever step is missing.
+
 ## 4b. Traefik's dynamic configuration
 
 Traefik reads two providers: **docker** (labels on containers — every per-PR router) and **file**, a

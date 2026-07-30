@@ -22,6 +22,7 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'deployment', redirect: (to) => `/deployments/${to.params.id}/overview` },
       { path: 'overview', name: 'd.overview', component: () => import('./views/tabs/OverviewTab.vue') },
       { path: 'config', name: 'd.config', component: () => import('./views/tabs/ConfigTab.vue') },
+      { path: 'runtime', name: 'd.runtime', component: () => import('./views/tabs/RuntimeTab.vue') },
       { path: 'axes', name: 'd.axes', component: () => import('./views/tabs/AxesTab.vue') },
       { path: 'requires', name: 'd.requires', component: () => import('./views/tabs/RequiresTab.vue') },
       { path: 'logs', name: 'd.logs', component: () => import('./views/tabs/LogsTab.vue') },

@@ -39,6 +39,15 @@ export {
 } from './subdomains.ts';
 export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
 
+export {
+  allTraefikRouters,
+  deploymentRuntime,
+  detectChallenge,
+  hostsFromRule,
+  routesFromLabels,
+} from './inspect.ts';
+export type { ContainerInfo, Finding, PortMap, RouteInfo, Runtime } from './inspect.ts';
+
 export { RoutingStore, RoutingError, assertValidRoutingName, validateRoutingContent } from './routing.ts';
 export type { RoutingFile } from './routing.ts';
 
