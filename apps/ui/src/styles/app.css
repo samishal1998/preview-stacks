@@ -99,6 +99,10 @@ code,
   padding: var(--gap-shell);
   gap: var(--gap-shell);
 }
+/* The signed-out shell: no rail column — the login card gets the whole width. */
+.shell.no-rail {
+  grid-template-columns: minmax(0, 1fr);
+}
 
 /*
  * The rail is a PANEL, not an edge: rounded on all four corners and inset by the shell gutter, so

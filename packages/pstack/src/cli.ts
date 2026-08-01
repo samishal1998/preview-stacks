@@ -463,12 +463,31 @@ switch (args.cmd) {
       process.env.DOCKER_CONFIG ??
       ((await isDir('/docker-config')) ? '/docker-config' : join(dataDir(), 'control', 'docker'));
 
-    createServer({ dataDir: dataDir(), port, host, token, routingDir, registryDir });
+    const server = createServer({ dataDir: dataDir(), port, host, token, routingDir, registryDir });
+
+    // First-admin bootstrap from the environment. Honoured only while no users exist (the Auth
+    // layer enforces that), so a compose file carrying this pair cannot mint extra admins later.
+    const adminUser = process.env.PSTACK_ADMIN_USER;
+    const adminPassword = process.env.PSTACK_ADMIN_PASSWORD;
+    if (adminUser && adminPassword) {
+      const { Store } = await import('./store.ts');
+      const { Auth, AuthError } = await import('./auth.ts');
+      const boot = new Auth(new Store(dataDir()));
+      try {
+        const made = await boot.bootstrap(adminUser, adminPassword);
+        if (made) console.log(`  admin account "${made.username}" created from PSTACK_ADMIN_USER`);
+      } catch (err) {
+        // A bad username/password in the env must not take the API down — say so and keep serving.
+        if (err instanceof AuthError) console.error(`  ! admin bootstrap skipped: ${err.message}`);
+        else throw err;
+      }
+    }
+    void server;
     console.log(`pstack api  http://${host}:${port}`);
     console.log(`  registry: ${dataDir()}/deployments`);
     console.log(
       token
-        ? '  auth: bearer token required for mutating routes'
+        ? '  auth: auth required on every route (session, personal token, or the token below)'
         : '  auth: NONE — bound to loopback only (set PSTACK_TOKEN to expose)',
     );
     break; // Bun.serve keeps the process alive

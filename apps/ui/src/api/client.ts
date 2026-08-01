@@ -51,26 +51,29 @@ function url(path: string): string {
   return base ? base + path : path;
 }
 
+/**
+ * Called on any 401 the server returns. Auth state subscribes and the router turns it into a
+ * redirect to /login — one hook, so an expired session surfaces once instead of as a wall of
+ * failed panels.
+ */
+let unauthorizedHook: (() => void) | null = null;
+export function onUnauthorized(fn: () => void): void {
+  unauthorizedHook = fn;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  /**
-   * Send the token on a GET. Off by default because reads are unauthenticated on this API — the
-   * dashboard must render before anyone pastes a token. The one exception is a spec's SOURCE: hook
-   * bodies are shell strings that routinely carry a credential inline, so the server withholds them
-   * without a token. That read has to opt in.
-   */
+  /** Retained for call-site compatibility; since 0.10.0 every request is authenticated anyway. */
   authedGet = false,
 ): Promise<ApiResult<T>> {
+  void authedGet;
   const headers: Record<string, string> = {};
-  if (method !== 'GET') {
-    headers['content-type'] = 'application/json';
-    // PUT and DELETE destroy just as thoroughly as POST, so all three carry the token.
-    if (settings.token) headers.authorization = `Bearer ${settings.token}`;
-  } else if (authedGet && settings.token) {
-    headers.authorization = `Bearer ${settings.token}`;
-  }
+  if (method !== 'GET') headers['content-type'] = 'application/json';
+  // 0.10.0: every route requires auth, reads included. A bearer in Settings rides on everything;
+  // with none set, the session cookie (attached automatically, same-origin) carries the request.
+  if (settings.token) headers.authorization = `Bearer ${settings.token}`;
   try {
     const res = await fetch(url(path), {
       method,
@@ -84,6 +87,9 @@ async function request<T>(
     } catch {
       /* handled by notJson below */
     }
+    // Auth expiry is a global event, not a per-panel error. Login/me are exempt so the login page
+    // probing its own state does not loop.
+    if (res.status === 401 && !path.startsWith('/api/auth/')) unauthorizedHook?.();
     if (parsed === null && raw) {
       return { status: res.status, ok: res.ok, body: {} as T & { error?: string }, raw, notJson: true };
     }

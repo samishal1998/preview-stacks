@@ -72,7 +72,8 @@ async function recheck(): Promise<void> {
           placeholder="paste the token from pstack init"
         />
         <div class="mute hint">
-          Needed to deploy, tear down or delete. Viewing works without one.
+          Authenticates every request — signing in with an account does the same job, so set this
+          only for token-based access (the machine token, or a personal token from your account).
           <template v-if="authEnforced === false">
             This server is not asking for one — it only accepts connections from this machine, so a
             token here is harmless but unnecessary.

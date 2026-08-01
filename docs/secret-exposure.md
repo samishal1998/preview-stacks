@@ -1,9 +1,19 @@
-# Secret exposure on unauthenticated reads — open, undecided
+# Secret exposure on unauthenticated reads — RESOLVED in 0.10.0
 
-**Status: UNDECIDED. Nothing here is fixed.** This records what is exposed, how it was measured, and
-what the options cost, so the decision can be made deliberately rather than under time pressure. It
-is deliberately separate from `control-plane.md`: that document describes the model as intended, this
-one describes where the implementation does not match it yet.
+**Status: DECIDED and closed.** The finding below was real; **0.10.0 resolved it by requiring auth on
+every route, reads included** — Option B from the menu at the bottom, generalised to the whole API
+rather than to `outcome` alone. There is no longer an unauthenticated read to leak through: a
+principal (session cookie, personal token, or `PSTACK_TOKEN`) is required before any data route
+runs, and `/api/health` + the UI document are the only exceptions. This file is kept as the record of
+why the decision was made; the analysis that follows was written while it was still open.
+
+The **posture that used to be load-bearing** (firewall the port, tunnel it) is now defence in depth
+rather than the only barrier — but keep it anyway: the API still commands a read-write Docker socket,
+so "reachable by someone without an account" is a smaller hole than it was, not a closed one.
+
+---
+
+_(Original, from when this was undecided:)_
 
 Written 2026-07-29 against **0.2.4**, immediately after closing the same class of hole on
 `GET /api/specs/:name` (0.2.4 changelog).

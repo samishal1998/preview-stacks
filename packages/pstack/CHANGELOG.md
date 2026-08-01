@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.10.0 — 2026-07-30
+
+### ⚠️ Breaking: the API now requires authentication on every route
+
+Reads included. To upgrade an existing host:
+
+1. **Create the first account.** Set `PSTACK_ADMIN_USER` / `PSTACK_ADMIN_PASSWORD` and re-run
+   `pstack init` (the control compose now passes them through), or once the stack is up:
+   ```
+   curl -X POST https://api.<domain>/api/auth/bootstrap \
+     -H "Authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' \
+     -d '{"username":"you","password":"…"}'
+   ```
+2. **Re-run `pstack init`** regardless — the control stack gains a `${DATA_DIR}/db` mount (the SQLite
+   home) and the admin-env passthrough. `init` is idempotent.
+3. **CI is unaffected.** `PSTACK_TOKEN` stays valid as the machine credential on every route; nothing
+   in a pipeline changes. For finer-grained access, mint a personal token in the UI.
+
+### Added
+
+- **Accounts, sessions, and personal API tokens**, backed by `bun:sqlite` (`<dataDir>/db/pstack.db`,
+  0600 — one file, so "back up the host" stays "copy the directory"; the deployment registry remains
+  the file-based cache-of-intent it was). Passwords are argon2id via `Bun.password`; sessions and
+  tokens are stored as SHA-256, never plaintext — a database read is not a session hijack.
+- **Three ways to authenticate**, mirrored in both UIs:
+  - a **session cookie** from username/password login — httpOnly, and the only form a browser can
+    attach to `EventSource` and (soon) `WebSocket`, which is *why* sessions are cookies;
+  - a **personal token** (`pstack_pat_…`), shown once, for scripts that should not hold root;
+  - **`PSTACK_TOKEN`**, unchanged, as the root/machine credential.
+- Login page + auth guard in the advanced UI; a sign-in row in the basic UI. A signed-out visitor is
+  redirected to `/login` carrying their destination, and told how to bootstrap when no account exists
+  yet (a dead login form with no way to make the account is the worst version of that page).
+
+### Security
+
+- **This resolves `docs/secret-exposure.md`.** Job outcomes carry captured credentials *by design*
+  (`outcome.outputs` is the inter-axis env channel), so the previous "reads are open" posture was a
+  credential feed to anyone who could reach the port. Every data route is now behind the gate; the
+  firewall/tunnel guidance becomes defence in depth rather than the only barrier.
+- Bootstrap is honoured **only while no account exists**, so a leaked compose file carrying the admin
+  env pair cannot mint admins later. Wrong-password and unknown-user return an identical refusal (no
+  username oracle). The last account cannot be deleted.
+
 ## 0.9.0 — 2026-07-30
 
 ### Added

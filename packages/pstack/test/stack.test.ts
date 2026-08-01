@@ -986,28 +986,20 @@ describe('a spec source is a secret; its metadata is not', () => {
     return { server, base };
   };
 
-  test('without a token the source is withheld — and the secret appears nowhere', async () => {
+  test('without auth the route is 401 — and the secret appears nowhere in the refusal', async () => {
+    // 0.10.0 reversed the reads-are-open design: job outcomes carry captured credentials BY DESIGN,
+    // so every read now sits behind the gate. This suite originally asserted public metadata with a
+    // withheld source; the withheld mechanism still exists for a future role split, but the gate
+    // fronts it.
     const { server, base } = await boot();
     try {
       const r = await fetch(`${base}/api/specs/web`);
-      // NOT a 401: the metadata is genuinely public, and failing the whole request would mean a
-      // token is needed just to see that a spec exists.
-      expect(r.status).toBe(200);
+      expect(r.status).toBe(401);
+      // The whole refusal body, not just the status: a leak anywhere is a leak.
       const raw = await r.text();
-      // The whole response body, not just the field: a leak anywhere in it is a leak.
       expect(raw).not.toContain(SECRET);
       expect(raw).not.toContain('docker login');
-
-      const body = JSON.parse(raw) as Record<string, unknown>;
-      expect(body.source).toBeUndefined();
-      // Explicit, so a page says "needs a token" instead of rendering a blank editor that reads as
-      // an empty spec.
-      expect(body.sourceWithheld).toBe(true);
-      // Metadata still served, including the NAMES of required variables — not credentials.
-      expect(body.name).toBe('web');
-      expect(body.kind).toBe('isolated');
-      expect(body.description).toBe('the web app');
-      expect(body.requiredVars).toEqual(['PR']);
+      expect(raw).not.toContain('web'); // not even the spec's existence
     } finally {
       server.stop(true);
     }
@@ -1028,14 +1020,16 @@ describe('a spec source is a secret; its metadata is not', () => {
     }
   });
 
-  test('a wrong token is treated as no token, not as an error', async () => {
-    // Same shape as the unauthenticated case: metadata, no source. A 401 here would let someone
-    // probe token validity against a route that is otherwise public.
+  test('a wrong token and no token are indistinguishable', async () => {
+    // The non-oracle property survives the auth reversal: both refusals must be byte-identical, so
+    // this route cannot be used to probe whether a guessed token is valid.
     const { server, base } = await boot();
     try {
-      const r = await fetch(`${base}/api/specs/web`, { headers: { authorization: 'Bearer wrong' } });
-      expect(r.status).toBe(200);
-      expect(await r.text()).not.toContain(SECRET);
+      const withWrong = await fetch(`${base}/api/specs/web`, { headers: { authorization: 'Bearer wrong' } });
+      const withNone = await fetch(`${base}/api/specs/web`);
+      expect(withWrong.status).toBe(401);
+      expect(withNone.status).toBe(401);
+      expect(await withWrong.text()).toBe(await withNone.text());
     } finally {
       server.stop(true);
     }
@@ -1044,7 +1038,9 @@ describe('a spec source is a secret; its metadata is not', () => {
   test('the LIST route never carried a source to begin with', async () => {
     const { server, base } = await boot();
     try {
-      const raw = await (await fetch(`${base}/api/specs`)).text();
+      const raw = await (
+        await fetch(`${base}/api/specs`, { headers: { authorization: `Bearer ${TOKEN}` } })
+      ).text();
       expect(raw).not.toContain(SECRET);
       expect(JSON.parse(raw).specs).toHaveLength(1);
     } finally {
@@ -1373,31 +1369,32 @@ describe("Traefik dynamic config — one bad write must not take down other peop
       return { server, base: `http://127.0.0.1:${server.port}`, routingDir };
     };
 
-    test('content needs a token; the file list does not', async () => {
+    test('everything is behind the gate; content round-trips for an authed caller', async () => {
       const { server, base } = await boot();
+      const authz = { authorization: `Bearer ${TOKEN}` };
       try {
         const put = await fetch(`${base}/api/routing/auth.yml`, {
           method: 'PUT',
-          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+          headers: { ...authz, 'content-type': 'application/json' },
           body: JSON.stringify({ content: VALID }),
         });
         expect(put.status).toBe(201);
 
-        // The list renders without a token — it is filenames, not configuration.
-        const list = (await (await fetch(`${base}/api/routing`)).json()) as {
+        // 0.10.0: the file LIST needs auth too — everything does.
+        expect((await fetch(`${base}/api/routing`)).status).toBe(401);
+        const unauthedRead = await fetch(`${base}/api/routing/auth.yml`);
+        expect(unauthedRead.status).toBe(401);
+        expect(await unauthedRead.text()).not.toContain('apr1');
+
+        const list = (await (await fetch(`${base}/api/routing`, { headers: authz })).json()) as {
           files: Array<{ name: string }>;
           writable: boolean;
         };
         expect(list.files.map((f) => f.name)).toEqual(['auth.yml']);
         expect(list.writable).toBe(true);
 
-        // The CONTENT does not: dynamic config holds basicAuth hashes and forwardAuth URLs.
-        const raw = await (await fetch(`${base}/api/routing/auth.yml`)).text();
-        expect(raw).not.toContain('apr1');
-        expect(JSON.parse(raw).sourceWithheld).toBe(true);
-
         const authedRead = (await (
-          await fetch(`${base}/api/routing/auth.yml`, { headers: { authorization: `Bearer ${TOKEN}` } })
+          await fetch(`${base}/api/routing/auth.yml`, { headers: authz })
         ).json()) as { content: string };
         expect(authedRead.content).toBe(VALID);
       } finally {
@@ -1482,14 +1479,12 @@ describe("a deployment's stored source — so replacing is editing, not retyping
     }
   });
 
-  test('without a token it is withheld, and the hook secret does not leak', async () => {
+  test('without auth it is a 401, and the compose secret does not leak', async () => {
     const { server, base } = await boot();
     try {
-      const raw = await (await fetch(`${base}/api/deployments/ingress/source`)).text();
-      expect(raw).not.toContain(SECRET);
-      const body = JSON.parse(raw);
-      expect(body.sourceWithheld).toBe(true);
-      expect(body.spec).toBeUndefined();
+      const r = await fetch(`${base}/api/deployments/ingress/source`);
+      expect(r.status).toBe(401);
+      expect(await r.text()).not.toContain(SECRET);
     } finally {
       server.stop(true);
     }
@@ -2163,7 +2158,7 @@ describe('private registry credentials — the client authenticates the pull, no
       return { server, base: `http://127.0.0.1:${server.port}`, registryDir };
     };
 
-    test('stored with a token; listed without one; the secret is never in a response', async () => {
+    test('stored and listed with auth; the secret is never in any response', async () => {
       const { server, base } = await boot();
       try {
         const put = await fetch(`${base}/api/registries/ghcr.io`, {
@@ -2175,7 +2170,14 @@ describe('private registry credentials — the client authenticates the pull, no
         // The normalized key is echoed, since it can differ from what was sent.
         expect(((await put.json()) as { registry: string }).registry).toBe('ghcr.io');
 
-        const raw = await (await fetch(`${base}/api/registries`)).text();
+        // 0.10.0: the list needs auth too. The unauthenticated refusal must carry nothing.
+        const unauthed = await fetch(`${base}/api/registries`);
+        expect(unauthed.status).toBe(401);
+        expect(await unauthed.text()).not.toContain('ghcr');
+
+        const raw = await (
+          await fetch(`${base}/api/registries`, { headers: { authorization: `Bearer ${TOKEN}` } })
+        ).text();
         expect(raw).not.toContain(PASSWORD);
         expect(raw).not.toContain(Buffer.from(`sami:${PASSWORD}`).toString('base64'));
         const body = JSON.parse(raw) as {
@@ -2391,7 +2393,9 @@ axes: []
             spec: 'version: 1\nstack: s\ncompose:\n  file: dc.yml\n  profiles: [app]\naxes: []\n',
           }),
         });
-        const r = await fetch(`${base}/api/deployments/d/logs?service=${encodeURIComponent('a; rm -rf /')}`);
+        const r = await fetch(`${base}/api/deployments/d/logs?service=${encodeURIComponent('a; rm -rf /')}`, {
+          headers: { authorization: 'Bearer tok' },
+        });
         expect(r.status).toBe(400);
         expect(((await r.json()) as { error: string }).error).toMatch(/not a valid compose service name/);
       } finally {
@@ -2575,5 +2579,232 @@ describe('cloud-init — pinned versions and distro targets', () => {
     expect(() =>
       renderCloudInit({ ...base, distro: 'gentoo' as Distro }),
     ).toThrow(/unknown distro "gentoo"/);
+  });
+});
+
+describe('authentication — every route behind the gate, three ways through it', () => {
+  const TOKEN = 'root-machine-token-value';
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-auth-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  const boot = (env: Record<string, string | undefined> = {}) => {
+    const dataDir = tmpd();
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    const server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: TOKEN });
+    return { server, base: `http://127.0.0.1:${server.port}`, dataDir };
+  };
+
+  const authz = { authorization: `Bearer ${TOKEN}` };
+  const jsonHeaders = { ...authz, 'content-type': 'application/json' };
+
+  test('the 401 sweep: every data route refuses an unauthenticated read', async () => {
+    // The reversal this release exists for. Job outcomes carry captured credentials BY DESIGN
+    // (outputs is the inter-axis env channel), so reads-are-open was a credential feed — measured
+    // and documented in docs/secret-exposure.md, now retired by this gate.
+    const { server, base } = boot();
+    try {
+      for (const path of [
+        '/api/deployments',
+        '/api/deployments/x',
+        '/api/jobs',
+        '/api/jobs/nope',
+        '/api/specs',
+        '/api/routing',
+        '/api/routing/live',
+        '/api/registries',
+        '/api/control',
+        '/api/users',
+        '/api/auth/me',
+      ]) {
+        const r = await fetch(`${base}${path}`);
+        expect(`${path} → ${r.status}`).toBe(`${path} → 401`);
+      }
+      // The two that must stay open: liveness (init waits on it before any auth exists) and the
+      // UI document itself (the login page has to load from somewhere).
+      expect((await fetch(`${base}/api/health`)).status).toBe(200);
+      expect((await fetch(`${base}/`)).status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('bootstrap → login → cookie session → logout, end to end', async () => {
+    const { server, base } = boot();
+    try {
+      // Bootstrap needs the machine token: its whole purpose is to run before accounts exist.
+      const noAuth = await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      expect(noAuth.status).toBe(401);
+
+      const made = await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      expect(made.status).toBe(201);
+
+      // Once only — a replayed bootstrap must NOT read as success, or it looks like it set the
+      // password it carried.
+      const again = await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({ username: 'mallory', password: 'evil-password' }),
+      });
+      expect(again.status).toBe(409);
+
+      // Login sets an httpOnly cookie…
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      expect(login.status).toBe(200);
+      const setCookie = login.headers.get('set-cookie')!;
+      expect(setCookie).toContain('pstack_session=');
+      expect(setCookie).toContain('HttpOnly');
+      // No X-Forwarded-Proto here, so Secure must be absent — hardcoding it would break plain-HTTP
+      // loopback development.
+      expect(setCookie).not.toContain('Secure');
+      const cookie = setCookie.split(';')[0]!;
+
+      // …which authenticates a read on its own. This is the property EventSource and WebSocket
+      // depend on: a browser can attach a cookie where it cannot attach a header.
+      const me = await fetch(`${base}/api/auth/me`, { headers: { cookie } });
+      expect(me.status).toBe(200);
+      expect(((await me.json()) as { user: { username: string } }).user.username).toBe('sami');
+      expect((await fetch(`${base}/api/deployments`, { headers: { cookie } })).status).toBe(200);
+
+      // Logout kills the server-side session, not just the cookie.
+      await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { cookie } });
+      expect((await fetch(`${base}/api/auth/me`, { headers: { cookie } })).status).toBe(401);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a wrong password and an unknown user produce the same refusal', async () => {
+    // Naming which half failed turns the login form into a username oracle.
+    const { server, base } = boot();
+    try {
+      await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      const wrongPw = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'sami', password: 'wrong' }),
+      });
+      const noUser = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'ghost', password: 'wrong' }),
+      });
+      expect(wrongPw.status).toBe(400);
+      expect(await wrongPw.text()).toBe(await noUser.text());
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('personal tokens: minted once, hashed at rest, usable as a bearer, revocable', async () => {
+    const { server, base, dataDir } = boot();
+    try {
+      await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+
+      const minted = await fetch(`${base}/api/tokens`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'ci-deploy' }),
+      });
+      expect(minted.status).toBe(201);
+      const { token, id } = (await minted.json()) as { token: string; id: number };
+      expect(token.startsWith('pstack_pat_')).toBe(true);
+
+      // The bearer works like PSTACK_TOKEN for data routes.
+      const asPat = await fetch(`${base}/api/deployments`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(asPat.status).toBe(200);
+
+      // Hashed at rest: the plaintext appears NOWHERE on disk. WAL mode keeps fresh rows in the
+      // -wal sibling, not the .db file — grepping only the .db would pass vacuously.
+      const { readdir } = await import('node:fs/promises');
+      let disk = '';
+      for (const f of await readdir(`${dataDir}/db`)) {
+        disk += await Bun.file(`${dataDir}/db/${f}`).text();
+      }
+      expect(disk).toContain('ci-deploy'); // proves the read actually captured the live rows
+      expect(disk).not.toContain(token);
+      expect(disk).not.toContain('correct-horse');
+
+      // The list carries names and dates, never the secret.
+      const listed = await (await fetch(`${base}/api/tokens`, { headers: { cookie } })).text();
+      expect(listed).toContain('ci-deploy');
+      expect(listed).not.toContain(token);
+
+      // Revoked, it stops working immediately.
+      await fetch(`${base}/api/tokens/${id}`, { method: 'DELETE', headers: { cookie } });
+      expect(
+        (await fetch(`${base}/api/deployments`, { headers: { authorization: `Bearer ${token}` } }))
+          .status,
+      ).toBe(401);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('PSTACK_ADMIN_USER env bootstraps the first admin, and only the first', async () => {
+    const { Store } = await import('../src/store.ts');
+    const { Auth } = await import('../src/auth.ts');
+    const dataDir = tmpd();
+    const auth = new Auth(new Store(dataDir));
+    expect(await auth.bootstrap('sami', 'correct-horse')).not.toBeNull();
+    // Inert once accounts exist — a leaked compose file carrying the env pair cannot mint admins.
+    expect(await auth.bootstrap('mallory', 'evil-password')).toBeNull();
+    expect(auth.listUsers().map((u) => u.username)).toEqual(['sami']);
+  });
+
+  test('the last user cannot be deleted', async () => {
+    // An instance with accounts and no way to log in is only recoverable by editing the database
+    // over SSH, and nothing in the UI can explain that state.
+    const { Store } = await import('../src/store.ts');
+    const { Auth, AuthError } = await import('../src/auth.ts');
+    const auth = new Auth(new Store(tmpd()));
+    const u = await auth.createUser('sami', 'correct-horse');
+    expect(() => auth.deleteUser(u.id)).toThrow(AuthError);
+    const other = await auth.createUser('backup', 'another-pass');
+    expect(auth.deleteUser(u.id)).toBe(true);
+    expect(auth.listUsers().map((x) => x.username)).toEqual(['backup']);
+    void other;
+  });
+
+  test('with no PSTACK_TOKEN configured, loopback dev mode stays open', async () => {
+    // The safety interlock in `serve` refuses to bind off-loopback without a token, so "everything
+    // is root" is confined to 127.0.0.1 by construction.
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1' });
+    try {
+      const r = await fetch(`http://127.0.0.1:${server.port}/api/deployments`);
+      expect(r.status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
   });
 });

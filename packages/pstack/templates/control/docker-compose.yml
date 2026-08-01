@@ -109,6 +109,10 @@ services:
       # Only the registry, not all of ${DATA_DIR}: the DNS provider token in ./dns.env is Traefik's
       # business, and the API has no reason to be able to read it.
       - ${DATA_DIR}/deployments:/data/deployments
+      # Accounts, sessions, API tokens (and, later, webhook registrations): one SQLite file. Its own
+      # mounted subdirectory because /data itself is NOT a mount — a database at /data/pstack.db
+      # would live in the container filesystem and silently vanish on every recreate.
+      - ${DATA_DIR}/db:/data/db
       # Traefik's dynamic config, READ-WRITE here and `:ro` on Traefik above — this is the API's
       # writing hand for middleware, TLS options and the fallback router. Same container path as
       # Traefik's so the two agree about what a filename means.
@@ -137,6 +141,10 @@ services:
       # Bearer token for mutating routes. Note GETs are NOT gated — /api/jobs/:id returns full hook
       # transcripts — so the ingress in front of this is the only protection on reads.
       PSTACK_TOKEN: ${PSTACK_TOKEN}
+      # First-admin bootstrap, honoured only while no accounts exist. Optional: without it, create
+      # the first account with `POST /api/auth/bootstrap` using the PSTACK_TOKEN bearer.
+      PSTACK_ADMIN_USER: ${PSTACK_ADMIN_USER:-}
+      PSTACK_ADMIN_PASSWORD: ${PSTACK_ADMIN_PASSWORD:-}
       # Registry root. The Registry appends `deployments/` itself, which is why the mount above
       # lands at /data/deployments.
       PSTACK_DATA: /data

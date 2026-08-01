@@ -210,18 +210,33 @@
     <span class="badge" v-if="health.version">v{{ health.version }}</span>
     <span class="grow"></span>
 
-    <label for="tok">token</label>
-    <input id="tok" type="password" v-model.trim="token" placeholder="PSTACK_TOKEN"
-           autocomplete="off" style="width:170px">
     <!--
-      Auth is only checked on POST/PUT/DELETE. When no token is configured the server binds
-      127.0.0.1 and refuses 0.0.0.0 (cli.ts), so "not enforced" is a deliberate loopback-only mode,
-      not an accident — say which of the two you are looking at.
+      Two ways in, mirroring the API's principals: a bearer token, or a username/password session.
+      The session sets an httpOnly cookie, which fetch and EventSource attach automatically — so
+      after signing in, the token field can stay empty.
+    -->
+    <template v-if="health.authEnforced === true && !token && !me">
+      <input type="text" v-model.trim="loginUser" placeholder="username"
+             autocomplete="username" style="width:110px">
+      <input type="password" v-model="loginPass" placeholder="password"
+             autocomplete="current-password" style="width:110px" @keyup.enter="signIn">
+      <button @click="signIn" :disabled="!loginUser || !loginPass">sign in</button>
+      <span v-if="loginError" class="badge warn">{{ loginError }}</span>
+    </template>
+    <span v-else-if="me && me.user" class="muted nowrap">{{ me.user.username }}
+      <button class="ghost" @click="signOut">sign out</button></span>
+
+    <label for="tok">token</label>
+    <input id="tok" type="password" v-model.trim="token" placeholder="bearer token"
+           autocomplete="off" style="width:150px">
+    <!--
+      When no token is configured the server binds 127.0.0.1 and refuses 0.0.0.0 (cli.ts), so
+      "not enforced" is a deliberate loopback-only mode, not an accident.
     -->
     <span v-if="health.authEnforced === false" class="muted nowrap">
       auth not enforced &mdash; loopback-only
     </span>
-    <span v-else-if="health.authEnforced === true && !token" class="badge warn">token required</span>
+    <span v-else-if="health.authEnforced === true && !token && !me" class="badge warn">sign in or set a token</span>
   </header>
 
   <div class="shell">
@@ -1221,6 +1236,9 @@ createApp({
       route: parseRoute(),
 
       token: localStorage.getItem('pstack.token') || '',
+      // The signed-in principal from /api/auth/me, or null. Drives the sign-in row.
+      me: null,
+      loginUser: '', loginPass: '', loginError: '',
       health: {}, healthError: '',
 
       control: {}, controlLoaded: false, controlError: '',
@@ -1318,6 +1336,9 @@ createApp({
   mounted() {
     addEventListener('hashchange', this.onHash);
     this.loadHealth();
+    // A session cookie may already be present (a prior sign-in here, or one in the advanced UI —
+    // same origin, same cookie). Resolve it so the header shows who instead of the sign-in row.
+    this.whoami();
     // Unconditional, so the nav's deployment count is right even on a deep link into Jobs.
     this.loadDeployments();
     this.onRoute(this.route, null);
@@ -1368,16 +1389,15 @@ createApp({
 
     // ---- transport ---------------------------------------------------------------------
     /**
-     * The one fetch path. Auth goes on every NON-GET request — `PUT` and `DELETE` destroy just as
-     * thoroughly as `POST`. GETs stay open, which is also why the log stream works at all:
-     * `EventSource` cannot send headers.
+     * The one fetch path. Since 0.10.0 EVERY route requires auth, reads included, so the bearer
+     * rides on everything when set. With no token, the session cookie from the sign-in row carries
+     * the request — fetch attaches same-origin cookies by default, and that is also what keeps the
+     * log stream working: `EventSource` cannot send headers, but it sends cookies.
      */
     async api(method, path, body) {
       const headers = {};
-      if (method !== 'GET') {
-        headers['content-type'] = 'application/json';
-        if (this.token) headers.authorization = `Bearer ${this.token}`;
-      }
+      if (method !== 'GET') headers['content-type'] = 'application/json';
+      if (this.token) headers.authorization = `Bearer ${this.token}`;
       try {
         const r = await fetch(path, {
           method, headers,
@@ -1398,6 +1418,25 @@ createApp({
     },
 
     get(path) { return this.api('GET', path); },
+
+    async signIn() {
+      this.loginError = '';
+      const r = await this.api('POST', '/api/auth/login', { username: this.loginUser, password: this.loginPass });
+      this.loginPass = '';
+      if (!r.ok) { this.loginError = r.body.error || 'sign-in failed'; return; }
+      this.me = { root: false, user: r.body.user };
+      // Reload what the pre-auth mount could not: the same calls mounted() makes.
+      this.loadDeployments();
+      this.onRoute(this.route, null);
+    },
+    async signOut() {
+      await this.api('POST', '/api/auth/logout', {});
+      this.me = null;
+    },
+    async whoami() {
+      const r = await this.api('GET', '/api/auth/me');
+      this.me = r.ok ? r.body : null;
+    },
 
     /**
      * Turn a non-2xx into text that names the call. A bare 404 is ambiguous — "no such deployment"

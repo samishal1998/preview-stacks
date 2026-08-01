@@ -6,13 +6,15 @@
  * view — so the numbers are right even on a deep link straight into a job, and a background tab
  * stops polling entirely (see `usePolling`).
  */
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import ToastHost from './components/ToastHost.vue';
 import ShortcutSheet from './components/ShortcutSheet.vue';
 import { useShortcuts } from './composables/useShortcuts';
 import { usePolling } from './composables/usePolling';
 import { loadDeployments, loadHealth, loadJobs, state } from './composables/useControlPlane';
 import { settings } from './composables/useSettings';
+import { authState, logout } from './composables/useAuth';
+import { useRouter } from 'vue-router';
 import InfoHint from './components/InfoHint.vue';
 // Named imports, so the bundler ships only these glyphs — not the whole set.
 import {
@@ -30,29 +32,50 @@ import {
 const { sheetOpen } = useShortcuts();
 
 usePolling(() => {
+  // Not before sign-in: every poll would 401, flashing failure state over the login page.
+  if (!authState.authed) return;
   void loadDeployments();
   void loadJobs();
 }, 7000);
+
+// The poll gate above skips ticks while signed out, so the tick that WOULD have populated the rail
+// ran early and did nothing. Load immediately when auth arrives — otherwise the first data appears
+// up to a full poll interval after login, which reads as a broken dashboard.
+watch(
+  () => authState.authed,
+  (authed) => {
+    if (authed) {
+      void loadDeployments();
+      void loadJobs();
+      void loadHealth();
+    }
+  },
+);
+
+const router = useRouter();
+async function signOut(): Promise<void> {
+  await logout();
+  void router.push('/login');
+}
 
 // Health barely changes; fetch it once and again only if it failed.
 void loadHealth();
 
 const runningJobs = computed(() => state.jobs.filter((j) => j.state === 'running').length);
 
-/**
- * The one health fact worth putting in permanent view. `authEnforced: false` is a deliberate
- * loopback-only mode — the server refuses to bind anything but 127.0.0.1 without a token — not a
- * misconfiguration, so it is stated rather than warned about. A token being REQUIRED and missing
- * is the other way round: every action will 401, so that one is a warning.
- */
-const tokenMissing = computed(() => state.health?.authEnforced === true && !settings.token);
+// The old "token required" warning is gone with 0.10.0: nobody sees this rail without already
+// being authenticated (session, personal token, or the machine token), so the warning could only
+// ever appear when it was already false.
+void settings;
 </script>
 
 <template>
   <a class="skip" href="#main">Skip to content</a>
 
-  <div class="shell">
-    <aside class="rail">
+  <div class="shell" :class="{ 'no-rail': !authState.authed }">
+    <!-- Signed out there is nothing to navigate to — every link would bounce back to /login — so
+         the rail is dead chrome and the login card gets the whole viewport. -->
+    <aside v-if="authState.authed" class="rail">
       <RouterLink to="/" class="brand">
         <Package :size="20" aria-hidden="true" />
         pstack
@@ -103,9 +126,6 @@ const tokenMissing = computed(() => state.health?.authEnforced === true && !sett
       </nav>
 
       <div class="foot">
-        <div v-if="tokenMissing">
-          <RouterLink to="/settings" class="badge warn">Token required</RouterLink>
-        </div>
         <div v-if="state.healthError" class="s-failed">Can't reach the server</div>
         <div v-else-if="state.health" class="row" style="gap: 2px">
           <span>v{{ state.health.version }}</span>
@@ -117,6 +137,11 @@ const tokenMissing = computed(() => state.health?.authEnforced === true && !sett
             </template>
           </InfoHint>
         </div>
+        <div v-if="authState.user" class="row" style="gap: 6px">
+          <span>{{ authState.user.username }}</span>
+          <button class="ghost sm" @click="signOut">Sign out</button>
+        </div>
+        <div v-else-if="authState.root && authState.checked" class="mute">token access</div>
         <div><button class="ghost sm" @click="sheetOpen = true">Shortcuts</button></div>
       </div>
     </aside>

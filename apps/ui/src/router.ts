@@ -12,6 +12,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 
 const routes: RouteRecordRaw[] = [
+  { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
   { path: '/', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
   { path: '/deployments', name: 'deployments', component: () => import('./views/DeploymentsView.vue') },
   {
@@ -45,4 +46,21 @@ export const router = createRouter({
   history: createWebHistory(),
   routes,
   scrollBehavior: (_to, _from, saved) => saved ?? { top: 0 },
+});
+
+/**
+ * The auth guard. Waits for the startup check (routing on unknown state would flash the login page
+ * at every signed-in user), then keeps unauthenticated visitors on /login — carrying the intended
+ * destination so signing in lands where they were going, not on the dashboard.
+ */
+router.beforeEach(async (to) => {
+  const { authState, checkAuth } = await import('./composables/useAuth');
+  if (!authState.checked) await checkAuth();
+  if (to.name === 'login') {
+    return authState.authed ? { path: '/' } : true;
+  }
+  if (!authState.authed) {
+    return { name: 'login', query: to.fullPath !== '/' ? { next: to.fullPath } : {} };
+  }
+  return true;
 });

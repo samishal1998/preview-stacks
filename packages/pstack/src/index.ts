@@ -39,6 +39,11 @@ export {
 } from './subdomains.ts';
 export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
 
+export { Store } from './store.ts';
+export type { UserRow } from './store.ts';
+export { Auth, AuthError } from './auth.ts';
+export type { Principal } from './auth.ts';
+
 export {
   RegistryAuthStore,
   RegistryAuthError,

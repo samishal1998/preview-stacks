@@ -1,7 +1,17 @@
 /**
  * HTTP API + static UI host — the control plane's remote surface.
  *
- *   GET    /api/health                    liveness, auth mode, data dir, version
+ *   GET    /api/health                    liveness, auth mode, data dir, version   (no auth)
+ *   POST   /api/auth/login                { username, password } → session cookie  (no auth)
+ *   POST   /api/auth/logout               clears the session                       (no auth)
+ *   POST   /api/auth/bootstrap            first admin, PSTACK_TOKEN bearer, only while none exist
+ *   GET    /api/auth/me                   who am I
+ *   GET|POST /api/users, DELETE /api/users/:id
+ *   GET|POST /api/tokens, DELETE /api/tokens/:id   personal API tokens, scoped to the caller
+ *
+ *   EVERYTHING BELOW REQUIRES AUTH — session cookie, personal token, or PSTACK_TOKEN. Reads
+ *   included: job outcomes carry captured credentials by design (docs/secret-exposure.md), so an
+ *   unauthenticated read was a credential feed.
  *   GET    /api/deployments               every submitted deployment (+ busy, + is it running)
  *   GET    /api/deployments/:id           meta + resolved spec summary
  *   PUT    /api/deployments/:id           submit or replace  { spec, compose?, env? }
@@ -80,6 +90,8 @@ import { SpecStore, SpecStoreError } from './specs.ts';
 import { RoutingError, RoutingStore } from './routing.ts';
 import { allTraefikRouters, deploymentRuntime, detectChallenge } from './inspect.ts';
 import { RegistryAuthError, RegistryAuthStore } from './registries.ts';
+import { Store } from './store.ts';
+import { Auth, AuthError, type Principal } from './auth.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -143,6 +155,8 @@ export function createServer(opts: ServerOptions) {
   const registries = new RegistryAuthStore(
     opts.registryDir ?? process.env.DOCKER_CONFIG ?? '/docker-config',
   );
+  const store = new Store(opts.dataDir);
+  const auth = new Auth(store);
   /**
    * For host-level queries that belong to no particular deployment (docker inventory).
    *
@@ -207,13 +221,50 @@ export function createServer(opts: ServerOptions) {
     return r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   };
 
-  const authed = (req: Request): boolean => {
-    if (!opts.token) return true; // localhost-only mode; see the header note
+  /**
+   * Who this request is. Three ways in, checked cheapest-first:
+   *
+   *   Bearer PSTACK_TOKEN   → root (the machine credential; predates accounts, CI holds it)
+   *   Bearer pstack_pat_…   → the token's user
+   *   Cookie pstack_session → the session's user — the only form a browser can attach to
+   *                           EventSource and WebSocket, which is why sessions are cookies at all
+   *
+   * With no PSTACK_TOKEN configured, everything is root: that is the loopback-only dev mode, and
+   * `serve` refuses to bind off-loopback in it.
+   */
+  const principal = (req: Request): Principal | null => {
+    if (!opts.token) return { kind: 'root' };
     const h = req.headers.get('authorization') ?? '';
     const m = /^Bearer (.+)$/.exec(h);
-    // Constant-time-ish: compare lengths first, then content. Not a hardened comparison — the
-    // threat model here is "don't leave it wide open", not resisting a timing oracle.
-    return !!m && m[1]!.length === opts.token.length && m[1] === opts.token;
+    if (m) {
+      const bearer = m[1]!;
+      // Constant-time-ish: compare lengths first, then content. Not a hardened comparison — the
+      // threat model is "don't leave it wide open", not resisting a timing oracle.
+      if (bearer.length === opts.token.length && bearer === opts.token) return { kind: 'root' };
+      if (bearer.startsWith('pstack_pat_')) {
+        const user = auth.tokenUser(bearer);
+        if (user) return { kind: 'user', user };
+      }
+      return null;
+    }
+    const cookie = /(?:^|;\s*)pstack_session=([^;]+)/.exec(req.headers.get('cookie') ?? '')?.[1];
+    if (cookie) {
+      const user = auth.sessionUser(cookie);
+      if (user) return { kind: 'user', user };
+    }
+    return null;
+  };
+
+  const authed = (req: Request): boolean => principal(req) !== null;
+
+  /**
+   * The session cookie. `Secure` only when the request arrived over TLS (Traefik sets
+   * X-Forwarded-Proto) — hardcoding it would break plain-HTTP loopback development, and omitting it
+   * would let a production cookie travel over HTTP.
+   */
+  const sessionCookie = (req: Request, value: string, maxAgeSeconds: number): string => {
+    const secure = req.headers.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+    return `pstack_session=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
   };
 
   return Bun.serve({
@@ -235,11 +286,121 @@ export function createServer(opts: ServerOptions) {
       }
 
       if (path === '/api/health') {
-        return json({ ok: true, authEnforced: !!opts.token, dataDir: opts.dataDir, version: pkg.version });
+        return json({
+          ok: true,
+          authEnforced: !!opts.token,
+          // Whether accounts exist — the login page needs this BEFORE authenticating, to say
+          // "sign in" versus "no accounts yet, bootstrap one" instead of a dead login form.
+          hasUsers: auth.userCount() > 0,
+          dataDir: opts.dataDir,
+          version: pkg.version,
+        });
       }
 
-      const mutating = req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE';
-      if (mutating && !authed(req)) return json({ error: 'unauthorized' }, { status: 401 });
+      // ---- authentication -------------------------------------------------------------
+      // These run BEFORE the auth gate below, or nobody could ever log in.
+      try {
+        if (path === '/api/auth/login' && req.method === 'POST') {
+          const body = (await req.json().catch(() => null)) as
+            | { username?: unknown; password?: unknown }
+            | null;
+          if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') {
+            return json({ error: 'body must be { username, password }' }, { status: 400 });
+          }
+          const { session, user } = await auth.login(body.username, body.password);
+          return json(
+            { user },
+            { headers: { 'set-cookie': sessionCookie(req, session, 30 * 24 * 60 * 60) } },
+          );
+        }
+
+        if (path === '/api/auth/logout' && req.method === 'POST') {
+          const cookie = /(?:^|;\s*)pstack_session=([^;]+)/.exec(req.headers.get('cookie') ?? '')?.[1];
+          if (cookie) auth.logout(cookie);
+          // Expire the cookie regardless — logging out must always succeed.
+          return json({ ok: true }, { headers: { 'set-cookie': sessionCookie(req, '', 0) } });
+        }
+
+        if (path === '/api/auth/bootstrap' && req.method === 'POST') {
+          // Gated by PSTACK_TOKEN specifically, not by principal(): its whole purpose is to work
+          // before any account exists.
+          const h = /^Bearer (.+)$/.exec(req.headers.get('authorization') ?? '')?.[1];
+          if (opts.token && h !== opts.token) {
+            return json({ error: 'bootstrap requires the PSTACK_TOKEN bearer' }, { status: 401 });
+          }
+          const body = (await req.json().catch(() => null)) as
+            | { username?: unknown; password?: unknown }
+            | null;
+          if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') {
+            return json({ error: 'body must be { username, password }' }, { status: 400 });
+          }
+          const user = await auth.bootstrap(body.username, body.password);
+          // 409, not silent success: "already bootstrapped" and "created" must be distinguishable,
+          // or a replayed bootstrap call reads as having set the password it carries.
+          if (!user) return json({ error: 'accounts already exist — bootstrap is only for the first one' }, { status: 409 });
+          return json({ user }, { status: 201 });
+        }
+      } catch (err) {
+        if (err instanceof AuthError) return json({ error: err.message }, { status: 400 });
+        throw err;
+      }
+
+      // ---- THE GATE: every route below requires a principal ---------------------------
+      // Reads included. This is the deliberate reversal of the original "reads are open" design,
+      // and it retires the exposure documented in docs/secret-exposure.md: job outcomes carry
+      // captured credentials BY DESIGN (outputs is the inter-axis env channel), so an
+      // unauthenticated read was a credential feed. State stays one login away; values stay
+      // behind it.
+      const who = principal(req);
+      if (!who) return json({ error: 'unauthorized' }, { status: 401 });
+
+      // ---- the signed-in principal, for the UI shell ---------------------------------
+      if (path === '/api/auth/me' && req.method === 'GET') {
+        return json(who.kind === 'root' ? { root: true } : { root: false, user: who.user });
+      }
+
+      // ---- users & personal tokens ----------------------------------------------------
+      if (path === '/api/users' && req.method === 'GET') return json({ users: auth.listUsers() });
+      if (path === '/api/users' && req.method === 'POST') {
+        const body = (await req.json().catch(() => null)) as
+          | { username?: unknown; password?: unknown }
+          | null;
+        if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') {
+          return json({ error: 'body must be { username, password }' }, { status: 400 });
+        }
+        return json({ user: await auth.createUser(body.username, body.password) }, { status: 201 });
+      }
+      const um = /^\/api\/users\/(\d+)$/.exec(path);
+      if (um && req.method === 'DELETE') {
+        return auth.deleteUser(Number(um[1]))
+          ? json({ deleted: Number(um[1]) })
+          : json({ error: 'no such user' }, { status: 404 });
+      }
+
+      // Personal tokens are scoped to the CALLER — root has PSTACK_TOKEN and needs none, and one
+      // user must not mint or list another's.
+      if (path === '/api/tokens') {
+        if (who.kind !== 'user') {
+          return json({ error: 'personal tokens belong to an account — sign in as one' }, { status: 400 });
+        }
+        if (req.method === 'GET') return json({ tokens: auth.listTokens(who.user.id) });
+        if (req.method === 'POST') {
+          const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
+          if (!body || typeof body.name !== 'string') {
+            return json({ error: 'body must be { name }' }, { status: 400 });
+          }
+          const made = auth.createToken(who.user.id, body.name);
+          // The one and only time the plaintext leaves the server.
+          return json({ id: made.id, token: made.token }, { status: 201 });
+        }
+      }
+      const tm = /^\/api\/tokens\/(\d+)$/.exec(path);
+      if (tm && req.method === 'DELETE') {
+        if (who.kind !== 'user') return json({ error: 'personal tokens belong to an account' }, { status: 400 });
+        return auth.deleteToken(who.user.id, Number(tm[1]))
+          ? json({ deleted: Number(tm[1]) })
+          : json({ error: 'no such token' }, { status: 404 });
+      }
 
       const vars = varsFrom(url);
 
@@ -879,6 +1040,7 @@ export function createServer(opts: ServerOptions) {
         if (err instanceof RoutingError) return json({ error: err.message }, { status: 400 });
         // A malformed registry host, a missing username, or a directory that is not mounted.
         if (err instanceof RegistryAuthError) return json({ error: err.message }, { status: 400 });
+        if (err instanceof AuthError) return json({ error: err.message }, { status: 400 });
         // Also the caller's problem: a spec that will not parse, or a name that cannot be a
         // directory. Mapped here as well as in the deployments branch, because PUT /api/specs/:name
         // has no local catch and was answering 500 for a malformed spec.

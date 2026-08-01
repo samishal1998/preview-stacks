@@ -212,6 +212,9 @@ export async function init(opts: InitOptions): Promise<void> {
   // DOCKER_CONFIG for the API's docker client. 0700 because config.json holds registry credentials as
   // reversible base64 — see src/registries.ts.
   await ensureDir(join(controlDir, 'docker'), dryRun, 0o700);
+  // The SQLite home (accounts, sessions, tokens). 0700 for the same reason as the docker config:
+  // WAL siblings carry live data, so the directory is the permission boundary, not the file.
+  await ensureDir(join(dataDir, 'db'), dryRun, 0o700);
 
   // ── 2. External networks ────────────────────────────────────────────────────────────────────
   // `network create` exits non-zero when the network exists, and this must be re-runnable, so the
