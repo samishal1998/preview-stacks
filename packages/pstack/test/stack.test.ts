@@ -2808,3 +2808,60 @@ describe('authentication — every route behind the gate, three ways through it'
     }
   });
 });
+
+describe('SSE over a session cookie — the reason sessions are cookies at all', () => {
+  /*
+   * `EventSource` cannot send an Authorization header. If the job log stream did not accept the
+   * session cookie, putting reads behind the gate would have silently broken live job following for
+   * every browser user — and the WebSocket terminal in the next phase depends on the same property.
+   * So this asserts the mechanism, not just the happy path.
+   */
+  test('the job stream refuses anonymously and streams for a cookie', async () => {
+    const dataDir = `${process.env.TMPDIR ?? '/tmp'}/pstack-sse-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+    const server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: 'tok' });
+    const base = `http://127.0.0.1:${server.port}`;
+    const j = { 'content-type': 'application/json' };
+    const rootAuth = { ...j, authorization: 'Bearer tok' };
+    try {
+      await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: rootAuth,
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: j,
+        body: JSON.stringify({ username: 'sami', password: 'correct-horse' }),
+      });
+      const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+
+      await fetch(`${base}/api/deployments/d`, {
+        method: 'PUT',
+        headers: rootAuth,
+        body: JSON.stringify({
+          spec: 'version: 1\nstack: s\naxes:\n  - name: a\n    up: "echo hi"\n    assert_gone: "true"\n',
+        }),
+      });
+      const started = (await (
+        await fetch(`${base}/api/deployments/d/up`, { method: 'POST', headers: rootAuth, body: '{}' })
+      ).json()) as { job: { id: string } };
+      const url = `${base}/api/jobs/${started.job.id}/stream`;
+
+      expect((await fetch(url)).status).toBe(401);
+
+      const streamed = await fetch(url, { headers: { cookie } });
+      expect(streamed.status).toBe(200);
+      expect(streamed.headers.get('content-type')).toContain('text/event-stream');
+      // Actually read a frame — a 200 with a dead body would pass a header-only assertion.
+      const reader = streamed.body!.getReader();
+      const first = await Promise.race([
+        reader.read().then((x) => new TextDecoder().decode(x.value ?? new Uint8Array())),
+        new Promise<string>((res) => setTimeout(() => res(''), 3000)),
+      ]);
+      expect(first).toContain('data:');
+      await reader.cancel();
+    } finally {
+      server.stop(true);
+    }
+  });
+});
