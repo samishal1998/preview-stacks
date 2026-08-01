@@ -2904,3 +2904,62 @@ describe('every route sits inside the error-mapping try', () => {
     }
   });
 });
+
+describe('a disconnected SSE client must not break the job it was watching', () => {
+  /*
+   * Found as cross-test pollution: the SSE-over-cookie test cancels its reader, and the job finishing
+   * afterwards threw `Invalid state: Controller is already closed` from inside JobRegistry's
+   * `finally` — attributed to whichever test happened to be running. Two defects, one symptom: the
+   * stream had no `cancel` handler so the subscription outlived the client, and the fanout was
+   * unguarded so a throwing subscriber aborted job cleanup.
+   */
+  test('cancelling the stream mid-job leaves the job able to finish cleanly', async () => {
+    const server = createServer({
+      dataDir: `${process.env.TMPDIR ?? '/tmp'}/pstack-sse2-${process.pid}-${Math.trunc(performance.now() * 1000)}`,
+      port: 0,
+      host: '127.0.0.1',
+      token: 'tok',
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { authorization: 'Bearer tok', 'content-type': 'application/json' };
+    try {
+      await fetch(`${base}/api/deployments/d`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          // Long enough that the stream is cancelled while the job is still running.
+          spec: 'version: 1\nstack: s\naxes:\n  - name: a\n    up: "sleep 0.6; echo hi"\n    assert_gone: "true"\n',
+        }),
+      });
+      const started = (await (
+        await fetch(`${base}/api/deployments/d/up`, { method: 'POST', headers, body: '{}' })
+      ).json()) as { job: { id: string } };
+      const jobId = started.job.id;
+
+      // Open the stream, read one frame, then hang up — the browser-closes-the-tab case.
+      const s = await fetch(`${base}/api/jobs/${jobId}/stream`, { headers });
+      const reader = s.body!.getReader();
+      await reader.read();
+      await reader.cancel();
+
+      // The job must still reach a terminal state. Before the fix the throw happened in `finally`,
+      // *before* `endedAt` was set and the lock released — so the stack stayed locked forever.
+      let state = 'running';
+      for (let i = 0; i < 60 && state === 'running'; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        const j = (await (await fetch(`${base}/api/jobs/${jobId}`, { headers })).json()) as {
+          job: { state: string; endedAt?: number };
+        };
+        state = j.job.state;
+        if (state !== 'running') expect(j.job.endedAt).toBeDefined();
+      }
+      expect(state).not.toBe('running');
+
+      // And the stack lock was released: a second job on the same stack is accepted, not 409'd.
+      const second = await fetch(`${base}/api/deployments/d/verify`, { method: 'POST', headers, body: '{}' });
+      expect(second.status).toBe(202);
+    } finally {
+      server.stop(true);
+    }
+  });
+});

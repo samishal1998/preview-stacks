@@ -67,9 +67,7 @@ export class JobRegistry {
     this.#locks.add(stack);
 
     const id = `${action}-${stack}-${++this.#seq}-${Math.random().toString(36).slice(2, 8)}`;
-    const sink = bufferSink((e) => {
-      for (const fn of this.#subscribers.get(id) ?? []) fn(e);
-    });
+    const sink = bufferSink((e) => this.#fanout(id, e));
     const job: Job = {
       id,
       stack,
@@ -96,13 +94,29 @@ export class JobRegistry {
         job.endedAt = Date.now();
         this.#locks.delete(stack);
         // Wake any SSE stream so it can observe the terminal state and close.
-        for (const fn of this.#subscribers.get(id) ?? []) {
-          fn({ seq: -1, at: Date.now(), level: 'info', message: '__end__' });
-        }
+        this.#fanout(id, { seq: -1, at: Date.now(), level: 'info', message: '__end__' });
       }
     })();
 
     return job;
+  }
+
+  /**
+   * Deliver to every subscriber of a job, defensively.
+   *
+   * Each callback is isolated. This fans out from inside the job's `finally`, so an exception
+   * escaping here aborts job cleanup — that is exactly what happened when a cancelled SSE stream
+   * left a subscription enqueueing into a closed controller. A subscriber is a listener, and a
+   * listener's failure is never the emitting operation's problem.
+   */
+  #fanout(id: string, e: LogEvent): void {
+    for (const fn of this.#subscribers.get(id) ?? []) {
+      try {
+        fn(e);
+      } catch {
+        /* a broken listener must not break the job */
+      }
+    }
   }
 
   subscribe(id: string, fn: (e: LogEvent) => void): () => void {

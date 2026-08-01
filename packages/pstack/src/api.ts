@@ -1001,23 +1001,58 @@ export function createServer(opts: ServerOptions) {
           if (jm[2] !== 'stream') return json({ job });
 
           // SSE: replay the buffered log, then stream live until the job ends.
+          //
+          // THE SUBSCRIPTION MUST OUTLIVE NOTHING. A browser closing the tab, or any client
+          // disconnecting mid-job, cancels this stream — and without the `cancel` hook below the
+          // subscription stayed registered, so when the job later finished the callback enqueued
+          // into a closed controller and threw `Invalid state: Controller is already closed`
+          // *inside JobRegistry's `finally`*. Two guards, because either alone leaves a window:
+          // unsubscribe on cancel, and treat the controller as one-shot so a late or duplicate
+          // event cannot throw.
+          let off: (() => void) | null = null;
+          let closed = false;
           const stream = new ReadableStream({
             start(controller) {
               const enc = new TextEncoder();
-              const send = (data: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+              const send = (data: unknown) => {
+                if (closed) return;
+                try {
+                  controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+                } catch {
+                  // The peer went away between the check and the write. Nothing to report — the
+                  // stream is gone either way, and throwing here reaches the job that emitted.
+                  closed = true;
+                }
+              };
+              const finish = (state: string) => {
+                if (closed) return;
+                send({ done: true, state });
+                closed = true;
+                off?.();
+                off = null;
+                try {
+                  controller.close();
+                } catch {
+                  /* already closed by cancel */
+                }
+              };
+
               for (const e of job.log) send(e);
               if (job.state !== 'running') {
-                send({ done: true, state: job.state });
-                controller.close();
+                finish(job.state);
                 return;
               }
-              const off = jobs.subscribe(job.id, (e) => {
-                if (e.message === '__end__') {
-                  send({ done: true, state: job.state });
-                  off();
-                  controller.close();
-                } else send(e);
+              off = jobs.subscribe(job.id, (e) => {
+                if (e.message === '__end__') finish(job.state);
+                else send(e);
               });
+            },
+            cancel() {
+              // The client disconnected. Drop the subscription NOW; otherwise it survives until the
+              // job ends and fires into a dead controller.
+              closed = true;
+              off?.();
+              off = null;
             },
           });
           return new Response(stream, {
