@@ -354,6 +354,9 @@ export function createServer(opts: ServerOptions) {
       const who = principal(req);
       if (!who) return json({ error: 'unauthorized' }, { status: 401 });
 
+      const vars = varsFrom(url);
+
+      try {
       // ---- the signed-in principal, for the UI shell ---------------------------------
       if (path === '/api/auth/me' && req.method === 'GET') {
         return json(who.kind === 'root' ? { root: true } : { root: false, user: who.user });
@@ -402,9 +405,6 @@ export function createServer(opts: ServerOptions) {
           : json({ error: 'no such token' }, { status: 404 });
       }
 
-      const vars = varsFrom(url);
-
-      try {
         // ---- the whole registry -----------------------------------------------------
         if (path === '/api/deployments' && req.method === 'GET') {
           const projects = await composeProjects();

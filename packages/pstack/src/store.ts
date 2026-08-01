@@ -71,6 +71,57 @@ const MIGRATIONS: string[] = [
     last_used_at INTEGER
   );
   `,
+  // 2 — webhook registrations and their delivery log.
+  `
+  CREATE TABLE notifiers (
+    id          INTEGER PRIMARY KEY,
+    -- The COMPOSABILITY seam: 'webhook' today; 'slack', 'discord', 'email' later are new values
+    -- with their own config shape and their own delivery module. Adding one is a new file, not a
+    -- migration.
+    type        TEXT NOT NULL,
+    -- Human label, the only handle in a list view.
+    name        TEXT NOT NULL,
+    -- JSON, shape owned by the type: {url} for webhook, {webhookUrl,channel} for slack, …
+    config      TEXT NOT NULL,
+    -- JSON array of event names. Validated against events.ts EVENTS at write time, so an
+    -- unsubscribable typo is refused rather than discovered as silence months later.
+    events      TEXT NOT NULL,
+    --
+    -- THE SIGNING SECRET IS STORED, NOT HASHED — and that is not an oversight.
+    --
+    -- A session id or an API token is verified by hashing what the caller presented and comparing;
+    -- the plaintext is never needed again, so one-way is strictly better. An HMAC signing secret is
+    -- the opposite: this process must COMPUTE HMAC(secret, body) on every delivery, so it needs the
+    -- secret itself. Hashing it would make signing impossible.
+    --
+    -- "Write-only" therefore means what it means for a docker registry credential: never returned by
+    -- any route, shown exactly once at creation. The protection is the 0700 directory, the 0600 file,
+    -- and the fact that no read path exists — not a one-way function.
+    secret      TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL,
+    -- Bookkeeping for a list view: was this thing ever actually reached?
+    last_status TEXT,
+    last_at     INTEGER
+  );
+  CREATE TABLE deliveries (
+    id           INTEGER PRIMARY KEY,
+    notifier_id  INTEGER NOT NULL REFERENCES notifiers(id) ON DELETE CASCADE,
+    event_id     TEXT NOT NULL,
+    event        TEXT NOT NULL,
+    -- 'ok' | 'failed' | 'pending'
+    status       TEXT NOT NULL,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    -- HTTP status of the last attempt, or null when the request never completed.
+    response_code INTEGER,
+    -- First line of the failure, for a list view. NEVER the request body — that would put the
+    -- payload (and anything an emit site got wrong) into a second store.
+    error        TEXT,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
+  CREATE INDEX deliveries_by_notifier ON deliveries (notifier_id, created_at DESC);
+  `,
 ];
 
 export type UserRow = {

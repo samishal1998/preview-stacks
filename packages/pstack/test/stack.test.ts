@@ -2865,3 +2865,42 @@ describe('SSE over a session cookie — the reason sessions are cookies at all',
     }
   });
 });
+
+describe('every route sits inside the error-mapping try', () => {
+  /*
+   * The 0.10.0 defect: the users/tokens/me routes were placed between the two try blocks in api.ts,
+   * so an AuthError escaped to Bun's default handler — HTTP 500 with an HTML error page for what is
+   * plainly a validation failure. The route working is not enough; it has to fail correctly.
+   */
+  test('a validation failure on /api/users is 400 JSON, never a 500 HTML page', async () => {
+    const server = createServer({
+      dataDir: `${process.env.TMPDIR ?? '/tmp'}/pstack-map-${process.pid}-${Math.trunc(performance.now() * 1000)}`,
+      port: 0,
+      host: '127.0.0.1',
+      token: 'tok',
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { authorization: 'Bearer tok', 'content-type': 'application/json' };
+    try {
+      for (const body of [
+        { username: 'BAD NAME', password: 'longenough' },
+        { username: 'ok', password: 'x' },
+      ]) {
+        const r = await fetch(`${base}/api/users`, { method: 'POST', headers, body: JSON.stringify(body) });
+        expect(r.status).toBe(400);
+        expect(r.headers.get('content-type')).toContain('application/json');
+        // The message is the diagnosis — an empty 400 would be almost as unhelpful as the 500.
+        expect(((await r.json()) as { error: string }).error.length).toBeGreaterThan(10);
+      }
+      // The happy path is unaffected by the move.
+      const ok = await fetch(`${base}/api/users`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ username: 'sami', password: 'longenough' }),
+      });
+      expect(ok.status).toBe(201);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
