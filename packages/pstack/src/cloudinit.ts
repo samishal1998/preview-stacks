@@ -15,6 +15,116 @@
  */
 
 import CLOUD_INIT_TEMPLATE from '../templates/cloud-init.tpl.yaml' with { type: 'text' };
+import pkg from '../package.json';
+
+/**
+ * The distros the generator can target.
+ *
+ * What actually differs is smaller than it looks: how Docker is installed and how its service is
+ * enabled. Everything else — cloud-init's own `users`/`groups`/`packages` stages, the Bun installer,
+ * pstack, the compose files — is identical across them. So a distro is a table row, not a template.
+ *
+ * Docker sources, and why they differ:
+ *   - ubuntu/debian/fedora: Docker's OWN repositories, which is the vendor-recommended path and what
+ *     the original Ubuntu-only template already did. Fedora avoids `dnf config-manager` on purpose —
+ *     its syntax CHANGED between dnf4 and dnf5 (Fedora ≥41), and downloading the .repo file directly
+ *     sidesteps the divergence entirely.
+ *   - suse/arch/alpine: Docker publishes no repository for these; the distro's own packages are the
+ *     supported path. Their compose package may ship a standalone `docker-compose` binary rather than
+ *     the CLI plugin, which is why the template carries a plugin-symlink fallback after this block.
+ *
+ * Alpine is the odd one out twice: OpenRC instead of systemd, and no bash in the base image — the
+ * template's own runcmd lines use `bash -c`, so bash (and sudo, for the `preview` user's sudoers
+ * entry) ride in through EXTRA_PACKAGES.
+ */
+export const DISTROS = ['ubuntu', 'debian', 'fedora', 'suse', 'arch', 'alpine'] as const;
+export type Distro = (typeof DISTROS)[number];
+
+type DistroProfile = {
+  /** Example image name for the header's `hcloud server create` line. */
+  imageHint: string;
+  /** Extra entries for cloud-init's `packages:` stage. */
+  extraPackages: string[];
+  /** runcmd fragment installing docker + compose. Complete YAML list items, 2-space indented. */
+  pkgSetup: string;
+  /** runcmd fragment enabling + starting the docker service. */
+  dockerEnable: string;
+  /** Rendered into the file header when the target needs a warning. */
+  note?: string;
+};
+
+const APT_SETUP = (repo: 'ubuntu' | 'debian'): string =>
+  [
+    '  - install -m 0755 -d /etc/apt/keyrings',
+    `  - curl -fsSL https://download.docker.com/linux/${repo}/gpg -o /etc/apt/keyrings/docker.asc`,
+    '  - chmod a+r /etc/apt/keyrings/docker.asc',
+    '  - >',
+    '    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc]',
+    `    https://download.docker.com/linux/${repo} $(. /etc/os-release && echo "$VERSION_CODENAME") stable"`,
+    '    > /etc/apt/sources.list.d/docker.list',
+    '  - apt-get update',
+    '  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io',
+    '      docker-buildx-plugin docker-compose-plugin',
+  ].join('\n');
+
+const SYSTEMD_ENABLE = '  - systemctl enable --now docker';
+
+const DISTRO_PROFILES: Record<Distro, DistroProfile> = {
+  ubuntu: {
+    imageHint: 'ubuntu-24.04',
+    extraPackages: [],
+    pkgSetup: APT_SETUP('ubuntu'),
+    dockerEnable: SYSTEMD_ENABLE,
+  },
+  debian: {
+    imageHint: 'debian-12',
+    extraPackages: [],
+    pkgSetup: APT_SETUP('debian'),
+    dockerEnable: SYSTEMD_ENABLE,
+  },
+  fedora: {
+    imageHint: 'fedora-40',
+    extraPackages: [],
+    // The .repo file straight into yum.repos.d — NOT `dnf config-manager`, whose flag syntax changed
+    // between dnf4 and dnf5. A curl works identically on both.
+    pkgSetup: [
+      '  - curl -fsSL https://download.docker.com/linux/fedora/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo',
+      '  - dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin',
+    ].join('\n'),
+    dockerEnable: SYSTEMD_ENABLE,
+  },
+  suse: {
+    imageHint: 'opensuse-leap-15.6',
+    extraPackages: [],
+    // Docker publishes no SUSE repository; the distro packages are the supported path.
+    pkgSetup: '  - zypper --non-interactive install docker docker-compose docker-buildx',
+    dockerEnable: SYSTEMD_ENABLE,
+    note: 'openSUSE installs Docker from the distro repositories (Docker publishes none for SUSE).',
+  },
+  arch: {
+    imageHint: 'arch-linux (cloud image)',
+    extraPackages: ['sudo'],
+    // -Syu, not -Sy: a partial sync followed by an install is the classic Arch breakage.
+    pkgSetup: '  - pacman -Syu --noconfirm docker docker-compose docker-buildx',
+    dockerEnable: SYSTEMD_ENABLE,
+    note:
+      'Arch cloud images vary in cloud-init support — verify yours ships cloud-init before booting ' +
+      'with this file. Docker comes from the distro repositories.',
+  },
+  alpine: {
+    imageHint: 'alpine-3.20 (cloud image)',
+    // The template runs `bash -c` in several runcmd lines and grants the preview user sudo; neither
+    // ships in the Alpine base image.
+    extraPackages: ['bash', 'sudo'],
+    pkgSetup: '  - apk add --no-cache docker docker-cli-compose docker-cli-buildx',
+    // OpenRC, not systemd.
+    dockerEnable: ['  - rc-update add docker boot', '  - service docker start'].join('\n'),
+    note:
+      'Alpine: OpenRC (not systemd), musl (the Bun installer detects and installs its musl build), ' +
+      'and cloud-init support varies by image — verify yours ships it. bash and sudo are added to ' +
+      'the package list because this file depends on both.',
+  },
+};
 
 export type CloudInitAnswers = {
   domain: string;
@@ -27,6 +137,8 @@ export type CloudInitAnswers = {
   ui: 'basic' | 'advanced';
   /** Optional git URL cloned to /opt/preview/config for driving the CLI from the host. */
   configRepo?: string;
+  /** Target distro; decides the Docker install/enable fragments. Default ubuntu. */
+  distro?: Distro;
 };
 
 export class CloudInitError extends Error {}
@@ -67,6 +179,12 @@ function validate(a: CloudInitAnswers): void {
 export function renderCloudInit(a: CloudInitAnswers): string {
   validate(a);
 
+  const distro = a.distro ?? 'ubuntu';
+  if (!DISTROS.includes(distro)) {
+    throw new CloudInitError(`unknown distro "${distro}" — expected one of ${DISTROS.join(', ')}`);
+  }
+  const profile = DISTRO_PROFILES[distro];
+
   const initFlags: string[] = [];
   if (a.challenge === 'dns01') {
     initFlags.push(`--challenge dns01`, `--dns-provider ${a.dnsProvider}`);
@@ -100,6 +218,26 @@ export function renderCloudInit(a: CloudInitAnswers): string {
           '  - /usr/local/bin/pstack build-image --ui'
         : '',
     CONFIG_REPO: a.configRepo ?? '',
+    IMAGE_HINT: profile.imageHint,
+    // A caveat the operator must read BEFORE booting belongs in the artifact itself, not in the
+    // terminal output that scrolled away — this file gets saved and reused.
+    DISTRO_NOTE: profile.note
+      ? `\n#\n# ── DISTRO NOTE (${distro}) ─────────────────────────────────────────────────────────────────\n` +
+        profile.note
+          .match(/.{1,92}(\s|$)/g)!
+          .map((line) => `# ${line.trim()}`)
+          .join('\n')
+      : '',
+    EXTRA_PACKAGES: profile.extraPackages.length
+      ? '\n' + profile.extraPackages.map((pkgName) => `  - ${pkgName}`).join('\n')
+      : '',
+    PKG_SETUP: profile.pkgSetup,
+    DOCKER_ENABLE: profile.dockerEnable,
+    // THE PINS — the point of this generator knowing versions at all. Stamped from the running
+    // CLI (same pattern as the generated Dockerfiles in image.ts), so the file reproduces the
+    // toolchain that rendered it rather than whatever is latest on the day someone reuses it.
+    PSTACK_VERSION: pkg.version,
+    BUN_VERSION: Bun.version,
   };
 
   let out = CLOUD_INIT_TEMPLATE as unknown as string;

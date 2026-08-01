@@ -46,6 +46,7 @@ type Parsed = {
   acmeEmail: string;
   dnsProvider: string;
   challenge: 'http01' | 'dns01';
+  distro: string;
   tag: string;
   ui: 'basic' | 'advanced';
   uiImage: boolean;
@@ -82,6 +83,7 @@ function parseArgs(argv: string[]): Parsed {
     sshKey: process.env.PSTACK_SSH_KEY ?? '',
     password: process.env.PSTACK_DASHBOARD_PASSWORD ?? '',
     configRepo: '',
+    distro: process.env.PSTACK_DISTRO ?? 'ubuntu',
     out: '',
     yes: false,
   };
@@ -121,6 +123,9 @@ function parseArgs(argv: string[]): Parsed {
       const c = argv[++i] ?? '';
       if (c !== 'http01' && c !== 'dns01') fail(`--challenge must be http01 or dns01, got "${c}"`);
       p.challenge = c;
+    }
+    else if (a === '--distro') {
+      p.distro = argv[++i] ?? '';
     }
     else if (a === '--set') {
       const kv = argv[++i] ?? '';
@@ -165,7 +170,7 @@ function usage(): void {
       '            --ui basic|advanced             (default basic — embedded, no extra container)',
       '            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)',
       '',
-      'cloud-init: --domain --acme-email [--ssh-key] [--password] [--challenge] [--ui]',
+      'cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui]',
       '            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)',
       '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
@@ -342,6 +347,9 @@ switch (args.cmd) {
         dnsProvider: args.dnsProvider || undefined,
         ui: args.ui,
         configRepo: configRepo || undefined,
+        // Validated by renderCloudInit against the DISTROS list, so the CLI and the library cannot
+        // hold two different opinions about what is supported.
+        distro: args.distro as import('./cloudinit.ts').Distro,
       });
 
       if (args.out) {

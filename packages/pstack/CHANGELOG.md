@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.0 — 2026-07-30
+
+### Added
+
+- **`pstack cloud-init --distro ubuntu|debian|fedora|suse|arch|alpine`** (default ubuntu). What
+  actually differs per distro is smaller than it looks — how Docker is installed and how its service
+  is enabled — so a distro is a table row in the generator, not a second template:
+
+  - **ubuntu / debian / fedora**: Docker's own repositories (the vendor-recommended path). Fedora
+    downloads the `.repo` file directly instead of using `dnf config-manager`, whose flag syntax
+    changed between dnf4 and dnf5.
+  - **suse / arch / alpine**: the distro's own packages — Docker publishes no repository for these.
+    Because their compose package may ship a standalone `docker-compose` binary rather than the CLI
+    plugin (and pstack shells out to `docker compose`, the plugin form), every render carries a
+    plugin-symlink fallback.
+  - **alpine**: OpenRC (`rc-update add docker boot`) instead of systemd, and `bash` + `sudo` added to
+    the package list — the file's own runcmd lines depend on both and the base image has neither.
+  - suse/arch/alpine renders carry a **DISTRO NOTE in the file itself** (cloud-init support varies by
+    image, musl, distro-repo Docker) — the file is what gets saved and reused; a terminal warning
+    scrolls away.
+
+### Fixed
+
+- **The generated cloud-config now pins bun and pstack** to the versions that rendered it
+  (`@samyx/preview-stacks@<version>`, `bash -s "bun-vX.Y.Z"` — the same stamp-own-version pattern the
+  generated Dockerfiles use). Unpinned, a saved file reused months later installed whatever was
+  latest that day — a control plane the rest of the file was never written for. To be precise about
+  the exposure: a machine *restart* never re-runs `runcmd` (cloud-init is once per instance); the
+  risk is **re-provisioning from a saved copy**. Docker is deliberately left repo-latest — the
+  distro's security updates are wanted, and the file says so where the decision lives.
+
 ## 0.8.0 — 2026-07-30
 
 No host change needed. Upgrade the CLI, rebuild the images.

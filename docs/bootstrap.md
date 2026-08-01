@@ -306,7 +306,15 @@ those labels when you switch modes.
 
 ## 4. The cloud-init file
 
-Save as `cloud-init.yaml`. Replace every `example.com`, `<you>` and `CHANGEME` placeholder.
+**Prefer generating this file**: `pstack cloud-init` fills every placeholder, **pins bun and pstack to
+the versions that rendered it** (a saved file reused months later otherwise installs whatever is
+latest that day), and targets other distros with
+`--distro ubuntu|debian|fedora|suse|arch|alpine` — apt vs dnf vs zypper vs pacman vs apk, and OpenRC
+instead of systemd on Alpine, are handled per distro. The hand-written file below is the annotated
+reference for what the generator emits (Ubuntu form).
+
+Save as `cloud-init.yaml`. Replace every `example.com`, `<you>` and `CHANGEME` placeholder — and pin
+the two installs marked below to the versions you mean to run.
 
 The file does four things, in this order: install **Docker**, install **Bun + pstack (a global
 package)**, get a **control image** onto the box, then hand over to **`pstack init`**. The split
@@ -464,7 +472,9 @@ runcmd:
   # 2. Bun, installed system-wide.
   #    runcmd runs as root, so a default install lands in /root/.bun where the `preview` user
   #    cannot execute it. BUN_INSTALL=/usr/local puts the binary at /usr/local/bin/bun.
-  - BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash'
+  #    PIN THIS (the generator does): `| bash -s "bun-vX.Y.Z"` — unpinned, a re-provision months
+  #    later gets a different runtime under the same config file.
+  - BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.12"'
   - /usr/local/bin/bun --version
 
   # 3. pstack, as a GLOBAL PACKAGE — a ~74 KB bundle, no checkout, no `bun install`.

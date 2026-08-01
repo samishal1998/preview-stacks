@@ -6,7 +6,8 @@ import { nullSink } from '../src/log.ts';
 import { init } from '../src/init.ts';
 import { buildImage, controlDockerfile, uiDockerfile } from '../src/image.ts';
 import { SpecStore, findRequiredVars } from '../src/specs.ts';
-import { renderCloudInit, randomPassword } from '../src/cloudinit.ts';
+import { renderCloudInit, randomPassword, DISTROS, type Distro } from '../src/cloudinit.ts';
+import pkgJson from '../package.json';
 import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
@@ -2464,5 +2465,115 @@ axes: []
         server.stop(true);
       }
     });
+  });
+});
+
+describe('cloud-init — pinned versions and distro targets', () => {
+  const base = {
+    domain: 'preview.example.com',
+    acmeEmail: 'ops@example.com',
+    dashboardPassword: 'pw',
+    challenge: 'http01' as const,
+    ui: 'basic' as const,
+  };
+
+  /*
+   * The reported failure mode: a saved cloud-config reused months later installs whatever is latest
+   * that day — a control plane the rest of the file was never written for. (A mere restart never
+   * re-runs runcmd; re-provisioning does.) So the generator stamps the toolchain it ran under.
+   */
+  test('pstack and bun are pinned to the generator\'s own versions', () => {
+    const out = renderCloudInit(base);
+    expect(out).toContain(`bun install -g @samyx/preview-stacks@${pkgJson.version}`);
+    expect(out).toContain(`bash -s "bun-v${Bun.version}"`);
+    // Bare, unpinned forms must be gone entirely.
+    expect(out).not.toMatch(/install -g @samyx\/preview-stacks(?!@)/);
+    expect(out).not.toMatch(/bun\.sh\/install \| bash'/);
+  });
+
+  test('docker is deliberately NOT pinned, and the file says why', () => {
+    // Distro security updates are wanted; the reproducibility risk is the pstack toolchain, which is
+    // pinned above. The reasoning must live in the artifact, since that is what gets saved.
+    expect(renderCloudInit(base)).toContain('DELIBERATELY not version-pinned');
+  });
+
+  const MANAGERS: Record<Distro, RegExp> = {
+    ubuntu: /apt-get install/,
+    debian: /apt-get install/,
+    fedora: /dnf -y install/,
+    suse: /zypper --non-interactive install/,
+    arch: /pacman -Syu --noconfirm/,
+    alpine: /apk add --no-cache/,
+  };
+
+  for (const distro of DISTROS) {
+    test(`${distro}: renders valid YAML using only its own package manager`, () => {
+      const out = renderCloudInit({ ...base, distro });
+      // The whole file must stay parseable cloud-config — a distro fragment with wrong indentation
+      // would corrupt the document while looking fine in a grep.
+      const doc = Bun.YAML.parse(out) as Record<string, unknown>;
+      expect(Array.isArray(doc.runcmd)).toBe(true);
+
+      expect(out).toMatch(MANAGERS[distro]);
+      // Cross-contamination is the failure this table design invites: one distro's commands leaking
+      // into another's render. Assert every FOREIGN manager is absent — keyed on the pattern, not
+      // the distro name, because ubuntu and debian legitimately share apt.
+      for (const [other, re] of Object.entries(MANAGERS)) {
+        if (other !== distro && re.source !== MANAGERS[distro].source) {
+          expect(out).not.toMatch(re);
+        }
+      }
+    });
+  }
+
+  test('every systemd distro enables docker with systemctl; alpine uses OpenRC', () => {
+    for (const distro of ['ubuntu', 'debian', 'fedora', 'suse', 'arch'] as const) {
+      const out = renderCloudInit({ ...base, distro });
+      expect(out).toContain('systemctl enable --now docker');
+      expect(out).not.toContain('rc-update');
+    }
+    const alpine = renderCloudInit({ ...base, distro: 'alpine' });
+    expect(alpine).toContain('rc-update add docker boot');
+    expect(alpine).toContain('service docker start');
+    expect(alpine).not.toContain('systemctl');
+  });
+
+  test('alpine adds bash and sudo — the template depends on both and the base image has neither', () => {
+    const doc = Bun.YAML.parse(renderCloudInit({ ...base, distro: 'alpine' })) as {
+      packages: string[];
+    };
+    expect(doc.packages).toContain('bash');
+    expect(doc.packages).toContain('sudo');
+    // And ubuntu is NOT burdened with extras it already has.
+    const ubuntu = Bun.YAML.parse(renderCloudInit(base)) as { packages: string[] };
+    expect(ubuntu.packages).not.toContain('bash');
+  });
+
+  test('debian pulls from the debian docker repo, not the ubuntu one', () => {
+    const out = renderCloudInit({ ...base, distro: 'debian' });
+    expect(out).toContain('download.docker.com/linux/debian');
+    expect(out).not.toContain('download.docker.com/linux/ubuntu');
+  });
+
+  test('the compose-plugin fallback ships on every distro', () => {
+    // suse/arch may package compose as a standalone binary; pstack shells out to `docker compose`
+    // (the plugin form), so the symlink fallback is what keeps them working.
+    for (const distro of DISTROS) {
+      expect(renderCloudInit({ ...base, distro })).toContain('cli-plugins/docker-compose');
+    }
+  });
+
+  test('distros that need a warning carry it in the FILE, and the default carries none', () => {
+    // The file is what gets saved and reused; a terminal warning scrolls away.
+    for (const distro of ['suse', 'arch', 'alpine'] as const) {
+      expect(renderCloudInit({ ...base, distro })).toContain(`DISTRO NOTE (${distro})`);
+    }
+    expect(renderCloudInit(base)).not.toContain('DISTRO NOTE');
+  });
+
+  test('an unknown distro is refused by name', () => {
+    expect(() =>
+      renderCloudInit({ ...base, distro: 'gentoo' as Distro }),
+    ).toThrow(/unknown distro "gentoo"/);
   });
 });
