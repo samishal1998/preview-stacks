@@ -9,6 +9,7 @@ import InfoHint from '../../components/InfoHint.vue';
 
 import { conflictingVars } from '../../composables/useVars';
 import VarEditor from '../../components/VarEditor.vue';
+import HelpModal from '../../components/HelpModal.vue';
 
 /** A count, not the raw query string — `?PR=7&REGION=eu` beside a button is machine talk. */
 const varCount = computed(() => Object.keys(dep.vars ?? {}).length);
@@ -33,18 +34,21 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
         a guarantee — a different browser, a CI job or the CLI must pass the same ones itself —
         which is why this warning stays visible rather than being dismissible.
       -->
-      <div class="banner warn">
-        <b>Tearing down needs the same variables as deploying.</b>
-        <p>
-          These are remembered in this browser. Another browser, a CI job, or the command line has
-          to supply them itself.
-          <InfoHint label="what happens if they differ">
-            The variables are part of how the stack name is resolved, so deploying with one value
-            and tearing down with another targets two different stacks — the teardown reports
-            success having removed nothing. They are stored per deployment in this browser only.
-          </InfoHint>
-        </p>
-      </div>
+      <p class="hint">
+        Remembered in this browser. Another browser, a CI job or the command line supplies its own.
+        <HelpModal title="Why the same variables have to be used for both">
+          <p>
+            These variables are part of how this deployment's name is worked out. Deploy with one
+            value and tear down with another and the two commands are pointing at
+            <b>different things</b> — the teardown finishes successfully having removed nothing, and
+            the original is still running.
+          </p>
+          <p>
+            They are kept per deployment in this browser only, which is what keeps them matched
+            <em>here</em>. Nothing carries them to anywhere else.
+          </p>
+        </HelpModal>
+      </p>
 
       <VarEditor v-model="dep.vars" @change="persistVars" />
 

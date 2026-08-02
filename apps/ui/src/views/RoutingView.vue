@@ -37,6 +37,7 @@ import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import HelpModal from '../components/HelpModal.vue';
 
 /**
  * The live routes, from container labels.
@@ -200,7 +201,31 @@ async function remove(): Promise<void> {
   <div>
     <div class="page-head">
       <div>
-        <h1>Routing</h1>
+        <h1>
+          Routing
+          <HelpModal title="How routing files work, and what can go wrong">
+            <p>
+              <b>Traefik reads this directory as a whole.</b> One file it cannot parse and it reports a
+              problem for the <em>directory</em> — so the symptom is other, unrelated routes
+              disappearing rather than an error about the file you just saved.
+            </p>
+            <p>
+              Saves here are checked before they are written and replace the old file in one step, so a
+              file that would break the directory never reaches Traefik in the first place.
+            </p>
+            <p>
+              <b>This page cannot lock you out.</b> It and the API are routed by their containers'
+              own settings, not by these files — no save here can take away the page you would use to
+              undo it.
+            </p>
+            <p>
+              What belongs here: shared middleware (sign-in prompts, rate limits, address
+              allow-lists), TLS options, the catch-all fallback, and routes to things running outside
+              this host's previews. A single preview's own routes are not here — those travel with the
+              deployment.
+            </p>
+          </HelpModal>
+        </h1>
         <div class="sub">
           Every route on this host, and the config files behind them
           <InfoHint label="what belongs in these files">
@@ -294,7 +319,7 @@ async function remove(): Promise<void> {
         <h2 class="section">Config files</h2>
         <span class="grow" />
         <span v-if="dir" class="mute" style="font-size: var(--t-sm)">
-          <code>{{ dir }}</code>
+          <span class="mute">{{ dir }}</span>
         </span>
       </div>
 
@@ -302,18 +327,6 @@ async function remove(): Promise<void> {
         The blast radius, stated once and up front — and the reassurance alongside it, because "this can
         break everything" without "you will still be able to fix it" just makes people avoid the page.
       -->
-      <div class="banner warn">
-        <b>A bad file here affects every preview on this host.</b>
-        <p>
-          Traefik reads this directory as a whole: one unparseable file and it logs a parse error for the
-          <em>directory</em>, so the symptom is other routes disappearing. Saves are checked before they
-          are written and land atomically, so a rejected file never reaches Traefik.
-          <InfoHint label="what this page cannot break">
-            This page and the API are routed by container labels, not by these files — so no save here
-            can lock you out of the page you would use to undo it.
-          </InfoHint>
-        </p>
-      </div>
 
       <div v-if="writable === false" class="banner failed">
         <b>Read-only: the API cannot write to this directory.</b>

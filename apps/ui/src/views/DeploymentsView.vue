@@ -11,6 +11,7 @@ import { state, summary } from '../composables/useControlPlane';
 import RunStateBadge from '../components/RunStateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 
 const q = ref('');
 const kind = ref<'all' | 'isolated' | 'shared'>('all');
@@ -73,11 +74,15 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
           />
           <kbd v-if="!q">/</kbd>
         </div>
-        <select v-model="kind" aria-label="Filter by kind" class="compact">
-          <option value="all">All kinds</option>
-          <option value="isolated">Isolated</option>
-          <option value="shared">Shared</option>
-        </select>
+        <SelectMenu
+          v-model="kind"
+          label="Filter by kind"
+          :options="[
+            { value: 'all', label: 'All kinds' },
+            { value: 'isolated', label: 'Isolated' },
+            { value: 'shared', label: 'Shared' },
+          ]"
+        />
         <label class="check">
           <input v-model="onlyLive" type="checkbox" />
           Running or busy only

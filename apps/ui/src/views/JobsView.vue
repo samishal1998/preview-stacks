@@ -6,6 +6,7 @@ import { actionLabel, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 import type { JobState } from '../api/types';
 
 const q = ref('');
@@ -38,13 +39,7 @@ const rows = computed(() => {
         </div>
         <div class="field">
           <label for="js" class="mute" style="font-size: var(--t-xs)">State</label>
-          <select id="js" v-model="only">
-            <option value="all">all</option>
-            <option value="running">running</option>
-            <option value="ok">ok</option>
-            <option value="leaked">leaked</option>
-            <option value="failed">failed</option>
-          </select>
+          <SelectMenu v-model="only" id="js" label="Filter jobs" :options="[{ value: 'all', label: 'All' }, { value: 'running', label: 'Running' }, { value: 'ok', label: 'Ok' }, { value: 'leaked', label: 'Leaked' }, { value: 'failed', label: 'Failed' }]" />
         </div>
       </div>
 

@@ -11,6 +11,7 @@ import { api, problem, query } from '../../api/client';
 import type { LogsResponse, RuntimeResponse } from '../../api/types';
 import { dep } from '../../composables/useDeployment';
 import InfoHint from '../../components/InfoHint.vue';
+import SelectMenu from '../../components/SelectMenu.vue';
 
 const tail = ref(200);
 /** '' means the whole stack. */
@@ -31,6 +32,12 @@ async function loadServices(): Promise<void> {
     ...new Set(r.body.containers.map((c) => c.service).filter((s): s is string => !!s)),
   ].sort();
 }
+
+/** Empty value = the whole stack, which is a real choice here rather than a placeholder. */
+const serviceOptions = computed(() => [
+  { value: '', label: 'All services' },
+  ...services.value.map((s) => ({ value: s, label: s })),
+]);
 
 const filter = ref('');
 const logs = ref<LogsResponse | null>(null);
@@ -95,20 +102,11 @@ const shown = computed(() => {
       <span class="grow" />
       <div v-if="services.length > 1" class="field">
         <label for="svc" class="mute" style="font-size: var(--t-xs)">service</label>
-        <select id="svc" v-model="service">
-          <option value="">all services</option>
-          <option v-for="s in services" :key="s" :value="s">{{ s }}</option>
-        </select>
+        <SelectMenu v-model="service" id="svc" label="Service" :options="serviceOptions" />
       </div>
       <div class="field">
         <label for="tail" class="mute" style="font-size: var(--t-xs)">tail</label>
-        <select id="tail" v-model.number="tail">
-          <option :value="50">50</option>
-          <option :value="200">200</option>
-          <option :value="500">500</option>
-          <option :value="1000">1000</option>
-          <option :value="2000">2000</option>
-        </select>
+        <SelectMenu :model-value="String(tail)" label="How many lines" :options="[{ value: '50', label: '50' }, { value: '200', label: '200' }, { value: '500', label: '500' }, { value: '1000', label: '1000' }, { value: '2000', label: '2000' }]" @update:model-value="(v) => (tail = Number(v))" />
       </div>
       <button
         class="primary"
@@ -131,7 +129,7 @@ const shown = computed(() => {
     <template v-else>
       <p class="hint" style="margin: 0 0 var(--s3)">
         Fetched on demand, never polled: an auto-refresh against a chatty stack would hammer the
-        host. <code>tail</code> is clamped to 1–2000 by the server.
+        host. The server caps how many lines it will return.
       </p>
 
       <div v-if="error" class="banner failed">{{ error }}</div>

@@ -26,6 +26,7 @@ import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import HelpModal from '../components/HelpModal.vue';
 
 const entries = ref<RegistryEntry[]>([]);
 const helpers = ref<string[]>([]);
@@ -119,11 +120,20 @@ async function forget(registry: string): Promise<void> {
     <ErrorNote v-if="listError" :text="listError" title="Could not load the registry credentials." />
 
     <div v-if="writable === false" class="banner failed">
-      <b>Read-only: the API cannot write the credential file.</b>
+      <b>Credentials cannot be saved here yet.</b>
       <p>
-        The control stack gains a credentials directory from 0.7.0 onward.
-        Re-run setup on the host — it is safe to repeat, and it recreates the control
-        containers.
+        Re-run setup on the host — it is safe to repeat.
+        <HelpModal title="Why this happens">
+          <p>
+            Saving a credential needs a writable directory that the control stack only started
+            providing in version 0.7.0. A host set up before then does not have it, so this page can
+            list credentials but not add one.
+          </p>
+          <p>
+            Re-running setup is safe to repeat and recreates the control containers with the
+            directory in place. Nothing already stored is lost.
+          </p>
+        </HelpModal>
       </p>
     </div>
 
@@ -146,7 +156,7 @@ async function forget(registry: string): Promise<void> {
       <div class="phead">
         <h2 class="section">Stored</h2>
         <span class="grow" />
-        <span v-if="dir" class="mute break" style="font-size: var(--t-sm)"><code>{{ dir }}</code></span>
+        <span v-if="dir" class="mute break" style="font-size: var(--t-sm)"><span class="mute">{{ dir }}</span></span>
       </div>
 
       <SkeletonList v-if="!loaded" :rows="2" />

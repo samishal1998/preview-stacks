@@ -119,12 +119,14 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
+/* The shell centres this now — see `.shell.no-rail .view`. A second centring context here would
+ * fight it, and `min-height: 70vh` was what pinned the card toward the top of the window. */
+/* `100%`, not `92vw`: the shell already insets this by its own padding, so a viewport-relative
+ * width added on top overflowed the right edge on a phone (measured 32px/0px at 390). */
 .login-wrap {
-  min-height: 70vh;
-  display: grid;
-  place-items: center;
+  width: min(420px, 100%);
 }
 .login-card {
-  width: min(420px, 92vw);
+  width: 100%;
 }
 </style>

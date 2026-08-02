@@ -27,6 +27,7 @@ import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import VarEditor from '../components/VarEditor.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 
 const props = defineProps<{ id?: string }>();
 
@@ -50,6 +51,12 @@ const result = ref<{
  * an error here — the picker simply is not offered and inline stays the only shape.
  */
 const specs = ref<SpecMeta[]>([]);
+
+/** `— choose —` stays first: an empty value is a real state here, not a placeholder. */
+const specOptions = computed(() => [
+  { value: '', label: '— choose —' },
+  ...specs.value.map((s) => ({ value: s.name, label: s.name, hint: s.kind })),
+]);
 void api.get<SpecsResponse>('/api/specs').then((r) => {
   if (r.ok && Array.isArray(r.body.specs)) specs.value = r.body.specs;
 });
@@ -384,12 +391,7 @@ function loadExample(): void {
       <template v-if="source === 'stored' && specs.length">
         <div class="field" style="max-width: 340px">
           <label for="sn">Stored spec</label>
-          <select id="sn" v-model="specName">
-            <option value="">— choose —</option>
-            <option v-for="s in specs" :key="s.name" :value="s.name">
-              {{ s.name }} ({{ s.kind }})
-            </option>
-          </select>
+          <SelectMenu v-model="specName" id="sn" label="Stored spec" :options="specOptions" />
         </div>
         <p v-if="chosenSpec" class="hint">
           <span v-if="chosenSpec.description">{{ chosenSpec.description }} — </span>

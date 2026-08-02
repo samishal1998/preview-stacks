@@ -22,6 +22,7 @@ import { api, problem } from '../../api/client';
 import type { RuntimeResponse } from '../../api/types';
 import ErrorNote from '../../components/ErrorNote.vue';
 import InfoHint from '../../components/InfoHint.vue';
+import SelectMenu from '../../components/SelectMenu.vue';
 
 const route = useRoute();
 const id = computed(() => String(route.params.id));
@@ -41,6 +42,10 @@ const term = shallowRef<import('@xterm/xterm').Terminal | null>(null);
 const fit = shallowRef<import('@xterm/addon-fit').FitAddon | null>(null);
 const socket = shallowRef<WebSocket | null>(null);
 let observer: ResizeObserver | null = null;
+
+const containerOptions = computed(() =>
+  running.value.map((c) => ({ value: c.name, label: c.name, hint: c.service ?? undefined })),
+);
 
 const running = computed(() => rt.value?.containers.filter((c) => c.state === 'running') ?? []);
 
@@ -177,17 +182,11 @@ onBeforeUnmount(teardown);
     <div class="row wrap" style="gap: var(--s3); align-items: end">
       <label class="field">
         <span>Container</span>
-        <select v-model="container" :disabled="state === 'open' || state === 'connecting'">
-          <option v-for="c in running" :key="c.id" :value="c.name">
-            {{ c.name }}<template v-if="c.service"> — {{ c.service }}</template>
-          </option>
-        </select>
+        <SelectMenu v-model="container" label="Container" :disabled="state === 'open' || state === 'connecting'" :options="containerOptions" />
       </label>
       <label class="field">
         <span>Shell</span>
-        <select v-model="shell" :disabled="state === 'open' || state === 'connecting'">
-          <option v-for="s in SHELLS" :key="s" :value="s">{{ s }}</option>
-        </select>
+        <SelectMenu v-model="shell" label="Shell" :disabled="state === 'open' || state === 'connecting'" :options="SHELLS.map((s) => ({ value: s, label: s }))" />
       </label>
       <button
         v-if="state !== 'open'"

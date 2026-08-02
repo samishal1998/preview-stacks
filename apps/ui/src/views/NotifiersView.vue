@@ -21,6 +21,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 
 const notifiers = ref<NotifierRow[]>([]);
 const meta = ref<NotifierMeta | null>(null);
@@ -37,6 +38,9 @@ const formError = ref('');
 
 const openDeliveries = ref<number | null>(null);
 const deliveries = ref<DeliveryRow[]>([]);
+
+/** Server-driven, so a new notifier type appears here with no change to this file. */
+const typeOptions = computed(() => (meta.value?.types ?? []).map((x) => ({ value: x.kind, label: x.label })));
 
 const chosenType = computed(() => meta.value?.types.find((t) => t.kind === form.value.type) ?? null);
 
@@ -298,9 +302,7 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
 
         <div v-if="meta && meta.types.length > 1" class="field" style="max-width: 320px">
           <label for="ty">Type</label>
-          <select id="ty" v-model="form.type">
-            <option v-for="t in meta.types" :key="t.kind" :value="t.kind">{{ t.label }}</option>
-          </select>
+          <SelectMenu v-model="form.type" id="ty" label="Notifier type" :options="typeOptions" />
         </div>
 
         <div class="field" style="max-width: 380px">
@@ -338,7 +340,9 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
             All events
           </label>
         </div>
-        <div v-if="!form.events.includes('*')" class="row" style="margin-top: var(--s2)">
+        <!-- A grid, not a wrapping row: eleven items of differing width wrapped into ragged lines
+             with one stranded on its own, which reads as a layout accident. -->
+        <div v-if="!form.events.includes('*')" class="check-grid">
           <label v-for="e in meta?.events ?? []" :key="e" class="check">
             <input type="checkbox" :checked="form.events.includes(e)" @change="toggleEvent(e)" />
             {{ e }}

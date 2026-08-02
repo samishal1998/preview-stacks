@@ -120,6 +120,19 @@ a:focus-visible {
 .shell.no-rail {
   grid-template-columns: minmax(0, 1fr);
 }
+/*
+ * Signed out there is no rail and no page content — just one card, which belongs in the middle of
+ * the window. `.view` is a LEFT-ALIGNED reading column capped at 1180px, so a card centred inside
+ * it sat centred in that column and visibly off-centre in the window (measured: 256px of gap on the
+ * left, 618px on the right). The cap and the alignment both have to go for this one case.
+ */
+.shell.no-rail .view {
+  max-width: none;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--s5);
+}
 
 /*
  * The rail is a PANEL, not an edge: rounded on all four corners and inset by the shell gutter, so
@@ -1554,4 +1567,266 @@ select.compact {
 /* Every control in a toolbar agrees on height, or the row reads as assembled from spare parts. */
 .phead > .check {
   min-height: 34px;
+}
+
+/* ------------------------------------------------------------------ select menu */
+/* Look only — Reka owns placement, focus and keyboard. See SelectMenu.vue. */
+
+/*
+ * A picker is as wide as the choice it holds, not as wide as its container. Inside a `.field` (a
+ * grid) it would otherwise stretch to the full panel — a 1100px-wide control for the word "Dark".
+ */
+.field > .selm-trigger,
+.selm-trigger {
+  max-width: 340px;
+  width: 100%;
+}
+.selm-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 var(--s2) 0 var(--s3);
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r1);
+  /* Inset like every other field — this is a thing you pick a value in, not a thing you press. */
+  box-shadow: inset 0 1px 2px var(--press);
+  font: var(--t-sm) / 1 var(--sans);
+  color: var(--fg);
+  cursor: pointer;
+}
+.selm-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--fg-mute) 55%, var(--line));
+}
+.selm-trigger[data-state='open'] {
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px var(--press), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.selm-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selm-caret {
+  flex: none;
+  color: var(--fg-mute);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.selm-trigger[data-state='open'] .selm-caret {
+  transform: rotate(180deg);
+}
+
+.selm-list {
+  z-index: 61;
+  padding: var(--s1);
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  box-shadow: var(--hairline-strong), var(--elev-4);
+  /* Reka measures the trigger and exposes it — so the list never opens narrower than what it opened from. */
+  min-width: var(--reka-select-trigger-width);
+  animation: palette-in var(--dur) var(--ease-spring);
+}
+.selm-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2);
+  min-height: 30px;
+  border-radius: calc(var(--r1) - 2px);
+  font-size: var(--t-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+/*
+ * `data-highlighted` is Reka's single source of "the thing the eye is on" — it follows both the
+ * pointer and the keyboard, so hover and arrow keys can never light two rows at once. That was a
+ * bug I had to avoid by hand in the command palette; here it comes for free.
+ */
+.selm-opt[data-highlighted] {
+  background: var(--accent-soft);
+  outline: none;
+}
+.selm-opt[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.selm-hint {
+  color: var(--fg-mute);
+  font-size: var(--t-xs);
+  margin-inline-start: auto;
+}
+.selm-tick {
+  margin-inline-start: auto;
+  color: var(--accent);
+  display: inline-flex;
+}
+.selm-hint + .selm-tick {
+  margin-inline-start: var(--s2);
+}
+
+/* ------------------------------------------------------------------ checkbox & radio */
+
+/*
+ * The INPUT stays — it is what makes these focusable, labellable, form-associated and announced
+ * correctly. Only its painting is replaced. A hand-rolled div with `role="checkbox"` would throw
+ * that away to gain nothing: unlike a `<select>`, a checkbox has no OS-drawn popup, so there is
+ * nothing here that CSS cannot reach.
+ */
+input[type='checkbox'],
+input[type='radio'] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--fg-mute) 60%, var(--line));
+  background: var(--sunk);
+  box-shadow: inset 0 1px 2px var(--press);
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+input[type='checkbox'] {
+  border-radius: 5px;
+}
+input[type='radio'] {
+  border-radius: 50%;
+}
+input[type='checkbox']:hover:not(:disabled),
+input[type='radio']:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+input[type='checkbox']::before,
+input[type='radio']::before {
+  content: '';
+  transform: scale(0);
+  transition: transform var(--dur-fast) var(--ease-spring);
+}
+/* The tick is a clip-path, not a glyph: a font-rendered ✓ shifts with the family and never centres. */
+input[type='checkbox']::before {
+  width: 11px;
+  height: 11px;
+  background: #fff;
+  clip-path: polygon(14% 47%, 0 61%, 40% 100%, 100% 22%, 85% 9%, 39% 71%);
+}
+input[type='radio']::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+}
+input[type='checkbox']:checked,
+input[type='radio']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type='checkbox']:checked::before,
+input[type='radio']:checked::before {
+  transform: scale(1);
+}
+input[type='checkbox']:disabled,
+input[type='radio']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------------ help modal */
+
+/* Sized to the header text it sits beside, so it never becomes the thing you notice first. */
+.helpq {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  min-height: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  box-shadow: none;
+  color: var(--fg-mute);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.helpq:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.help-scrim {
+  /* Reka owns open/close state; this is only the backdrop's look. */
+  backdrop-filter: blur(2px);
+  z-index: 70;
+}
+.help-modal {
+  position: fixed;
+  z-index: 71;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(620px, calc(100vw - var(--s5)));
+  max-height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r3);
+  box-shadow: var(--hairline-strong), var(--elev-4);
+  animation: help-in var(--dur-slow) var(--ease-spring);
+}
+@keyframes help-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -46%) scale(0.97);
+  }
+}
+.help-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4) var(--s4) var(--s3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.help-title {
+  font-size: var(--t-lg);
+  font-weight: 620;
+  letter-spacing: var(--track-title);
+  margin: 0;
+  flex: 1;
+}
+.help-body {
+  padding: var(--s4);
+  overflow-y: auto;
+  color: var(--fg-dim);
+  font-size: var(--t-sm);
+  line-height: var(--lh-body);
+}
+.help-body > * + * {
+  margin-top: var(--s3);
+}
+.help-body b,
+.help-body strong {
+  color: var(--fg);
+}
+
+/*
+ * A set of related checkboxes. Columns that size to the longest label keep the ticks in a straight
+ * line down the page; a wrapping flex row leaves them scattered and strands the last item.
+ */
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--s2) var(--s4);
+  margin-top: var(--s2);
+}
+.check-grid .check {
+  min-height: 26px;
 }

@@ -10,6 +10,7 @@ import { settings } from '../composables/useSettings';
 import { state, loadHealth } from '../composables/useControlPlane';
 import { toast } from '../composables/useToasts';
 import InfoHint from '../components/InfoHint.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 
 const checking = ref(false);
 
@@ -101,20 +102,28 @@ async function recheck(): Promise<void> {
 
       <div class="field">
         <label for="theme">Theme</label>
-        <select id="theme" v-model="settings.theme">
-          <option value="system">Follow the system</option>
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
-        </select>
+        <SelectMenu
+            v-model="settings.theme" id="theme"
+            label="Theme"
+            :options="[
+              { value: 'system', label: 'Follow the system' },
+              { value: 'dark', label: 'Dark' },
+              { value: 'light', label: 'Light' },
+            ]"
+          />
       </div>
 
       <div class="field">
         <label for="motion">Motion</label>
-        <select id="motion" v-model="settings.motion">
-          <option value="system">Follow the system</option>
-          <option value="full">Full animation</option>
-          <option value="none">Reduce motion</option>
-        </select>
+        <SelectMenu
+            v-model="settings.motion" id="motion"
+            label="Motion"
+            :options="[
+              { value: 'system', label: 'Follow the system' },
+              { value: 'full', label: 'Always animate' },
+              { value: 'none', label: 'No animation' },
+            ]"
+          />
         <div class="mute hint">
           “Follow the system” uses your device's reduce-motion setting. The other two override it,
           in either direction.
