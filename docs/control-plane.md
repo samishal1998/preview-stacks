@@ -597,6 +597,76 @@ Two traps it handles explicitly:
 
 ---
 
+## 4d. Notifications — telling something else what happened
+
+`job.leaked` is the event this product exists to produce, and until 0.11.0 the only way to see it was
+to be looking at the page. Notifiers push it somewhere.
+
+### The seam, and what "composable" actually buys
+
+A registration is `{ type, name, events[], config{} }`. `type` selects a **notifier type** — a
+`{ kind, label, fields, validate, send }` in `src/notify.ts` — and that type OWNS the shape of
+`config`. Adding Slack or Discord later is one entry in that map:
+
+- **no migration** — `config` is opaque JSON in the `notifiers` table;
+- **no route change** — every route is type-agnostic;
+- **no UI change** — the form is rendered from `GET /api/notifiers/meta`, which returns each type's
+  `fields`. Hard-coding the URL field in the page would have made the seam a lie, so the page does
+  not know what a webhook is.
+
+Slack and Discord will ignore the signing secret entirely, because for an incoming-webhook URL the
+*URL* is the credential. That is the seam working, not a gap in it.
+
+### Delivery
+
+| Property | Choice | Why |
+|---|---|---|
+| Timing | fire-and-forget | Nothing awaits a delivery. A webhook endpoint that is down, slow, or hanging must not be able to slow a deploy, let alone fail one. |
+| Retries | 3 attempts, 1s then 5s | Bounded and short. The delivery id is **stable across attempts**, so a receiver can dedupe; a fresh id per retry would make at-least-once undedupable. |
+| Timeout | 5s per attempt | `AbortSignal.timeout`. |
+| Concurrency | 8 in flight, **1 per notifier** | This process also runs `docker`; an event burst across many notifiers would otherwise exhaust its file descriptors. The per-notifier limit is what stops one broken endpoint taking the whole process down to its speed: a delivery costs up to 21s, so without it eight events put all eight slots on ONE dead notifier and every healthy one's event is logged as dropped. Over either cap a delivery is **recorded as dropped**, not queued — a queue that grows during an outage is a disk leak wearing a different hat. |
+| Deletion | retries stop | `DELETE` returns 200 at once, and the loop re-checks before each retry, so an unregistered endpoint stops receiving signed POSTs instead of getting two more over the next 6s. |
+| Log | last 200 per notifier | Pruned on write — **finished rows only**, so a delivery still retrying is never deleted out from under its own result. Unbounded, it is the lowest-value data in the database growing on the same disk as the registry. |
+| Test deliveries | logged like any other | `POST /api/notifiers/:id/test` writes a delivery row and updates `lastStatus`. It carries `data.test: true`, which a per-event formatter **must** check — the synthesized event name is a real one and would otherwise render a green "job succeeded" nobody earned. |
+
+### The signature, and what a receiver must do
+
+```
+x-pstack-event:      job.leaked
+x-pstack-delivery:   evt_…          ← stable across retries; DEDUPE ON THIS
+x-pstack-timestamp:  1754000000000
+x-pstack-signature:  sha256=<hex of HMAC-SHA256(secret, `${timestamp}.${rawBody}`)>
+```
+
+Verify over the **raw** body — re-serialising the JSON changes the bytes and the signature will not
+match, which is the single most common way this goes wrong on the receiving end. Reject anything whose
+timestamp is more than five minutes old; that is the replay protection, and it works because the
+timestamp is *inside* the signed material.
+
+### What is deliberately not in a payload
+
+Job outcomes carry credentials **by design** — `outcome.outputs` is the inter-axis env channel, so a
+provisioned database's connection string lives there — and a webhook URL is outside the auth gate that
+protects every other consumer of job data. So payloads are built field by field: ids, stack, action,
+state, timings, the *names* of leaked axes. Never the outcome object, never `spec.env`, never
+`job.log`.
+
+`verified` is in the payload for a reason worth knowing: `down` with `verify: false` emits no
+`assert_gone` steps, and a spec whose axes declare none yields all-skipped ones. In both cases the job
+succeeds having proven nothing. Without that flag, `job.succeeded` would read as "clean" when it means
+"nobody looked".
+
+### The URL guard is not a privilege boundary
+
+Loopback, link-local and private addresses are refused, and a redirect is treated as a failure rather
+than followed (a public host that 302s to `169.254.169.254` would otherwise defeat any
+registration-time check). But **anyone who can register a notifier can already run shell on this host**
+— a spec's hooks are `bash -c` with the Docker socket mounted. The guard exists so a *typo* aimed at
+an internal address fails loudly, not because it stops an attacker. `PSTACK_NOTIFY_ALLOW_PRIVATE=1`
+escapes it for the legitimate case of a collector on the same box.
+
+---
+
 ## 5. Trust boundary
 
 **Accepting a spec over HTTP is accepting arbitrary shell, by design.**

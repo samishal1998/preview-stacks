@@ -1,0 +1,363 @@
+/**
+ * Delivering domain events to the outside world.
+ *
+ * ── THE SEAM ─────────────────────────────────────────────────────────────────────────────────────
+ *
+ * A `NotifierType` is `{ kind, label, fields, validate, send }`. `TYPES` maps `kind` → type. Adding
+ * Slack, Discord or email later is **one entry in that map**: a `validate` for its own config shape
+ * and a `send` that formats its own body. No schema migration (the registration's `config` is opaque
+ * JSON), no change to the bus, no change to any route, no change to the UI's plumbing — the UI reads
+ * `fields` from `/api/notifiers/meta` and renders the form from it.
+ *
+ * Slack and Discord will ignore `secret` entirely, because for an incoming-webhook URL the *URL* is
+ * the credential. That is the seam working, not a gap in it.
+ *
+ * ── NOTHING AWAITS DELIVERY ──────────────────────────────────────────────────────────────────────
+ *
+ * `dispatch` is called from the bus, which is called from inside a job's `finally` and from request
+ * handlers. It starts work and returns. A webhook endpoint that is down, slow, or hanging must not be
+ * able to slow a deploy, let alone fail one — so every attempt carries an `AbortSignal.timeout`, and
+ * `MAX_IN_FLIGHT` bounds concurrent sockets: this process also runs `docker`, and an event burst
+ * across twenty notifiers would otherwise exhaust its file descriptors. Over the cap a delivery is
+ * recorded as dropped rather than queued — a queue that grows during an outage is a disk leak wearing
+ * a different hat.
+ *
+ * ── WHY THE URL IS CHECKED, AND WHAT THAT IS NOT ─────────────────────────────────────────────────
+ *
+ * The notifier URL is the one field that turns this control plane into an HTTP client aimed at an
+ * address of someone else's choosing — including `169.254.169.254` (cloud metadata, i.e. instance
+ * credentials) or `127.0.0.1:7878` (this very API). So loopback / link-local / private ranges are
+ * refused, and a redirect is treated as a FAILURE rather than followed, because a public host that
+ * 302s to the metadata endpoint defeats any registration-time check.
+ *
+ * **This is not a privilege boundary, and pretending otherwise would be dishonest.** Registering a
+ * notifier requires auth, and anyone who can do that can already submit a spec — whose hooks are
+ * `bash -c` on this host with the Docker socket mounted. They do not need SSRF. The check exists so a
+ * *typo* aimed at an internal address fails loudly and visibly, and it is escapable with
+ * `PSTACK_NOTIFY_ALLOW_PRIVATE=1` for the legitimate case of an internal collector on the same box.
+ */
+
+import { redactText } from './redact.ts';
+import type { PstackEvent } from './events.ts';
+import type { NotifierRow, Webhooks } from './webhooks.ts';
+
+export class NotifierError extends Error {}
+
+/** Per attempt. Long enough for a cold lambda, short enough that three attempts stay bounded. */
+const ATTEMPT_TIMEOUT_MS = 5_000;
+/** Attempt 1 is immediate; these are the waits BEFORE attempts 2 and 3. Worst case ~21s. */
+const RETRY_DELAYS_MS = [1_000, 5_000];
+/** Concurrent in-flight deliveries across all notifiers. */
+const MAX_IN_FLIGHT = 8;
+
+export type DeliveryResult = {
+  ok: boolean;
+  status?: number;
+  error?: string;
+};
+
+/** A form field the UI renders for this type's `config`. */
+export type NotifierField = {
+  key: string;
+  label: string;
+  placeholder?: string;
+  required: boolean;
+};
+
+export type NotifierType = {
+  kind: string;
+  label: string;
+  fields: NotifierField[];
+  /** Throw `NotifierError` with a message naming the fix. Called before anything is stored. */
+  validate: (config: Record<string, unknown>) => void;
+  /**
+   * Deliver one event. CONTRACT: never throws — return `{ ok: false, error }` instead. The dispatcher
+   * defends against a breach of that contract anyway, because a third-party type getting it wrong
+   * must not take down the dispatcher.
+   *
+   * `e.data.test === true` marks a TEST delivery from `POST /api/notifiers/:id/test`. A type that
+   * renders per event — the Slack card this seam anticipates — must check it, because the synthesized
+   * event name is a real one and would otherwise draw a green "Job succeeded" nobody's job earned.
+   */
+  send: (
+    e: PstackEvent,
+    config: Record<string, unknown>,
+    secret: string,
+    signal: AbortSignal,
+  ) => Promise<DeliveryResult>;
+};
+
+// ── URL safety ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Is this host one the control plane should refuse to call?
+ *
+ * Written as a classifier rather than one regexp because the regexp version was wrong in BOTH
+ * directions, and each direction is its own kind of bad:
+ *
+ *   - **False positives.** A `fc|fd|fe80` prefix alternative matches any DNS NAME starting with
+ *     those letters — `fcm.googleapis.com` (Firebase, an entirely plausible webhook target) was
+ *     refused as if it were an IPv6 unique-local address.
+ *   - **False negatives.** `URL.hostname` KEEPS the brackets on an IPv6 literal, so `http://[fc00::1]/`
+ *     has hostname `[fc00::1]` — which starts with `[`, so the same prefix test never fired and the
+ *     genuinely private address sailed through.
+ *
+ * So: decide what kind of host it is first, then apply the rule for that kind. A DNS name is never
+ * tested against IP rules, and an IP literal is never tested against name rules.
+ */
+function isPrivateHost(hostname: string): boolean {
+  // Trailing dot is a legal FQDN form and must not defeat a name comparison.
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+
+  // ── IPv6 literal: bracketed in a URL, so unwrap before parsing.
+  if (host.startsWith('[') && host.endsWith(']')) {
+    const v6 = host.slice(1, -1).split('%')[0]!; // strip a zone id (fe80::1%eth0)
+    if (v6 === '::1' || v6 === '::') return true;
+    // fc00::/7 (unique local) — first byte fc or fd. fe80::/10 (link local).
+    if (/^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)) return true;
+    // IPv4-mapped. `URL.hostname` NORMALIZES `::ffff:127.0.0.1` to the hex form `::ffff:7f00:1`, so
+    // matching only the dotted spelling would miss every one the parser actually hands us.
+    const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
+    if (dotted) return isPrivateHost(dotted[1]!);
+    const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
+    if (hex) {
+      const [hi, lo] = [parseInt(hex[1]!, 16), parseInt(hex[2]!, 16)];
+      return isPrivateHost(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    return false;
+  }
+
+  // ── IPv4 literal: parse octets. A prefix string match cannot express 172.16.0.0/12.
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 0 || a === 127) return true; // this host
+    if (a === 10) return true; // private
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 — NOT all of 172.x
+    if (a === 192 && b === 168) return true; // private
+    if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
+    return false;
+  }
+
+  // ── A DNS name. Only exact names, never prefixes — `fcm.googleapis.com` is not `fc00::`.
+  return host === 'localhost' || host.endsWith('.localhost');
+}
+
+export { isPrivateHost };
+
+export function assertDeliverableUrl(raw: string): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new NotifierError(`"${raw}" is not a URL`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new NotifierError(`only http and https are deliverable, got "${url.protocol}"`);
+  }
+  if (process.env.PSTACK_NOTIFY_ALLOW_PRIVATE === '1') return url;
+  if (isPrivateHost(url.hostname)) {
+    throw new NotifierError(
+      `"${url.hostname}" is a loopback, link-local or private address. The control plane would be ` +
+        `making the request, so this can reach services only it can see — including cloud metadata. ` +
+        `Set PSTACK_NOTIFY_ALLOW_PRIVATE=1 if that is genuinely what you want.`,
+    );
+  }
+  return url;
+}
+
+// ── the webhook type ────────────────────────────────────────────────────────────────────────────
+
+function sign(secret: string, timestamp: number, body: string): string {
+  // Bun's builtin, keyed — byte-identical to node:crypto's createHmac, and this package carries zero
+  // runtime dependencies.
+  return `sha256=${new Bun.CryptoHasher('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`;
+}
+
+export const webhookType: NotifierType = {
+  kind: 'webhook',
+  label: 'HTTP webhook',
+  fields: [{ key: 'url', label: 'URL', placeholder: 'https://example.com/hooks/pstack', required: true }],
+  validate(config) {
+    if (typeof config.url !== 'string' || !config.url.trim()) {
+      throw new NotifierError('a webhook needs a `url`');
+    }
+    assertDeliverableUrl(config.url);
+  },
+  async send(e, config, secret, signal) {
+    const url = String(config.url);
+    // SERIALISED EXACTLY ONCE. Signing one string and sending a separately-stringified object is how
+    // signatures mysteriously fail against a receiver doing everything right.
+    const body = JSON.stringify({ id: e.id, event: e.event, at: e.at, data: e.data });
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        // A 3xx is a FAILURE, not a hop to follow: a public host that redirects to the metadata
+        // endpoint is exactly how a registration-time address check gets defeated.
+        redirect: 'manual',
+        headers: {
+          'content-type': 'application/json',
+          'user-agent': 'pstack',
+          'x-pstack-event': e.event,
+          // Stable across all attempts AND across the notifiers of one event — the receiver's
+          // dedupe key. Minting a fresh id per retry would make at-least-once undedupable.
+          'x-pstack-delivery': e.id,
+          'x-pstack-timestamp': String(e.at),
+          'x-pstack-signature': sign(secret, e.at, body),
+        },
+        body,
+        signal,
+      });
+      if (r.status >= 300 && r.status < 400) {
+        return { ok: false, status: r.status, error: `redirect to ${r.headers.get('location') ?? '?'} not followed` };
+      }
+      return { ok: r.ok, status: r.status, error: r.ok ? undefined : `HTTP ${r.status}` };
+    } catch (err) {
+      // Includes the abort. The message can contain the URL — the caller redacts before storing.
+      return { ok: false, error: (err as Error).message };
+    }
+  },
+};
+
+/**
+ * `null` prototype, deliberately.
+ *
+ * A plain object literal inherits from `Object.prototype`, so `TYPES['constructor']` is a truthy
+ * FUNCTION and `TYPES['__proto__']` is a truthy object — a caller registering `type: "constructor"`
+ * sailed past the unknown-type guard and got `Object.prototype.constructor` back, which then failed
+ * far from the cause with a confusing shape error. `Object.create(null)` makes the map contain only
+ * what was put in it.
+ */
+export const TYPES: Record<string, NotifierType> = Object.assign(Object.create(null) as Record<string, NotifierType>, {
+  [webhookType.kind]: webhookType,
+});
+
+export function typeOf(kind: string): NotifierType {
+  // `Object.hasOwn` as well as the null prototype: belt and braces, and it states the intent for a
+  // reader who does not know why the map is built the way it is.
+  const t = Object.hasOwn(TYPES, kind) ? TYPES[kind] : undefined;
+  if (!t) {
+    throw new NotifierError(
+      `unknown notifier type "${kind}" — known types: ${Object.keys(TYPES).join(', ')}`,
+    );
+  }
+  return t;
+}
+
+/** For `POST /api/notifiers` — validates without this module knowing about the store. */
+export function validateConfig(kind: string, config: Record<string, unknown>): void {
+  typeOf(kind).validate(config);
+}
+
+// ── the dispatcher ──────────────────────────────────────────────────────────────────────────────
+
+export class Dispatcher {
+  #hooks: Webhooks;
+  #inFlight = 0;
+  /**
+   * Notifier ids with a delivery in progress. At most ONE delivery per notifier runs at a time.
+   *
+   * Without this, a single black-holing endpoint takes the whole process down to its own speed: a
+   * delivery costs up to 21s (3 attempts × 5s timeout, plus 1s and 5s backoff), so eight events
+   * inside that window put all eight slots on ONE broken notifier — and every healthy notifier's
+   * event is then written straight to the log as "dropped". A broken notifier must degrade itself,
+   * not everyone else.
+   */
+  #busy = new Set<number>();
+
+  constructor(hooks: Webhooks) {
+    this.#hooks = hooks;
+  }
+
+  /** Bus listener. Returns immediately; every failure path is contained. */
+  dispatch(e: PstackEvent): void {
+    let rows: NotifierRow[];
+    try {
+      rows = this.#hooks.subscribedTo(e.event);
+    } catch {
+      // A database that cannot be read must not break the operation that emitted.
+      return;
+    }
+    for (const row of rows) {
+      if (this.#busy.has(row.id)) {
+        this.#drop(row, e, 'dropped — a delivery to this notifier is still in progress');
+        continue;
+      }
+      if (this.#inFlight >= MAX_IN_FLIGHT) {
+        this.#drop(row, e, 'dropped — too many deliveries in flight');
+        continue;
+      }
+      this.#inFlight++;
+      this.#busy.add(row.id);
+      void this.#deliver(row, e)
+        .catch(() => {
+          // Last resort. A notifier deleted mid-delivery makes the delivery INSERT violate its
+          // foreign key, and with `PRAGMA foreign_keys = ON` that throws inside a voided promise —
+          // an unhandled rejection discovered in production months later.
+        })
+        .finally(() => {
+          this.#inFlight--;
+          this.#busy.delete(row.id);
+        });
+    }
+  }
+
+  /** Record a non-attempt. Silence here would be the exact failure this product exists to remove. */
+  #drop(row: NotifierRow, e: PstackEvent, reason: string): void {
+    try {
+      const id = this.#hooks.startDelivery(row.id, e.id, e.event);
+      this.#hooks.finishDelivery(id, { status: 'failed', attempts: 0, error: reason });
+    } catch {
+      /* the row may have been deleted mid-dispatch */
+    }
+  }
+
+  async #deliver(row: NotifierRow, e: PstackEvent): Promise<void> {
+    const type = Object.hasOwn(TYPES, row.type) ? TYPES[row.type] : undefined;
+    if (!type) return;
+    const secret = this.#hooks.secretOf(row.id);
+    if (secret === null) return; // deleted between the read and here
+
+    const deliveryId = this.#hooks.startDelivery(row.id, e.id, e.event);
+    let last: DeliveryResult = { ok: false, error: 'not attempted' };
+    let attempt = 0;
+
+    for (;;) {
+      attempt++;
+      last = await type
+        .send(e, row.config, secret, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS))
+        .catch((err) => ({ ok: false, error: (err as Error).message }) as DeliveryResult);
+      const wait = RETRY_DELAYS_MS[attempt - 1];
+      if (last.ok || wait === undefined) break;
+      await Bun.sleep(wait);
+      // DELETE returns 200 immediately; without this the endpoint the operator just unregistered
+      // still receives two more signed POSTs over the following 6 seconds.
+      if (this.#hooks.secretOf(row.id) === null) {
+        last = { ...last, error: 'notifier deleted before retry' };
+        break;
+      }
+    }
+
+    this.#hooks.finishDelivery(deliveryId, {
+      status: last.ok ? 'ok' : 'failed',
+      attempts: attempt,
+      responseCode: last.status,
+      error: last.error ? this.#redact(row, secret, last.error) : undefined,
+    });
+    this.#hooks.noteResult(row.id, last.ok ? 'ok' : 'failed');
+    this.#hooks.prune(row.id);
+  }
+
+  /**
+   * Strip credentials from a stored error.
+   *
+   * A fetch failure message contains the URL — and for a Slack or Discord incoming webhook the URL
+   * *is* the credential. So every string in `config` is redacted, not just the signing secret: a
+   * future type's SMTP password is then covered by an author who never read this comment.
+   * `redactText` ignores strings under 8 characters, so a `channel: '#ops'` survives intact.
+   */
+  #redact(row: NotifierRow, secret: string, message: string): string {
+    const secrets = [secret, ...Object.values(row.config).filter((v): v is string => typeof v === 'string')];
+    return redactText(message, secrets);
+  }
+}

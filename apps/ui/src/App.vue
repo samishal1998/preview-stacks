@@ -18,6 +18,7 @@ import { useRouter } from 'vue-router';
 import InfoHint from './components/InfoHint.vue';
 // Named imports, so the bundler ships only these glyphs — not the whole set.
 import {
+  BellRing,
   Boxes,
   ClockFading,
   FileCode2,
@@ -106,6 +107,11 @@ void settings;
         <RouterLink to="/registries" class="navlink">
           <KeyRound :size="17" aria-hidden="true" />
           <span>Registries</span>
+        </RouterLink>
+
+        <RouterLink to="/notifiers" class="navlink">
+          <BellRing :size="17" aria-hidden="true" />
+          <span>Notifiers</span>
         </RouterLink>
 
         <RouterLink to="/jobs" class="navlink" title="g j">

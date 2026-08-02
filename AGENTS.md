@@ -19,10 +19,10 @@ hooks, provisioned around a Docker Compose project, torn down in reverse, and th
 
 | Not | Why it matters when you edit |
 |---|---|
-| **A PaaS.** Coolify / Dokploy / Uffizzi run a compose file per PR and terminate TLS. | Don't add ingress management, TLS issuance, git-webhook deploys, or a service catalog. If a user only needs that, the README tells them to use a PaaS. |
+| **A PaaS.** Coolify / Dokploy / Uffizzi run a compose file per PR and terminate TLS. | Don't add ingress management, TLS issuance, git-webhook deploys (**inbound** — a push triggering a deploy; *outbound* notification webhooks landed in 0.11.0 and are a different thing), or a service catalog. If a user only needs that, the README tells them to use a PaaS. |
 | **Multi-tenant.** One spec, one Docker socket, one trust level. | Every caller of the API shares them. See *Scope discipline*. |
 | **A sandbox.** Hooks are shell strings run via `bash -c` at CI trust level. | Sanitizing, escaping, or allow-listing hook content is a **category error**, not a hardening task. A spec is as trusted as a CI workflow file. |
-| **Stateful.** No database, no state file, no reconciliation loop. | Truth lives in Docker and in each axis's `assert_*` probe. |
+| **A reconciler.** No desired-state loop, and no database *of stacks*. | Truth about the world lives in Docker and in each axis's `assert_*` probe — never in a row this process wrote. The SQLite added in 0.10.0 holds accounts, tokens and notifiers (relational, secret-bearing, ours); the deployment registry stays a directory of YAML an operator can read and repair over SSH. Adding a `stacks` table would be the thing this row forbids. |
 
 ## Repo map
 
@@ -106,9 +106,18 @@ rather than a silent downgrade. *Why:* an unauthenticated API that can delete da
 exposable by forgetting a flag. `authed()` returning `true` when no token is set is the local-dev
 mode, not a hole to harden away.
 
-**10. No state store.** Job records are transcripts of attempts, in memory, unpersisted. Restarting
-the server loses history, not correctness. Don't add a database, a lock file, or a "desired state"
-table — truth is Docker + the `assert_*` probes, and there's nothing to get out of sync.
+**10. No state store FOR WHAT EXISTS.** Job records are transcripts of attempts, in memory,
+unpersisted. Restarting the server loses history, not correctness. Truth is Docker + the `assert_*`
+probes, and there is nothing to get out of sync — so never add a "desired state" table, and never let
+a database become the answer to "is this deployment running".
+
+*Amended in 0.10.0.* There **is** now a SQLite database (`<dataDir>/db/pstack.db`), and the line it
+holds is precise: it stores things that are **not** claims about infrastructure — accounts, sessions,
+API tokens, notifier registrations, delivery logs. Every one is relational, secret-bearing, and has
+no source of truth in Docker to be contradicted by. The deployment registry stayed a directory of
+YAML for exactly the original reason: it is a cache of intent an operator can read and repair over
+SSH. If you find yourself adding a table whose rows describe what is *running*, invariant 10 in its
+original form still applies and you are about to be wrong.
 
 ### Gotcha: dry-run proves ordering, never absence
 
@@ -194,7 +203,9 @@ Deliberate non-goals, and what each would actually require:
   boundary.** Do not add tenant IDs, per-user auth, or RBAC to `api.ts` as a substitute.
 - **Untrusted specs.** Same boundary problem, plus hooks are shell strings by design (see *What this
   is not*).
-- **PaaS features** — ingress config, TLS issuance, webhook-driven deploys, a service catalog.
+- **PaaS features** — ingress config, TLS issuance, webhook-driven deploys (**inbound**: a git push
+  triggering a deploy. Outbound notification webhooks are a different feature and shipped in 0.11.0),
+  a service catalog.
 - **Persistence / reconciliation.** See invariant 10.
 
 Before adding anything, check whether an existing axis hook already expresses it. Most requests

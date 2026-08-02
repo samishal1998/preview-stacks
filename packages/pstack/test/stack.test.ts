@@ -22,6 +22,9 @@ import {
   normalizeRegistry,
   DOCKER_HUB_KEY,
 } from '../src/registries.ts';
+import { Store } from '../src/store.ts';
+import { Webhooks } from '../src/webhooks.ts';
+import { mkdirSync, rmSync } from 'node:fs';
 import {
   augmentComposeDoc,
   labelsToMap,
@@ -2960,6 +2963,529 @@ describe('a disconnected SSE client must not break the job it was watching', () 
       expect(second.status).toBe(202);
     } finally {
       server.stop(true);
+    }
+  });
+});
+
+describe('webhooks — composable notifications', () => {
+  const TOKEN = 'tok';
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-wh-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  /** A receiver that verifies the signature exactly as an independent third party would. */
+  const receiver = (opts: { status?: number; failFirst?: number } = {}) => {
+    const got: Array<{
+      event: string;
+      delivery: string;
+      timestamp: string;
+      signature: string;
+      raw: string;
+      body: { id: string; event: string; at: number; data: Record<string, unknown> };
+    }> = [];
+    let calls = 0;
+    const s = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        calls++;
+        const raw = await req.text();
+        got.push({
+          event: req.headers.get('x-pstack-event') ?? '',
+          delivery: req.headers.get('x-pstack-delivery') ?? '',
+          timestamp: req.headers.get('x-pstack-timestamp') ?? '',
+          signature: req.headers.get('x-pstack-signature') ?? '',
+          raw,
+          body: JSON.parse(raw),
+        });
+        if (opts.failFirst && calls <= opts.failFirst) return new Response('nope', { status: 500 });
+        return new Response('ok', { status: opts.status ?? 200 });
+      },
+    });
+    return { got, server: s, url: `http://127.0.0.1:${s.port}/hook`, calls: () => calls };
+  };
+
+  const boot = () => {
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+
+  const register = (base: string, body: Record<string, unknown>) =>
+    fetch(`${base}/api/notifiers`, { method: 'POST', headers: H, body: JSON.stringify(body) });
+
+  describe('the URL guard', () => {
+    test('loopback, link-local and private addresses are refused with 400 and a reason', async () => {
+      const { server, base } = boot();
+      delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      try {
+        for (const url of [
+          'http://127.0.0.1/hook',
+          'http://localhost/hook',
+          // Cloud metadata — instance credentials. The single worst destination.
+          'http://169.254.169.254/latest/meta-data/',
+          'http://10.1.2.3/hook',
+          'http://192.168.1.5/hook',
+          'http://172.16.0.9/hook',
+          // IPv6 literals. `URL.hostname` KEEPS the brackets, so a check written for a bare address
+          // never fires — every one of these was allowed through before the classifier replaced it.
+          'http://[::1]/hook',
+          'http://[fc00::1]/hook',
+          'http://[fd12:3456::1]/hook',
+          'http://[fe80::1]/hook',
+          'http://[::ffff:127.0.0.1]/hook',
+        ]) {
+          const r = await register(base, { name: 'x', events: ['*'], config: { url } });
+          expect(`${url} → ${r.status}`).toBe(`${url} → 400`);
+          expect(((await r.json()) as { error: string }).error).toMatch(/loopback, link-local or private/);
+        }
+        // 172.32 is NOT in 172.16.0.0/12 — a naive `172.` prefix check would over-match it.
+        const publicish = await register(base, {
+          name: 'ok',
+          events: ['*'],
+          config: { url: 'http://172.32.0.1/hook' },
+        });
+        expect(publicish.status).toBe(201);
+
+        // The other half of the same mistake, and the one that bites real operators: a prefix test
+        // for the IPv6 ranges matches DNS NAMES that merely start with those letters. Firebase is a
+        // plausible webhook destination and was being refused as "a private address".
+        for (const url of [
+          'https://fcm.googleapis.com/hook',
+          'https://fd-cdn.example.com/hook',
+          'https://fe80-notreally.com/hook',
+          'https://localhost.mycompany.com/hook',
+        ]) {
+          const r = await register(base, { name: `n${url.length}`, events: ['*'], config: { url } });
+          expect(`${url} → ${r.status}`).toBe(`${url} → 201`);
+        }
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('prune keeps a delivery that is still in flight', () => {
+      // A row inserted by `startDelivery` and not yet finished must survive a burst that pushes it
+      // past the cap — otherwise the later `finishDelivery` updates nothing, and the failure it was
+      // recording is the one row an operator went looking for.
+      const dir = tmpd();
+      const store = new Store(dir);
+      try {
+        const hooks = new Webhooks(store);
+        const { row } = hooks.create({
+          type: 'webhook',
+          name: 'n',
+          config: { url: 'https://example.com/h' },
+          events: ['*'],
+          validateConfig: () => {},
+        });
+        const inFlight = hooks.startDelivery(row.id, 'evt_slow', 'job.failed');
+        for (let i = 0; i < 250; i++) {
+          const id = hooks.startDelivery(row.id, `evt_${i}`, 'job.succeeded');
+          hooks.finishDelivery(id, { status: 'ok', attempts: 1, responseCode: 200 });
+          hooks.prune(row.id);
+        }
+        hooks.finishDelivery(inFlight, { status: 'failed', attempts: 3, error: 'timed out' });
+        expect(hooks.deliveries(row.id, 500).find((d) => d.id === inFlight)?.error).toBe('timed out');
+        // …and the cap still holds for the finished ones.
+        expect(hooks.deliveries(row.id, 500).length).toBeLessThanOrEqual(201);
+      } finally {
+        store.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test('a prototype key is not a notifier type — 400, not a 500 from inherited junk', async () => {
+      const { server, base } = boot();
+      try {
+        // `TYPES` was an object literal, so `TYPES['constructor']` was truthy and skipped the
+        // unknown-type guard, then blew up on `.validate` as an unmapped 500.
+        for (const type of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'nope']) {
+          const r = await fetch(`${base}/api/notifiers`, {
+            method: 'POST',
+            headers: H,
+            body: JSON.stringify({ type, name: 'x', events: ['job.failed'], config: {} }),
+          });
+          expect(`${type} → ${r.status}`).toBe(`${type} → 400`);
+          expect(((await r.json()) as { error: string }).error).toMatch(/unknown notifier type/);
+        }
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('a non-http scheme is refused', async () => {
+      const { server, base } = boot();
+      try {
+        const r = await register(base, { name: 'x', events: ['*'], config: { url: 'file:///etc/passwd' } });
+        expect(r.status).toBe(400);
+        expect(((await r.json()) as { error: string }).error).toMatch(/only http and https/);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('a redirect is a FAILURE, not a hop to follow', async () => {
+      // The bypass a registration-time check cannot catch: a public host that 302s to the metadata
+      // endpoint. Following it would defeat the whole guard.
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const redirector = Bun.serve({
+        port: 0,
+        fetch: () => new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/' } }),
+      });
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, {
+            name: 'r',
+            events: ['*'],
+            config: { url: `http://127.0.0.1:${redirector.port}/hook` },
+          })
+        ).json()) as { notifier: { id: number } };
+        const res = (await (
+          await fetch(`${base}/api/notifiers/${made.notifier.id}/test`, { method: 'POST', headers: H })
+        ).json()) as { result: { ok: boolean; error?: string } };
+        expect(res.result.ok).toBe(false);
+        expect(res.result.error).toMatch(/redirect/);
+      } finally {
+        redirector.stop(true);
+        server.stop(true);
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+    });
+  });
+
+  describe('delivery', () => {
+    test('a real event is signed, deduplicable, and carries no credential', async () => {
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver();
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, { name: 'e2e', events: ['*'], config: { url: rx.url } })
+        ).json()) as { secret: string; notifier: { id: number } };
+
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({
+            spec: 'version: 1\nstack: s\nenv:\n  API_TOKEN: super-secret-value\naxes:\n  - name: a\n    up: "echo hi"\n    assert_gone: "true"\n',
+          }),
+        });
+        // Delivery is off the awaited path by design, so poll rather than assume.
+        for (let i = 0; i < 40 && rx.got.length === 0; i++) await Bun.sleep(50);
+        expect(rx.got.length).toBeGreaterThan(0);
+
+        const d = rx.got[0]!;
+        expect(d.event).toBe('deployment.created');
+        // The signature verifies against an INDEPENDENT recomputation over `${ts}.${rawBody}` — the
+        // body is signed exactly as sent, which is what stops "verifies here, fails there".
+        const expected = `sha256=${new Bun.CryptoHasher('sha256', made.secret).update(`${d.timestamp}.${d.raw}`).digest('hex')}`;
+        expect(d.signature).toBe(expected);
+        // Timestamp is inside the signed material — that is the replay protection.
+        expect(Math.abs(Date.now() - Number(d.timestamp))).toBeLessThan(60_000);
+        expect(d.delivery).toBe(d.body.id);
+
+        // The spec declared a secret env var. It must appear nowhere in what was sent.
+        expect(d.raw).not.toContain('super-secret-value');
+        expect(d.raw).not.toContain(made.secret);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+    });
+
+    test('a spec write and a routing write actually reach a subscriber', async () => {
+      // Every name in EVENTS must have an emit site. `spec.stored`, `spec.deleted` and
+      // `routing.changed` were advertised, offered in the UI picker and accepted at registration —
+      // and emitted from nowhere, so subscribing to them bought permanent silence.
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver();
+      const routingDir = tmpd();
+      mkdirSync(routingDir, { recursive: true });
+      const server = createServer({
+        dataDir: tmpd(),
+        port: 0,
+        host: '127.0.0.1',
+        token: TOKEN,
+        routingDir,
+      });
+      const base = `http://127.0.0.1:${server.port}`;
+      try {
+        await register(base, {
+          name: 'specs',
+          events: ['spec.stored', 'spec.deleted', 'routing.changed'],
+          config: { url: rx.url },
+        });
+        const put = await fetch(`${base}/api/specs/s1`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: s\naxes:\n  - name: a\n    up: "true"\n' }),
+        });
+        expect(put.status).toBe(201);
+        const route = await fetch(`${base}/api/routing/r1.yml`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ content: 'http:\n  routers: {}\n' }),
+        });
+        expect(route.status).toBe(201);
+        expect((await fetch(`${base}/api/specs/s1`, { method: 'DELETE', headers: H })).status).toBe(200);
+
+        for (let i = 0; i < 60 && rx.got.length < 3; i++) await Bun.sleep(50);
+        expect(rx.got.map((g) => g.event).sort()).toEqual(['routing.changed', 'spec.deleted', 'spec.stored']);
+        // The routing FILE's content can hold basicAuth hashes — only its name travels.
+        const routing = rx.got.find((g) => g.event === 'routing.changed')!;
+        expect(routing.body.data).toEqual({ file: 'r1.yml', action: 'created' });
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+        rmSync(routingDir, { recursive: true, force: true });
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+    });
+
+    test('a failing endpoint is retried with the SAME delivery id, then logged as failed', async () => {
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      // Fails every attempt, so all three are exercised.
+      const rx = receiver({ failFirst: 99 });
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, { name: 'flaky', events: ['*'], config: { url: rx.url } })
+        ).json()) as { notifier: { id: number } };
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: s\naxes: []\n' }),
+        });
+        // Worst case is ~1s + 5s of backoff plus request time.
+        for (let i = 0; i < 160 && rx.calls() < 3; i++) await Bun.sleep(50);
+        expect(rx.calls()).toBe(3);
+        // Stable across retries — a fresh id per attempt would make the receiver's dedupe useless.
+        expect(new Set(rx.got.map((g) => g.delivery)).size).toBe(1);
+
+        const log = (await (
+          await fetch(`${base}/api/notifiers/${made.notifier.id}/deliveries`, { headers: H })
+        ).json()) as { deliveries: Array<{ status: string; attempts: number; responseCode: number }> };
+        expect(log.deliveries[0]!.status).toBe('failed');
+        expect(log.deliveries[0]!.attempts).toBe(3);
+        expect(log.deliveries[0]!.responseCode).toBe(500);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+      // 20s, because this exercises the REAL backoff (1s + 5s between three attempts) rather than a
+      // test-only timing path. A shortened-for-tests schedule would leave the shipped one unverified.
+    }, 20_000);
+
+    test('a job that leaks names the leaked axes, and says whether anything was proven', async () => {
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver();
+      const { server, base } = boot();
+      try {
+        await register(base, { name: 'leaks', events: ['job.leaked'], config: { url: rx.url } });
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          // `assert_gone: false` — the resource is still there after teardown.
+          body: JSON.stringify({
+            spec: 'version: 1\nstack: s\naxes:\n  - name: database\n    down: "true"\n    assert_gone: "false"\n',
+          }),
+        });
+        await fetch(`${base}/api/deployments/d/down`, { method: 'POST', headers: H, body: '{}' });
+        for (let i = 0; i < 80 && rx.got.length === 0; i++) await Bun.sleep(50);
+
+        expect(rx.got.length).toBe(1);
+        const data = rx.got[0]!.body.data as { leakedAxes: string[]; verified: boolean; state: string };
+        expect(rx.got[0]!.event).toBe('job.leaked');
+        expect(data.state).toBe('leaked');
+        // The axis NAMES are the operator-actionable part.
+        expect(data.leakedAxes).toEqual(['database']);
+        expect(data.verified).toBe(true);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+    });
+
+    test('`verified: false` when nothing was actually checked', async () => {
+      // `down` with verify:false emits zero assert_gone steps, so the leak check can never be true
+      // and the job reports success having proven nothing. Without this field `job.succeeded` would
+      // read as "clean" when it means "nobody looked".
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver();
+      const { server, base } = boot();
+      try {
+        await register(base, { name: 'all', events: ['*'], config: { url: rx.url } });
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({
+            spec: 'version: 1\nstack: s\naxes:\n  - name: a\n    down: "true"\n    assert_gone: "true"\n',
+          }),
+        });
+        await fetch(`${base}/api/deployments/d/down`, {
+          method: 'POST',
+          headers: H,
+          body: JSON.stringify({ verify: false }),
+        });
+        for (let i = 0; i < 80; i++) {
+          if (rx.got.some((g) => g.event === 'job.succeeded')) break;
+          await Bun.sleep(50);
+        }
+        const done = rx.got.find((g) => g.event === 'job.succeeded')!;
+        expect(done).toBeDefined();
+        expect((done.body.data as { verified: boolean }).verified).toBe(false);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+    });
+  });
+
+  describe('registration', () => {
+    test('the signing secret is returned once and never again', async () => {
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, { name: 'once', events: ['*'], config: { url: 'https://example.com/h' } })
+        ).json()) as { secret: string; notifier: { id: number } };
+        expect(made.secret.startsWith('whsec_')).toBe(true);
+
+        for (const path of [
+          '/api/notifiers',
+          `/api/notifiers/${made.notifier.id}/deliveries`,
+          '/api/notifiers/meta',
+        ]) {
+          const raw = await (await fetch(`${base}${path}`, { headers: H })).text();
+          expect(`${path}: ${raw.includes(made.secret)}`).toBe(`${path}: false`);
+        }
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('an unsubscribable event name is refused, listing the real ones', async () => {
+      const { server, base } = boot();
+      try {
+        const r = await register(base, {
+          name: 'typo',
+          events: ['job.leeked'],
+          config: { url: 'https://example.com/h' },
+        });
+        expect(r.status).toBe(400);
+        const err = ((await r.json()) as { error: string }).error;
+        expect(err).toContain('job.leeked');
+        expect(err).toContain('job.leaked');
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('an unknown notifier type is refused by name', async () => {
+      const { server, base } = boot();
+      try {
+        const r = await register(base, {
+          name: 'slack-someday',
+          type: 'slack',
+          events: ['*'],
+          config: { url: 'https://example.com/h' },
+        });
+        expect(r.status).toBe(400);
+        expect(((await r.json()) as { error: string }).error).toMatch(/unknown notifier type "slack"/);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('/meta drives the UI: event names and per-type form fields come from the server', async () => {
+      // The composability seam reaching the UI — adding a type must not mean editing the UI.
+      const { server, base } = boot();
+      try {
+        const meta = (await (await fetch(`${base}/api/notifiers/meta`, { headers: H })).json()) as {
+          events: string[];
+          wildcard: string;
+          types: Array<{ kind: string; label: string; fields: Array<{ key: string }> }>;
+        };
+        expect(meta.events).toContain('job.leaked');
+        expect(meta.wildcard).toBe('*');
+        expect(meta.types.map((t) => t.kind)).toEqual(['webhook']);
+        expect(meta.types[0]!.fields.map((f) => f.key)).toEqual(['url']);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('disabled notifiers receive nothing', async () => {
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver();
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, { name: 'off', events: ['*'], config: { url: rx.url } })
+        ).json()) as { notifier: { id: number } };
+        await fetch(`${base}/api/notifiers/${made.notifier.id}`, {
+          method: 'PATCH',
+          headers: H,
+          body: JSON.stringify({ enabled: false }),
+        });
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: s\naxes: []\n' }),
+        });
+        await Bun.sleep(400);
+        expect(rx.got).toEqual([]);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+      }
+    });
+
+    test('every notifier route requires auth', async () => {
+      const { server, base } = boot();
+      try {
+        for (const [method, path] of [
+          ['GET', '/api/notifiers'],
+          ['POST', '/api/notifiers'],
+          ['GET', '/api/notifiers/meta'],
+          ['GET', '/api/notifiers/1/deliveries'],
+        ] as const) {
+          const r = await fetch(`${base}${path}`, { method, body: method === 'POST' ? '{}' : undefined });
+          expect(`${method} ${path} → ${r.status}`).toBe(`${method} ${path} → 401`);
+        }
+      } finally {
+        server.stop(true);
+      }
+    });
+  });
+
+  test('a stopped server stops listening to the bus', async () => {
+    // `events` is a module singleton and the dispatcher is per-server. Without detaching on stop, one
+    // event fans out into every database any server in this process ever opened.
+    process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+    const rx = receiver();
+    const first = boot();
+    try {
+      await register(first.base, { name: 'gone', events: ['*'], config: { url: rx.url } });
+      first.server.stop(true);
+
+      const second = boot();
+      await fetch(`${second.base}/api/deployments/d`, {
+        method: 'PUT',
+        headers: H,
+        body: JSON.stringify({ spec: 'version: 1\nstack: s\naxes: []\n' }),
+      });
+      await Bun.sleep(400);
+      // The stopped server's notifier must NOT have been consulted.
+      expect(rx.got).toEqual([]);
+      second.server.stop(true);
+    } finally {
+      rx.server.stop(true);
+      delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
     }
   });
 });

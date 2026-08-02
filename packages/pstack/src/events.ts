@@ -43,6 +43,17 @@ export function isEventName(v: unknown): v is EventName {
   return typeof v === 'string' && (EVENTS as readonly string[]).includes(v);
 }
 
+/**
+ * `'*'` subscribes to everything, including events added in later versions.
+ *
+ * One line here spares every operator from re-registering each time the enumeration grows — which is
+ * the failure mode of a strict enum: the feature works, nobody is notified, and nobody knows why.
+ */
+export const WILDCARD = '*';
+export function isSubscribable(v: unknown): v is EventName | typeof WILDCARD {
+  return v === WILDCARD || isEventName(v);
+}
+
 export type PstackEvent = {
   /** Unique per emission. A receiver dedupes on this across retries. */
   id: string;
@@ -60,7 +71,8 @@ export type PstackEvent = {
   data: Record<string, unknown>;
 };
 
-export type Listener = (e: PstackEvent) => void;
+/** May be async — the bus handles a returned promise's rejection; see `emit`. */
+export type Listener = (e: PstackEvent) => void | Promise<void>;
 
 export class EventBus {
   #listeners = new Set<Listener>();
@@ -88,7 +100,11 @@ export class EventBus {
     };
     for (const fn of this.#listeners) {
       try {
-        fn(e);
+        // `Promise.resolve(...)` is load-bearing, not defensive noise: a bare `try/catch` catches
+        // NOTHING from `async (e) => …` — the rejection escapes as an unhandled rejection and, with
+        // Bun's strict mode, takes down the server that was merely doing a deploy. Both halves are
+        // needed: the catch for a synchronous throw, the `.catch` for an asynchronous one.
+        void Promise.resolve(fn(e)).catch(() => {});
       } catch {
         // Deliberately swallowed. A listener that throws is a bug in the listener; surfacing it here
         // would punish the operation that merely happened to trigger it.

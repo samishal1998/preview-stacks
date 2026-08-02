@@ -232,6 +232,45 @@ export type RuntimeResponse = {
 };
 export type LiveRoutesResponse = { reachable: boolean; routes: RuntimeRoute[] };
 
+/** A notifier registration. Note the absence of a secret — the server has no read path for it. */
+export type NotifierRow = {
+  id: number;
+  type: string;
+  name: string;
+  config: Record<string, unknown>;
+  /** Event names, or the single entry `'*'` meaning everything including future events. */
+  events: string[];
+  enabled: boolean;
+  createdAt: number;
+  lastStatus: string | null;
+  lastAt: number | null;
+};
+export type DeliveryRow = {
+  id: number;
+  notifierId: number;
+  eventId: string;
+  event: string;
+  status: string;
+  attempts: number;
+  responseCode: number | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+/**
+ * `GET /api/notifiers/meta` — what the server supports. The form is rendered FROM this, so adding a
+ * notifier type on the server needs no change in the UI.
+ */
+export type NotifierMeta = {
+  events: string[];
+  wildcard: string;
+  types: Array<{
+    kind: string;
+    label: string;
+    fields: Array<{ key: string; label: string; placeholder?: string; required: boolean }>;
+  }>;
+};
+
 /** One file in Traefik's watched dynamic-config directory. */
 export type RoutingFile = { name: string; size: number; updatedAt: number };
 export type RoutingListResponse = {

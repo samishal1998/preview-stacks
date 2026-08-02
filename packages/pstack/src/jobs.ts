@@ -12,6 +12,8 @@
 
 import type { Outcome } from './stack.ts';
 import { bufferSink, type LogEvent, type Sink } from './log.ts';
+import { events } from './events.ts';
+import { redactText } from './redact.ts';
 
 export type JobAction = 'up' | 'down' | 'verify';
 export type JobState = 'running' | 'ok' | 'failed' | 'leaked';
@@ -79,6 +81,8 @@ export class JobRegistry {
     this.#jobs.set(id, job);
     this.#evict();
 
+    events.emit('job.started', { jobId: id, stack, action, startedAt: job.startedAt });
+
     // Fire and forget: the HTTP handler returns immediately with the job id.
     void (async () => {
       try {
@@ -95,6 +99,57 @@ export class JobRegistry {
         this.#locks.delete(stack);
         // Wake any SSE stream so it can observe the terminal state and close.
         this.#fanout(id, { seq: -1, at: Date.now(), level: 'info', message: '__end__' });
+
+        // THE choke point: success, failure, leaked and crash all converge here with `state` already
+        // assigned. Emitted AFTER the lock is released, matching the `__end__` sentinel above — a
+        // listener that reacts by starting a follow-on job would otherwise hit its own 409.
+        //
+        // The payload is built FIELD BY FIELD and deliberately excludes `outcome`: `outcome.outputs`
+        // is the inter-axis credential channel (a provisioned database's connection string lives
+        // there by design) and a webhook URL is outside the auth gate that protects every other
+        // consumer of job data. Only identity and status leave the process.
+        const leakedAxes =
+          job.outcome?.steps
+            .filter((s) => s.phase === 'assert_gone' && !s.ok)
+            .map((s) => s.axis) ?? [];
+        // `outcome` is UNDEFINED on the crash path, so every read of it is optional — an unguarded
+        // `job.outcome.steps` here would throw inside this very `finally` and swallow the failure it
+        // was meant to report.
+        const unverifiable =
+          job.outcome?.steps.filter((s) => s.message?.startsWith('unverifiable')).length ?? 0;
+        events.emit(
+          job.state === 'leaked' ? 'job.leaked' : job.state === 'ok' ? 'job.succeeded' : 'job.failed',
+          {
+            jobId: job.id,
+            stack: job.stack,
+            action: job.action,
+            state: job.state,
+            startedAt: job.startedAt,
+            endedAt: job.endedAt,
+            durationMs: job.endedAt - job.startedAt,
+            // Named axes are the operator-actionable part of a leak.
+            leakedAxes,
+            /**
+             * Whether teardown was actually PROVEN — and `null` where the question does not apply.
+             *
+             * `down` with `verify: false` emits zero `assert_gone` steps, and a spec whose axes define
+             * none yields all-skipped ones; in both cases the job reports success having checked
+             * nothing, so `false` is the honest answer and stops `job.succeeded` reading as "clean".
+             *
+             * But an `up` runs no `assert_gone` by design, so reporting `false` there would claim a
+             * failure to verify something that was never in question. Three-valued deliberately:
+             * `true` proven, `false` nobody looked, `null` not applicable to this action.
+             */
+            verified:
+              job.action === 'up'
+                ? null
+                : (job.outcome?.steps.some((s) => s.phase === 'assert_gone' && !s.skipped) ?? false),
+            unverifiable,
+            // First line only, and only on the crash path. Hook stderr can carry a credential, so it
+            // is redacted the way container logs are.
+            error: job.error ? redactText(job.error).split('\n')[0]!.slice(0, 300) : undefined,
+          },
+        );
       }
     })();
 

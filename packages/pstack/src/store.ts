@@ -83,8 +83,9 @@ const MIGRATIONS: string[] = [
     name        TEXT NOT NULL,
     -- JSON, shape owned by the type: {url} for webhook, {webhookUrl,channel} for slack, …
     config      TEXT NOT NULL,
-    -- JSON array of event names. Validated against events.ts EVENTS at write time, so an
-    -- unsubscribable typo is refused rather than discovered as silence months later.
+    -- JSON array of event names, or the single entry '*' for everything including events added in
+    -- later versions. Validated against events.ts at write time, so an unsubscribable typo is
+    -- refused rather than discovered as silence months later.
     events      TEXT NOT NULL,
     --
     -- THE SIGNING SECRET IS STORED, NOT HASHED — and that is not an oversight.

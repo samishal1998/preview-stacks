@@ -113,6 +113,9 @@ export const api = {
   getAuthed: <T>(path: string) => request<T>('GET', path, undefined, true),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
+  /** Partial update. Used where a row has a column a caller can never send (a signing secret), so a
+   *  full-replace PUT would be lying about its own semantics. */
+  patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
   /** For `EventSource`, which builds its own connection and cannot go through `request`. */
   url,

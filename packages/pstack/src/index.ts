@@ -39,6 +39,20 @@ export {
 } from './subdomains.ts';
 export type { SubdomainConfig, SubdomainDepth, SubdomainRoute } from './subdomains.ts';
 
+export { EventBus, events, EVENTS, WILDCARD, isEventName, isSubscribable } from './events.ts';
+export type { EventName, PstackEvent, Listener } from './events.ts';
+export { Webhooks, WebhookError } from './webhooks.ts';
+export type { NotifierRow, DeliveryRow } from './webhooks.ts';
+export {
+  Dispatcher,
+  NotifierError,
+  TYPES,
+  assertDeliverableUrl,
+  validateConfig,
+  webhookType,
+} from './notify.ts';
+export type { DeliveryResult, NotifierField, NotifierType } from './notify.ts';
+
 export { Store } from './store.ts';
 export type { UserRow } from './store.ts';
 export { Auth, AuthError } from './auth.ts';

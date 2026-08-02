@@ -24,6 +24,13 @@
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
  *   GET    /api/deployments/:id/logs?service=  compose logs, optionally for ONE service
  *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
+ *   GET    /api/notifiers                 registrations — metadata only, NEVER the signing secret
+ *   POST   /api/notifiers                 register  { name, events[], config{}, type? } → 201 { notifier, secret }
+ *   PATCH  /api/notifiers/:id             { enabled }
+ *   DELETE /api/notifiers/:id             forget it (deliveries cascade)
+ *   POST   /api/notifiers/:id/test        send a synthetic delivery now
+ *   GET    /api/notifiers/:id/deliveries  recent attempts
+ *   GET    /api/notifiers/meta            event names + per-type form fields (drives the UI)
  *   GET    /api/registries                private-registry credentials: hosts + usernames, NEVER secrets
  *   PUT    /api/registries/:host           store one  { username, password }  (write-only)
  *   DELETE /api/registries/:host           forget one
@@ -92,6 +99,9 @@ import { allTraefikRouters, deploymentRuntime, detectChallenge } from './inspect
 import { RegistryAuthError, RegistryAuthStore } from './registries.ts';
 import { Store } from './store.ts';
 import { Auth, AuthError, type Principal } from './auth.ts';
+import { Webhooks, WebhookError } from './webhooks.ts';
+import { Dispatcher, NotifierError, TYPES, validateConfig } from './notify.ts';
+import { EVENTS, WILDCARD, events } from './events.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -157,6 +167,15 @@ export function createServer(opts: ServerOptions) {
   );
   const store = new Store(opts.dataDir);
   const auth = new Auth(store);
+  const hooks = new Webhooks(store);
+  const dispatcher = new Dispatcher(hooks);
+  /**
+   * The bus is a module singleton and this listener is per-server. A process can host several servers
+   * over a test run (and a long-lived one could be restarted in place), so the subscription must end
+   * when the server does — otherwise one event fans out into every database any server ever opened,
+   * most of them belonging to something already finished. See the `stop` override below.
+   */
+  const detachDispatcher = events.on((e) => dispatcher.dispatch(e));
   /**
    * For host-level queries that belong to no particular deployment (docker inventory).
    *
@@ -267,7 +286,7 @@ export function createServer(opts: ServerOptions) {
     return `pstack_session=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
   };
 
-  return Bun.serve({
+  const server = Bun.serve({
     port: opts.port,
     hostname: opts.host,
     idleTimeout: 240, // SSE streams must outlive the default
@@ -565,6 +584,18 @@ export function createServer(opts: ServerOptions) {
             }
 
             const dep = await registry.put(id, specSource, { composeYaml: composeSource, env, vars, specName });
+            // Identity only. `specSource`/`composeSource` are in scope right here and both routinely
+            // carry inline credentials (a hook is a shell string; a shared deployment's compose holds
+            // POSTGRES_PASSWORD), and a webhook URL is outside the auth gate that protects every
+            // other reader of them.
+            events.emit(existed ? 'deployment.updated' : 'deployment.created', {
+              id: dep.id,
+              kind: dep.kind,
+              stack: parsed.stack,
+              specName: dep.specName ?? null,
+              // The collision the duplicate flow can create: two records driving one compose project.
+              stackSharedWith,
+            });
             // `vars` ARE stored (unlike `env`, which only validated this submission), so up/down
             // need no query params — and a later `down` cannot target a different stack by
             // forgetting one.
@@ -656,6 +687,7 @@ export function createServer(opts: ServerOptions) {
                 );
               }
               await registry.remove(id);
+          events.emit('deployment.deleted', { id, stack: spec.stack, kind: dep.kind });
               return json({ removed: id, stack: spec.stack });
             }
 
@@ -733,6 +765,12 @@ export function createServer(opts: ServerOptions) {
               composeYaml: typeof body.compose === 'string' ? body.compose : undefined,
               description: typeof body.description === 'string' ? body.description : undefined,
             });
+            events.emit('spec.stored', {
+              name: stored.name,
+              kind: stored.kind,
+              replaced: existed,
+              requiredVars: stored.requiredVars,
+            });
             return json({ spec: { ...stored, dir: undefined, specPath: undefined } }, { status: existed ? 200 : 201 });
           }
 
@@ -781,6 +819,7 @@ export function createServer(opts: ServerOptions) {
               );
             }
             await specs.remove(name);
+            events.emit('spec.deleted', { name });
             return json({ deleted: name });
           }
 
@@ -946,14 +985,130 @@ export function createServer(opts: ServerOptions) {
             // `previous` is the undo: there is deliberately no on-disk history, because the only
             // obvious place to keep it is the one directory that must contain nothing but config.
             const previous = await routing.write(name, body.content);
+            // The name and the action only — the file's CONTENT can hold basicAuth hashes and
+            // forwardAuth URLs, and a notifier URL is outside the auth gate that protects it.
+            events.emit('routing.changed', { file: name, action: previous === null ? 'created' : 'replaced' });
             return json({ name, previous }, { status: previous === null ? 201 : 200 });
           }
 
           if (req.method === 'DELETE') {
-            return json({ deleted: name, previous: await routing.remove(name) });
+            const previous = await routing.remove(name);
+            events.emit('routing.changed', { file: name, action: 'deleted' });
+            return json({ deleted: name, previous });
           }
 
           return json({ error: 'use GET, PUT or DELETE' }, { status: 405 });
+        }
+
+        // ---- notifiers: webhooks now, Slack/Discord/email later --------------------------
+        // Inside this try deliberately — a route above it gets no error mapping, which is how the
+        // user routes ended up answering 500 with an HTML page for a validation failure.
+        //
+        // `/meta` is matched BEFORE the `:id` regex so the literal cannot be eaten by it, and it is
+        // what drives the UI's pickers: the event list and the per-type form fields come from the
+        // server, so adding a notifier type does not mean editing the UI.
+        if (path === '/api/notifiers/meta' && req.method === 'GET') {
+          return json({
+            events: EVENTS,
+            wildcard: WILDCARD,
+            types: Object.values(TYPES).map((ty) => ({
+              kind: ty.kind,
+              label: ty.label,
+              fields: ty.fields,
+            })),
+          });
+        }
+
+        if (path === '/api/notifiers') {
+          if (req.method === 'GET') return json({ notifiers: hooks.list() });
+          if (req.method === 'POST') {
+            const body = (await req.json().catch(() => null)) as
+              | { type?: unknown; name?: unknown; config?: unknown; events?: unknown }
+              | null;
+            if (!body || typeof body.name !== 'string') {
+              return json(
+                { error: 'body must be { name, events[], config{}, type? }' },
+                { status: 400 },
+              );
+            }
+            const cfg = body.config;
+            if (cfg !== undefined && (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg))) {
+              return json({ error: '`config` must be an object' }, { status: 400 });
+            }
+            const made = hooks.create({
+              type: typeof body.type === 'string' && body.type ? body.type : 'webhook',
+              name: body.name,
+              config: (cfg as Record<string, unknown>) ?? {},
+              events: Array.isArray(body.events) ? (body.events as string[]) : [],
+              validateConfig,
+            });
+            // The ONLY time the signing secret leaves the server. There is no read path for it —
+            // see webhooks.ts, and the test that greps every response for it.
+            return json({ notifier: made.row, secret: made.secret }, { status: 201 });
+          }
+          return json({ error: 'use GET or POST' }, { status: 405 });
+        }
+
+        const nm = /^\/api\/notifiers\/(\d+)(?:\/(test|deliveries))?$/.exec(path);
+        if (nm) {
+          const nid = Number(nm[1]);
+          const sub = nm[2];
+          const row = hooks.get(nid);
+          if (!row) return json({ error: `no such notifier: ${nid}` }, { status: 404 });
+
+          if (!sub && req.method === 'DELETE') {
+            hooks.remove(nid);
+            return json({ deleted: nid });
+          }
+          if (!sub && req.method === 'PATCH') {
+            // PATCH, not PUT: the row has a column a caller can never send, so a full-replace verb
+            // would be lying about its own semantics.
+            const body = (await req.json().catch(() => null)) as { enabled?: unknown } | null;
+            if (!body || typeof body.enabled !== 'boolean') {
+              return json({ error: 'body must be { enabled: boolean }' }, { status: 400 });
+            }
+            hooks.setEnabled(nid, body.enabled);
+            return json({ notifier: hooks.get(nid) });
+          }
+          if (sub === 'deliveries' && req.method === 'GET') {
+            return json({ deliveries: hooks.deliveries(nid) });
+          }
+          if (sub === 'test' && req.method === 'POST') {
+            // Sent DIRECTLY, never through the bus: emitting a real event to test one notifier would
+            // notify every other notifier too. There is also no `webhook.*` event name anywhere, so a
+            // delivery failure cannot trigger a delivery — that recursion is structurally impossible.
+            const ty = Object.hasOwn(TYPES, row.type) ? TYPES[row.type] : undefined;
+            if (!ty) return json({ error: `unknown notifier type "${row.type}"` }, { status: 400 });
+            const secret = hooks.secretOf(nid) ?? '';
+            const eventId = `evt_test_${Date.now().toString(36)}`;
+            // Logged like any other delivery. It updates `lastStatus`, so leaving no row behind would
+            // put a status in the list view with nothing in the log to explain it.
+            const deliveryId = hooks.startDelivery(nid, eventId, 'test');
+            const result = await ty.send(
+              {
+                id: eventId,
+                event: 'job.succeeded',
+                at: Date.now(),
+                // `test: true` is the contract flag a per-event formatter must check — see
+                // `NotifierType.send`. The event name is a real one and would otherwise read as a
+                // job that actually succeeded.
+                data: { test: true, note: 'Test delivery from pstack — no job ran.' },
+              },
+              row.config,
+              secret,
+              AbortSignal.timeout(5_000),
+            );
+            hooks.finishDelivery(deliveryId, {
+              status: result.ok ? 'ok' : 'failed',
+              attempts: 1,
+              responseCode: result.status,
+              error: result.error ? redactText(result.error, [secret, ...Object.values(row.config).filter((v): v is string => typeof v === 'string')]) : undefined,
+            });
+            hooks.noteResult(nid, result.ok ? 'ok' : 'failed');
+            hooks.prune(nid);
+            return json({ result });
+          }
+          return json({ error: 'use GET, PATCH or DELETE' }, { status: 405 });
         }
 
         // ---- private registry credentials ----------------------------------------------
@@ -1080,8 +1235,25 @@ export function createServer(opts: ServerOptions) {
         // directory. Mapped here as well as in the deployments branch, because PUT /api/specs/:name
         // has no local catch and was answering 500 for a malformed spec.
         if (err instanceof SpecStoreError) return json({ error: err.message }, { status: 400 });
+        // A malformed notifier registration, an unknown type, or an undeliverable URL.
+        if (err instanceof WebhookError) return json({ error: err.message }, { status: 400 });
+        if (err instanceof NotifierError) return json({ error: err.message }, { status: 400 });
         return json({ error: (err as Error).message }, { status: 500 });
       }
     },
   });
+
+  /**
+   * Stopping the server must also stop it LISTENING to the bus.
+   *
+   * `events` is a module singleton; this server's dispatcher is not. Without this, a server that has
+   * been stopped keeps receiving every event the process emits and writing deliveries into its own
+   * (possibly deleted) database — which in a test suite means one event fanning out into fifteen.
+   */
+  const stopServing = server.stop.bind(server);
+  server.stop = (closeActiveConnections?: boolean) => {
+    detachDispatcher();
+    return stopServing(closeActiveConnections);
+  };
+  return server;
 }
