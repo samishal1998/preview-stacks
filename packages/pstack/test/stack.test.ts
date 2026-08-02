@@ -12,7 +12,7 @@ import { Registry } from '../src/registry.ts';
 import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.ts';
 import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
-import { createServer } from '../src/api.ts';
+import { createServer, crToNl } from '../src/api.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
 import { deploymentRuntime, hostsFromRule, routesFromLabels } from '../src/inspect.ts';
 import {
@@ -24,7 +24,8 @@ import {
 } from '../src/registries.ts';
 import { Store } from '../src/store.ts';
 import { Webhooks } from '../src/webhooks.ts';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   augmentComposeDoc,
   labelsToMap,
@@ -3486,6 +3487,155 @@ describe('webhooks — composable notifications', () => {
     } finally {
       rx.server.stop(true);
       delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+    }
+  });
+});
+
+describe('container terminal', () => {
+  const TOKEN = 'tok';
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-term-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  /**
+   * A fake `docker` on PATH, so `deploymentRuntime` reports a container without a Docker daemon.
+   * The alternative — asserting the guard against an empty container list — proves nothing: an
+   * endpoint that refuses everything passes it. This makes the ALLOW path real, so the refusals
+   * below are refusals of something that would otherwise have worked.
+   */
+  const dockerShim = () => {
+    const dir = tmpd();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'docker'),
+      `#!/bin/sh
+case "$1 $2" in
+  "ps -aq") echo "c0ffee123456" ;;
+  "inspect "*) echo '[{"Id":"c0ffee123456","Name":"/probe-app-1","Config":{"Image":"nginx","Labels":{"com.docker.compose.service":"app","com.docker.compose.project":"probe"}},"State":{"Status":"running"},"NetworkSettings":{"Networks":{"preview-ingress":{"IPAddress":"172.20.0.5"}},"Ports":{}}}]' ;;
+  *) exit 0 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    return () => {
+      process.env.PATH = prev;
+      rmSync(dir, { recursive: true, force: true });
+    };
+  };
+
+  const bootTerm = () => {
+    // A real local `sh` stands in for `docker exec -i` — the socket plumbing is then PROVEN rather
+    // than asserted about a command this machine cannot run.
+    const server = createServer({
+      dataDir: tmpd(),
+      port: 0,
+      host: '127.0.0.1',
+      token: TOKEN,
+      terminalArgv: () => ['sh'],
+    });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+  const putSpec = (base: string) =>
+    fetch(`${base}/api/deployments/d`, {
+      method: 'PUT',
+      headers: H,
+      body: JSON.stringify({ spec: 'version: 1\nstack: probe\naxes:\n  - name: a\n    up: "true"\n' }),
+    });
+
+  test('CRLF and CR both become exactly one newline', () => {
+    // A client that sends CRLF must not run the line and then an empty one.
+    const s = (v: string) => crToNl(v) as string;
+    expect(s('ls\r')).toBe('ls\n');
+    expect(s('ls\r\n')).toBe('ls\n');
+    expect(s('a\rb\r\nc\n')).toBe('a\nb\nc\n');
+    const bytes = crToNl(Buffer.from('a\rb\r\nc', 'utf8')) as Uint8Array;
+    expect(new TextDecoder().decode(bytes)).toBe('a\nb\nc');
+  });
+
+  test('a container the deployment does not own is refused — this is the host escape', async () => {
+    // `docker exec` accepts ANY container on the daemon: Traefik, another PR's stack, and the pstack
+    // control container itself, whose filesystem is pstack.db — every password hash and every
+    // notifier signing secret. The name is matched against what this deployment owns, or it is a 404.
+    const restore = dockerShim();
+    const { server, base } = bootTerm();
+    try {
+      await putSpec(base);
+      for (const name of ['pstack-control', 'traefik', 'c0ffee999999', '../../etc/passwd']) {
+        const r = await fetch(`${base}/api/deployments/d/terminal?container=${encodeURIComponent(name)}`, {
+          headers: H,
+        });
+        expect(`${name} → ${r.status}`).toBe(`${name} → 404`);
+      }
+      // …and the one it DOES own upgrades, so the refusals above are refusing something real.
+      const ok = await fetch(`${base}/api/deployments/d/terminal?container=probe-app-1`, {
+        headers: { ...H, connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==' },
+      });
+      expect(ok.status).toBe(101);
+    } finally {
+      server.stop(true);
+      restore();
+    }
+  });
+
+  test('unauthenticated, and a shell outside the allowlist, never reach docker', async () => {
+    const restore = dockerShim();
+    const { server, base } = bootTerm();
+    try {
+      await putSpec(base);
+      expect((await fetch(`${base}/api/deployments/d/terminal?container=probe-app-1`)).status).toBe(401);
+      const bad = await fetch(`${base}/api/deployments/d/terminal?container=probe-app-1&shell=evil`, { headers: H });
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as { error: string }).error).toMatch(/shell must be one of/);
+      expect((await fetch(`${base}/api/deployments/d/terminal`, { headers: H })).status).toBe(400);
+      expect((await fetch(`${base}/api/deployments/nope/terminal?container=x`, { headers: H })).status).toBe(404);
+    } finally {
+      server.stop(true);
+      restore();
+    }
+  });
+
+  test('keystrokes reach the shell, output and exit come back, and the session is audited', async () => {
+    const restore = dockerShim();
+    const { server, base } = bootTerm();
+    try {
+      await putSpec(base);
+      const out: string[] = [];
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${server.port}/api/deployments/d/terminal?container=probe-app-1`,
+        { headers: { authorization: `Bearer ${TOKEN}` } } as unknown as string[],
+      );
+      ws.binaryType = 'arraybuffer';
+      ws.onmessage = (e) =>
+        out.push(typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data as ArrayBuffer));
+      await new Promise<void>((r) => {
+        ws.onopen = () => r();
+        ws.onerror = () => r();
+      });
+      // `\r`, NOT `\n` — this is what a terminal emulator actually sends for Enter, and with no pty
+      // there is no line discipline to convert it. Written with `\n` this test passed while the
+      // browser sat there looking dead: every keystroke arrived and nothing ever ran.
+      ws.send('echo MARKER-OUT; echo MARKER-ERR 1>&2; exit 7\r');
+      for (let i = 0; i < 40 && !out.join('').includes('exited'); i++) await Bun.sleep(50);
+
+      const text = out.join('');
+      expect(text).toContain('MARKER-OUT'); // stdout
+      expect(text).toContain('MARKER-ERR'); // stderr is pumped too, or half the failures are invisible
+      expect(text).toContain('shell exited (7)'); // the exit CODE, not just "closed"
+      expect(text).toContain('no TTY'); // the ceiling is stated to the operator, not left to guess
+
+      const { sessions } = (await (await fetch(`${base}/api/terminal-sessions`, { headers: H })).json()) as {
+        sessions: Array<{ actor: string; container: string; deployment: string; endedAt: number | null }>;
+      };
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]!.container).toBe('probe-app-1');
+      expect(sessions[0]!.deployment).toBe('d');
+      expect(sessions[0]!.actor).toBe('root (PSTACK_TOKEN)');
+      expect(sessions[0]!.endedAt).not.toBeNull();
+    } finally {
+      server.stop(true);
+      restore();
     }
   });
 });

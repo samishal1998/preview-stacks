@@ -123,6 +123,24 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX deliveries_by_notifier ON deliveries (notifier_id, created_at DESC);
   `,
+  // 3 — the terminal audit log.
+  `
+  CREATE TABLE terminal_sessions (
+    id           INTEGER PRIMARY KEY,
+    -- 'root (PSTACK_TOKEN)' or a username. Denormalized on purpose: deleting the account must not
+    -- erase the record that it opened a shell on the host.
+    actor        TEXT NOT NULL,
+    deployment   TEXT NOT NULL,
+    container    TEXT NOT NULL,
+    container_id TEXT NOT NULL,
+    shell        TEXT NOT NULL,
+    started_at   INTEGER NOT NULL,
+    -- Null while open, and STAYS null if pstack dies mid-session. An audit log that only records
+    -- tidy endings misses exactly the sessions worth auditing.
+    ended_at     INTEGER
+  );
+  CREATE INDEX terminal_sessions_recent ON terminal_sessions (started_at DESC);
+  `,
 ];
 
 export type UserRow = {

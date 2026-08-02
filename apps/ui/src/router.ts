@@ -27,6 +27,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'axes', name: 'd.axes', component: () => import('./views/tabs/AxesTab.vue') },
       { path: 'requires', name: 'd.requires', component: () => import('./views/tabs/RequiresTab.vue') },
       { path: 'logs', name: 'd.logs', component: () => import('./views/tabs/LogsTab.vue') },
+      { path: 'terminal', name: 'd.terminal', component: () => import('./views/tabs/TerminalTab.vue') },
       { path: 'danger', name: 'd.danger', component: () => import('./views/tabs/DangerTab.vue') },
     ],
   },

@@ -719,6 +719,47 @@ ssh -N -L 7878:127.0.0.1:7878 preview@<host>
 
 See [`bootstrap.md` §9](bootstrap.md#9-hardening-checklist) for the full checklist.
 
+### 5c. The container terminal (0.12.0)
+
+`GET /api/deployments/:id/terminal?container=…&shell=sh`, upgraded to a WebSocket. The **Terminal**
+tab in the advanced UI is the client.
+
+**The container name is not trusted, and that is the whole security story.** `docker exec` accepts
+any container the daemon knows — Traefik, another PR's stack, and the pstack control container
+itself, whose filesystem holds `pstack.db`: every password hash, every session, every notifier
+signing secret. So the requested name is matched against the containers **this deployment owns**
+(`com.docker.compose.project=<stack>`), and anything else is a 404. Quoting is not the defence and
+never was: the command is an argv array with no shell in it, and the wrong container would still be
+the wrong container.
+
+| Property | Choice | Why |
+|---|---|---|
+| Auth | session cookie (or bearer) | A browser cannot put an `Authorization` header on a WebSocket — which is exactly why sessions became cookies in 0.10.0. The handshake is a same-origin GET and carries it automatically. **No token ever goes in the URL**: URLs land in proxy logs and browser history. |
+| Who | root or an `admin` user | Everyone is `admin` today, so the check is currently a no-op — it is in the code path now so that when roles become real, the decision about who gets a shell on the host is already where it belongs. |
+| Audit | a row per session, written at OPEN | `GET /api/terminal-sessions`. Written when the shell opens, not when it closes, so a session ended by process death still leaves a record. The actor is denormalized: deleting the account must not erase the fact that it opened a shell. |
+| **No pty** | `docker exec -i`, not `-it` | A real terminal needs `script` (or a pty binding) whose flags differ across distributions, and it was never run on a real host — so pstack ships the half it can stand behind. |
+
+**What "no pty" costs, concretely:** no prompt, no job control, no `Ctrl-C`, and no full-screen
+programs (`top`, `vim`). What still works is everything an operator usually opens a shell for —
+`ls`, `cat`, `env`, `psql`, `redis-cli`, a migration command. The UI says this on the page rather
+than letting an operator conclude the terminal is broken.
+
+**The line discipline is emulated, because that is what a pty actually was.** A pty does two
+translations that nothing else does, and missing either one looks like a bug rather than a missing
+feature:
+
+- **Input, CR → NL** (`crToNl` in `api.ts`). A terminal emulator sends `\r` for Enter. A shell
+  reading a *pipe* never treats that as end-of-line, so without this every keystroke arrives, the
+  socket stays healthy, and nothing ever runs — the terminal looks dead while being perfectly
+  connected.
+- **Output, NL → CR-NL** (`convertEol` in the UI). Otherwise `\n` moves down a row without
+  returning the carriage and `ls` renders as a staircase marching off the right edge.
+
+**Proxies must forward the upgrade.** The UI container's nginx sends `Connection ""` to keep the
+upstream alive for the SSE job log; a `map` now picks `upgrade` per-request when the client asked
+for one. Without it the handshake degrades to an ordinary GET and the browser reports a bare
+code-1006 close that looks like the server refusing it.
+
 ---
 
 ## 6. Submitting a deployment

@@ -25,6 +25,8 @@ const TABS = [
   { to: 'axes', label: 'Axes' },
   { to: 'requires', label: 'Requires' },
   { to: 'logs', label: 'Logs' },
+  // After Logs: a shell is what you reach for when the logs did not answer it.
+  { to: 'terminal', label: 'Terminal' },
   { to: 'danger', label: 'Danger' },
 ] as const;
 

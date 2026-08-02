@@ -18,8 +18,9 @@ export default defineConfig({
       '/api': {
         target: process.env.PSTACK_API ?? 'http://127.0.0.1:7878',
         changeOrigin: true,
-        // SSE: without this the live job log is buffered and arrives in one lump at the end.
-        ws: false,
+        // The container terminal upgrades to a WebSocket on /api/…/terminal; without this the dev
+        // proxy answers the handshake itself and the socket never reaches the API.
+        ws: true,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes) => {
             if (proxyRes.headers['content-type']?.includes('text/event-stream')) {

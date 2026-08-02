@@ -106,6 +106,16 @@ import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
 import { down, up, verify } from './stack.ts';
+import {
+  actorOf,
+  execArgv,
+  isShell,
+  mayOpenTerminal,
+  SHELLS,
+  TerminalAudit,
+  type Shell,
+  type TerminalData,
+} from './terminal.ts';
 
 export type ServerOptions = {
   /** Registry root; `new Registry(dataDir)` keeps deployments under `<dataDir>/deployments`. */
@@ -120,6 +130,14 @@ export type ServerOptions = {
   routingDir?: string;
   /** DOCKER_CONFIG directory holding private-registry credentials. Defaults to `/docker-config`. */
   registryDir?: string;
+  /**
+   * The argv that opens a container shell. Defaults to `docker exec -i <id> <shell>`.
+   *
+   * Injectable for the same reason `Runner` is: the machine this is developed on has no Docker, so
+   * the socket plumbing is proven end to end against a real local `sh` instead of asserted about a
+   * command nobody ran. Not a production knob.
+   */
+  terminalArgv?: (containerId: string, shell: Shell) => string[];
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -127,6 +145,29 @@ const json = (body: unknown, init: ResponseInit = {}) =>
     ...init,
     headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
   });
+
+/**
+ * CR → NL for terminal input. See the `message` handler: with no pty there is no line discipline, so
+ * this is the only thing standing between "Enter" and a shell that never runs anything.
+ *
+ * CRLF collapses to a single NL rather than becoming two, or every Enter from a client that sends
+ * both would run the line and then an empty one.
+ */
+export function crToNl(message: string | Buffer): string | Uint8Array {
+  if (typeof message === 'string') return message.replace(/\r\n?/g, '\n');
+  const src = new Uint8Array(message);
+  const out = new Uint8Array(src.length);
+  let n = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] === 0x0d) {
+      out[n++] = 0x0a;
+      if (src[i + 1] === 0x0a) i++; // CRLF → one NL
+    } else {
+      out[n++] = src[i]!;
+    }
+  }
+  return out.subarray(0, n);
+}
 
 /** Request variables: `?PR=7&REGION=eu` → `{ PR: '7', REGION: 'eu' }`, layered over process.env. */
 const varsFrom = (url: URL): Record<string, string> => Object.fromEntries(url.searchParams);
@@ -168,6 +209,8 @@ export function createServer(opts: ServerOptions) {
   const store = new Store(opts.dataDir);
   const auth = new Auth(store);
   const hooks = new Webhooks(store);
+  const terminals = new TerminalAudit(store);
+  const terminalArgv = opts.terminalArgv ?? execArgv;
   const dispatcher = new Dispatcher(hooks);
   /**
    * The bus is a module singleton and this listener is per-server. A process can host several servers
@@ -286,10 +329,88 @@ export function createServer(opts: ServerOptions) {
     return `pstack_session=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
   };
 
-  const server = Bun.serve({
+  // Typed so `ws.data` IS a TerminalData rather than a cast at three call sites.
+  const server = Bun.serve<TerminalData>({
     port: opts.port,
     hostname: opts.host,
-    idleTimeout: 240, // SSE streams must outlive the default
+    idleTimeout: 240, // SSE streams must outlive the default (measured: it does NOT apply to
+    //                   upgraded WebSockets, so an idle terminal needs no keepalive)
+    /**
+     * The container terminal. The upgrade decision — auth, which deployment, which container, is it
+     * running — is made in `fetch` above, because once the socket is up the only way to say "no" is
+     * a close frame the client has to interpret.
+     */
+    websocket: {
+      open(ws) {
+        const d = ws.data;
+        let proc: ReturnType<typeof Bun.spawn>;
+        try {
+          proc = Bun.spawn(d.argv, { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+        } catch (err) {
+          ws.send(`\r\n[pstack] could not start a shell: ${(err as Error).message}\r\n`);
+          ws.close(1011, 'spawn failed');
+          return;
+        }
+        d.proc = {
+          kill: () => proc.kill(),
+          stdinWrite: (chunk) => {
+            const w = proc.stdin as { write: (c: unknown) => void; flush?: () => void };
+            w.write(chunk);
+            w.flush?.();
+          },
+        };
+        ws.send(`[pstack] ${d.shell} in ${d.containerName} — no TTY: no prompt, no job control, no curses UIs.\r\n`);
+
+        // Binary frames: terminal output is bytes, and decoding to a string here would corrupt a
+        // multi-byte character split across two reads. xterm.js takes a Uint8Array directly.
+        const pump = async (stream: ReadableStream<Uint8Array>) => {
+          try {
+            for await (const chunk of stream) {
+              if (ws.readyState !== 1) return;
+              ws.send(chunk);
+            }
+          } catch {
+            // The process died or the socket went away mid-read; `exited` below reports it once.
+          }
+        };
+        void pump(proc.stdout as ReadableStream<Uint8Array>);
+        void pump(proc.stderr as ReadableStream<Uint8Array>);
+        void proc.exited.then((code) => {
+          if (ws.readyState === 1) {
+            ws.send(`\r\n[pstack] shell exited (${code}).\r\n`);
+            ws.close(1000, 'shell exited');
+          }
+        });
+      },
+      message(ws, message) {
+        const d = ws.data;
+        // Nothing is interpreted EXCEPT the newline, and that one is not optional.
+        //
+        // A terminal emulator sends CR (\r) for Enter — correct, and what a real terminal's line
+        // discipline then converts to NL before the shell sees it. There is no line discipline here
+        // (that is what the missing pty WAS), so a shell reading a pipe never sees a complete line:
+        // every keystroke arrives, nothing ever runs, and the terminal looks dead while being
+        // perfectly connected. Standing in for that one conversion is the whole fix.
+        //
+        // Beyond that, keystrokes go to the shell verbatim. There is no command allowlist because
+        // there could not be a meaningful one — this IS a shell, and WHICH CONTAINER it runs in was
+        // decided at upgrade time. That is where the boundary is.
+        try {
+          d.proc?.stdinWrite(crToNl(message));
+        } catch {
+          /* the shell exited between the keystroke and here */
+        }
+      },
+      close(ws) {
+        const d = ws.data;
+        try {
+          d.proc?.kill();
+        } catch {
+          /* already gone */
+        }
+        terminals.close(d.sessionId);
+      },
+    },
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
@@ -916,6 +1037,70 @@ export function createServer(opts: ServerOptions) {
             spec: src.spec,
             compose: src.compose,
           });
+        }
+
+        // ---- a shell in a container -----------------------------------------------------
+        // THE CONTAINER NAME IS NOT TRUSTED. `docker exec` would accept Traefik, another PR's stack,
+        // or the pstack control container itself — whose filesystem is pstack.db, i.e. every password
+        // hash and every signing secret. So the request is matched against the containers this
+        // deployment actually OWNS, and anything else is a 404. See terminal.ts.
+        const term = /^\/api\/deployments\/([^/]+)\/terminal$/.exec(path);
+        if (term && req.method === 'GET') {
+          const id = decodeURIComponent(term[1]!);
+          if (!mayOpenTerminal(who)) {
+            return json({ error: 'opening a terminal requires an admin' }, { status: 403 });
+          }
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          const shellRaw = url.searchParams.get('shell') ?? 'sh';
+          if (!isShell(shellRaw)) {
+            return json({ error: `shell must be one of: ${SHELLS.join(', ')}` }, { status: 400 });
+          }
+          const wanted = url.searchParams.get('container');
+          if (!wanted) return json({ error: 'container is required' }, { status: 400 });
+
+          const spec = await registry.resolve(id, vars);
+          // `challenge: 'unknown'` skips a docker call this route has no use for.
+          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown' });
+          const c = rt.containers.find((x) => x.id === wanted || x.name === wanted);
+          if (!c) {
+            return json(
+              {
+                error: `no container "${wanted}" in deployment ${id}`,
+                containers: rt.containers.map((x) => x.name),
+              },
+              { status: 404 },
+            );
+          }
+          if (!c.state.startsWith('running')) {
+            return json({ error: `container "${c.name}" is ${c.state}, not running` }, { status: 409 });
+          }
+
+          const data: TerminalData = {
+            actor: actorOf(who),
+            deployment: id,
+            containerId: c.id,
+            containerName: c.name,
+            shell: shellRaw,
+            // The row exists BEFORE the socket does: a session that dies on upgrade still happened.
+            sessionId: terminals.open({
+              actor: actorOf(who),
+              deployment: id,
+              container: c.name,
+              containerId: c.id,
+              shell: shellRaw,
+            }),
+            argv: terminalArgv(c.id, shellRaw),
+          };
+          // `upgrade` returning true means the response is the handshake — returning anything here
+          // would clobber it.
+          if (server.upgrade(req, { data })) return undefined;
+          terminals.close(data.sessionId);
+          return json({ error: 'this endpoint expects a websocket upgrade' }, { status: 426 });
+        }
+
+        if (path === '/api/terminal-sessions' && req.method === 'GET') {
+          return json({ sessions: terminals.recent() });
         }
 
         // ---- what is actually running, and what Traefik was told about it ---------------
