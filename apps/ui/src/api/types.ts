@@ -267,7 +267,16 @@ export type NotifierMeta = {
   types: Array<{
     kind: string;
     label: string;
-    fields: Array<{ key: string; label: string; placeholder?: string; required: boolean }>;
+    fields: Array<{
+      key: string;
+      label: string;
+      placeholder?: string;
+      required: boolean;
+      /** Credential material — masked by every read path, so never rendered as a real value. */
+      secret?: boolean;
+    }>;
+    /** Whether this type signs with the HMAC secret. False for types whose config IS the credential. */
+    signs: boolean;
   }>;
 };
 

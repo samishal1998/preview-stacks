@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { parseSpec, SpecError, interpolate, resolvePreviewDomain, warnings } from '../src/spec.ts';
 import { captureOutputs, createRunner, type RunResult, type Runner } from '../src/exec.ts';
 import { down, up, verify } from '../src/stack.ts';
@@ -13,6 +13,8 @@ import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.t
 import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer, crToNl } from '../src/api.ts';
+import { NotifierError, TYPES, redactForNotifier } from '../src/notify.ts';
+import { events } from '../src/events.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
 import { deploymentRuntime, hostsFromRule, routesFromLabels } from '../src/inspect.ts';
 import {
@@ -3013,6 +3015,193 @@ describe('webhooks — composable notifications', () => {
   const register = (base: string, body: Record<string, unknown>) =>
     fetch(`${base}/api/notifiers`, { method: 'POST', headers: H, body: JSON.stringify(body) });
 
+  /*
+   * `PSTACK_NOTIFY_ALLOW_PRIVATE` is process-wide state that several tests below flip. Restoring the
+   * ORIGINAL rather than deleting it: a `delete` in a `finally` silently clears a value the
+   * developer had exported in their shell, and the next test then behaves differently for them than
+   * it does in CI — the worst kind of flake to chase.
+   */
+  let allowPrivateBefore: string | undefined;
+  beforeEach(() => {
+    allowPrivateBefore = process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+  });
+  afterEach(() => {
+    if (allowPrivateBefore === undefined) delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+    else process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = allowPrivateBefore;
+  });
+
+  describe('a second notifier type — the composability claim, actually exercised', () => {
+    /*
+     * Every comment in notify.ts says adding Slack is "one entry in TYPES". That claim was made in
+     * five places and tested in none, which is exactly the kind of thing that is true when written
+     * and false a release later. This registers a real second type at runtime and drives it through
+     * registration, meta, delivery and the read path WITHOUT touching any other file — if the seam
+     * ever stops being a seam, this is what fails.
+     */
+    const sent: Array<{ config: Record<string, unknown>; secret: string; event: string }> = [];
+
+    beforeEach(() => {
+      TYPES.pigeon = {
+        kind: 'pigeon',
+        label: 'Carrier pigeon',
+        // The Slack shape: the endpoint IS the credential, so it does not sign and it is masked.
+        signs: false,
+        fields: [{ key: 'loft', label: 'Loft URL', required: true, secret: true }],
+        validate: (config) => {
+          if (typeof config.loft !== 'string' || !config.loft) {
+            throw new NotifierError('loft is required');
+          }
+        },
+        send: async (e, config, secret) => {
+          sent.push({ config, secret, event: e.event });
+          return { ok: true, status: 200 };
+        },
+      };
+    });
+    afterEach(() => {
+      delete TYPES.pigeon;
+      sent.length = 0;
+    });
+
+    test('registers, appears in meta, delivers, and never leaks its credential', async () => {
+      const { server, base } = boot();
+      try {
+        const meta = (await (await fetch(`${base}/api/notifiers/meta`, { headers: H })).json()) as {
+          types: Array<{ kind: string; signs: boolean; fields: Array<{ key: string; secret?: boolean }> }>;
+        };
+        const pigeon = meta.types.find((x) => x.kind === 'pigeon');
+        // The UI renders from this and nothing else — a type absent here does not exist to a user.
+        expect(pigeon?.signs).toBe(false);
+        expect(pigeon?.fields[0]?.secret).toBe(true);
+
+        const made = await fetch(`${base}/api/notifiers`, {
+          method: 'POST',
+          headers: H,
+          body: JSON.stringify({
+            type: 'pigeon',
+            name: 'loft',
+            events: ['*'],
+            config: { loft: 'https://pigeon.example/hooks/SUPER-SECRET-PATH' },
+          }),
+        });
+        expect(made.status).toBe(201);
+        const body = (await made.json()) as { secret: string | null; notifier: { id: number } };
+        // A type that does not sign must not be handed a secret it can never use — and must not be
+        // told, as the UI used to, that its receiver needs one.
+        expect(body.secret).toBeNull();
+
+        // The read path masks the credential field. `list` feeds GET /api/notifiers and the UI.
+        const listed = await (await fetch(`${base}/api/notifiers`, { headers: H })).text();
+        expect(listed).not.toContain('SUPER-SECRET-PATH');
+
+        // …and the DELIVERY path still gets the real value, or it would POST to a masked URL.
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: s\naxes:\n  - name: a\n    up: "true"\n' }),
+        });
+        for (let i = 0; i < 40 && sent.length === 0; i++) await Bun.sleep(50);
+        expect(sent).toHaveLength(1);
+        expect(sent[0]!.config.loft).toBe('https://pigeon.example/hooks/SUPER-SECRET-PATH');
+        expect(sent[0]!.event).toBe('deployment.created');
+      } finally {
+        server.stop(true);
+      }
+    });
+  });
+
+  describe('the defences that had no test', () => {
+    test('redaction strips the signing secret AND every config string', () => {
+      /*
+       * Tested DIRECTLY, and that is the point. The first version of this drove a real delivery at a
+       * dead port and asserted the log was clean — it passed with the redaction ripped out, because
+       * Bun's connection error is "Unable to connect…" and never contained the credential to begin
+       * with. A test whose subject cannot appear in the input is not testing anything.
+       *
+       * This is the behaviour notify.ts defends at length: not just the secret, but EVERY string in
+       * `config`, so the Slack URL and a future SMTP password are covered by an author who never
+       * read the comment.
+       */
+      const secret = 'whsec_0123456789abcdef0123456789abcdef';
+      const config = { url: 'https://hooks.example/services/T000/B111/XXXXXXXXXXXX', channel: '#ops' };
+      const message = `POST ${config.url} failed; signed with ${secret}`;
+      const out = redactForNotifier(message, secret, config);
+
+      expect(out).not.toContain(secret);
+      expect(out).not.toContain(config.url);
+      // `redactText` ignores strings under 8 characters, so a channel name survives intact — the
+      // log would be useless if every short config value became a blob.
+      expect(redactForNotifier(`posting to ${config.channel}`, secret, config)).toContain('#ops');
+      // A message with nothing to hide is returned unchanged.
+      expect(redactForNotifier('HTTP 500', secret, config)).toBe('HTTP 500');
+    });
+
+    test('a job event carries status, never the outcome that holds captured credentials', async () => {
+      /*
+       * `outcome.outputs` is the documented inter-axis env channel — a provisioned database's
+       * connection string lives there BY DESIGN (docs/secret-exposure.md). jobs.ts builds its
+       * payload field by field specifically so the outcome cannot ride along, and nothing checked.
+       */
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver();
+      const { server, base } = boot();
+      try {
+        await register(base, { name: 'jobs', events: ['*'], config: { url: rx.url } });
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({
+            spec:
+              'version: 1\nstack: s\nenv:\n  DB_PASSWORD: hunter2-in-the-env\n' +
+              'axes:\n  - name: a\n    up: "echo NOTHING"\n    assert_gone: "true"\n',
+          }),
+        });
+        await fetch(`${base}/api/deployments/d/verify`, { method: 'POST', headers: H });
+        for (let i = 0; i < 60 && !rx.got.some((g) => g.event.startsWith('job.')); i++) await Bun.sleep(100);
+
+        const jobEvents = rx.got.filter((g) => g.event.startsWith('job.'));
+        expect(jobEvents.length).toBeGreaterThan(0);
+        for (const e of jobEvents) {
+          expect(e.raw).not.toContain('hunter2-in-the-env');
+          // The whole object, not just the secret: `outcome` must not be in the payload at all.
+          expect(Object.keys(e.body.data)).not.toContain('outcome');
+          expect(Object.keys(e.body.data)).not.toContain('outputs');
+        }
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+      }
+    }, 30_000);
+
+    test('a listener that throws — synchronously or asynchronously — cannot reach the emitter', () => {
+      /*
+       * `emit` claims it "cannot throw, by construction". The async half is the subtle one: a bare
+       * try/catch catches NOTHING from `async (e) => { throw }`, so without the `.catch()` the
+       * rejection escapes as an unhandled one and, under Bun's default, kills the server that was
+       * merely doing a deploy.
+       */
+      const seen: string[] = [];
+      const offSync = events.on(() => {
+        throw new Error('sync listener is broken');
+      });
+      const offAsync = events.on(async () => {
+        throw new Error('async listener is broken');
+      });
+      const offGood = events.on((e) => {
+        seen.push(e.event);
+      });
+      try {
+        expect(() => events.emit('job.started', { jobId: 'x' })).not.toThrow();
+        // …and a broken listener must not starve the ones registered after it.
+        expect(seen).toEqual(['job.started']);
+      } finally {
+        offSync();
+        offAsync();
+        offGood();
+      }
+    });
+  });
+
   describe('the URL guard', () => {
     test('loopback, link-local and private addresses are refused with 400 and a reason', async () => {
       const { server, base } = boot();
@@ -3077,6 +3266,7 @@ describe('webhooks — composable notifications', () => {
           config: { url: 'https://example.com/h' },
           events: ['*'],
           validateConfig: () => {},
+          signs: true,
         });
         const inFlight = hooks.startDelivery(row.id, 'evt_slow', 'job.failed');
         for (let i = 0; i < 250; i++) {
@@ -3194,6 +3384,48 @@ describe('webhooks — composable notifications', () => {
         delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
       }
     });
+
+    test('a retry STOPS once an attempt succeeds — it does not run out the schedule', async () => {
+      /*
+       * `receiver({ failFirst })` was built for this and never called with it: every retry test
+       * failed all three attempts, so nothing distinguished "retries until success" from "always
+       * retries three times". The delivery log is what an operator reads to decide whether an
+       * endpoint is healthy, and a successful-on-attempt-2 delivery recorded as 3 attempts, or as
+       * failed, is a wrong answer to that question.
+       */
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = receiver({ failFirst: 1 });
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, { name: 'flaky', events: ['*'], config: { url: rx.url } })
+        ).json()) as { notifier: { id: number } };
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: s\naxes: []\n' }),
+        });
+
+        let log: { deliveries: Array<{ status: string; attempts: number; responseCode: number | null }> } = {
+          deliveries: [],
+        };
+        for (let i = 0; i < 60; i++) {
+          log = (await (
+            await fetch(`${base}/api/notifiers/${made.notifier.id}/deliveries`, { headers: H })
+          ).json()) as typeof log;
+          if (log.deliveries[0]?.status === 'ok') break;
+          await Bun.sleep(150);
+        }
+        expect(log.deliveries[0]?.status).toBe('ok');
+        expect(log.deliveries[0]?.attempts).toBe(2);
+        expect(log.deliveries[0]?.responseCode).toBe(200);
+        // The third attempt must never have been made — that is the whole claim.
+        expect(rx.calls()).toBe(2);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+      }
+    }, 20_000);
 
     test('a spec write and a routing write actually reach a subscriber', async () => {
       // Every name in EVENTS must have an emit site. `spec.stored`, `spec.deleted` and
@@ -3439,10 +3671,28 @@ describe('webhooks — composable notifications', () => {
         });
         await Bun.sleep(400);
         expect(rx.got).toEqual([]);
+
+        /*
+         * THE POSITIVE CONTROL. "Nothing arrived" is also what a completely broken delivery path
+         * looks like, so on its own the assertion above proves nothing. Re-enable the SAME notifier
+         * and the SAME receiver, fire the SAME kind of event: if this does not arrive, the test
+         * above was passing for the wrong reason.
+         */
+        await fetch(`${base}/api/notifiers/${made.notifier.id}`, {
+          method: 'PATCH',
+          headers: H,
+          body: JSON.stringify({ enabled: true }),
+        });
+        await fetch(`${base}/api/deployments/d2`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: s2\naxes: []\n' }),
+        });
+        for (let i = 0; i < 40 && rx.got.length === 0; i++) await Bun.sleep(50);
+        expect(rx.got.map((g) => g.event)).toEqual(['deployment.created']);
       } finally {
         rx.server.stop(true);
         server.stop(true);
-        delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
       }
     });
 
@@ -3483,10 +3733,22 @@ describe('webhooks — composable notifications', () => {
       await Bun.sleep(400);
       // The stopped server's notifier must NOT have been consulted.
       expect(rx.got).toEqual([]);
+
+      /*
+       * THE POSITIVE CONTROL — same receiver, same event, but registered on the LIVE server. Without
+       * it, "nothing arrived" is equally consistent with the dispatcher never having worked at all.
+       */
+      await register(second.base, { name: 'live', events: ['*'], config: { url: rx.url } });
+      await fetch(`${second.base}/api/deployments/d2`, {
+        method: 'PUT',
+        headers: H,
+        body: JSON.stringify({ spec: 'version: 1\nstack: s2\naxes: []\n' }),
+      });
+      for (let i = 0; i < 40 && rx.got.length === 0; i++) await Bun.sleep(50);
+      expect(rx.got.map((g) => g.event)).toEqual(['deployment.created']);
       second.server.stop(true);
     } finally {
       rx.server.stop(true);
-      delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
     }
   });
 });

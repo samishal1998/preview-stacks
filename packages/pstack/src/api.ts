@@ -106,6 +106,7 @@ import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
 import { down, up, verify } from './stack.ts';
+import { publicConfig, redactForNotifier, typeOf } from './notify.ts';
 import {
   actorOf,
   execArgv,
@@ -208,7 +209,7 @@ export function createServer(opts: ServerOptions) {
   );
   const store = new Store(opts.dataDir);
   const auth = new Auth(store);
-  const hooks = new Webhooks(store);
+  const hooks = new Webhooks(store, publicConfig);
   const terminals = new TerminalAudit(store);
   const terminalArgv = opts.terminalArgv ?? execArgv;
   const dispatcher = new Dispatcher(hooks);
@@ -808,7 +809,7 @@ export function createServer(opts: ServerOptions) {
                 );
               }
               await registry.remove(id);
-          events.emit('deployment.deleted', { id, stack: spec.stack, kind: dep.kind });
+              events.emit('deployment.deleted', { id, stack: spec.stack, kind: dep.kind });
               return json({ removed: id, stack: spec.stack });
             }
 
@@ -1189,9 +1190,13 @@ export function createServer(opts: ServerOptions) {
         // Inside this try deliberately — a route above it gets no error mapping, which is how the
         // user routes ended up answering 500 with an HTML page for a validation failure.
         //
-        // `/meta` is matched BEFORE the `:id` regex so the literal cannot be eaten by it, and it is
-        // what drives the UI's pickers: the event list and the per-type form fields come from the
+        // This drives the UI's pickers: the event list and the per-type form fields come from the
         // server, so adding a notifier type does not mean editing the UI.
+        //
+        // (An earlier note here claimed the order relative to the `:id` route was load-bearing. It
+        // is not — that regex captures `(\d+)`, which cannot match `meta` — and a false constraint
+        // is worse than none: it makes the next reader afraid to reorganise the block, and teaches
+        // them to discount an equivalent claim elsewhere that IS doing real work.)
         if (path === '/api/notifiers/meta' && req.method === 'GET') {
           return json({
             events: EVENTS,
@@ -1200,6 +1205,8 @@ export function createServer(opts: ServerOptions) {
               kind: ty.kind,
               label: ty.label,
               fields: ty.fields,
+              // So the UI can say "your receiver needs this secret" only where that is true.
+              signs: ty.signs,
             })),
           });
         }
@@ -1220,15 +1227,20 @@ export function createServer(opts: ServerOptions) {
             if (cfg !== undefined && (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg))) {
               return json({ error: '`config` must be an object' }, { status: 400 });
             }
+            const kind = typeof body.type === 'string' && body.type ? body.type : 'webhook';
             const made = hooks.create({
-              type: typeof body.type === 'string' && body.type ? body.type : 'webhook',
+              type: kind,
               name: body.name,
               config: (cfg as Record<string, unknown>) ?? {},
               events: Array.isArray(body.events) ? (body.events as string[]) : [],
               validateConfig,
+              // `typeOf` throws NotifierError for an unknown kind, which the handler below maps to
+              // 400 — the same path an unknown type already took.
+              signs: typeOf(kind).signs,
             });
-            // The ONLY time the signing secret leaves the server. There is no read path for it —
-            // see webhooks.ts, and the test that greps every response for it.
+            // The ONLY time the signing secret leaves the server, and `null` for a type that does
+            // not sign. There is no read path for it — see webhooks.ts, and the test that greps
+            // every response for it.
             return json({ notifier: made.row, secret: made.secret }, { status: 201 });
           }
           return json({ error: 'use GET or POST' }, { status: 405 });
@@ -1287,13 +1299,23 @@ export function createServer(opts: ServerOptions) {
               status: result.ok ? 'ok' : 'failed',
               attempts: 1,
               responseCode: result.status,
-              error: result.error ? redactText(result.error, [secret, ...Object.values(row.config).filter((v): v is string => typeof v === 'string')]) : undefined,
+              error: result.error ? redactForNotifier(result.error, secret, row.config) : undefined,
             });
             hooks.noteResult(nid, result.ok ? 'ok' : 'failed');
             hooks.prune(nid);
-            return json({ result });
+            // Redacted on the way OUT too. The dispatcher runs every stored error through the same
+            // function; a second send path that skipped it would hand back the very credential the
+            // read path above was just changed to mask — for a Slack type, the URL in a fetch error.
+            return json({
+              result: {
+                ...result,
+                error: result.error ? redactForNotifier(result.error, secret, row.config) : undefined,
+              },
+            });
           }
-          return json({ error: 'use GET, PATCH or DELETE' }, { status: 405 });
+          // PATCH or DELETE on the row; GET or POST only on the sub-routes. The old message said
+          // "use GET, PATCH or DELETE", so a GET on :id was told to use the method it had just used.
+          return json({ error: 'use PATCH or DELETE here, or /deliveries (GET) and /test (POST)' }, { status: 405 });
         }
 
         // ---- private registry credentials ----------------------------------------------

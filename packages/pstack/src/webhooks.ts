@@ -100,11 +100,32 @@ const PUBLIC_COLUMNS =
 export class Webhooks {
   #store: Store;
 
-  constructor(store: Store) {
+  constructor(store: Store, publicConfig?: (kind: string, c: Record<string, unknown>) => Record<string, unknown>) {
     this.#store = store;
+    this.#public = publicConfig ?? ((_k, c) => c);
   }
 
+  /**
+   * Every row, with credential-bearing config fields masked.
+   *
+   * `subscribedTo` deliberately does NOT go through this — the dispatcher needs the real values to
+   * make the request. Read paths and the delivery path want different things from the same row, and
+   * conflating them is how a masked value ends up being POSTed to a masked URL.
+   */
   list(): NotifierRow[] {
+    return this.#raw().map((r) => ({ ...r, config: this.#public(r.type, r.config) }));
+  }
+
+  get(id: number): NotifierRow | null {
+    const r = this.#store.db
+      .query(`SELECT ${PUBLIC_COLUMNS} FROM notifiers WHERE id = ?`)
+      .get(id) as RawNotifier | null;
+    if (!r) return null;
+    const row = toRow(r);
+    return { ...row, config: this.#public(row.type, row.config) };
+  }
+
+  #raw(): NotifierRow[] {
     return (
       this.#store.db
         .query(`SELECT ${PUBLIC_COLUMNS} FROM notifiers ORDER BY created_at DESC`)
@@ -112,18 +133,14 @@ export class Webhooks {
     ).map(toRow);
   }
 
-  get(id: number): NotifierRow | null {
-    const r = this.#store.db
-      .query(`SELECT ${PUBLIC_COLUMNS} FROM notifiers WHERE id = ?`)
-      .get(id) as RawNotifier | null;
-    return r ? toRow(r) : null;
-  }
+  /** Injected rather than imported, so this module still knows nothing about what a webhook is. */
+  #public: (kind: string, config: Record<string, unknown>) => Record<string, unknown>;
 
   /** Every enabled notifier subscribed to this event. The dispatcher's only read path. */
   subscribedTo(event: EventName): NotifierRow[] {
     // Filtered in JS rather than with a LIKE on the JSON: a LIKE would match 'job.failed' inside
     // 'job.failed_x' if an event were ever named that way, and the list is tiny.
-    return this.list().filter(
+    return this.#raw().filter(
       (n) => n.enabled && (n.events.includes(event) || (n.events as string[]).includes(WILDCARD)),
     );
   }
@@ -154,7 +171,9 @@ export class Webhooks {
     config: Record<string, unknown>;
     events: string[];
     validateConfig: (type: string, config: Record<string, unknown>) => void;
-  }): { row: NotifierRow; secret: string } {
+    /** Whether this type signs. A type whose config already carries its credential gets no secret. */
+    signs: boolean;
+  }): { row: NotifierRow; secret: string | null } {
     if (!NAME.test(args.name)) {
       throw new WebhookError(
         `name must be 1–64 characters of letters, digits, space, or . : @ / _ -  (got "${args.name}")`,
@@ -175,7 +194,14 @@ export class Webhooks {
     }
     args.validateConfig(args.type, args.config);
 
-    const secret = `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString('hex')}`;
+    /*
+     * Empty for a non-signing type, and the column stays NOT NULL. Minting one anyway and simply
+     * not showing it would leave a live credential in the database that nothing can ever use or
+     * rotate — a secret that exists only to be forgotten is still a secret to be stolen.
+     */
+    const secret = args.signs
+      ? `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString('hex')}`
+      : '';
     const r = this.#store.db
       .query(
         `INSERT INTO notifiers (type, name, config, events, secret, created_at)
@@ -189,7 +215,7 @@ export class Webhooks {
         secret,
         Date.now(),
       ) as RawNotifier;
-    return { row: toRow(r), secret };
+    return { row: toRow(r), secret: args.signs ? secret : null };
   }
 
   setEnabled(id: number, enabled: boolean): boolean {

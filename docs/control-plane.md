@@ -755,6 +755,23 @@ feature:
 - **Output, NL → CR-NL** (`convertEol` in the UI). Otherwise `\n` moves down a row without
   returning the carriage and `ls` renders as a staircase marching off the right edge.
 
+#### Known limits of the notifier seam (deliberate, as of 0.14.0)
+
+Recorded so the next person does not have to rediscover that they were considered:
+
+- **Retry policy and timeout are the dispatcher's, not the type's.** A provider with its own
+  backoff contract — Slack's `429` + `Retry-After` — cannot express it. Real, and left until a
+  second type actually needs it: a per-type knob with exactly one implementation is the abstraction
+  that gets built wrong, because there is nothing to check the shape against.
+- **`assertDeliverableUrl` is called by the type, not enforced by the seam.** A type that forgets it
+  gets no URL check. The dispatcher cannot enforce it — it does not know which config field is an
+  address, and `secret` marks credentials rather than URLs.
+- **`POST /:id/test` bypasses `MAX_IN_FLIGHT`.** It is one operator pressing one button, bounded by
+  how fast a person can click; queueing it behind the delivery cap would make "test this endpoint"
+  fail while the endpoint being tested was busy failing.
+- **`webhooks.ts` holds all notifiers, not only webhooks** — named for the first type extracted from
+  it. A rename is pure churn against every import.
+
 **Proxies must forward the upgrade.** The UI container's nginx sends `Connection ""` to keep the
 upstream alive for the SSE job log; a `map` now picks `upgrade` per-request when the client asked
 for one. Without it the handshake degrades to an ordinary GET and the browser reports a bare

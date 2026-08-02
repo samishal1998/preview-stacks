@@ -37,7 +37,7 @@
  * `PSTACK_NOTIFY_ALLOW_PRIVATE=1` for the legitimate case of an internal collector on the same box.
  */
 
-import { redactText } from './redact.ts';
+import { mask, redactText } from './redact.ts';
 import type { PstackEvent } from './events.ts';
 import type { NotifierRow, Webhooks } from './webhooks.ts';
 
@@ -62,12 +62,32 @@ export type NotifierField = {
   label: string;
   placeholder?: string;
   required: boolean;
+  /**
+   * This field is CREDENTIAL MATERIAL and must never be returned by a read path.
+   *
+   * The seam's own example is the reason this exists: a Slack incoming-webhook URL *is* the
+   * credential — anyone holding it can post as the app — so `{ webhookUrl }` is a secret in a way
+   * that a plain webhook's `{ url }` is not. Without a per-field declaration the only options were
+   * to return every config verbatim (leaking the Slack case) or mask all of them (hiding the
+   * webhook URL an operator registered the notifier to check). The type knows; nothing else can.
+   */
+  secret?: boolean;
 };
 
 export type NotifierType = {
   kind: string;
   label: string;
   fields: NotifierField[];
+  /**
+   * Does this type use the HMAC signing secret?
+   *
+   * `false` for anything whose config already carries its credential — Slack and Discord, the two
+   * this seam was designed for. Without it the secret was unconditional across four layers: the
+   * column, `create()`, the 201 body, and a UI banner reading "your receiver needs it to verify the
+   * X-Pstack-Signature header". Register a Slack notifier and an operator would be handed 48 hex
+   * characters, told it was the only time they would see them, and given no way to ever use them.
+   */
+  signs: boolean;
   /** Throw `NotifierError` with a message naming the fix. Called before anything is stored. */
   validate: (config: Record<string, unknown>) => void;
   /**
@@ -176,6 +196,9 @@ function sign(secret: string, timestamp: number, body: string): string {
 
 export const webhookType: NotifierType = {
   kind: 'webhook',
+  // The URL is an address, not a credential — the HMAC secret is what proves authenticity, so the
+  // URL stays readable in the list view where it is the only thing identifying the notifier.
+  signs: true,
   label: 'HTTP webhook',
   fields: [{ key: 'url', label: 'URL', placeholder: 'https://example.com/hooks/pstack', required: true }],
   validate(config) {
@@ -213,7 +236,14 @@ export const webhookType: NotifierType = {
       }
       return { ok: r.ok, status: r.status, error: r.ok ? undefined : `HTTP ${r.status}` };
     } catch (err) {
-      // Includes the abort. The message can contain the URL — the caller redacts before storing.
+      /*
+       * Includes the abort. MEASURED on Bun 1.3: a connection failure here is
+       * "Unable to connect. Is the computer able to access the url?" and does NOT carry the URL —
+       * so the redaction the caller applies is currently prospective, not load-bearing for THIS
+       * type. It stays because the message is a third party's to choose: another runtime words it
+       * with the URL, and `send` is a seam any future type implements however it likes. Do not
+       * remove it on the grounds that today's message happens to be clean.
+       */
       return { ok: false, error: (err as Error).message };
     }
   },
@@ -242,6 +272,32 @@ export function typeOf(kind: string): NotifierType {
     );
   }
   return t;
+}
+
+/**
+ * A type's config, safe to hand back to a caller.
+ *
+ * Fields the type marked `secret` become a mask. This is what makes `webhooks.ts`'s stated property
+ * — "no function in this module returns a credential" — survive the very next type the design
+ * names, rather than being true only of the one column it was written about.
+ */
+export function publicConfig(kind: string, config: Record<string, unknown>): Record<string, unknown> {
+  const type = Object.hasOwn(TYPES, kind) ? TYPES[kind] : undefined;
+  if (!type) return config;
+  const secretKeys = new Set(type.fields.filter((f) => f.secret).map((f) => f.key));
+  if (secretKeys.size === 0) return config;
+  return Object.fromEntries(
+    Object.entries(config).map(([k, v]) => [k, secretKeys.has(k) && typeof v === 'string' ? mask(v) : v]),
+  );
+}
+
+/** Redact a message the way the dispatcher does — for the one send path that is not the dispatcher. */
+export function redactForNotifier(
+  message: string,
+  secret: string,
+  config: Record<string, unknown>,
+): string {
+  return redactText(message, [secret, ...Object.values(config).filter((v): v is string => typeof v === 'string')]);
 }
 
 /** For `POST /api/notifiers` — validates without this module knowing about the store. */
@@ -357,7 +413,6 @@ export class Dispatcher {
    * `redactText` ignores strings under 8 characters, so a `channel: '#ops'` survives intact.
    */
   #redact(row: NotifierRow, secret: string, message: string): string {
-    const secrets = [secret, ...Object.values(row.config).filter((v): v is string => typeof v === 'string')];
-    return redactText(message, secrets);
+    return redactForNotifier(message, secret, row.config);
   }
 }

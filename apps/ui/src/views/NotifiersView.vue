@@ -93,7 +93,7 @@ function toggleEvent(name: string): void {
 async function create(): Promise<void> {
   saving.value = true;
   formError.value = '';
-  const r = await api.post<{ notifier: NotifierRow; secret: string }>('/api/notifiers', {
+  const r = await api.post<{ notifier: NotifierRow; secret: string | null }>('/api/notifiers', {
     name: form.value.name.trim(),
     type: form.value.type,
     events: form.value.events,
@@ -104,7 +104,9 @@ async function create(): Promise<void> {
     formError.value = problem(r, 'register this notifier');
     return;
   }
-  revealed.value = { name: r.body.notifier.name, secret: r.body.secret };
+  // `null` for a type whose config already carries its credential — a Slack notifier must not be
+  // handed 48 hex characters and told its receiver needs them.
+  revealed.value = r.body.secret ? { name: r.body.notifier.name, secret: r.body.secret } : null;
   form.value = { name: '', type: form.value.type, events: [], config: {} };
   void load();
 }
@@ -189,6 +191,7 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
         design choice that could be softened later — the value genuinely does not exist anywhere
         retrievable after this moment.
       -->
+      <!-- Only a signing type ever produces one; see `signs` in notify.ts. -->
       <div v-if="revealed" class="banner ok">
         <b>Signing secret for “{{ revealed.name }}” — copy it now.</b>
         <p>
@@ -346,7 +349,7 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
         </div>
 
         <p class="hint">
-          Deliveries are signed with a secret shown once at registration, retried twice on failure,
+          Deliveries from a signing type are signed with a secret shown once at registration, retried twice on failure,
           and logged here.
           <InfoHint label="how a receiver verifies a delivery">
             Recompute <code>HMAC-SHA256(secret, `${timestamp}.${rawBody}`)</code> and compare against
