@@ -2970,6 +2970,82 @@ describe('a disconnected SSE client must not break the job it was watching', () 
   });
 });
 
+describe('changing a password', () => {
+  const TOKEN = 'root-machine-token-value';
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-pw-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  test('revokes that account\'s sessions and tokens, and nobody else\'s', async () => {
+    /*
+     * A password change is normally a response to "someone may have this". Leaving the sessions it
+     * was protecting alive would make the change theatre — so this is the assertion that matters
+     * more than the hash actually changing.
+     */
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    const base = `http://127.0.0.1:${server.port}`;
+    const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+    try {
+      await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ username: 'alice', password: 'first-password-here' }),
+      });
+      await fetch(`${base}/api/users`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ username: 'bob', password: 'bobs-password-here' }),
+      });
+      const users = (await (await fetch(`${base}/api/users`, { headers: H })).json()) as {
+        users: Array<{ id: number; username: string }>;
+      };
+      const alice = users.users.find((u) => u.username === 'alice')!;
+      const bob = users.users.find((u) => u.username === 'bob')!;
+
+      // Two live sessions, one each.
+      const sessionOf = async (username: string, password: string) => {
+        const r = await fetch(`${base}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        return /pstack_session=([^;]+)/.exec(r.headers.get('set-cookie') ?? '')?.[1] ?? '';
+      };
+      const aliceCookie = await sessionOf('alice', 'first-password-here');
+      const bobCookie = await sessionOf('bob', 'bobs-password-here');
+      const whoami = (cookie: string) =>
+        fetch(`${base}/api/auth/me`, { headers: { cookie: `pstack_session=${cookie}` } });
+      expect((await whoami(aliceCookie)).status).toBe(200);
+      expect((await whoami(bobCookie)).status).toBe(200);
+
+      const changed = await fetch(`${base}/api/users/${alice.id}/password`, {
+        method: 'PUT',
+        headers: H,
+        body: JSON.stringify({ password: 'a-brand-new-password' }),
+      });
+      expect(changed.status).toBe(200);
+
+      // Alice is out everywhere…
+      expect((await whoami(aliceCookie)).status).toBe(401);
+      // …and Bob, who had nothing to do with it, is untouched.
+      expect((await whoami(bobCookie)).status).toBe(200);
+      // The new password works and the old one does not.
+      expect(await sessionOf('alice', 'a-brand-new-password')).not.toBe('');
+      expect(await sessionOf('alice', 'first-password-here')).toBe('');
+
+      // Too short is refused before anything is written.
+      const short = await fetch(`${base}/api/users/${bob.id}/password`, {
+        method: 'PUT',
+        headers: H,
+        body: JSON.stringify({ password: 'short' }),
+      });
+      expect(short.status).toBe(400);
+      expect((await whoami(bobCookie)).status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  }, 20_000);
+});
+
 describe('webhooks — composable notifications', () => {
   const TOKEN = 'tok';
   const tmpd = () =>

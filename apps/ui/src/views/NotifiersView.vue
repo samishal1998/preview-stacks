@@ -195,8 +195,13 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
       <div v-if="revealed" class="banner ok">
         <b>Signing secret for “{{ revealed.name }}” — copy it now.</b>
         <p>
-          This is the only time it is shown. Your receiver needs it to verify the
-          <code>X-Pstack-Signature</code> header; the server keeps no way to show it again.
+          This is the only time it is shown — the server keeps no way to show it again. Your
+          receiver uses it to check that a delivery really came from here.
+          <InfoHint label="how a receiver checks it">
+            Each delivery carries a signature header computed from this secret and the exact body
+            sent. Recompute it on your side and compare; a mismatch means the delivery was not sent
+            by this host, or was altered on the way.
+          </InfoHint>
         </p>
         <pre class="code">{{ revealed.secret }}</pre>
         <div class="row">

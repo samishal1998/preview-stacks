@@ -121,8 +121,8 @@ async function forget(registry: string): Promise<void> {
     <div v-if="writable === false" class="banner failed">
       <b>Read-only: the API cannot write the credential file.</b>
       <p>
-        The control stack mounts a <code>DOCKER_CONFIG</code> directory into the API from 0.7.0 onward.
-        Re-run <code>pstack init</code> on the host — it is idempotent, and it recreates the control
+        The control stack gains a credentials directory from 0.7.0 onward.
+        Re-run setup on the host — it is safe to repeat, and it recreates the control
         containers.
       </p>
     </div>
@@ -137,7 +137,7 @@ async function forget(registry: string): Promise<void> {
       <p>
         Found: <span class="mono">{{ helpers.join(', ') }}</span>. A helper keeps the secret outside the
         file — in an OS keychain, usually — and the helper binary does not exist in this container, so
-        pulls fail with <code>error getting credentials</code>. Add the credential below instead, which
+        pulls from private registries will fail. Add the credential below instead, which
         stores it in the file.
       </p>
     </div>
@@ -190,7 +190,7 @@ async function forget(registry: string): Promise<void> {
           autocomplete="off"
         />
         <div class="mute hint">
-          Use <code>docker.io</code> for Docker Hub — it is stored under Docker Hub's canonical key.
+          Docker Hub is stored under its canonical key.
         </div>
       </div>
 
@@ -204,7 +204,7 @@ async function forget(registry: string): Promise<void> {
         <input id="pass" v-model="password" type="password" autocomplete="off" spellcheck="false" />
         <div class="mute hint">
           Prefer a token scoped to reading packages. Stored on the host as reversible base64, exactly as
-          <code>docker login</code> stores it — never sent back to this page.
+          Stored the same way a terminal login stores it — never sent back to this page.
         </div>
       </div>
 

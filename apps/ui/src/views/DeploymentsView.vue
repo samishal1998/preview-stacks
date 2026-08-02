@@ -50,28 +50,37 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
 
     <section class="panel">
       <div class="phead">
-        <div class="field" style="flex: 1; min-width: 180px">
-          <label for="q" class="mute" style="font-size: var(--t-xs)">Search — press /</label>
+        <!--
+          One row of equal-height controls. Each used to sit under its own stacked label, which cost
+          a line of vertical space per control, put "Search — press /" on screen as a permanent
+          instruction, and left the two fields 8px out of vertical alignment because a `select` and
+          an `input` do not have the same intrinsic height. A placeholder says the same thing in the
+          place you are already looking, and the select's own options say what it filters.
+        -->
+        <div class="searchbox">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+            <path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
           <input
             id="q"
             v-model="q"
             data-search
             type="search"
-            placeholder="id, stack or spec name"
+            aria-label="Search deployments"
+            placeholder="Search by id, stack or spec"
             spellcheck="false"
           />
+          <kbd v-if="!q">/</kbd>
         </div>
-        <div class="field">
-          <label for="kind" class="mute" style="font-size: var(--t-xs)">Kind</label>
-          <select id="kind" v-model="kind">
-            <option value="all">all</option>
-            <option value="isolated">isolated</option>
-            <option value="shared">shared</option>
-          </select>
-        </div>
-        <label class="check" style="align-self: end; min-height: 32px">
+        <select v-model="kind" aria-label="Filter by kind" class="compact">
+          <option value="all">All kinds</option>
+          <option value="isolated">Isolated</option>
+          <option value="shared">Shared</option>
+        </select>
+        <label class="check">
           <input v-model="onlyLive" type="checkbox" />
-          running or busy only
+          Running or busy only
         </label>
       </div>
 

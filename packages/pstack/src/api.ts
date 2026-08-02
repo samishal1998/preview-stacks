@@ -7,6 +7,7 @@
  *   POST   /api/auth/bootstrap            first admin, PSTACK_TOKEN bearer, only while none exist
  *   GET    /api/auth/me                   who am I
  *   GET|POST /api/users, DELETE /api/users/:id
+ *   PUT    /api/users/:id/password       { password } — also revokes that user's sessions+tokens
  *   GET|POST /api/tokens, DELETE /api/tokens/:id   personal API tokens, scoped to the caller
  *
  *   EVERYTHING BELOW REQUIRES AUTH — session cookie, personal token, or PSTACK_TOKEN. Reads
@@ -505,6 +506,18 @@ export function createServer(opts: ServerOptions) {
 
       // ---- users & personal tokens ----------------------------------------------------
       if (path === '/api/users' && req.method === 'GET') return json({ users: auth.listUsers() });
+      const pw = /^\/api\/users\/(\d+)\/password$/.exec(path);
+      if (pw && req.method === 'PUT') {
+        const body = (await req.json().catch(() => null)) as { password?: unknown } | null;
+        if (!body || typeof body.password !== 'string') {
+          return json({ error: 'body must be { password }' }, { status: 400 });
+        }
+        // Revokes that user's sessions and tokens — see `setPassword`. Says so, because a caller
+        // changing their OWN password is about to be signed out and should not read that as a bug.
+        const ok = await auth.setPassword(Number(pw[1]), body.password);
+        if (!ok) return json({ error: `no such user: ${pw[1]}` }, { status: 404 });
+        return json({ ok: true, revokedSessions: true });
+      }
       if (path === '/api/users' && req.method === 'POST') {
         const body = (await req.json().catch(() => null)) as
           | { username?: unknown; password?: unknown }

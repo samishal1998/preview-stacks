@@ -121,6 +121,32 @@ export class Auth {
   }
 
   /**
+   * Change a password.
+   *
+   * Every session and token for that user is revoked in the same transaction. A password change is
+   * usually a response to "someone may have this" — leaving the sessions it was protecting alive
+   * would make the change theatre. The caller's own session dies with the rest; the UI signs them
+   * back in rather than pretending nothing happened.
+   */
+  async setPassword(id: number, password: string): Promise<boolean> {
+    if (password.length < 8) {
+      throw new AuthError('password must be at least 8 characters');
+    }
+    const hash = await Bun.password.hash(password);
+    const apply = this.#store.db.transaction(() => {
+      const changed = this.#store.db
+        .query('UPDATE users SET password_hash = ? WHERE id = ?')
+        .run(hash, id).changes;
+      if (changed > 0) {
+        this.#store.db.query('DELETE FROM sessions WHERE user_id = ?').run(id);
+        this.#store.db.query('DELETE FROM tokens WHERE user_id = ?').run(id);
+      }
+      return changed > 0;
+    });
+    return apply();
+  }
+
+  /**
    * First-admin bootstrap. Only while the table is empty — see the header. Returns null when it
    * declined, so the caller can distinguish "created" from "already bootstrapped" without a race.
    */

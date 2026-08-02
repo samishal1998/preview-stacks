@@ -40,6 +40,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/submit/:id?', name: 'submit', component: () => import('./views/SubmitView.vue'), props: true },
   { path: '/jobs', name: 'jobs', component: () => import('./views/JobsView.vue') },
   { path: '/jobs/:jobId', name: 'job', component: () => import('./views/JobDetailView.vue'), props: true },
+  { path: '/users', name: 'users', component: () => import('./views/UsersView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
   // A path that matches nothing renders a message, never a blank screen.
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },

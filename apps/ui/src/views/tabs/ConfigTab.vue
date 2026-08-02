@@ -4,9 +4,14 @@
  * purpose, and the tab explains the difference rather than merging them into one table.
  */
 import { computed } from 'vue';
-import { applyVars, dep, persistVars, row, varsQuery } from '../../composables/useDeployment';
+import { applyVars, dep, persistVars, row } from '../../composables/useDeployment';
+import InfoHint from '../../components/InfoHint.vue';
+
 import { conflictingVars } from '../../composables/useVars';
 import VarEditor from '../../components/VarEditor.vue';
+
+/** A count, not the raw query string — `?PR=7&REGION=eu` beside a button is machine talk. */
+const varCount = computed(() => Object.keys(dep.vars ?? {}).length);
 
 const storedVars = computed(() => row.value?.vars);
 const storedList = computed(() => Object.entries(storedVars.value ?? {}));
@@ -29,14 +34,15 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
         which is why this warning stays visible rather than being dismissible.
       -->
       <div class="banner warn">
-        <b>The same variables must accompany <code>down</code> as accompanied <code>up</code>.</b>
+        <b>Tearing down needs the same variables as deploying.</b>
         <p>
-          These are sent as query parameters on <em>every</em> call that resolves this deployment,
-          so <code>up</code> with <code>PR=7</code> and <code>down</code> without it target two
-          different stacks — and the teardown silently misses everything the deploy created. They
-          are kept in this browser (<code>localStorage</code>, keyed by deployment id) so they stay
-          matched <em>here</em>; a different browser, a CI job, or the CLI must pass the same ones
-          itself.
+          These are remembered in this browser. Another browser, a CI job, or the command line has
+          to supply them itself.
+          <InfoHint label="what happens if they differ">
+            The variables are part of how the stack name is resolved, so deploying with one value
+            and tearing down with another targets two different stacks — the teardown reports
+            success having removed nothing. They are stored per deployment in this browser only.
+          </InfoHint>
         </p>
       </div>
 
@@ -44,14 +50,19 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
 
       <div class="row" style="margin-top: var(--s3)">
         <button class="primary" @click="applyVars">Apply &amp; reload</button>
-        <span class="mono mute">{{ varsQuery || 'no variables' }}</span>
+        <span class="mute" style="font-size: var(--t-xs)">
+          {{ varCount ? `${varCount} variable${varCount === 1 ? '' : 's'}` : 'no variables' }}
+        </span>
       </div>
 
       <p class="hint">
-        The <code>env</code> table below lists what the spec <em>declares</em>, which is not the
-        same as what it <em>needs</em>: <code>stack: pr-${PR}</code> consumes <code>PR</code>
-        without declaring it. So this editor is free-form, and the 400 message on a resolve failure
-        is the authoritative list of what is missing.
+        Add any variable you need — the list below is what the spec declares, not everything it
+        uses.
+        <InfoHint label="why the two differ">
+          A spec can consume a variable without declaring it, for instance by building its stack
+          name out of one. If a variable is missing, the error you get when the spec fails to
+          resolve names it exactly — that message is the authoritative list.
+        </InfoHint>
       </p>
     </section>
 
@@ -63,9 +74,8 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
     <section v-if="storedList.length" class="panel">
       <h2 class="section" style="margin-bottom: var(--s3)">Stored on the server</h2>
       <p class="dim" style="font-size: var(--t-sm)">
-        This deployment carries its own variables in the registry, so <code>up</code> and
-        <code>down</code> resolve the same stack even with no query parameters at all. Request
-        variables still win, so anything you set above <em>overrides</em> these.
+        Kept with the deployment on the server, so deploying and tearing down agree without anyone
+        passing anything. Anything set above overrides these.
       </p>
       <ul class="kvlist" style="margin-top: var(--s3)">
         <li v-for="[k, v] in storedList" :key="k">

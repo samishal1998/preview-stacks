@@ -82,6 +82,12 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
       <section class="panel">
         <div class="phead">
           <h2 class="section">Control stack</h2>
+          <InfoHint label="why there are no actions here">
+            pstack itself runs in this stack, so starting or stopping it here would kill the process
+            handling the request — and a failed self-upgrade would leave the host with no control
+            plane and no way back in. It is managed from the host instead.
+            <template v-if="control?.managedBy">Managed by {{ control.managedBy }}.</template>
+          </InfoHint>
           <span v-if="control?.project" class="badge">{{ control.project }}</span>
           <span class="grow" />
           <button class="sm ghost" @click="loadControl">Refresh</button>
@@ -144,23 +150,15 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           </table>
 
           <!--
-            THIS SITS WHERE AN OPERATOR LOOKS FOR up/down/verify BUTTONS, because the answer to
-            "where are they" is the important part. The API serving this page runs INSIDE this
-            stack: `up` here would kill the process performing it, and a failed self-upgrade leaves
-            the host with no control plane and no remote way in. The server states
-            `actionable: false` for exactly this reason. Never add an action here, not even a safe
-            one.
+            NEVER ADD AN ACTION HERE, not even a safe one. The API serving this page runs INSIDE this
+            stack: `up` would kill the process performing it, and a failed self-upgrade leaves the
+            host with no control plane and no remote way in. The server says `actionable: false` for
+            exactly this reason.
+
+            This used to be a banner reading "Read-only — there are no actions here", which spent a
+            block of the page announcing the ABSENCE of something. Nobody looks at a panel with no
+            buttons and wonders why; the handful who do get the reason from the hint in the header.
           -->
-          <div class="banner plain">
-            <b>Read-only — there are no actions here.</b>
-            <p>
-              {{
-                control.note ||
-                'The control stack is not managed through this API: the process serving this request runs inside it.'
-              }}
-            </p>
-            <p v-if="control.managedBy" class="mute">Managed by {{ control.managedBy }}.</p>
-          </div>
         </template>
       </section>
 

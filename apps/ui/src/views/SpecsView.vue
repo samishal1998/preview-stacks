@@ -19,6 +19,7 @@ import SkeletonList from '../components/SkeletonList.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
+import EquivalentCommand from '../components/EquivalentCommand.vue';
 
 const specs = ref<SpecMeta[]>([]);
 const loaded = ref(false);
@@ -160,10 +161,14 @@ const shown = computed(() => {
           <RouterLink to="/submit">Submit</RouterLink> — and that is all you need for a one-off.
           Storing one here pays off when several deployments share it.
         </p>
-        <p class="mute">
-          Storing is not yet possible from this page; send the spec to
-          <code>PUT /api/specs/&lt;name&gt;</code> with your token.
-        </p>
+        <p class="mute">This page cannot store one yet — the command below does.</p>
+        <EquivalentCommand
+          what="storing a spec"
+          method="PUT"
+          path="/api/specs/my-spec"
+          :body="{ spec: '…the contents of your preview.yml…' }"
+          cli="pstack validate -f preview.yml   # then PUT it with the curl above"
+        />
       </div>
     </section>
   </div>

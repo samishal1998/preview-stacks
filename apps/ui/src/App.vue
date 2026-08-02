@@ -29,6 +29,7 @@ import {
   Package,
   Plus,
   Settings2,
+  Users,
   Waypoints,
 } from 'lucide-vue-next';
 
@@ -125,6 +126,11 @@ void settings;
         <RouterLink to="/submit" class="navlink" title="g n">
           <Plus :size="17" aria-hidden="true" />
           <span>Submit</span>
+        </RouterLink>
+
+        <RouterLink to="/users" class="navlink">
+          <Users :size="17" aria-hidden="true" />
+          <span>Users</span>
         </RouterLink>
 
         <RouterLink to="/settings" class="navlink" title="g s">

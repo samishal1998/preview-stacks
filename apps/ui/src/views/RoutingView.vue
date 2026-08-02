@@ -319,7 +319,7 @@ async function remove(): Promise<void> {
         <b>Read-only: the API cannot write to this directory.</b>
         <p>
           The control stack mounts it into the API from 0.4.0 onward. Re-run
-          <code>pstack init</code> on the host to pick up the mount — it is idempotent, and it recreates
+          setup again on the host to pick up the mount — it is safe to repeat, and it recreates
           the control containers.
         </p>
       </div>

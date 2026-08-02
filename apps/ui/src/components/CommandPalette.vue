@@ -46,6 +46,7 @@ const PAGES: Item[] = [
   { id: 'p.routing', label: 'Routing', group: 'Go to', to: '/routing', base: 5 },
   { id: 'p.reg', label: 'Registries', group: 'Go to', to: '/registries', base: 4 },
   { id: 'p.notif', label: 'Notifiers', group: 'Go to', to: '/notifiers', base: 3 },
+  { id: 'p.users', label: 'Users & access', group: 'Go to', to: '/users', base: 2.5 },
   { id: 'p.set', label: 'Settings', hint: 'g s', group: 'Go to', to: '/settings', base: 2 },
   { id: 'a.submit', label: 'Submit a spec', hint: 'g n', group: 'Actions', to: '/submit', base: 1 },
 ];

@@ -15,6 +15,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { authState, checkAuth, login } from '../composables/useAuth';
 import ActionButton from '../components/ActionButton.vue';
 import InfoHint from '../components/InfoHint.vue';
+import EquivalentCommand from '../components/EquivalentCommand.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -52,18 +53,30 @@ async function submit(): Promise<void> {
         <p class="dim">
           No accounts exist on this server yet — create the first one, then sign in.
         </p>
+        <!--
+          A curl block used to sit here permanently, on the FIRST screen anyone sees. It is needed
+          exactly once per host and by one person; behind the button it costs a click then and
+          nothing on every later visit — and it is generated, so it cannot drift from the route.
+        -->
         <div class="banner plain" style="margin-top: var(--s3)">
           <b>Create the first account</b>
           <p>
-            With the machine token from <code>pstack init</code>:
+            This has to be done with the host token, from a terminal — a browser has no way to prove
+            it is allowed to claim a fresh server.
           </p>
-          <pre class="code" style="max-height: none">curl -X POST https://api.&lt;domain&gt;/api/auth/bootstrap \
-  -H "Authorization: Bearer $PSTACK_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{"username":"you","password":"…"}'</pre>
-          <p class="mute">
-            Or set <code>PSTACK_ADMIN_USER</code> / <code>PSTACK_ADMIN_PASSWORD</code> before
-            <code>pstack init</code> — honoured only while no account exists.
+          <EquivalentCommand
+            what="creating the first account"
+            method="POST"
+            path="/api/auth/bootstrap"
+            :body="{ username: 'you', password: '…' }"
+          />
+          <p class="mute" style="margin-top: var(--s3)">
+            It can also be set up ahead of time when the host is first provisioned.
+            <InfoHint label="how">
+              Set the admin username and password in the environment before running the setup
+              command on the host. They are honoured only while no account exists, so they cannot
+              overwrite one later.
+            </InfoHint>
           </p>
         </div>
       </template>
