@@ -9,3 +9,10 @@ dist/
 **/examples/cloud-init.*.yaml
 !**/examples/cloud-init.*.tpl.yaml
 .turbo/
+
+# Generated cloud-configs for a specific host. `pstack cloud-init > my-host.yml` is a normal thing
+# to do in the working tree, and the result names one operator's domain and dashboard — it belongs
+# to them, not to the repo. (One was committed by accident; it carried no credential, because the
+# generator embeds none — tokens are minted at boot.)
+hetzner*.yml
+*.cloud-init.yml
