@@ -32,8 +32,17 @@ body {
   background-image: var(--bg-grad);
   background-attachment: fixed;
   color: var(--fg);
-  font: var(--t-md) / 1.55 var(--sans);
+  font: var(--t-md) / var(--lh-body) var(--sans);
+  letter-spacing: var(--track-body);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /*
+   * `tnum` — tabular figures, globally. This page is mostly NUMBERS in columns: counts, durations,
+   * ports, timestamps. With proportional figures a `1` is narrower than a `0`, so a column of them
+   * shimmers as it updates and never quite lines up. One line fixes every table at once.
+   */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'cv05' 1;
   /* The guarantee. If something inside overflows, it scrolls inside its own box, not the page. */
   overflow-x: hidden;
 }
@@ -67,10 +76,18 @@ code,
 }
 
 /* Focus must stay visible. An ops tool is used by keyboard under pressure. */
+/*
+ * ONE ring, from one token, on everything. An outline plus a spread shadow rather than a bare
+ * outline: the inner ring is the page colour, so the accent ring stays legible whether the focused
+ * thing sits on the page, on a panel, or on a coloured button.
+ */
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 3px;
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--r1);
+}
+a:focus-visible {
+  border-radius: 4px;
 }
 
 /* Reachable by keyboard, invisible until then. */
@@ -251,9 +268,9 @@ code,
 }
 .page-head h1 {
   font-size: var(--t-2xl);
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+  font-weight: 640;
+  letter-spacing: var(--track-display);
+  line-height: var(--lh-tight);
 }
 .page-head .sub {
   color: var(--fg-dim);
@@ -267,9 +284,9 @@ code,
 h2.section {
   font-size: var(--t-xs);
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--track-caps);
   color: var(--fg-dim);
-  font-weight: 600;
+  font-weight: 620;
 }
 
 h3 {
@@ -299,6 +316,19 @@ h3 {
   padding: var(--s4) var(--s4) var(--s5);
   margin-bottom: var(--s4);
   min-width: 0;
+  /* So `.stats` inside can size to the PANEL rather than the viewport — a two-column dashboard
+   * gives its panels half the width, which a viewport media query cannot see. */
+  container-type: inline-size;
+  /*
+   * Catch-light AND shadow, always as a pair — see the note in tokens.css. Remove either and the
+   * panel stops reading as a surface with thickness and goes back to being a filled rectangle.
+   */
+  box-shadow: var(--hairline), var(--elev-2);
+}
+/* A panel that holds only a scrolling list should not also pad it. */
+.panel.flush {
+  padding: 0;
+  overflow: hidden;
 }
 .panel > .phead {
   display: flex;
@@ -306,6 +336,9 @@ h3 {
   gap: var(--s2);
   flex-wrap: wrap;
   margin-bottom: var(--s3);
+}
+.panel.flush > .phead {
+  padding: var(--s4) var(--s4) 0;
 }
 
 .grid-2 {
@@ -326,7 +359,8 @@ h3 {
 
 button,
 .btn {
-  font: 500 var(--t-sm) / 1 var(--sans);
+  font: 530 var(--t-sm) / 1 var(--sans);
+  letter-spacing: var(--track-body);
   color: var(--fg);
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -339,33 +373,56 @@ button,
   gap: var(--s2);
   position: relative;
   overflow: hidden;
+  box-shadow: var(--hairline), var(--elev-1);
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
-    transform var(--dur-fast) var(--ease);
+    box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 button:hover:not(:disabled),
 .btn:hover {
-  border-color: var(--fg-mute);
+  border-color: color-mix(in srgb, var(--fg-mute) 60%, var(--line));
+  background: color-mix(in srgb, var(--hover) 100%, var(--panel-2));
   text-decoration: none;
 }
 button:active:not(:disabled) {
   transform: translateY(1px);
+  /* The catch-light goes out and an inset shadow replaces it: pressed things do not catch light. */
+  box-shadow: inset 0 2px 4px var(--press);
 }
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  box-shadow: none;
 }
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  /* A slight vertical gradient — flat fills read as stickers; lit-from-above reads as a control. */
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff) 0%, var(--accent) 100%);
+  border-color: color-mix(in srgb, var(--accent) 75%, #000);
   color: #fff;
+  box-shadow: var(--hairline-strong), var(--elev-2),
+    0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
+}
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 78%, #fff) 0%, color-mix(in srgb, var(--accent) 94%, #fff) 100%);
+  border-color: color-mix(in srgb, var(--accent) 75%, #000);
+  /* The glow says "this is the one" without adding a second colour to the page. */
+  box-shadow: var(--hairline-strong), var(--elev-2),
+    0 0 18px -2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 button.danger {
   background: var(--fail-soft);
   border-color: color-mix(in srgb, var(--fail) 45%, transparent);
   color: var(--fail);
 }
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fail) 26%, transparent);
+  border-color: color-mix(in srgb, var(--fail) 62%, transparent);
+}
 button.ghost {
   background: transparent;
+  box-shadow: none;
+}
+button.ghost:hover:not(:disabled) {
+  background: var(--hover);
 }
 button.sm {
   min-height: 27px;
@@ -390,6 +447,7 @@ input[type='search'],
 textarea,
 select {
   font: var(--t-sm) / 1.5 var(--sans);
+  letter-spacing: var(--track-body);
   color: var(--fg);
   background: var(--sunk);
   border: 1px solid var(--line);
@@ -398,6 +456,29 @@ select {
   min-height: 32px;
   width: 100%;
   min-width: 0;
+  /*
+   * INSET, where a button is raised. An input is a hole you put something into and a button is a
+   * thing you press; giving them the same box makes a form read as a row of identical rectangles.
+   */
+  box-shadow: inset 0 1px 2px var(--press);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+input[type='text']:hover,
+input[type='password']:hover,
+input[type='search']:hover,
+textarea:hover,
+select:hover {
+  border-color: color-mix(in srgb, var(--fg-mute) 55%, var(--line));
+}
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='search']:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px var(--press),
+    0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 textarea {
   font-family: var(--mono);
@@ -586,15 +667,26 @@ table {
 }
 th {
   text-align: left;
-  font: 600 var(--t-xs) / 1 var(--sans);
+  font: 620 var(--t-xs) / 1 var(--sans);
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: var(--track-caps);
   color: var(--fg-mute);
-  padding: 0 var(--s3) var(--s2);
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--line);
+  /*
+   * The header stays put while the body scrolls. A 200-row deployment list whose column names have
+   * scrolled away is a list you have to scroll back up to read.
+   */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  white-space: nowrap;
 }
 td {
-  padding: var(--s3);
+  /* Tighter than it was: 12px top and bottom made a 4-row table 65px per row, which reads as a
+   * settings form rather than a list you scan. */
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--line-soft);
   vertical-align: middle;
 }
@@ -602,7 +694,11 @@ tbody tr {
   transition: background var(--dur-fast) var(--ease);
 }
 tbody tr:hover {
-  background: var(--panel-2);
+  /* A WASH, not a different panel colour: the row lifts, it does not become another material. */
+  background: var(--hover);
+}
+tbody tr:last-child td {
+  border-bottom: none;
 }
 td.name {
   font-weight: 600;
@@ -756,26 +852,55 @@ pre.log mark {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  /*
+   * `auto-fit` + a small min left six tiles laying out as 5 + 1 ORPHAN — a ragged row that reads as
+   * a layout bug rather than a choice. An explicit count per breakpoint always divides evenly.
+   */
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--s2);
+}
+/*
+ * Six across only when six FIT. Measured: this panel is ~564px in the dashboard's two-column
+ * layout, which gives each of six tiles ~70px of content — and "ISOLATED" at 12px caps needs about
+ * that, so it truncated to "ISOLA…". A label that has to be elided is not a label. 3×2 below the
+ * threshold, and a wide single-column panel still gets its one clean row.
+ */
+@container (min-width: 680px) {
+  .stats {
+    grid-template-columns: repeat(6, 1fr);
+  }
 }
 .stat {
   background: var(--panel-2);
   border: 1px solid var(--line-soft);
   border-radius: var(--r2);
   padding: var(--s3);
+  box-shadow: var(--hairline);
+  min-width: 0;
 }
 .stat .v {
   font: 600 var(--t-2xl) / 1.1 var(--sans);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--track-display);
   font-variant-numeric: tabular-nums;
+}
+/*
+ * A zero is NOT news. Rendered at the same weight as a real count it competes for attention with
+ * the numbers that actually changed, and a dashboard where everything shouts says nothing.
+ */
+.stat[data-zero='true'] .v {
+  color: var(--fg-mute);
+  font-weight: 500;
 }
 .stat .k {
   font-size: var(--t-xs);
   color: var(--fg-mute);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  /* Half the usual caps tracking: these labels are width-constrained by the grid above. */
+  letter-spacing: 0.04em;
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stat.unknown .v {
   color: var(--neutral);
@@ -981,29 +1106,48 @@ pre.log mark {
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }
+/*
+ * A 3px coloured left rule is a 2010 alert box. The status now reads from a small tinted dot at the
+ * start of the row — the same vocabulary the badges already use — so a toast looks like it belongs
+ * to this app rather than to its stylesheet's ancestry, and the panel keeps a single even border.
+ */
 .toast {
   display: flex;
   gap: var(--s3);
   align-items: flex-start;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-left-width: 3px;
   border-radius: var(--r2);
-  padding: var(--s3);
-  box-shadow: var(--shadow);
+  padding: var(--s3) var(--s3) var(--s3) var(--s2);
+  box-shadow: var(--hairline), var(--elev-4);
   font-size: var(--t-sm);
+  position: relative;
 }
-.toast.ok {
-  border-left-color: var(--ok);
+.toast::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 6px 0 0 var(--s2);
+  border-radius: 50%;
+  background: var(--neutral);
+  box-shadow: 0 0 0 3px var(--neutral-soft);
 }
-.toast.error {
-  border-left-color: var(--fail);
+.toast.ok::before {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
 }
-.toast.warn {
-  border-left-color: var(--leak);
+.toast.error::before {
+  background: var(--fail);
+  box-shadow: 0 0 0 3px var(--fail-soft);
 }
-.toast.info {
-  border-left-color: var(--accent);
+.toast.warn::before {
+  background: var(--leak);
+  box-shadow: 0 0 0 3px var(--leak-soft);
+}
+.toast.info::before {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .toast .x {
   margin-left: auto;
@@ -1172,4 +1316,168 @@ kbd {
 .hint-bub.above.hint-enter-from,
 .hint-bub.above.hint-leave-to {
   transform: translateY(3px);
+}
+
+/* ------------------------------------------------------------------ command palette */
+
+/*
+ * Top-anchored, not centred. A palette that appears in the vertical middle jumps as its list grows
+ * and shrinks with every keystroke; pinned near the top, only the bottom edge moves.
+ */
+.palette-scrim {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.palette {
+  width: min(620px, calc(100vw - var(--s5)));
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r3);
+  box-shadow: var(--hairline-strong), var(--elev-4);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: min(60vh, 560px);
+}
+.palette-q {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-mute);
+}
+.palette-q input {
+  /* Reset the global input chrome: inside the palette the whole row IS the field. */
+  flex: 1;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  min-height: 26px;
+  font-size: var(--t-lg);
+  letter-spacing: var(--track-title);
+  color: var(--fg);
+}
+.palette-q input:focus {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+.palette-list {
+  overflow-y: auto;
+  padding: var(--s2);
+  min-height: 0;
+}
+.palette-group {
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-caps);
+  color: var(--fg-mute);
+  padding: var(--s3) var(--s2) var(--s1);
+}
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  box-shadow: none;
+  border-radius: var(--r1);
+  padding: var(--s2) var(--s3);
+  min-height: 34px;
+  color: var(--fg);
+}
+/*
+ * The cursor is driven by `data-on`, and hover MOVES the cursor rather than painting a second
+ * highlight — two lit rows at once (one hovered, one selected) is the classic palette bug where
+ * Enter does something other than what the eye is on.
+ */
+.palette-row[data-on='true'] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.palette-label {
+  font-weight: 520;
+}
+.palette-hint {
+  margin-left: auto;
+  color: var(--fg-mute);
+  font-size: var(--t-xs);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.palette-empty {
+  color: var(--fg-mute);
+  padding: var(--s5) var(--s3);
+  text-align: center;
+  font-size: var(--t-sm);
+}
+.palette-foot {
+  display: flex;
+  gap: var(--s4);
+  align-items: center;
+  padding: var(--s2) var(--s4);
+  border-top: 1px solid var(--line-soft);
+  background: var(--panel-2);
+  color: var(--fg-mute);
+  font-size: var(--t-xs);
+}
+kbd {
+  font: 500 11px / 1 var(--mono);
+  color: var(--fg-dim);
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 5px;
+  margin-right: 3px;
+}
+
+/* The palette springs in — a thing that ARRIVES, not a thing that fades up. */
+.fade-enter-active .palette {
+  animation: palette-in var(--dur-slow) var(--ease-spring);
+}
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * View Transitions. The cross-fade is the browser's default; this only tunes its timing to the
+ * app's own tokens so a route change moves at the same speed as everything else on the page.
+ * `data-vt` is set by the router only where the API exists — see the note there.
+ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur);
+  animation-timing-function: var(--ease);
+}
+/* The old view should not linger under the new one and muddy the text mid-fade. */
+::view-transition-old(root) {
+  animation-name: vt-out;
+}
+::view-transition-new(root) {
+  animation-name: vt-in;
+}
+@keyframes vt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }

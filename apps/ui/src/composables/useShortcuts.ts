@@ -85,6 +85,7 @@ export function useShortcuts() {
 
 /** The sheet's own contents, so the list and the handler above cannot drift apart. */
 export const SHORTCUTS: Array<{ keys: string; what: string }> = [
+  { keys: '⌘K / Ctrl-K', what: 'Open the command palette — jump to any deployment or page' },
   { keys: '?', what: 'Open or close this sheet' },
   { keys: 'g h', what: 'Go to the dashboard' },
   { keys: 'g d', what: 'Go to deployments' },

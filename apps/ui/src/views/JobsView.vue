@@ -2,9 +2,10 @@
 /** Job history. Polled by the shell already, so this view only filters what is in memory. */
 import { computed, ref } from 'vue';
 import { state } from '../composables/useControlPlane';
-import { actionLabel, stamp, took } from '../composables/useFormat';
+import { actionLabel, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import RelativeTime from '../components/RelativeTime.vue';
 import type { JobState } from '../api/types';
 
 const q = ref('');
@@ -78,7 +79,7 @@ const rows = computed(() => {
             <td class="name" data-label="stack">
               <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">{{ j.stack }}</RouterLink>
             </td>
-            <td class="dim nowrap" data-label="started">{{ stamp(j.startedAt) }}</td>
+            <td class="dim nowrap" data-label="started"><RelativeTime :at="j.startedAt" /></td>
             <td class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
             <td class="dim" data-label="steps">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
           </tr>

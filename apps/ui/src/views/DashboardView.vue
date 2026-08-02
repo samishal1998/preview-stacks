@@ -176,12 +176,13 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           <p v-if="state.deploymentsError" class="s-failed">{{ state.deploymentsError }}</p>
           <SkeletonList v-else-if="!state.deploymentsLoaded" :rows="2" tall />
           <template v-else>
+            <!-- `data-zero` dims a nought so it stops competing with the counts that moved. -->
             <div class="stats">
-              <div class="stat"><div class="v">{{ summary.total }}</div><div class="k">total</div></div>
-              <div class="stat"><div class="v">{{ summary.isolated }}</div><div class="k">isolated</div></div>
-              <div class="stat"><div class="v">{{ summary.shared }}</div><div class="k">shared</div></div>
-              <div class="stat"><div class="v">{{ summary.running }}</div><div class="k">running</div></div>
-              <div class="stat busy"><div class="v">{{ summary.busy }}</div><div class="k">busy</div></div>
+              <div class="stat" :data-zero="summary.total === 0"><div class="v">{{ summary.total }}</div><div class="k">total</div></div>
+              <div class="stat" :data-zero="summary.isolated === 0"><div class="v">{{ summary.isolated }}</div><div class="k">isolated</div></div>
+              <div class="stat" :data-zero="summary.shared === 0"><div class="v">{{ summary.shared }}</div><div class="k">shared</div></div>
+              <div class="stat" :data-zero="summary.running === 0"><div class="v">{{ summary.running }}</div><div class="k">running</div></div>
+              <div class="stat busy" :data-zero="summary.busy === 0"><div class="v">{{ summary.busy }}</div><div class="k">busy</div></div>
               <!--
                 The server sends `null`, never `false`, when it could not determine busy/running.
                 An unknown must never be counted as a zero — that is how a live stack gets reported

@@ -9,6 +9,7 @@
  * wrong — is not waiting on the submit editor's bundle.
  */
 
+import { nextTick } from 'vue';
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 
 const routes: RouteRecordRaw[] = [
@@ -66,3 +67,57 @@ router.beforeEach(async (to) => {
   }
   return true;
 });
+
+/*
+ * ── ROUTE TRANSITIONS ────────────────────────────────────────────────────────────────────────────
+ *
+ * The Vue `<Transition mode="out-in">` in App.vue fades the old view out and THEN the new one in, so
+ * every navigation spends a full duration showing neither — a blink that gets more obvious the
+ * faster the app gets. The View Transitions API snapshots both and cross-fades them simultaneously,
+ * and it snapshots the WHOLE page, so a heading that stays put across two routes visibly stays put
+ * instead of blinking with everything else.
+ *
+ * It is a progressive enhancement and stays one: where the API is missing, `data-vt` is never set,
+ * App.vue keeps its CSS transition, and nothing about navigation changes. The two never both run.
+ */
+const supportsViewTransitions =
+  typeof document !== 'undefined' && typeof document.startViewTransition === 'function';
+
+if (supportsViewTransitions) document.documentElement.dataset.vt = 'on';
+
+export { supportsViewTransitions };
+
+if (supportsViewTransitions) {
+  let commitDone: (() => void) | null = null;
+
+  router.beforeResolve(
+    () =>
+      new Promise<void>((resolveNavigation) => {
+        document.startViewTransition(() => {
+          // Let the navigation commit, then HOLD the transition open until Vue has painted the new
+          // view — returning immediately would snapshot the new state before it existed.
+          resolveNavigation();
+          return new Promise<void>((done) => {
+            commitDone = done;
+            /*
+             * The safety net, and it is not paranoia. A view transition that is never released
+             * leaves the browser showing a frozen SNAPSHOT of the page: no clicks, no scroll,
+             * nothing. On a control plane someone opened because production is on fire, a UI that
+             * can wedge itself over an animation is not a trade worth making — so the transition
+             * always ends, on its own, whatever else went wrong.
+             */
+            setTimeout(() => {
+              commitDone?.();
+              commitDone = null;
+            }, 400);
+          });
+        });
+      }),
+  );
+
+  router.afterEach(async () => {
+    await nextTick();
+    commitDone?.();
+    commitDone = null;
+  });
+}

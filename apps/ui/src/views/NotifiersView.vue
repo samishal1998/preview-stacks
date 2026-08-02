@@ -20,6 +20,7 @@ import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import RelativeTime from '../components/RelativeTime.vue';
 
 const notifiers = ref<NotifierRow[]>([]);
 const meta = ref<NotifierMeta | null>(null);
@@ -234,7 +235,7 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
                     {{ n.lastStatus }}
                   </span>
                   <div v-if="n.lastAt" class="mute" style="font-size: var(--t-sm)">
-                    {{ stamp(n.lastAt) }}
+                    <RelativeTime :at="n.lastAt" />
                   </div>
                 </td>
                 <td data-label="">

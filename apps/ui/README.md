@@ -89,3 +89,32 @@ src/
 
 `src/composables/useSteps.ts` is the most important file: it is where a step becomes
 `ok` / `unverifiable` / `leaked` / `failed`, in the same order the CLI's own report uses.
+
+## The design system (0.13.0)
+
+`styles/tokens.css` is the source of truth. Four rules worth knowing before editing anything:
+
+- **A raised surface gets a catch-light AND a shadow, never one of them.** `--hairline` is an inset
+  highlight one pixel tall along the top edge; the elevation shadows are tinted toward the page hue
+  rather than neutral black. Drop either half and a panel flattens into a filled rectangle. Buttons
+  use the same pair, and swap it for an inset shadow while pressed — pressed things do not catch
+  light. Inputs are inset from the start: an input is a hole, a button is a thing you press, and
+  giving them the same box makes a form read as a row of identical rectangles.
+- **Tracking is part of the type scale.** `--track-display` through `--track-caps`: type spaced for
+  15px looks slack at 36px, and small ALL-CAPS labels lose their word-shape and need the opposite.
+  `font-variant-numeric: tabular-nums` is global — this page is mostly numbers in columns, and
+  proportional figures make a column shimmer as it updates.
+- **One focus ring, from `--ring`.** Two rings, the inner one page-coloured, so the accent stays
+  legible on the page, on a panel, and on a coloured button alike. A ring that differs per control
+  reads as an accident to the person least able to tolerate one.
+- **Reduced motion also stops View Transitions.** They are generated outside the document tree, so
+  the `*` selector never reaches them — the `::view-transition-*` rules are stopped explicitly.
+
+Route changes use the **View Transitions API** where it exists (`data-vt` on `<html>`, set by the
+router), and Vue's CSS transition everywhere else. Exactly one of them runs: Vue unmounting a node
+the browser had already swapped for a snapshot throws on every navigation, so where the browser
+animates, Vue does not manage the swap at all.
+
+`components/CommandPalette.vue` is ⌘K. It scores by fuzzy **subsequence**, not substring, so `sdb`
+finds `shared-db`; hover moves the cursor rather than painting a second highlight, because two lit
+rows is the classic palette bug where Enter does something other than what the eye is on.

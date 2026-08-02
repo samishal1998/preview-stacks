@@ -14,10 +14,11 @@ import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
 import type { SpecMeta, SpecsResponse } from '../api/types';
 import { state, loadDeployments } from '../composables/useControlPlane';
-import { stamp } from '../composables/useFormat';
+
 import SkeletonList from '../components/SkeletonList.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
+import RelativeTime from '../components/RelativeTime.vue';
 
 const specs = ref<SpecMeta[]>([]);
 const loaded = ref(false);
@@ -139,7 +140,7 @@ const shown = computed(() => {
                 </span>
                 <span v-else class="mute">nothing yet</span>
               </td>
-              <td class="dim nowrap" data-label="updated">{{ stamp(s.updatedAt) }}</td>
+              <td class="dim nowrap" data-label="updated"><RelativeTime :at="s.updatedAt" /></td>
             </tr>
             <tr v-if="!shown.length">
               <td colspan="5" class="mute">No spec matches “{{ needle }}”.</td>

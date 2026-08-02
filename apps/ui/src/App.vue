@@ -9,6 +9,8 @@
 import { computed, watch } from 'vue';
 import ToastHost from './components/ToastHost.vue';
 import ShortcutSheet from './components/ShortcutSheet.vue';
+import CommandPalette from './components/CommandPalette.vue';
+import { supportsViewTransitions } from './router';
 import { useShortcuts } from './composables/useShortcuts';
 import { usePolling } from './composables/usePolling';
 import { loadDeployments, loadHealth, loadJobs, state } from './composables/useControlPlane';
@@ -154,7 +156,14 @@ void settings;
 
     <main id="main" class="view">
       <RouterView v-slot="{ Component }">
-        <Transition name="view" mode="out-in">
+        <!--
+          Exactly ONE of these runs. `:css="false"` was not enough: `mode="out-in"` still
+          orchestrates the removal, and Vue unmounting a node the browser had already swapped for a
+          view-transition snapshot threw `Cannot read properties of null (reading 'parentNode')` on
+          every navigation. Where the browser animates, Vue does not manage the swap at all.
+        -->
+        <component :is="Component" v-if="supportsViewTransitions" />
+        <Transition v-else name="view" mode="out-in">
           <component :is="Component" />
         </Transition>
       </RouterView>
@@ -162,5 +171,6 @@ void settings;
   </div>
 
   <ToastHost />
+  <CommandPalette />
   <ShortcutSheet :open="sheetOpen" @close="sheetOpen = false" />
 </template>
