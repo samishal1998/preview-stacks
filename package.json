@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@samyx/publish-kit": "^0.0.0-pre.1",
+    "shadcn": "^4.16.1",
     "turbo": "^2.5.6"
   },
   "engines": {

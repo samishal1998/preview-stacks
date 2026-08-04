@@ -10,6 +10,18 @@
 import { watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { dep, isShared, openDeployment } from '../composables/useDeployment';
+import {
+  act,
+  actionError,
+  busy,
+  conflict,
+  conflictJobId,
+  pending,
+  resetActions,
+  whyDisabled,
+} from '../composables/useDeploymentActions';
+import ActionButton from '../components/ActionButton.vue';
+import ConflictNote from '../components/ConflictNote.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 
@@ -30,7 +42,15 @@ const TABS = [
   { to: 'danger', label: 'Danger' },
 ] as const;
 
-watch(() => props.id, (id) => openDeployment(id), { immediate: true });
+watch(
+  () => props.id,
+  (id) => {
+    openDeployment(id);
+    // A stale "refused" from the previous deployment must not greet the next one.
+    resetActions();
+  },
+  { immediate: true },
+);
 
 // Land the operator on the editor when the spec will not resolve — but only from the tab that has
 // nothing to show. Sending them away from Logs or Danger mid-read would be its own annoyance.
@@ -63,7 +83,41 @@ watch(
       <span class="grow" />
       <span v-if="dep.detail" class="badge" :class="dep.detail.kind">{{ dep.detail.kind }}</span>
       <span v-if="dep.detail?.busy === true" class="badge busy"><span class="dot pulse" />busy</span>
+      <!--
+        Deploy and Verify live HERE, on every tab — they are the product's routine actions, and they
+        used to be reachable only through a tab named "Danger". Teardown stays there: the header
+        carries what is safe to reach for, the Danger tab carries what deserves the walk.
+      -->
+      <!-- One flex unit, so on a narrow screen the pair wraps together instead of Verify being
+           orphaned onto its own line under the title. -->
+      <div v-if="dep.detail" class="row" style="flex-wrap: nowrap">
+        <ActionButton
+          variant="primary"
+          :pending="pending === 'up'"
+          :disabled="!!pending || busy"
+          :title="whyDisabled('up')"
+          @click="act('up')"
+        >
+          Deploy
+        </ActionButton>
+        <ActionButton
+          :pending="pending === 'verify'"
+          :disabled="!!pending || busy"
+          :title="whyDisabled('verify')"
+          @click="act('verify')"
+        >
+          Verify
+        </ActionButton>
+      </div>
     </div>
+
+    <ErrorNote v-if="actionError" :text="actionError" title="The action was refused." />
+    <ConflictNote
+      v-if="conflict"
+      :conflict="conflict"
+      :job-id="conflictJobId"
+      style="margin-bottom: var(--s4)"
+    />
 
     <nav class="tabs" aria-label="Deployment sections">
       <RouterLink

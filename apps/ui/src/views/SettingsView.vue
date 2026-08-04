@@ -40,7 +40,9 @@ async function recheck(): Promise<void> {
       </div>
     </div>
 
-    <section class="panel">
+    <!-- `settings-form` caps the field widths: a URL input stretched to the panel's full 1500px
+         reads as a text editor, not a form — see the rule in app.css. -->
+    <section class="panel settings-form">
       <h2 class="phead-title">Connection</h2>
 
       <div class="field">

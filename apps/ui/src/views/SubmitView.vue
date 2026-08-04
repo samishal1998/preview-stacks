@@ -290,14 +290,9 @@ function loadExample(): void {
     </div>
 
     <section class="panel">
-      <p class="dim">
-        Nothing is saved until the spec is valid.
-        <InfoHint label="what happens on a rejected submission">
-          The spec is checked before anything is written, so a rejected submission leaves nothing
-          behind — and a replace never destroys a good record over a typo. Whether the deployment is
-          shared or isolated comes from the spec, not from this form.
-        </InfoHint>
-      </p>
+      <!-- The "nothing saved until valid" reassurance lives beside the Submit button below — the
+           moment of commitment is where a guarantee about committing belongs, not floating above
+           an unrelated id field. -->
 
       <!--
         A `PUT` REPLACES the whole record, and this form cannot pre-fill it: the API has no route
@@ -411,7 +406,7 @@ function loadExample(): void {
           <textarea
             id="spec"
             v-model="form.spec"
-            rows="18"
+            rows="12"
             spellcheck="false"
             placeholder="version: 1&#10;kind: isolated&#10;stack: pr-${PR}&#10;axes: []"
           />
@@ -422,7 +417,7 @@ function loadExample(): void {
           <textarea
             id="compose"
             v-model="form.compose"
-            rows="8"
+            rows="6"
             spellcheck="false"
             placeholder="Written next to spec.yml, so a compose file named compose.yml resolves"
           />
@@ -449,8 +444,16 @@ function loadExample(): void {
 
       <div class="row" style="margin-top: var(--s5)">
         <ActionButton variant="primary" :pending="submitting" :disabled="!canSubmit" @click="submit">
-          {{ submitting ? 'submitting…' : 'Submit' }}
+          {{ submitting ? 'Submitting…' : 'Submit' }}
         </ActionButton>
+        <span v-if="!result" class="mute" style="font-size: var(--t-sm)">
+          Nothing is saved until the spec is valid
+          <InfoHint label="what happens on a rejected submission">
+            The spec is checked before anything is written, so a rejected submission leaves nothing
+            behind — and a replace never destroys a good record over a typo. Whether the deployment
+            is shared or isolated comes from the spec, not from this form.
+          </InfoHint>
+        </span>
         <span v-if="result" class="s-ok">
           {{ result.created ? 'Created' : 'Replaced' }} — stack
           <b>{{ result.stack }}</b>

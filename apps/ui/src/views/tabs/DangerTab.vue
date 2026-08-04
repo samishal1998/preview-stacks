@@ -1,6 +1,10 @@
 <script setup lang="ts">
 /**
- * Lifecycle actions, and forgetting the record. Everything on this page destroys something.
+ * Teardown and forgetting — everything on this page destroys something, and NOTHING else is here.
+ *
+ * Deploy and Verify used to live on this tab too, which meant the product's primary action was
+ * filed under "Danger". They moved to the detail header (`useDeploymentActions`); this tab now
+ * carries exactly what its name promises.
  *
  * The two guards that matter:
  *
@@ -17,13 +21,23 @@
  */
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { api, classifyConflict, problem, type Conflict } from '../../api/client';
-import type { ActionResponse, ConflictBody, JobsResponse } from '../../api/types';
+import { api, problem } from '../../api/client';
+import type { ConflictBody } from '../../api/types';
 import { dep, isShared, varsQuery } from '../../composables/useDeployment';
-import { loadDeployments, state } from '../../composables/useControlPlane';
-import { settings } from '../../composables/useSettings';
+import {
+  act,
+  actionError,
+  busy,
+  conflict,
+  conflictJobId,
+  onConflict,
+  pending,
+  tokenMissing,
+  varsSummary,
+  whyDisabled,
+} from '../../composables/useDeploymentActions';
+import { loadDeployments } from '../../composables/useControlPlane';
 import { toast } from '../../composables/useToasts';
-import { actionLabel } from '../../composables/useFormat';
 import ActionButton from '../../components/ActionButton.vue';
 import ConflictNote from '../../components/ConflictNote.vue';
 import InfoHint from '../../components/InfoHint.vue';
@@ -31,82 +45,14 @@ import ErrorNote from '../../components/ErrorNote.vue';
 
 const router = useRouter();
 
-const pending = ref<'' | 'up' | 'verify' | 'down' | 'forget'>('');
-const actionError = ref('');
-const conflict = ref<Conflict | null>(null);
-const conflictJobId = ref('');
 const downVerify = ref(true);
 const forceTyped = ref('');
 const forgetArmed = ref(false);
-
-/**
- * The variables these actions will send, as prose. Which variables are set decides which stack is
- * touched, so the NAMES are worth stating — the URL-encoded query string they become is not.
- */
-const varsSummary = computed(() => {
-  const names = dep.vars.filter((v) => v.k).map((v) => v.k);
-  // NOT "no variables": with none set here the server resolves the ones stored with the deployment,
-  // and claiming otherwise would have an operator hunting for variables that are already in place.
-  return names.length
-    ? `Sending ${names.join(', ')} with every action.`
-    : 'Using the variables saved with this deployment.';
-});
 
 /** Exact match against the resolved stack name. Nothing looser — no trim-insensitive, no prefix. */
 const forceArmed = computed(
   () => !!dep.detail?.stack && forceTyped.value === dep.detail.stack,
 );
-
-const tokenMissing = computed(() => state.health?.authEnforced === true && !settings.token);
-const busy = computed(() => dep.detail?.busy === true);
-
-/** A disabled control must say why. This is the text that answers it. */
-function whyDisabled(action: 'up' | 'verify' | 'down'): string | undefined {
-  if (!dep.detail) return 'The spec has not resolved — the server cannot compute the stack name.';
-  if (busy.value) return `A job is already in flight for ${dep.detail.stack}.`;
-  if (action === 'down' && isShared.value && !forceArmed.value) {
-    return `Type the stack name "${dep.detail.stack}" below to confirm a shared teardown.`;
-  }
-  return undefined;
-}
-
-async function act(action: 'up' | 'verify' | 'down'): Promise<void> {
-  if (!dep.detail) return;
-  pending.value = action;
-  actionError.value = '';
-  conflict.value = null;
-
-  const body =
-    action === 'down'
-      ? // `force` is only ever true for a shared deployment whose stack name was typed out in full.
-        { verify: downVerify.value, force: isShared.value && forceArmed.value }
-      : {};
-
-  const r = await api.post<ActionResponse & ConflictBody>(
-    `/api/deployments/${encodeURIComponent(dep.id)}/${action}${varsQuery.value}`,
-    body,
-  );
-  pending.value = '';
-
-  if (r.status === 202) {
-    const job = r.body.job;
-    if (job?.id) {
-      toast('info', `${actionLabel(action)} started on ${job.stack}`, {
-        to: `/jobs/${encodeURIComponent(job.id)}`,
-        toLabel: 'Follow',
-      });
-      void loadDeployments();
-      void router.push(`/jobs/${encodeURIComponent(job.id)}`);
-      return;
-    }
-    actionError.value = 'The action was accepted, but the response carried nothing to follow.';
-    return;
-  }
-  if (r.status === 409) return onConflict(r.body);
-
-  actionError.value = problem(r, actionLabel(action).toLowerCase());
-  toast('error', `${actionLabel(action)} was refused.`);
-}
 
 async function forget(): Promise<void> {
   if (!forgetArmed.value) return;
@@ -128,34 +74,16 @@ async function forget(): Promise<void> {
   if (r.status === 409) return onConflict(r.body);
   actionError.value = problem(r, 'forget this deployment');
 }
-
-/**
- * Classify on payload SHAPE (in `client.ts`), never on message text — then look for a running job
- * ONLY to offer a link. "A job is in flight" and "docker did not answer" are shape-identical, so
- * neither is claimed; the server's message is printed verbatim either way. Never retry.
- */
-async function onConflict(body: ConflictBody): Promise<void> {
-  const c = classifyConflict(body);
-  conflict.value = c;
-  conflictJobId.value = '';
-  if (c.kind === 'shared') forceTyped.value = '';
-
-  const stack = c.stack || dep.detail?.stack;
-  if (c.kind !== 'other' || !stack) return;
-  const jl = await api.get<JobsResponse>('/api/jobs');
-  const live = (jl.body.jobs ?? []).find((j) => j.state === 'running' && j.stack === stack);
-  if (live) conflictJobId.value = live.id;
-}
 </script>
 
 <template>
   <div>
     <section class="panel">
-      <h2 class="section" style="margin-bottom: var(--s3)">Lifecycle</h2>
+      <h2 class="section" style="margin-bottom: var(--s3)">Tear down</h2>
 
       <p v-if="!dep.detail" class="mute">
-        Actions are unavailable until this deployment's variables are filled in — without them its
-        stack has no name to act on. Set them under
+        Unavailable until this deployment's variables are filled in — without them its stack has no
+        name to act on. Set them under
         <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">
           Config &amp; variables </RouterLink
         >first.
@@ -170,35 +98,26 @@ async function onConflict(body: ConflictBody): Promise<void> {
           </p>
         </div>
 
-        <div class="row">
-          <ActionButton
-            variant="primary"
-            :pending="pending === 'up'"
-            :disabled="!!pending || busy"
-            :title="whyDisabled('up')"
-            @click="act('up')"
-          >
-            {{ actionLabel('up') }}
-          </ActionButton>
-          <ActionButton
-            :pending="pending === 'verify'"
-            :disabled="!!pending || busy"
-            :title="whyDisabled('verify')"
-            @click="act('verify')"
-          >
-            {{ actionLabel('verify') }}
-          </ActionButton>
+        <p class="dim">
+          Stops and removes this deployment's containers, networks and volumes.
+          {{ varsSummary }}
+          <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">change</RouterLink>
+        </p>
+
+        <div class="row" style="margin-top: var(--s3)">
           <ActionButton
             variant="danger"
             :pending="pending === 'down'"
             :disabled="!!pending || busy || (isShared && !forceArmed)"
-            :title="whyDisabled('down')"
-            @click="act('down')"
+            :title="whyDisabled('down', forceArmed)"
+            @click="act('down', { verify: downVerify, force: isShared && forceArmed })"
           >
             {{ isShared ? 'Tear down (force)' : 'Tear down' }}
           </ActionButton>
-          <span class="grow" />
-          <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Edit spec &amp; compose →</RouterLink>
+          <label class="check">
+            <input v-model="downVerify" type="checkbox" />
+            Check for leftovers afterwards
+          </label>
         </div>
 
         <p v-if="busy" class="hint">
@@ -208,17 +127,6 @@ async function onConflict(body: ConflictBody): Promise<void> {
             the same database would corrupt it, so the second request is refused rather than delayed.
           </InfoHint>
         </p>
-        <p class="hint">
-          {{ varsSummary }}
-          <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">change</RouterLink>
-        </p>
-
-        <div class="row" style="margin-top: var(--s3)">
-          <label class="check">
-            <input v-model="downVerify" type="checkbox" />
-            Check for leftovers afterwards
-          </label>
-        </div>
         <p v-if="!downVerify" class="hint">
           Nothing will check that teardown actually finished. A teardown that silently half-worked is
           the exact failure this tool exists to catch — run <b>Verify</b> yourself afterwards.

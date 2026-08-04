@@ -62,7 +62,7 @@ const kindBlurb = computed(() =>
         <li>
           <span class="k">compose file</span>
           <span class="v mono">
-            {{ dep.detail.compose ? dep.detail.compose.file : '— (no compose section)' }}
+            {{ dep.detail.compose ? dep.detail.compose.file : 'none' }}
           </span>
         </li>
         <li v-if="dep.detail.compose">

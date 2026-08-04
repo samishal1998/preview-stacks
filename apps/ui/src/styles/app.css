@@ -219,6 +219,14 @@ a:focus-visible {
   gap: var(--s1);
   word-break: break-all;
 }
+.rail .foot .foot-who {
+  color: var(--fg-dim);
+  font-weight: 550;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .view {
   min-width: 0;
@@ -457,6 +465,9 @@ button .progress {
 input[type='text'],
 input[type='password'],
 input[type='search'],
+input[type='url'],
+input[type='email'],
+input[type='number'],
 textarea,
 select {
   font: var(--t-sm) / 1.5 var(--sans);
@@ -479,6 +490,9 @@ select {
 input[type='text']:hover,
 input[type='password']:hover,
 input[type='search']:hover,
+input[type='url']:hover,
+input[type='email']:hover,
+input[type='number']:hover,
 textarea:hover,
 select:hover {
   border-color: color-mix(in srgb, var(--fg-mute) 55%, var(--line));
@@ -486,6 +500,9 @@ select:hover {
 input[type='text']:focus,
 input[type='password']:focus,
 input[type='search']:focus,
+input[type='url']:focus,
+input[type='email']:focus,
+input[type='number']:focus,
 textarea:focus,
 select:focus {
   outline: none;
@@ -506,6 +523,21 @@ textarea {
 input::placeholder,
 textarea::placeholder {
   color: var(--fg-mute);
+}
+
+/*
+ * Chrome's autofill paints its own pale-yellow background INSIDE the field, which over a dark
+ * `--sunk` renders as a brown smear (visible on Settings' URL field). The background cannot be
+ * overridden directly — autofill styling ignores `background` — so the standard trick: a huge inset
+ * shadow in the field's own colour covers it, and `-webkit-text-fill-color` keeps the text legible.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--sunk) inset;
+  -webkit-text-fill-color: var(--fg);
+  caret-color: var(--fg);
+  transition: background-color 9999s ease-out;
 }
 
 label {
@@ -560,6 +592,12 @@ label {
   gap: var(--s2);
   margin-bottom: var(--s2);
   align-items: center;
+  /*
+   * Variables are short — PR=7, REGION=eu. On a full-width panel the fractional split handed the
+   * name field ~600px, which reads as a form for paragraphs. Capped, the editor sizes to what the
+   * data actually looks like; the container stays free to be narrower.
+   */
+  max-width: 640px;
 }
 .kv.head {
   font-size: var(--t-xs);
@@ -1829,4 +1867,22 @@ input[type='radio']:disabled {
 }
 .check-grid .check {
   min-height: 26px;
+}
+
+/* ------------------------------------------------------------------ settings */
+
+/*
+ * Fields in a settings form are read as a COLUMN, and a column needs a measure: an input the full
+ * width of a 1500px panel dwarfs its own label and puts the hint a screen-width away from the value
+ * it explains. 560px comfortably fits a URL or a token without reading as a text editor.
+ */
+.settings-form .field input,
+.settings-form input[type='url'],
+.settings-form input[type='password'],
+.settings-form input[type='text'] {
+  max-width: 560px;
+}
+.settings-form .hint,
+.settings-form .mute.hint {
+  max-width: 640px;
 }

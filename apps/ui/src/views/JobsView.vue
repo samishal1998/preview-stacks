@@ -7,6 +7,7 @@ import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
+import InfoHint from '../components/InfoHint.vue';
 import type { JobState } from '../api/types';
 
 const q = ref('');
@@ -27,27 +28,50 @@ const rows = computed(() => {
     <div class="page-head">
       <div>
         <h1>Jobs</h1>
-        <div class="sub">Most recent first, capped at the last 50.</div>
+        <div class="sub">
+          Most recent first, capped at the last 50
+          <InfoHint label="why old jobs disappear">
+            The history is held in memory and a server restart clears it. A job record is the
+            transcript of an attempt, not the truth about what exists — that truth lives in the
+            containers themselves and in each axis's own probe.
+          </InfoHint>
+        </div>
       </div>
     </div>
 
     <section class="panel">
+      <!-- Same one-row toolbar as Deployments — this page had kept the old stacked-label layout,
+           and two list pages with two different toolbars reads as two different products. -->
       <div class="phead">
-        <div class="field" style="flex: 1; min-width: 180px">
-          <label for="jq" class="mute" style="font-size: var(--t-xs)">Search — press /</label>
-          <input id="jq" v-model="q" data-search type="search" placeholder="stack or action" spellcheck="false" />
+        <div class="searchbox">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+            <path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <input
+            id="jq"
+            v-model="q"
+            data-search
+            type="search"
+            aria-label="Search jobs"
+            placeholder="Search by stack or action"
+            spellcheck="false"
+          />
+          <kbd v-if="!q">/</kbd>
         </div>
-        <div class="field">
-          <label for="js" class="mute" style="font-size: var(--t-xs)">State</label>
-          <SelectMenu v-model="only" id="js" label="Filter jobs" :options="[{ value: 'all', label: 'All' }, { value: 'running', label: 'Running' }, { value: 'ok', label: 'Ok' }, { value: 'leaked', label: 'Leaked' }, { value: 'failed', label: 'Failed' }]" />
-        </div>
+        <SelectMenu
+          id="js"
+          v-model="only"
+          label="Filter by state"
+          :options="[
+            { value: 'all', label: 'All states' },
+            { value: 'running', label: 'Running' },
+            { value: 'ok', label: 'Ok' },
+            { value: 'leaked', label: 'Leaked' },
+            { value: 'failed', label: 'Failed' },
+          ]"
+        />
       </div>
-
-      <p class="hint" style="margin: 0 0 var(--s3)">
-        Held in memory. A server restart clears the history — a job record is the transcript of an
-        attempt, not the truth about what exists. That truth lives in docker and in each axis's own
-        probe.
-      </p>
 
       <p v-if="state.jobsError" class="s-failed">{{ state.jobsError }}</p>
       <SkeletonList v-else-if="!state.jobsLoaded" :rows="5" />

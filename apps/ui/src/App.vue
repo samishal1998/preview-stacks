@@ -139,10 +139,17 @@ void settings;
         </RouterLink>
       </nav>
 
+      <!--
+        Two quiet lines, not three ragged ones: WHO on top, the two actions below. The footer used to
+        stack version / identity / shortcuts each with its own alignment, and the corner read as
+        leftovers rather than a designed edge.
+      -->
       <div class="foot">
         <div v-if="state.healthError" class="s-failed">Can't reach the server</div>
-        <div v-else-if="state.health" class="row" style="gap: 2px">
-          <span>v{{ state.health.version }}</span>
+        <div v-else-if="state.health" class="row" style="gap: 4px">
+          <span v-if="authState.user" class="foot-who">{{ authState.user.username }}</span>
+          <span v-else-if="authState.root && authState.checked" class="foot-who">token access</span>
+          <span class="mute">· v{{ state.health.version }}</span>
           <InfoHint label="server details" side="top">
             Data is stored in <code>{{ state.health.dataDir }}</code> on the host.
             <template v-if="state.health.authEnforced === false">
@@ -151,12 +158,10 @@ void settings;
             </template>
           </InfoHint>
         </div>
-        <div v-if="authState.user" class="row" style="gap: 6px">
-          <span>{{ authState.user.username }}</span>
-          <button class="ghost sm" @click="signOut">Sign out</button>
+        <div class="row" style="gap: var(--s1)">
+          <button class="ghost sm" @click="sheetOpen = true">Shortcuts</button>
+          <button v-if="authState.user" class="ghost sm" @click="signOut">Sign out</button>
         </div>
-        <div v-else-if="authState.root && authState.checked" class="mute">token access</div>
-        <div><button class="ghost sm" @click="sheetOpen = true">Shortcuts</button></div>
       </div>
     </aside>
 
