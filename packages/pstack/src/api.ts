@@ -311,12 +311,30 @@ export function createServer(opts: ServerOptions) {
       }
       return null;
     }
-    const cookie = /(?:^|;\s*)pstack_session=([^;]+)/.exec(req.headers.get('cookie') ?? '')?.[1];
-    if (cookie) {
-      const user = auth.sessionUser(cookie);
+    for (const candidate of sessionCandidates(req)) {
+      const user = auth.sessionUser(candidate);
       if (user) return { kind: 'user', user };
     }
     return null;
+  };
+
+  /**
+   * EVERY `pstack_session` value in the Cookie header, not just the first.
+   *
+   * A browser can legitimately hold two cookies with the same name — one set with `Secure` over
+   * https and one over plain http, or a survivor from a previous server database — and it sends
+   * BOTH. Reading only the first meant that when the stale one sorted ahead (per RFC 6265, older
+   * and longer-path cookies do), the live session behind it was never consulted: login "succeeded",
+   * every request 401'd, and the only escape was clearing cookies by hand. A dead candidate costs
+   * one hash lookup; a locked-out operator costs a support thread.
+   */
+  const sessionCandidates = (req: Request): string[] => {
+    const header = req.headers.get('cookie') ?? '';
+    const out: string[] = [];
+    for (const m of header.matchAll(/(?:^|;\s*)pstack_session=([^;]+)/g)) {
+      if (m[1]) out.push(m[1]);
+    }
+    return out;
   };
 
   const authed = (req: Request): boolean => principal(req) !== null;
@@ -457,8 +475,9 @@ export function createServer(opts: ServerOptions) {
         }
 
         if (path === '/api/auth/logout' && req.method === 'POST') {
-          const cookie = /(?:^|;\s*)pstack_session=([^;]+)/.exec(req.headers.get('cookie') ?? '')?.[1];
-          if (cookie) auth.logout(cookie);
+          // Every candidate, same reason as principal(): with duplicate cookies, revoking only the
+          // first can leave the session the browser will actually use next time still alive.
+          for (const candidate of sessionCandidates(req)) auth.logout(candidate);
           // Expire the cookie regardless — logging out must always succeed.
           return json({ ok: true }, { headers: { 'set-cookie': sessionCookie(req, '', 0) } });
         }

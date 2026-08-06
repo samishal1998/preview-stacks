@@ -12,6 +12,8 @@ import type { LogsResponse, RuntimeResponse } from '../../api/types';
 import { dep } from '../../composables/useDeployment';
 import InfoHint from '../../components/InfoHint.vue';
 import SelectMenu from '../../components/SelectMenu.vue';
+import LogViewer from '../../components/LogViewer.vue';
+import type { LogRow } from '../../components/log-viewer-types';
 
 const tail = ref(200);
 /** '' means the whole stack. */
@@ -93,6 +95,38 @@ const shown = computed(() => {
   const lines = text.split('\n').filter((l) => l.toLowerCase().includes(needle));
   return lines.length ? lines.join('\n') : `(no line matches "${filter.value}")`;
 });
+
+/**
+ * Raw is ALWAYS available, one click away. The pretty view re-arranges compose's output, and a
+ * re-arranged log is the wrong thing to paste into a bug report or diff against a colleague's —
+ * raw shows the exact bytes the server sent, filter and all.
+ */
+const raw = ref(false);
+
+/**
+ * Compose prefixes every line with `container-name  | `. The pretty view lifts that prefix into a
+ * non-wrapping gutter with a stable per-service colour, so interleaved services stop reading as one
+ * grey wall. A line with no prefix (a compose warning, a continuation) gets an empty gutter rather
+ * than being guessed at.
+ */
+const PREFIX = /^(\S+)\s+\| /;
+const logRows = computed<LogRow[]>(() => {
+  const text = shown.value;
+  if (!text || text.startsWith('(no line matches')) return [];
+  const hues = new Map<string, number>();
+  return text.split('\n').map((line, i) => {
+    const m = PREFIX.exec(line);
+    if (!m) return { key: i, text: line };
+    const svc = m[1]!;
+    if (!hues.has(svc)) hues.set(svc, hues.size % 6);
+    return {
+      key: i,
+      gutter: svc,
+      text: line.slice(m[0].length),
+      tone: `svc-${hues.get(svc)}`,
+    };
+  });
+});
 </script>
 
 <template>
@@ -159,7 +193,21 @@ const shown = computed(() => {
         </InfoHint>
       </div>
 
-      <pre v-if="logs" class="log">{{ shown || '(no output)' }}</pre>
+      <template v-if="logs">
+        <pre v-if="raw" class="log">{{ shown || '(no output)' }}</pre>
+        <LogViewer v-else :rows="logRows" :copy-text="shown" empty-text="(no output)" />
+        <div class="row" style="margin-top: var(--s2)">
+          <label class="check">
+            <input v-model="raw" type="checkbox" />
+            Raw output
+            <InfoHint label="when raw matters">
+              The pretty view lifts each line's service prefix into a coloured column. Raw is the
+              exact text the server sent — the form to paste into a bug report or compare with
+              someone else's copy.
+            </InfoHint>
+          </label>
+        </div>
+      </template>
       <p v-else-if="!loading" class="mute" style="margin-top: var(--s3)">
         Press <b>Fetch</b> to read the last {{ tail }} lines{{ service ? ` of ${service}` : '' }}.
       </p>

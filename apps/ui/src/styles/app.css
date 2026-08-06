@@ -1886,3 +1886,90 @@ input[type='radio']:disabled {
 .settings-form .mute.hint {
   max-width: 640px;
 }
+
+/* ------------------------------------------------------------------ log viewer */
+
+.lv {
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  background: var(--sunk);
+  overflow: hidden;
+}
+.lv-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--t-xs);
+  color: var(--fg-mute);
+}
+.lv-box {
+  max-height: 520px;
+  overflow-y: auto;
+  padding: var(--s2) 0 var(--s3);
+  font: var(--t-sm) / 1.6 var(--mono);
+  overscroll-behavior: contain;
+}
+.lv-empty {
+  color: var(--fg-mute);
+  padding: var(--s4) var(--s3);
+  font-family: var(--sans);
+}
+.lv-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 var(--s3);
+  padding: 1px var(--s3);
+  /* The whole trick for thousands of rows: the browser skips layout/paint for off-screen ones. */
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 22px;
+}
+.lv-row:hover {
+  background: var(--hover);
+}
+/* The gutter NEVER wraps — that was the original complaint: a 19-character timestamp folding a
+ * one-line message into six. */
+.lv-gutter {
+  white-space: nowrap;
+  color: var(--fg-mute);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.lv-msg {
+  white-space: pre-wrap;
+  /* Break inside an 80-char token (a URL, a hash) but never mid-word for prose. */
+  overflow-wrap: anywhere;
+  color: var(--fg-dim);
+}
+.lv-row.error .lv-msg {
+  color: var(--fail);
+}
+.lv-row.warn .lv-msg {
+  color: var(--leak);
+}
+.lv-row.ok .lv-msg {
+  color: var(--ok);
+}
+/* Per-service hues for compose logs — stable, muted, and legible in both themes. */
+.lv-row.svc-0 .lv-gutter { color: #7aa2f7; }
+.lv-row.svc-1 .lv-gutter { color: #9ece6a; }
+.lv-row.svc-2 .lv-gutter { color: #e0af68; }
+.lv-row.svc-3 .lv-gutter { color: #bb9af7; }
+.lv-row.svc-4 .lv-gutter { color: #7dcfff; }
+.lv-row.svc-5 .lv-gutter { color: #f7768e; }
+.lv-sep {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  color: var(--fg-mute);
+  font-family: var(--sans);
+  font-size: var(--t-xs);
+}
+.lv-sep::before,
+.lv-sep::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line-soft);
+}

@@ -12,6 +12,8 @@ import { api, problem } from '../api/client';
 import type { Job, LogEvent } from '../api/types';
 import { leakedAxes, countUnverifiable } from '../composables/useSteps';
 import { actionLabel, stamp, took } from '../composables/useFormat';
+import LogViewer from '../components/LogViewer.vue';
+import type { LogRow } from '../components/log-viewer-types';
 import StepList from '../components/StepList.vue';
 import StateBadge from '../components/StateBadge.vue';
 import ErrorNote from '../components/ErrorNote.vue';
@@ -23,8 +25,29 @@ const lines = ref<LogEvent[]>([]);
 const error = ref('');
 const loading = ref(true);
 const streaming = ref(false);
-const follow = ref(true);
-const logEl = ref<HTMLElement | null>(null);
+
+/** Job events → viewer rows. The date repeats for hundreds of lines, so it appears once per DAY as
+ *  a separator and each row carries only the clock; the full stamp survives in the tooltip. */
+const logRows = computed<LogRow[]>(() => {
+  const out: LogRow[] = [];
+  let lastDay = '';
+  for (const l of lines.value) {
+    const d = new Date(l.at);
+    const day = d.toLocaleDateString('sv');
+    if (day !== lastDay) {
+      out.push({ key: `day-${day}-${l.seq}`, separator: true, text: day });
+      lastDay = day;
+    }
+    out.push({
+      key: l.seq,
+      gutter: d.toTimeString().slice(0, 8),
+      gutterTitle: stamp(l.at),
+      text: l.message,
+      tone: l.level,
+    });
+  }
+  return out;
+});
 
 let source: EventSource | null = null;
 
@@ -76,7 +99,6 @@ function stream(): void {
       return;
     }
     lines.value.push(payload as LogEvent);
-    if (follow.value) queueMicrotask(scrollToEnd);
   };
 
   // An error here is usually the job having ended between the fetch and the connect, or the API
@@ -87,10 +109,6 @@ function stream(): void {
   };
 }
 
-function scrollToEnd(): void {
-  const el = logEl.value;
-  if (el) el.scrollTop = el.scrollHeight;
-}
 
 watch(
   () => props.jobId,
@@ -151,29 +169,21 @@ onBeforeUnmount(closeStream);
     <section class="panel">
       <div class="phead">
         <h2 class="phead-title">Log</h2>
-        <div class="row" style="gap: 8px">
-          <span v-if="streaming" class="mute pulse">streaming…</span>
-          <label class="row" style="gap: 6px">
-            <input v-model="follow" type="checkbox" />
-            <span class="mute">Follow</span>
-          </label>
-          <button
-            v-if="!streaming && job?.state === 'running'"
-            class="btn"
-            @click="stream"
-          >
-            Reconnect
-          </button>
-        </div>
       </div>
 
-      <div ref="logEl" class="logbox" role="log" aria-live="polite">
-        <div v-if="loading" class="mute">Loading…</div>
-        <div v-else-if="!lines.length" class="mute">No output.</div>
-        <div v-for="l in lines" :key="l.seq" class="logline" :class="l.level">
-          <span class="mute">{{ stamp(l.at) }}</span> {{ l.message }}
-        </div>
-      </div>
+      <!-- Time-of-day gutter with a date separator when the day flips — the full 19-character
+           timestamp per line is what used to wrap every entry onto five or six lines. -->
+      <LogViewer
+        :rows="logRows"
+        :live="streaming"
+        :empty-text="loading ? 'Loading…' : 'No output.'"
+      >
+        <template #actions>
+          <button v-if="!streaming && job?.state === 'running'" class="ghost sm" @click="stream">
+            Reconnect
+          </button>
+        </template>
+      </LogViewer>
     </section>
 
     <section v-if="job?.outcome" class="panel">

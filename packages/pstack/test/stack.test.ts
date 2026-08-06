@@ -2970,6 +2970,56 @@ describe('a disconnected SSE client must not break the job it was watching', () 
   });
 });
 
+describe('duplicate session cookies — the lockout that only clearing cookies used to fix', () => {
+  const TOKEN = 'root-machine-token-value';
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-cookie-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  test('a dead cookie ahead of the live one no longer locks the operator out', async () => {
+    /*
+     * A browser can hold TWO cookies named pstack_session — one set with `Secure` over https and
+     * one over plain http, or a survivor from a previous server database — and it sends both, the
+     * stale one often first (RFC 6265 sorts older/longer-path cookies ahead). The server used to
+     * read only the first: login "succeeded", every request 401'd, and no amount of re-logging-in
+     * could fix it, because the new cookie never dislodged the dead duplicate.
+     */
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    const base = `http://127.0.0.1:${server.port}`;
+    const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+    try {
+      await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ username: 'alice', password: 'a-long-password-here' }),
+      });
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'alice', password: 'a-long-password-here' }),
+      });
+      const live = /pstack_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+      expect(live).not.toBe('');
+
+      const me = (cookie: string) => fetch(`${base}/api/auth/me`, { headers: { cookie } });
+      // The dead candidate FIRST — the exact arrangement that used to 401 forever.
+      expect((await me(`pstack_session=dead-stale-value; pstack_session=${live}`)).status).toBe(200);
+      // Order-independent, and a lone dead cookie still refuses.
+      expect((await me(`pstack_session=${live}; pstack_session=dead-stale-value`)).status).toBe(200);
+      expect((await me('pstack_session=dead-stale-value')).status).toBe(401);
+
+      // Logout revokes EVERY candidate: with duplicates, revoking only the first can leave the
+      // session the browser uses next time alive.
+      await fetch(`${base}/api/auth/logout`, {
+        method: 'POST',
+        headers: { cookie: `pstack_session=dead-stale-value; pstack_session=${live}` },
+      });
+      expect((await me(`pstack_session=${live}`)).status).toBe(401);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
 describe('changing a password', () => {
   const TOKEN = 'root-machine-token-value';
   const tmpd = () =>

@@ -215,7 +215,33 @@ async function submit(): Promise<void> {
   error.value = problem(r, 'save this deployment');
 }
 
-const EXAMPLE_SPEC = `version: 1
+/**
+ * The preview domain, guessed from where this page is served.
+ *
+ * The UI lives on a host UNDER the preview domain (ui.preview.example.com, pstack.preview…), so
+ * previews live beside it: drop this page's own first label and that is the base every generated
+ * hostname hangs off. localhost and bare IPs have no domain to offer — those keep an honest
+ * placeholder rather than generating `pr-123.192.168.1.5`.
+ */
+function detectPreviewDomain(): string {
+  const h = location.hostname;
+  if (h === 'localhost' || h.endsWith('.localhost') || /^[\d.]+$/.test(h) || h.includes(':')) {
+    return 'preview.example.com';
+  }
+  const labels = h.split('.');
+  return labels.length >= 3 ? labels.slice(1).join('.') : h;
+}
+
+/**
+ * Kept as a function of the domain so the example is true on the host it is loaded on — a spec
+ * copied from here should deploy without edits, not after find-and-replacing example.com.
+ *
+ * The compose half uses `pstack.routing.port`, NOT hand-written traefik labels: pstack generates
+ * the router, TLS and network wiring from that one label. A bare `traefik.enable=true` is the
+ * OPT-OUT signal (any traefik.* label means "leave my service alone") — which is what an older
+ * version of this example taught, producing a service that was never reachable.
+ */
+const exampleSpec = (domain: string): string => `version: 1
 kind: isolated
 
 # The stack identity: the compose project name, and $STACK inside every hook.
@@ -223,7 +249,9 @@ kind: isolated
 stack: pr-\${PR}
 
 env:
-  PREVIEW_DOMAIN: preview.example.com
+  # The base every generated hostname hangs off: the app below is served at
+  # app-pr-\${PR}.${domain}
+  PREVIEW_DOMAIN: ${domain}
 
 compose:
   file: compose.yml
@@ -256,12 +284,15 @@ const EXAMPLE_COMPOSE = `services:
     image: nginx:alpine
     profiles: [app]
     labels:
-      - traefik.enable=true
+      # The ONE label routing needs: pstack generates the Traefik router, TLS and network wiring
+      # from it. Writing any traefik.* label yourself is the opt-out — pstack then leaves the
+      # service entirely alone, so only do that when you need something the shorthand cannot say.
+      - pstack.routing.port=80
 `;
 
 function loadExample(): void {
   source.value = 'inline';
-  form.value.spec = EXAMPLE_SPEC;
+  form.value.spec = exampleSpec(detectPreviewDomain());
   if (!form.value.compose.trim()) form.value.compose = EXAMPLE_COMPOSE;
   if (!form.value.id) form.value.id = 'pr-123';
   if (!vars.value.some((e) => e.k)) vars.value = [{ k: 'PR', v: '123' }];

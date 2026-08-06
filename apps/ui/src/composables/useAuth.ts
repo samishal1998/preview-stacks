@@ -13,6 +13,7 @@
  */
 import { reactive } from 'vue';
 import { api, onUnauthorized } from '../api/client';
+import { router } from '../router';
 
 export const authState = reactive({
   /** The startup check has completed — routing decisions before this would flicker. */
@@ -31,6 +32,12 @@ export async function checkAuth(): Promise<void> {
   const me = await api.getAuthed<{ root: boolean; user?: { id: number; username: string; role: string } }>(
     '/api/auth/me',
   );
+  /*
+   * Status 0 is "the server did not answer", not "you are signed out" — a control plane restarting
+   * for two seconds must not bounce a valid session to the login page. Leaving `checked` false
+   * makes the router guard retry on the next navigation instead of caching the outage as a verdict.
+   */
+  if (me.status === 0) return;
   authState.checked = true;
   if (me.ok) {
     authState.authed = true;
@@ -62,12 +69,23 @@ export async function logout(): Promise<void> {
   authState.user = null;
 }
 
-// Any 401 anywhere flips the state; the router guard turns that into a redirect. Registered at
-// module scope so it exists before the first request fires.
+/*
+ * Any 401 anywhere flips the state AND navigates. The old version only flipped and left the
+ * redirect to the router guard — which runs on navigation, so a session expiring while you sat on
+ * a page produced a wall of dead panels that stayed until you happened to click something. The
+ * navigation carries `next`, so signing back in lands where the session died, not on the dashboard.
+ */
 onUnauthorized(() => {
-  if (authState.checked) {
-    authState.authed = false;
-    authState.user = null;
-    authState.root = false;
+  if (!authState.checked) return;
+  const wasAuthed = authState.authed;
+  authState.authed = false;
+  authState.user = null;
+  authState.root = false;
+  const route = router.currentRoute.value;
+  if (wasAuthed && route.name !== 'login') {
+    void router.replace({
+      name: 'login',
+      query: route.fullPath !== '/' ? { next: route.fullPath } : {},
+    });
   }
 });
