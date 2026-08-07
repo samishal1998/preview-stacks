@@ -9,6 +9,9 @@
  *   GET|POST /api/users, DELETE /api/users/:id
  *   PUT    /api/users/:id/password       { password } — also revokes that user's sessions+tokens
  *   GET|POST /api/tokens, DELETE /api/tokens/:id   personal API tokens, scoped to the caller
+ *   GET    /api/host-vars                variables (with values) + secrets (names only)
+ *   PUT    /api/host-vars/:name          { value, secret } — a secret's value is write-only
+ *   DELETE /api/host-vars/:name
  *
  *   EVERYTHING BELOW REQUIRES AUTH — session cookie, personal token, or PSTACK_TOKEN. Reads
  *   included: job outcomes carry captured credentials by design (docs/secret-exposure.md), so an
@@ -108,6 +111,8 @@ import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
 import { down, up, verify } from './stack.ts';
 import { publicConfig, redactForNotifier, typeOf } from './notify.ts';
+import { HostVars, HostVarsError } from './hostvars.ts';
+import type { Sink } from './log.ts';
 import {
   actorOf,
   execArgv,
@@ -212,6 +217,21 @@ export function createServer(opts: ServerOptions) {
   const auth = new Auth(store);
   const hooks = new Webhooks(store, publicConfig);
   const terminals = new TerminalAudit(store);
+  const hostVars = new HostVars(store);
+  /** Every registry.resolve on this server goes through here, so a spec referencing
+   *  ${vars.*}/${secrets.*} resolves identically on every route. */
+  const resolveDep = (id: string, vars: Record<string, string | undefined> = {}) =>
+    registry.resolve(id, vars, hostVars.resolveMaps());
+  /**
+   * A sink that scrubs host-secret VALUES from every job log line, at the one choke point all of
+   * up/down/verify write through. Hooks echo whatever they like — `echo $DB_PASSWORD` is one
+   * debugging session away — and by-name redaction cannot catch a value, only content can.
+   */
+  const scrubbedSink = (inner: Sink): Sink => {
+    const secrets = hostVars.secretValues();
+    if (secrets.length === 0) return inner;
+    return { emit: (level, message) => inner.emit(level, redactText(message, secrets)) };
+  };
   const terminalArgv = opts.terminalArgv ?? execArgv;
   const dispatcher = new Dispatcher(hooks);
   /**
@@ -588,7 +608,7 @@ export function createServer(opts: ServerOptions) {
             let spec: Stack | null = null;
             let unresolved: string | undefined;
             try {
-              spec = await registry.resolve(meta.id, vars);
+              spec = await resolveDep(meta.id, vars);
             } catch (err) {
               unresolved = (err as Error).message;
             }
@@ -697,7 +717,9 @@ export function createServer(opts: ServerOptions) {
             // errors are caught here, with the raw SpecError text rather than a wrapped one.
             let parsed: Stack;
             try {
-              parsed = parseSpec(specSource, { ...process.env, ...vars, ...env });
+              // The same host values the resolve path uses — a spec referencing ${secrets.*}
+              // must validate at submission exactly as it will resolve at deploy time.
+              parsed = parseSpec(specSource, { ...process.env, ...vars, ...env }, hostVars.resolveMaps());
             } catch (err) {
               if (err instanceof SpecError) return json({ error: `spec: ${err.message}` }, { status: 400 });
               throw err;
@@ -732,12 +754,18 @@ export function createServer(opts: ServerOptions) {
               for (const other of await registry.list()) {
                 if (other.id === id) continue;
                 // Resolved with the other deployment's own stored vars, which is what its up/down use.
-                const s = await registry.resolve(other.id, {}).catch(() => null);
+                const s = await resolveDep(other.id, {}).catch(() => null);
                 if (s?.stack === parsed.stack) stackSharedWith.push(other.id);
               }
             }
 
-            const dep = await registry.put(id, specSource, { composeYaml: composeSource, env, vars, specName });
+            const dep = await registry.put(id, specSource, {
+              composeYaml: composeSource,
+              env,
+              vars,
+              specName,
+              host: hostVars.resolveMaps(),
+            });
             // Identity only. `specSource`/`composeSource` are in scope right here and both routinely
             // carry inline credentials (a hook is a shell string; a shared deployment's compose holds
             // POSTGRES_PASSWORD), and a webhook URL is outside the auth gate that protects every
@@ -767,7 +795,7 @@ export function createServer(opts: ServerOptions) {
 
           if (!action) {
             if (req.method === 'GET') {
-              const spec = await registry.resolve(id, vars);
+              const spec = await resolveDep(id, vars);
               // Field-by-field on purpose — see guard 3 in the header. Axis HOOK NAMES, never hook
               // bodies: a hook is a shell string that routinely carries an API token inline.
               return json({
@@ -805,7 +833,7 @@ export function createServer(opts: ServerOptions) {
             }
 
             if (req.method === 'DELETE') {
-              const spec = await registry.resolve(id, vars);
+              const spec = await resolveDep(id, vars);
               if (jobs.isBusy(spec.stack)) {
                 return json(
                   { error: `stack ${spec.stack} has a job in flight`, stack: spec.stack },
@@ -852,7 +880,7 @@ export function createServer(opts: ServerOptions) {
           if (req.method !== 'POST') return json({ error: 'use POST' }, { status: 405 });
 
           const body = (await req.json().catch(() => ({}))) as { verify?: boolean; force?: boolean };
-          const spec = await registry.resolve(id, vars);
+          const spec = await resolveDep(id, vars);
           const runner = runnerFor(spec, dep.dir);
 
           // Answer the shared-kind refusal synchronously rather than handing back a job id that is
@@ -874,11 +902,19 @@ export function createServer(opts: ServerOptions) {
             );
           }
 
-          const job = jobs.start(spec.stack, action, (sink) => {
-            if (action === 'up') return up(spec, runner, sink);
-            if (action === 'verify') return verify(spec, runner, sink);
-            return down(spec, runner, { verify: body.verify ?? true, force: body.force ?? false }, sink);
-          });
+          const hostSecretValues = hostVars.secretValues();
+          const job = jobs.start(
+            spec.stack,
+            action,
+            (rawSink) => {
+              const sink = scrubbedSink(rawSink);
+              if (action === 'up') return up(spec, runner, sink);
+              if (action === 'verify') return verify(spec, runner, sink);
+              return down(spec, runner, { verify: body.verify ?? true, force: body.force ?? false }, sink);
+            },
+            // The outcome path: a FAILING hook's stderr lands in step messages, not the sink.
+            (text) => (hostSecretValues.length ? redactText(text, hostSecretValues) : text),
+          );
           if (!job) {
             // One job per stack: a `down` racing an `up` over the same database branch is
             // corruption, not contention, so the conflict is surfaced instead of queued.
@@ -888,6 +924,38 @@ export function createServer(opts: ServerOptions) {
             );
           }
           return json({ job: { id: job.id, stack: job.stack, action: job.action, state: job.state } }, { status: 202 });
+        }
+
+        // ---- host variables & secrets ----------------------------------------------------
+        // The GitHub model, scoped to one host: a VARIABLE is readable configuration, a SECRET's
+        // value goes in and never comes back out. Specs reference them as ${vars.NAME} and
+        // ${secrets.NAME} — see spec.ts for why the namespace is explicit.
+        if (path === '/api/host-vars' && req.method === 'GET') {
+          return json({ entries: hostVars.list() });
+        }
+        const hv = /^\/api\/host-vars\/([A-Za-z0-9_]+)$/.exec(path);
+        if (hv) {
+          const name = hv[1]!;
+          if (req.method === 'PUT') {
+            const body = (await req.json().catch(() => null)) as
+              | { value?: unknown; secret?: unknown }
+              | null;
+            if (!body || typeof body.value !== 'string' || typeof body.secret !== 'boolean') {
+              return json({ error: 'body must be { value: string, secret: boolean }' }, { status: 400 });
+            }
+            const r = hostVars.put(name, body.value, body.secret);
+            // The value is echoed back ONLY for a variable — a secret's storage is the last time
+            // the server ever emits it.
+            return json(
+              { name, secret: body.secret, value: body.secret ? null : body.value },
+              { status: r.created ? 201 : 200 },
+            );
+          }
+          if (req.method === 'DELETE') {
+            if (!hostVars.remove(name)) return json({ error: `no such entry: ${name}` }, { status: 404 });
+            return json({ deleted: name });
+          }
+          return json({ error: 'use PUT or DELETE' }, { status: 405 });
         }
 
         // ---- named specs ----------------------------------------------------------------
@@ -1030,7 +1098,7 @@ export function createServer(opts: ServerOptions) {
           const id = decodeURIComponent(lm[1]!);
           const dep = await registry.get(id);
           if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
-          const spec = await registry.resolve(id, vars);
+          const spec = await resolveDep(id, vars);
           // Bounded: an unbounded tail on a chatty stack would stream megabytes into a browser tab.
           const tailRaw = Number(url.searchParams.get('tail') ?? 200);
           const tail = Number.isFinite(tailRaw) ? Math.min(Math.max(tailRaw, 1), 2000) : 200;
@@ -1044,7 +1112,12 @@ export function createServer(opts: ServerOptions) {
           // Application logs are the one place a secret shows up as free text — an app echoing its
           // own config, a hook printing a connection string. Redact by content before it leaves the
           // host, and mask this process's own token explicitly since it is the worst thing to leak.
-          const text = redactText(r.stdout + (r.stderr ? `\n${r.stderr}` : ''), [opts.token ?? '']);
+          const text = redactText(r.stdout + (r.stderr ? `\n${r.stderr}` : ''), [
+            opts.token ?? '',
+            // Containers print their own environment freely; a host secret handed to a service via
+            // the spec's env block is one crash-handler away from its logs.
+            ...hostVars.secretValues(),
+          ]);
           // `service` echoed so a UI can tell a stale response from a current one after a switch.
           return json({ stack: spec.stack, tail, service: svcRaw ?? null, ok: r.ok, text });
         }
@@ -1092,7 +1165,7 @@ export function createServer(opts: ServerOptions) {
           const wanted = url.searchParams.get('container');
           if (!wanted) return json({ error: 'container is required' }, { status: 400 });
 
-          const spec = await registry.resolve(id, vars);
+          const spec = await resolveDep(id, vars);
           // `challenge: 'unknown'` skips a docker call this route has no use for.
           const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown' });
           const c = rt.containers.find((x) => x.id === wanted || x.name === wanted);
@@ -1145,7 +1218,7 @@ export function createServer(opts: ServerOptions) {
           const id = decodeURIComponent(rtm[1]!);
           const dep = await registry.get(id);
           if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
-          const spec = await registry.resolve(id, vars);
+          const spec = await resolveDep(id, vars);
           // Gathered once and passed in: the router-name collision check is global across the daemon
           // (Traefik's router namespace is), so it cannot be answered from this stack alone.
           const all = await allTraefikRouters(host);
@@ -1469,6 +1542,7 @@ export function createServer(opts: ServerOptions) {
         if (err instanceof RoutingError) return json({ error: err.message }, { status: 400 });
         // A malformed registry host, a missing username, or a directory that is not mounted.
         if (err instanceof RegistryAuthError) return json({ error: err.message }, { status: 400 });
+        if (err instanceof HostVarsError) return json({ error: err.message }, { status: 400 });
         if (err instanceof AuthError) return json({ error: err.message }, { status: 400 });
         // Also the caller's problem: a spec that will not parse, or a name that cannot be a
         // directory. Mapped here as well as in the deployments branch, because PUT /api/specs/:name

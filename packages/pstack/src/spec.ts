@@ -151,16 +151,47 @@ export function resolvePreviewDomain(
 /** Non-fatal spec observations, surfaced by `pstack validate`. Reset per `loadSpec`. */
 export const warnings: string[] = [];
 
-const VAR = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/**
+ * `${NAME}` from the request/deployment environment, or the EXPLICIT `${vars.NAME}` /
+ * `${secrets.NAME}` from host-level storage. The namespace is deliberate, GitHub-style: a plain
+ * `${REGION}` keeps meaning "whatever this request supplied", and a spec that reads host state says
+ * so on its face — no precedence rule between the two can ever need explaining, because they are
+ * spelled differently.
+ */
+const VAR = /\$\{(?:(vars|secrets)\.)?([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/** Host-level values, supplied by the control plane. Absent entirely under the bare CLI. */
+export type HostValues = { vars: Record<string, string>; secrets: Record<string, string> };
 
 /**
  * Substitute `${VAR}` from `vars`. Unknown variables are an error rather than an empty string:
  * silently expanding `${PR}` to "" yields a stack named `pr-` that collides across every PR, which
  * is far worse than failing loudly.
  */
-export function interpolate(input: string, vars: Record<string, string>, where: string): string {
+export function interpolate(
+  input: string,
+  vars: Record<string, string>,
+  where: string,
+  host?: HostValues,
+): string {
   const missing = new Set<string>();
-  const out = input.replace(VAR, (_m, name: string) => {
+  const out = input.replace(VAR, (_m, ns: string | undefined, name: string) => {
+    if (ns) {
+      if (!host) {
+        // The bare CLI has no host store. Naming the boundary beats a generic "undefined
+        // variable": the spec is fine, the runtime is the wrong one.
+        throw new SpecError(
+          `${where}: \${${ns}.${name}} — host ${ns} live on the control plane. Submit this spec ` +
+            `to a pstack server, or use a plain \${${name}} and pass the value yourself.`,
+        );
+      }
+      const v = host[ns as keyof HostValues][name];
+      if (v === undefined || v === '') {
+        missing.add(`${ns}.${name}`);
+        return '';
+      }
+      return v;
+    }
     const v = vars[name];
     if (v === undefined || v === '') {
       missing.add(name);
@@ -171,7 +202,8 @@ export function interpolate(input: string, vars: Record<string, string>, where: 
   if (missing.size > 0) {
     throw new SpecError(
       `${where}: undefined variable(s) ${[...missing].map((m) => `\${${m}}`).join(', ')}. ` +
-        `Pass them in the environment or under \`env:\` in the spec.`,
+        `Plain names are passed in the environment or under \`env:\`; \`vars.\` and \`secrets.\` ` +
+        `names are defined on the host's Variables page.`,
     );
   }
   return out;
@@ -205,7 +237,11 @@ function asString(v: unknown, where: string): string {
  * @param source  raw YAML
  * @param baseEnv the environment to interpolate against (usually process.env plus CLI overrides)
  */
-export function parseSpec(source: string, baseEnv: Record<string, string | undefined>): Stack {
+export function parseSpec(
+  source: string,
+  baseEnv: Record<string, string | undefined>,
+  host?: HostValues,
+): Stack {
   // Reset here, not in loadSpec: warnings describe THIS parse. Accumulating across calls made a
   // long-lived server (which re-parses per request) report warnings from other stacks' specs.
   warnings.length = 0;
@@ -245,13 +281,23 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
       throw new SpecError('`env` must be a mapping of NAME: value');
     }
     for (const [k, v] of Object.entries(specEnv as Record<string, unknown>)) {
-      vars[k] = interpolate(asString(v, `env.${k}`), vars, `env.${k}`);
+      vars[k] = interpolate(asString(v, `env.${k}`), vars, `env.${k}`, host);
       declaredEnv.push(k);
     }
   }
 
   if (raw.stack === undefined) throw new SpecError('`stack` is required (the stack identity)');
-  const stack = interpolate(asString(raw.stack, 'stack'), vars, 'stack');
+  const rawStack = asString(raw.stack, 'stack');
+  // The stack is IDENTITY: a compose project name, a hostname label, a value in every log line and
+  // container name. A secret interpolated into it would be published by every surface redaction
+  // cannot reach, so the reference itself is refused — not the resolved value scrubbed.
+  if (/\$\{secrets\./.test(rawStack)) {
+    throw new SpecError(
+      'stack: must not reference ${secrets.*} — the stack name appears in container names, ' +
+        'hostnames and logs, none of which can be redacted. Use ${vars.*} for identity parts.',
+    );
+  }
+  const stack = interpolate(rawStack, vars, 'stack', host);
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(stack)) {
     // Compose project names, DNS labels and most namespace APIs share roughly this alphabet.
     // Rejecting here beats a confusing failure five steps into a deploy.
@@ -275,13 +321,13 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     const overlays = cm.overlays === undefined ? [] : cm.overlays;
     if (!Array.isArray(overlays)) throw new SpecError('`compose.overlays` must be a list');
     const resolvedProfiles = profiles.map((p, i) =>
-      interpolate(asString(p, `compose.profiles[${i}]`), vars, `compose.profiles[${i}]`),
+      interpolate(asString(p, `compose.profiles[${i}]`), vars, `compose.profiles[${i}]`, host),
     );
     compose = {
-      file: interpolate(asString(cm.file, 'compose.file'), vars, 'compose.file'),
+      file: interpolate(asString(cm.file, 'compose.file'), vars, 'compose.file', host),
       profiles: resolvedProfiles,
       overlays: overlays.map((o, i) =>
-        interpolate(asString(o, `compose.overlays[${i}]`), vars, `compose.overlays[${i}]`),
+        interpolate(asString(o, `compose.overlays[${i}]`), vars, `compose.overlays[${i}]`, host),
       ),
     };
     // After the profiles, because a subdomain naming a profile that is never started is dead config
@@ -311,10 +357,10 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     if (rm.assert === undefined) throw new SpecError(`requires[${i}].assert is required`);
     return {
       name,
-      assert: interpolate(asString(rm.assert, `requires.${name}.assert`), vars, `requires.${name}.assert`),
+      assert: interpolate(asString(rm.assert, `requires.${name}.assert`), vars, `requires.${name}.assert`, host),
       hint: rm.hint === undefined
         ? undefined
-        : interpolate(asString(rm.hint, `requires.${name}.hint`), vars, `requires.${name}.hint`),
+        : interpolate(asString(rm.hint, `requires.${name}.hint`), vars, `requires.${name}.hint`, host),
     };
   });
 
@@ -334,7 +380,7 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
     const field = (k: keyof Axis) =>
       am[k] === undefined
         ? undefined
-        : interpolate(asString(am[k], `axes.${name}.${k}`), vars, `axes.${name}.${k}`);
+        : interpolate(asString(am[k], `axes.${name}.${k}`), vars, `axes.${name}.${k}`, host);
 
     const axis: Axis = {
       name,
@@ -397,8 +443,9 @@ export function parseSpec(source: string, baseEnv: Record<string, string | undef
 export async function loadSpec(
   path: string,
   baseEnv: Record<string, string | undefined>,
+  host?: HostValues,
 ): Promise<Stack> {
   const file = Bun.file(path);
   if (!(await file.exists())) throw new SpecError(`spec not found: ${path}`);
-  return parseSpec(await file.text(), baseEnv);
+  return parseSpec(await file.text(), baseEnv, host);
 }

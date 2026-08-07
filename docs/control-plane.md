@@ -779,6 +779,27 @@ code-1006 close that looks like the server refusing it.
 
 ---
 
+## 5d. Host variables & secrets (0.19.0)
+
+The GitHub model, scoped to one host. A **variable** is configuration anyone may read back (a
+region, an image tag); a **secret**'s value goes in through `PUT /api/host-vars/:name` and never
+comes back out — `GET /api/host-vars` returns its name and timestamp only, and there is no other
+read path.
+
+Specs reference them **explicitly**: `${vars.REGION}`, `${secrets.DB_PASSWORD}` — anywhere a spec
+interpolates (the `env:` block, hooks, compose settings). The namespace is the point: a plain
+`${REGION}` keeps meaning "whatever the request or the deployment supplied", so no precedence rule
+between request variables and host variables can ever need explaining — they are spelled
+differently. A missing reference fails the resolve loudly, naming the Variables page.
+
+| Rule | Why |
+|---|---|
+| `${secrets.*}` is refused in `stack:` | The stack name is identity — a compose project name, a hostname label, a value in every log line. Those surfaces cannot be redacted, so the reference is refused rather than the value scrubbed after the fact. |
+| Secret values are scrubbed from job logs, job records and compose logs **by content** | Hooks echo whatever they like (`echo $TOKEN` is one debugging session away), and a failing hook's stderr lands in the outcome record that `GET /api/jobs/:id` serves forever. By-name redaction cannot catch a value; content matching can. |
+| secret → variable conversion is refused | Flipping the flag would turn a write-only value into a readable one with no re-entry — an information-flow downgrade wearing an UPDATE's clothes. Variable → secret only tightens and is allowed. |
+| The bare CLI errors on `${vars.*}`/`${secrets.*}` | Host values live in the control plane's database. The error names the boundary ("submit this spec to a pstack server") instead of pretending the variable is merely undefined. |
+| Stored plainly, like notifier signing secrets | The server must hand the plaintext to hooks and compose, so one-way storage is impossible. The protection is the 0700 directory, the 0600 database file, and the absence of a read path. |
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves

@@ -145,6 +145,8 @@ export class Registry {
       vars?: Record<string, string>;
       /** Set when this deployment references a named spec rather than owning its copy. */
       specName?: string;
+      /** Host-level \${vars.*}/\${secrets.*}, so validation here matches resolution later. */
+      host?: import('./spec.ts').HostValues;
     } = {},
   ): Promise<Deployment> {
     const dir = this.#dir(id);
@@ -167,7 +169,7 @@ export class Registry {
       // which is why compose.yml is written alongside it.
       // Same precedence as `resolve`: process env < stored vars < request env. Omitting `vars`
       // here made `put` reject the exact variables it was about to store.
-      spec = await loadSpec(specPath, { ...process.env, ...mergedVars, ...opts.env });
+      spec = await loadSpec(specPath, { ...process.env, ...mergedVars, ...opts.env }, opts.host);
     } catch (err) {
       // Roll back rather than leave an unusable deployment on disk.
       await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -198,13 +200,18 @@ export class Registry {
   }
 
   /** Resolve a stored deployment into a Stack, interpolating with the given variables. */
-  async resolve(id: string, env: Record<string, string | undefined> = {}): Promise<Stack> {
+  async resolve(
+    id: string,
+    env: Record<string, string | undefined> = {},
+    host?: import('./spec.ts').HostValues,
+  ): Promise<Stack> {
     const dep = await this.get(id);
     if (!dep) throw new RegistryError(`no such deployment: ${id}`);
     // Precedence: process env < stored vars < request vars. Stored vars beat the ambient
     // environment so a stray PR=… in the server's own environment cannot hijack a deployment;
-    // request vars still win so a one-off override is possible.
-    return loadSpec(dep.specPath, { ...process.env, ...(dep.vars ?? {}), ...env });
+    // request vars still win so a one-off override is possible. Host values live in their own
+    // \${vars.*}/\${secrets.*} namespace and cannot collide with any of these.
+    return loadSpec(dep.specPath, { ...process.env, ...(dep.vars ?? {}), ...env }, host);
   }
 
   async #readMeta(id: string): Promise<DeploymentMeta> {

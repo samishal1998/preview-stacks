@@ -64,6 +64,13 @@ export class JobRegistry {
     stack: string,
     action: JobAction,
     work: (sink: Sink) => Promise<Outcome>,
+    /**
+     * Applied to every string that lands in the RECORD: outcome step messages, captured outputs and
+     * the crash error. The live sink is the caller's to wrap, but a failing hook's stderr goes into
+     * `StepResult.message` — the outcome, not the sink — and the record is what GET /api/jobs/:id
+     * serves forever after.
+     */
+    scrub: (text: string) => string = (s) => s,
   ): Job | null {
     if (this.#locks.has(stack)) return null;
     this.#locks.add(stack);
@@ -87,12 +94,18 @@ export class JobRegistry {
     void (async () => {
       try {
         const outcome = await work(sink);
-        job.outcome = outcome;
+        job.outcome = {
+          ...outcome,
+          steps: outcome.steps.map((s) => (s.message ? { ...s, message: scrub(s.message) } : s)),
+          // `outputs` is the documented inter-axis credential channel (docs/secret-exposure.md);
+          // host secrets echoed into it must not survive into the served record.
+          outputs: Object.fromEntries(Object.entries(outcome.outputs).map(([k, v]) => [k, scrub(v)])),
+        };
         const leaked = outcome.steps.some((s) => s.phase === 'assert_gone' && !s.ok);
         job.state = leaked ? 'leaked' : outcome.ok ? 'ok' : 'failed';
       } catch (err) {
         job.state = 'failed';
-        job.error = (err as Error).message;
+        job.error = scrub((err as Error).message);
         sink.emit('error', `job crashed: ${job.error}`);
       } finally {
         job.endedAt = Date.now();

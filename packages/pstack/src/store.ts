@@ -141,6 +141,21 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX terminal_sessions_recent ON terminal_sessions (started_at DESC);
   `,
+  // 4 — host-level variables and secrets, referenced from specs as \${vars.NAME} / \${secrets.NAME}.
+  `
+  CREATE TABLE host_vars (
+    name        TEXT PRIMARY KEY,
+    -- Stored plainly for BOTH kinds. A variable is meant to be read back; a secret is the notifier
+    -- precedent (see the comment on notifiers.secret): this process must hand the plaintext to
+    -- hooks and compose, so one-way storage is impossible. "Write-only" means no API route returns
+    -- it — the protection is the 0700 directory, the 0600 file, and the absence of a read path.
+    value       TEXT NOT NULL,
+    -- 1 = secret: value never leaves the server, and it is scrubbed from job and compose logs.
+    secret      INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+  `,
 ];
 
 export type UserRow = {

@@ -2970,6 +2970,113 @@ describe('a disconnected SSE client must not break the job it was watching', () 
   });
 });
 
+describe('host variables & secrets — the GitHub model, scoped to one host', () => {
+  const TOKEN = 'root-machine-token-value';
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-hv-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+  const boot = () => {
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+
+  test('a variable reads back; a secret never does — not from any route', async () => {
+    const { server, base } = boot();
+    try {
+      const put = (name: string, value: string, secret: boolean) =>
+        fetch(`${base}/api/host-vars/${name}`, { method: 'PUT', headers: H, body: JSON.stringify({ value, secret }) });
+
+      expect((await put('REGION', 'eu-central', false)).status).toBe(201);
+      const sec = await put('DB_PASSWORD', 'hunter2-swordfish-42', true);
+      expect(sec.status).toBe(201);
+      // The 201 itself must not echo a secret back.
+      expect(await sec.text()).not.toContain('hunter2-swordfish-42');
+
+      const list = (await (await fetch(`${base}/api/host-vars`, { headers: H })).json()) as {
+        entries: Array<{ name: string; value: string | null; secret: boolean }>;
+      };
+      expect(list.entries.find((e) => e.name === 'REGION')?.value).toBe('eu-central');
+      const s = list.entries.find((e) => e.name === 'DB_PASSWORD')!;
+      expect(s.secret).toBe(true);
+      expect(s.value).toBeNull();
+
+      // secret → variable is an information-flow downgrade wearing an UPDATE's clothes.
+      const downgrade = await put('DB_PASSWORD', 'anything', false);
+      expect(downgrade.status).toBe(400);
+      expect(((await downgrade.json()) as { error: string }).error).toMatch(/write-only|reveal/);
+      // variable → secret only tightens, so it is allowed.
+      expect((await put('REGION', 'eu-central', true)).status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a spec resolves ${vars.*} and ${secrets.*}; the log never contains the secret value', async () => {
+    const { server, base } = boot();
+    try {
+      const put = (name: string, value: string, secret: boolean) =>
+        fetch(`${base}/api/host-vars/${name}`, { method: 'PUT', headers: H, body: JSON.stringify({ value, secret }) });
+      await put('GREETING', 'hello-from-host', false);
+      await put('API_TOKEN', 'super-secret-token-value-9000', true);
+
+      // The worst-case spec, aimed at the surface that actually records hook output: a FAILING
+      // hook's stderr lands in the outcome's step message, which GET /api/jobs/:id serves forever.
+      // (A succeeding hook's stdout is not recorded at all.) The greeting proves ${vars.*} resolved;
+      // the failure line proves the secret's VALUE was scrubbed from the record.
+      const spec = [
+        'version: 1',
+        'stack: hv-demo',
+        'env:',
+        '  TOKEN_FOR_APP: ${secrets.API_TOKEN}',
+        'axes:',
+        '  - name: a',
+        '    up: echo greeting is ${vars.GREETING} and token is $TOKEN_FOR_APP 1>&2; exit 1',
+        '    assert_gone: "true"',
+      ].join('\n');
+      const dep = await fetch(`${base}/api/deployments/hv`, {
+        method: 'PUT',
+        headers: H,
+        body: JSON.stringify({ spec }),
+      });
+      expect(dep.status).toBe(201);
+
+      await fetch(`${base}/api/deployments/hv/up`, { method: 'POST', headers: H, body: '{}' });
+      let jobRaw = '';
+      for (let i = 0; i < 40; i++) {
+        const jl = (await (await fetch(`${base}/api/jobs`, { headers: H })).json()) as {
+          jobs: Array<{ id: string; state: string }>;
+        };
+        const j = jl.jobs[0];
+        if (j && j.state !== 'running') {
+          jobRaw = await (await fetch(`${base}/api/jobs/${j.id}`, { headers: H })).text();
+          break;
+        }
+        await Bun.sleep(100);
+      }
+      // The variable flowed through; the secret's VALUE did not survive into the record.
+      expect(jobRaw).toContain('hello-from-host');
+      expect(jobRaw).not.toContain('super-secret-token-value-9000');
+      expect(jobRaw).toContain('••••••');
+    } finally {
+      server.stop(true);
+    }
+  }, 20_000);
+
+  test('identity may not carry a secret, and a missing reference names the Variables page', () => {
+    expect(() =>
+      parseSpec('version: 1\nstack: pr-${secrets.X}\naxes: []\n', {}, { vars: {}, secrets: { X: 'v' } }),
+    ).toThrow(/must not reference/);
+    // Bare CLI (no host store): the error names the boundary, not a generic "undefined variable".
+    expect(() => parseSpec('version: 1\nstack: s\nenv:\n  A: ${secrets.X}\naxes: []\n', {})).toThrow(
+      /control plane/,
+    );
+    // With a store but no such entry: points at where it would be defined.
+    expect(() =>
+      parseSpec('version: 1\nstack: s\nenv:\n  A: ${vars.NOPE}\naxes: []\n', {}, { vars: {}, secrets: {} }),
+    ).toThrow(/Variables page/);
+  });
+});
+
 describe('duplicate session cookies — the lockout that only clearing cookies used to fix', () => {
   const TOKEN = 'root-machine-token-value';
   const tmpd = () =>
