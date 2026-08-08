@@ -234,7 +234,9 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
                 <td class="name" data-label="name">
                   {{ n.name }}
                   <div class="mute" style="font-size: var(--t-sm)">
-                    {{ n.type }} · {{ String(n.config.url ?? '') }}
+                    <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
+                         the credential) — so this shows dots for those rows, which is correct. -->
+                    {{ n.type }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
                   </div>
                 </td>
                 <td data-label="events">
@@ -357,8 +359,8 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
           </ActionButton>
         </div>
 
-        <p class="hint">
-          Deliveries from a signing type are signed with a secret shown once at registration, retried twice on failure,
+        <p v-if="chosenType?.signs !== false" class="hint">
+          Deliveries are signed with a secret shown once at registration, retried twice on failure,
           and logged here.
           <InfoHint label="how a receiver verifies a delivery">
             Recompute <code>HMAC-SHA256(secret, `${timestamp}.${rawBody}`)</code> and compare against
@@ -367,6 +369,10 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
             old, and dedupe on <code>X-Pstack-Delivery</code>: delivery is at-least-once, and that id
             is stable across retries.
           </InfoHint>
+        </p>
+        <p v-else class="hint">
+          The webhook URL is the credential — it is stored write-only and scrubbed from logs, and no
+          signing secret is involved. Deliveries are retried twice on failure and logged here.
         </p>
       </section>
     </template>

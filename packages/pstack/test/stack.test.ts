@@ -13,7 +13,7 @@ import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.t
 import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer, crToNl } from '../src/api.ts';
-import { NotifierError, TYPES, redactForNotifier } from '../src/notify.ts';
+import { NotifierError, TYPES, redactForNotifier, summarize } from '../src/notify.ts';
 import { events } from '../src/events.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
 import { deploymentRuntime, hostsFromRule, routesFromLabels } from '../src/inspect.ts';
@@ -3435,6 +3435,143 @@ describe('webhooks — composable notifications', () => {
     });
   });
 
+  describe('Slack and Discord — the chat types the seam was built for', () => {
+    /** A chat receiver: no signature verification (there is none to verify), captures raw JSON. */
+    const chatReceiver = (status = 200) => {
+      const got: Array<{ raw: string; headers: Record<string, string> }> = [];
+      const s = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          got.push({
+            raw: await req.text(),
+            headers: Object.fromEntries(req.headers.entries()),
+          });
+          return new Response(status === 204 ? null : 'ok', { status });
+        },
+      });
+      return { got, server: s, url: `http://127.0.0.1:${s.port}/services/T00/B00/tok` };
+    };
+
+    test('a Slack delivery is a readable line under `text`, unsigned, with the URL masked at rest', async () => {
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = chatReceiver(200);
+      const { server, base } = boot();
+      try {
+        const made = await register(base, {
+          name: 'ops',
+          type: 'slack',
+          events: ['*'],
+          config: { webhookUrl: rx.url },
+        });
+        expect(made.status).toBe(201);
+        // No HMAC secret for a type whose URL is the credential.
+        expect(((await made.json()) as { secret: string | null }).secret).toBeNull();
+
+        await fetch(`${base}/api/deployments/d`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: chat-demo\naxes: []\n' }),
+        });
+        for (let i = 0; i < 40 && rx.got.length === 0; i++) await Bun.sleep(50);
+        expect(rx.got).toHaveLength(1);
+
+        const d = rx.got[0]!;
+        const body = JSON.parse(d.raw) as { text?: string };
+        // A sentence a human reads in a channel — not an envelope of raw JSON.
+        expect(body.text).toBe('Deployment d created (stack chat-demo).');
+        // Unsigned by design: the URL is the credential, and a signature header would imply a
+        // secret the operator was never given.
+        expect(d.headers['x-pstack-signature']).toBeUndefined();
+
+        // At rest the URL is credential material: masked in the list, absent verbatim everywhere.
+        const listed = await (await fetch(`${base}/api/notifiers`, { headers: H })).text();
+        expect(listed).not.toContain('/services/T00/B00/tok');
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+      }
+    });
+
+    test('a Discord delivery posts `content` and treats its 204 as success', async () => {
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = chatReceiver(204); // Discord answers 204 No Content on success
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, {
+            name: 'discord-ops',
+            type: 'discord',
+            events: ['*'],
+            config: { webhookUrl: rx.url },
+          })
+        ).json()) as { notifier: { id: number } };
+
+        await fetch(`${base}/api/deployments/d2`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify({ spec: 'version: 1\nstack: chat-demo-2\naxes: []\n' }),
+        });
+        for (let i = 0; i < 40 && rx.got.length === 0; i++) await Bun.sleep(50);
+        expect((JSON.parse(rx.got[0]!.raw) as { content?: string }).content).toBe(
+          'Deployment d2 created (stack chat-demo-2).',
+        );
+
+        // The 204 must be recorded as ok — a strict ===200 check would log every successful
+        // Discord delivery as failed.
+        let status = '';
+        for (let i = 0; i < 40 && status !== 'ok'; i++) {
+          const log = (await (
+            await fetch(`${base}/api/notifiers/${made.notifier.id}/deliveries`, { headers: H })
+          ).json()) as { deliveries: Array<{ status: string; responseCode: number | null }> };
+          status = log.deliveries[0]?.status ?? '';
+          if (status !== 'ok') await Bun.sleep(50);
+        }
+        expect(status).toBe('ok');
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+      }
+    });
+
+    test('a test delivery reads as a test — never as a job that succeeded', async () => {
+      // The 0.14.0 contract: `data.test === true` must be honoured by per-event formatters,
+      // because the synthesized event name is a real one.
+      process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+      const rx = chatReceiver(200);
+      const { server, base } = boot();
+      try {
+        const made = (await (
+          await register(base, {
+            name: 'slack-test',
+            type: 'slack',
+            events: ['*'],
+            config: { webhookUrl: rx.url },
+          })
+        ).json()) as { notifier: { id: number } };
+        await fetch(`${base}/api/notifiers/${made.notifier.id}/test`, { method: 'POST', headers: H });
+        for (let i = 0; i < 40 && rx.got.length === 0; i++) await Bun.sleep(50);
+        const text = (JSON.parse(rx.got[0]!.raw) as { text?: string }).text ?? '';
+        expect(text).toContain('Test delivery');
+        expect(text).not.toMatch(/succeeded/i);
+      } finally {
+        rx.server.stop(true);
+        server.stop(true);
+      }
+    });
+
+    test('the leaked wording cannot be skimmed past as routine', () => {
+      const line = summarize({
+        id: 'e1',
+        event: 'job.leaked',
+        at: 0,
+        data: { stack: 's', action: 'down', leakedAxes: ['db', 'dns'] },
+      });
+      expect(line).toContain('LEAKED');
+      expect(line).toContain('db, dns');
+      expect(line).toContain('nothing will retry');
+    });
+  });
+
   describe('the URL guard', () => {
     test('loopback, link-local and private addresses are refused with 400 and a reason', async () => {
       const { server, base } = boot();
@@ -3851,16 +3988,18 @@ describe('webhooks — composable notifications', () => {
     });
 
     test('an unknown notifier type is refused by name', async () => {
+      // `slack` was the example unknown type here until 0.20.0 made it real — the seam's roadmap
+      // catching up with its own test fixture.
       const { server, base } = boot();
       try {
         const r = await register(base, {
-          name: 'slack-someday',
-          type: 'slack',
+          name: 'teams-someday',
+          type: 'teams',
           events: ['*'],
           config: { url: 'https://example.com/h' },
         });
         expect(r.status).toBe(400);
-        expect(((await r.json()) as { error: string }).error).toMatch(/unknown notifier type "slack"/);
+        expect(((await r.json()) as { error: string }).error).toMatch(/unknown notifier type "teams"/);
       } finally {
         server.stop(true);
       }
@@ -3877,8 +4016,18 @@ describe('webhooks — composable notifications', () => {
         };
         expect(meta.events).toContain('job.leaked');
         expect(meta.wildcard).toBe('*');
-        expect(meta.types.map((t) => t.kind)).toEqual(['webhook']);
+        expect(meta.types.map((t) => t.kind)).toEqual(['webhook', 'slack', 'discord']);
         expect(meta.types[0]!.fields.map((f) => f.key)).toEqual(['url']);
+        // Chat types: one field, marked secret (the URL IS the credential), and no signing.
+        for (const kind of ['slack', 'discord'] as const) {
+          const ty = meta.types.find((x) => x.kind === kind)! as unknown as {
+            signs: boolean;
+            fields: Array<{ key: string; secret?: boolean }>;
+          };
+          expect(ty.signs).toBe(false);
+          expect(ty.fields.map((f) => f.key)).toEqual(['webhookUrl']);
+          expect(ty.fields[0]!.secret).toBe(true);
+        }
       } finally {
         server.stop(true);
       }

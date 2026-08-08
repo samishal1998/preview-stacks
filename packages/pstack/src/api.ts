@@ -1382,6 +1382,10 @@ export function createServer(opts: ServerOptions) {
             const ty = Object.hasOwn(TYPES, row.type) ? TYPES[row.type] : undefined;
             if (!ty) return json({ error: `unknown notifier type "${row.type}"` }, { status: 400 });
             const secret = hooks.secretOf(nid) ?? '';
+            // RAW, not row.config: the row masks secret-marked fields for display, and a chat
+            // type's masked webhookUrl is not a URL — the test would fail with "fetch() URL is
+            // invalid" against a perfectly healthy notifier.
+            const cfg = hooks.rawConfigOf(nid) ?? row.config;
             const eventId = `evt_test_${Date.now().toString(36)}`;
             // Logged like any other delivery. It updates `lastStatus`, so leaving no row behind would
             // put a status in the list view with nothing in the log to explain it.
@@ -1396,7 +1400,7 @@ export function createServer(opts: ServerOptions) {
                 // job that actually succeeded.
                 data: { test: true, note: 'Test delivery from pstack — no job ran.' },
               },
-              row.config,
+              cfg,
               secret,
               AbortSignal.timeout(5_000),
             );
@@ -1404,7 +1408,7 @@ export function createServer(opts: ServerOptions) {
               status: result.ok ? 'ok' : 'failed',
               attempts: 1,
               responseCode: result.status,
-              error: result.error ? redactForNotifier(result.error, secret, row.config) : undefined,
+              error: result.error ? redactForNotifier(result.error, secret, cfg) : undefined,
             });
             hooks.noteResult(nid, result.ok ? 'ok' : 'failed');
             hooks.prune(nid);
@@ -1414,7 +1418,7 @@ export function createServer(opts: ServerOptions) {
             return json({
               result: {
                 ...result,
-                error: result.error ? redactForNotifier(result.error, secret, row.config) : undefined,
+                error: result.error ? redactForNotifier(result.error, secret, cfg) : undefined,
               },
             });
           }

@@ -9,8 +9,11 @@
  * JSON), no change to the bus, no change to any route, no change to the UI's plumbing — the UI reads
  * `fields` from `/api/notifiers/meta` and renders the form from it.
  *
- * Slack and Discord will ignore `secret` entirely, because for an incoming-webhook URL the *URL* is
- * the credential. That is the seam working, not a gap in it.
+ * Slack and Discord (below, built by `chatType`) ignore `secret` entirely, because for an
+ * incoming-webhook URL the *URL* is the credential. That is the seam working, not a gap in it —
+ * and it held: shipping both cost one factory, two registrations and zero schema or route changes.
+ * The Slack payload shape is deliberately un-pinned to hooks.slack.com, so Mattermost and
+ * Rocket.Chat incoming webhooks work with the same type.
  *
  * ── NOTHING AWAITS DELIVERY ──────────────────────────────────────────────────────────────────────
  *
@@ -250,6 +253,129 @@ export const webhookType: NotifierType = {
 };
 
 /**
+ * One human-readable line per event, shared by every chat-shaped type.
+ *
+ * Chat messages are READ, not parsed — a Slack channel getting raw JSON is a notifier nobody keeps
+ * enabled. One formatter, not one per type, so Slack and Discord can never describe the same event
+ * differently; each type only decides the envelope it posts the line in.
+ *
+ * `data.test === true` is the contract flag from `POST /:id/test` (see NotifierType.send): the
+ * synthesized event name is a real one, and without this check a test would render as a green
+ * "Deploy succeeded" nobody's deploy earned.
+ */
+export function summarize(e: PstackEvent): string {
+  if (e.data.test === true) {
+    return 'Test delivery from pstack — the connection works. No job ran.';
+  }
+  const d = e.data as Record<string, unknown>;
+  const stack = typeof d.stack === 'string' ? d.stack : String(d.id ?? '');
+  const took =
+    typeof d.durationMs === 'number' ? ` in ${Math.max(1, Math.round(d.durationMs / 1000))}s` : '';
+  switch (e.event) {
+    case 'deployment.created':
+      return `Deployment ${d.id} created (stack ${stack}).`;
+    case 'deployment.updated':
+      return `Deployment ${d.id} updated (stack ${stack}).`;
+    case 'deployment.deleted':
+      return `Deployment ${d.id} forgotten. Nothing was torn down.`;
+    case 'job.started':
+      return `${actionWord(d.action)} started on ${stack}.`;
+    case 'job.succeeded':
+      return `${actionWord(d.action)} succeeded on ${stack}${took}.`;
+    case 'job.failed':
+      return `${actionWord(d.action)} FAILED on ${stack}${took}.${d.error ? ` ${String(d.error)}` : ''}`;
+    case 'job.leaked': {
+      const axes = Array.isArray(d.leakedAxes) && d.leakedAxes.length ? ` Leaked: ${(d.leakedAxes as string[]).join(', ')}.` : '';
+      // The event this product exists for — the wording must be impossible to skim past as routine.
+      return `Teardown LEAKED on ${stack} — resources survived and nothing will retry.${axes}`;
+    }
+    case 'spec.stored':
+      return `Spec ${d.name} ${d.replaced ? 'replaced' : 'stored'}.`;
+    case 'spec.deleted':
+      return `Spec ${d.name} deleted.`;
+    case 'routing.changed':
+      return `Routing file ${d.file} ${d.action}.`;
+    default:
+      return `${e.event} on ${stack || 'this host'}.`;
+  }
+}
+
+function actionWord(action: unknown): string {
+  return action === 'up' ? 'Deploy' : action === 'down' ? 'Teardown' : action === 'verify' ? 'Verify' : String(action);
+}
+
+/**
+ * A chat-webhook type: the whole difference between Slack and Discord is the URL's owner and the
+ * JSON key the text goes under, so one factory builds both. `signs: false` and `secret: true` on
+ * the URL field are the pair that makes the 0.14.0 seam work: no HMAC secret is minted or shown
+ * (for an incoming webhook the URL IS the credential), and every read path masks it.
+ */
+function chatType(args: {
+  kind: string;
+  label: string;
+  placeholder: string;
+  /** `{ [textKey]: line }` — "text" for Slack-compatible receivers, "content" for Discord. */
+  textKey: string;
+}): NotifierType {
+  return {
+    kind: args.kind,
+    label: args.label,
+    signs: false,
+    fields: [
+      {
+        key: 'webhookUrl',
+        label: 'Incoming webhook URL',
+        placeholder: args.placeholder,
+        required: true,
+        // Anyone holding this URL can post as the app — it is the credential, not an address.
+        secret: true,
+      },
+    ],
+    validate(config) {
+      if (typeof config.webhookUrl !== 'string' || !config.webhookUrl.trim()) {
+        throw new NotifierError(`a ${args.label} notifier needs a \`webhookUrl\``);
+      }
+      assertDeliverableUrl(config.webhookUrl);
+    },
+    async send(e, config, _secret, signal) {
+      try {
+        const r = await fetch(String(config.webhookUrl), {
+          method: 'POST',
+          redirect: 'manual',
+          headers: { 'content-type': 'application/json', 'user-agent': 'pstack' },
+          body: JSON.stringify({ [args.textKey]: summarize(e) }),
+          signal,
+        });
+        if (r.status >= 300 && r.status < 400) {
+          return { ok: false, status: r.status, error: `redirect to ${r.headers.get('location') ?? '?'} not followed` };
+        }
+        // Discord answers 204 on success; Slack answers 200 "ok". `r.ok` covers both.
+        return { ok: r.ok, status: r.status, error: r.ok ? undefined : `HTTP ${r.status}` };
+      } catch (err) {
+        return { ok: false, error: (err as Error).message };
+      }
+    },
+  };
+}
+
+/** The host is deliberately NOT pinned to hooks.slack.com: Mattermost and Rocket.Chat speak the
+ *  same `{ text }` payload on their own domains, and pinning would lock them out for no safety —
+ *  the URL is already checked by `assertDeliverableUrl`. */
+export const slackType = chatType({
+  kind: 'slack',
+  label: 'Slack',
+  placeholder: 'https://hooks.slack.com/services/T…/B…/…',
+  textKey: 'text',
+});
+
+export const discordType = chatType({
+  kind: 'discord',
+  label: 'Discord',
+  placeholder: 'https://discord.com/api/webhooks/…/…',
+  textKey: 'content',
+});
+
+/**
  * `null` prototype, deliberately.
  *
  * A plain object literal inherits from `Object.prototype`, so `TYPES['constructor']` is a truthy
@@ -260,6 +386,8 @@ export const webhookType: NotifierType = {
  */
 export const TYPES: Record<string, NotifierType> = Object.assign(Object.create(null) as Record<string, NotifierType>, {
   [webhookType.kind]: webhookType,
+  [slackType.kind]: slackType,
+  [discordType.kind]: discordType,
 });
 
 export function typeOf(kind: string): NotifierType {

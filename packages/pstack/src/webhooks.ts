@@ -151,6 +151,19 @@ export class Webhooks {
    * Named to be conspicuous in a diff. If a second caller ever appears, that is the moment to ask
    * whether it should exist — every other path in this module deliberately cannot reach this column.
    */
+  /**
+   * The UNMASKED config, for delivery only — the test route and the dispatcher. `get()` masks
+   * secret-marked fields for display, and this class's own comment names the hazard: conflating
+   * the read path with the delivery path is how a masked value gets POSTed to a masked URL —
+   * which is exactly what the /test route did the day the first secret-marked field existed.
+   */
+  rawConfigOf(id: number): Record<string, unknown> | null {
+    const r = this.#store.db.query('SELECT config FROM notifiers WHERE id = ?').get(id) as
+      | { config: string }
+      | null;
+    return r ? (JSON.parse(r.config) as Record<string, unknown>) : null;
+  }
+
   secretOf(id: number): string | null {
     const r = this.#store.db.query('SELECT secret FROM notifiers WHERE id = ?').get(id) as
       | { secret: string }

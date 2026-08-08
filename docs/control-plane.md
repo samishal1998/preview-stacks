@@ -614,7 +614,9 @@ A registration is `{ type, name, events[], config{} }`. `type` selects a **notif
   `fields`. Hard-coding the URL field in the page would have made the seam a lie, so the page does
   not know what a webhook is.
 
-Slack and Discord will ignore the signing secret entirely, because for an incoming-webhook URL the
+Slack and Discord (shipped in 0.20.0 as exactly such entries — one `chatType` factory, since the
+whole difference between them is the URL's owner and the JSON key the text goes under) ignore the
+signing secret entirely, because for an incoming-webhook URL the
 *URL* is the credential. That is the seam working, not a gap in it.
 
 ### Delivery
