@@ -22,8 +22,10 @@ import type { RuntimeContainer, RuntimeResponse } from '../../api/types';
 import { dep, varsQuery } from '../../composables/useDeployment';
 import { usePolling } from '../../composables/usePolling';
 import SkeletonList from '../../components/SkeletonList.vue';
+import ActionButton from '../../components/ActionButton.vue';
 import ErrorNote from '../../components/ErrorNote.vue';
 import InfoHint from '../../components/InfoHint.vue';
+import { toast } from '../../composables/useToasts';
 
 const rt = ref<RuntimeResponse | null>(null);
 const error = ref('');
@@ -50,6 +52,32 @@ const errors = computed(() => rt.value?.findings.filter((f) => f.level === 'erro
 const warns = computed(() => rt.value?.findings.filter((f) => f.level === 'warn') ?? []);
 const infos = computed(() => rt.value?.findings.filter((f) => f.level === 'info') ?? []);
 const running = computed(() => rt.value?.containers.filter((c) => c.state === 'running').length ?? 0);
+
+/**
+ * One container action in flight, as `action:name`.
+ *
+ * A single ref rather than a per-row flag: two `docker restart`s racing on the same stack is not
+ * something to make easy, and the readiness watch each one starts would fight the other.
+ */
+const busy = ref('');
+
+async function act(c: RuntimeContainer, action: 'start' | 'stop' | 'restart'): Promise<void> {
+  busy.value = `${action}:${c.name}`;
+  const r = await api.post<{ note?: string }>(
+    `/api/deployments/${encodeURIComponent(dep.id)}/containers/${encodeURIComponent(c.name)}/${action}${varsQuery.value}`,
+  );
+  busy.value = '';
+  if (!r.ok) {
+    // Docker's own words. "Already started" and "no such container" are different problems and it
+    // says both better than this layer could.
+    toast('error', problem(r, `${action} ${c.name}`));
+    return;
+  }
+  toast('ok', r.body.note ?? `${c.name}: ${action} done.`);
+  // Read the table back rather than assuming the new state: a container that exits again immediately
+  // is exactly the case worth seeing, and the 8s poll would show it a beat later anyway.
+  void load();
+}
 
 /**
  * The hostname Traefik actually routes to this container, or null.
@@ -227,8 +255,13 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                 </td>
                 <td data-label="state">
                   <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
+                  <!--
+                    Health is only reported while it is RUNNING. Docker keeps the last probe result on
+                    a stopped container, so an exited one rendered "Exited / Healthy" — a stale reading
+                    presented beside the fact that contradicts it.
+                  -->
                   <div
-                    v-if="c.health"
+                    v-if="c.health && c.state === 'running'"
                     class="mute"
                     style="font-size: var(--t-sm)"
                     :class="c.health === 'healthy' ? 's-ok' : 's-failed'"
@@ -258,6 +291,44 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                   (see `urlFor`), so it is absent rather than wrong when no router points here.
                 -->
                 <td class="row-actions" data-label="">
+                  <!--
+                    One container, not the service and not the stack. Start appears only when it is
+                    not running and Stop only when it is, so the control on screen is the one that
+                    would do something. Both destructive ones confirm in place.
+                  -->
+                  <ActionButton
+                    v-if="c.state !== 'running'"
+                    class="sm"
+                    variant="ghost"
+                    :pending="busy === `start:${c.name}`"
+                    :disabled="!!busy"
+                    confirm="Start it?"
+                    @run="act(c, 'start')"
+                  >
+                    Start
+                  </ActionButton>
+                  <ActionButton
+                    v-else
+                    class="sm"
+                    variant="ghost"
+                    :pending="busy === `stop:${c.name}`"
+                    :disabled="!!busy"
+                    confirm="Stop it?"
+                    title="Stops this container only. It stays stopped until something starts it."
+                    @run="act(c, 'stop')"
+                  >
+                    Stop
+                  </ActionButton>
+                  <ActionButton
+                    class="sm"
+                    variant="ghost"
+                    :pending="busy === `restart:${c.name}`"
+                    :disabled="!!busy"
+                    confirm="Restart it?"
+                    @run="act(c, 'restart')"
+                  >
+                    Restart
+                  </ActionButton>
                   <RouterLink
                     class="btn sm ghost"
                     :to="`/deployments/${encodeURIComponent(dep.id)}/logs?container=${encodeURIComponent(c.name)}`"
@@ -271,8 +342,12 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                   >
                     Shell
                   </RouterLink>
+                  <!--
+                    Only while running: the router label survives a stopped container, so the URL
+                    still exists and answers 502. A link that is certain to fail is worse than no link.
+                  -->
                   <a
-                    v-if="urlFor(c)"
+                    v-if="c.state === 'running' && urlFor(c)"
                     class="btn sm ghost"
                     :href="urlFor(c)!"
                     target="_blank"

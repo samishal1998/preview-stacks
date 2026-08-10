@@ -30,6 +30,7 @@
  *   GET    /api/deployments/:id/logs/stream   the same, FOLLOWED — SSE, one line per frame
  *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
  *   GET    /api/deployments/:id/readiness  is it SERVING yet — poll, or `?wait=<seconds>` to long-poll
+ *   POST   /api/deployments/:id/containers/:name/(start|stop|restart)   one container, not the stack
  *   GET    /api/notifiers                 registrations — metadata only, NEVER the signing secret
  *   POST   /api/notifiers                 register  { name, events[], config{}, type? } → 201 { notifier, secret }
  *   PATCH  /api/notifiers/:id             { enabled }
@@ -1372,6 +1373,106 @@ export function createServer(opts: ServerOptions) {
             specName: dep.specName ?? null,
             spec: src.spec,
             compose: src.compose,
+          });
+        }
+
+        /**
+         * Stop / start / restart ONE container.
+         *
+         * THE SAME BOUNDARY AS THE TERMINAL, and for a bigger reason. `docker stop` accepts any name
+         * on the daemon: `traefik` takes down every preview on the host at once, `pstack-control`
+         * takes down the thing being asked. So the name is matched against the containers this
+         * deployment actually owns and anything else is a 404 — never trusted from the request.
+         *
+         * Synchronous, unlike the lifecycle actions. A job exists because `up` takes minutes and
+         * holds a per-stack lock; one `docker restart` takes seconds, and putting it behind the lock
+         * would make it collide with a deploy for no benefit. It is also NOT compose: `compose
+         * restart` acts on a whole service, and the point here is one container out of a replica set.
+         */
+        const cact = /^\/api\/deployments\/([^/]+)\/containers\/([^/]+)\/(start|stop|restart)$/.exec(path);
+        if (cact) {
+          if (req.method !== 'POST') return json({ error: 'use POST' }, { status: 405 });
+          const id = decodeURIComponent(cact[1]!);
+          const wanted = decodeURIComponent(cact[2]!);
+          const action = cact[3] as 'start' | 'stop' | 'restart';
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+
+          const spec = await resolveDep(id, vars);
+          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown' });
+          // "Docker did not answer" is not "you do not own that container" — refusing with a 404
+          // there would send someone hunting for a container that is sitting right in front of them.
+          if (!rt.reachable) {
+            return json(
+              { error: 'docker did not answer, so ownership of this container could not be checked' },
+              { status: 503 },
+            );
+          }
+          const c = rt.containers.find((x) => x.id === wanted || x.name === wanted);
+          if (!c) {
+            return json(
+              {
+                error: `no container "${wanted}" in deployment ${id}`,
+                containers: rt.containers.map((x) => x.name),
+              },
+              { status: 404 },
+            );
+          }
+
+          // Seconds docker waits for the process to exit before SIGKILL. Clamped: an unbounded value
+          // is a request that never returns, and 0 is a hard kill nobody asked for by default.
+          const graceRaw = Number(url.searchParams.get('grace') ?? 10);
+          const grace = Number.isFinite(graceRaw) ? Math.min(Math.max(Math.trunc(graceRaw), 1), 120) : 10;
+          const timing = action === 'start' ? '' : ` -t ${grace}`;
+          const r = await host.run(`docker ${action}${timing} ${shq(c.name)}`, {
+            label: `docker ${action} ${c.name}`,
+          });
+          const by = who ? actorOf(who) : 'an operator';
+
+          if (!r.ok) {
+            // Docker's own message, not a paraphrase — "container already started" and "no such
+            // container" are different problems and it words both better than this layer could.
+            return json(
+              {
+                error: `docker ${action} failed: ${(r.stderr || r.stdout).trim().split('\n')[0] ?? `exit ${r.code}`}`,
+                container: c.name,
+                action,
+              },
+              { status: 409 },
+            );
+          }
+
+          events.emit(`container.${action === 'restart' ? 'restarted' : action === 'stop' ? 'stopped' : 'started'}`, {
+            stack: spec.stack,
+            deployment: id,
+            container: c.name,
+            service: c.service,
+            action,
+            by,
+          });
+
+          /*
+           * Readiness follows the intent.
+           *
+           * A start or a restart raises exactly the question a watch answers — does it come back
+           * healthy — so one is (re)started and it narrates. A STOP is deliberate, and a watch left
+           * running would report `stack.failed` about a container someone meant to stop: a false
+           * alarm delivered to every notifier. So stopping cancels it, the same way `down` does.
+           */
+          if (action === 'stop') readiness.cancel(spec.stack);
+          else readiness.start(spec.stack, runnerFor(spec, dep.dir), { restart: true });
+
+          return json({
+            container: c.name,
+            service: c.service,
+            action,
+            by,
+            // What to expect next, rather than a bare `{ok:true}`: a restarted container is not
+            // serving the instant docker returns, and the readiness watch is where that is answered.
+            note:
+              action === 'stop'
+                ? 'Stopped. It stays stopped until something starts it — a deploy, or Start here.'
+                : 'Docker has started it. Whether it comes back healthy is what readiness reports.',
           });
         }
 

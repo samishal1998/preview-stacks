@@ -925,6 +925,35 @@ data: {"seq":3,"at":1785014283206,"level":"step","message":"→ verify (assertin
 data: {"done":true,"state":"ok"}
 ```
 
+### Stop, start or restart one container
+
+Not the stack and not the service — one container out of a replica set:
+
+```console
+$ curl -s -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
+       'https://api.preview.example.com/api/deployments/pr-123/containers/pr-123-worker-1/restart?PR=123'
+{
+  "container": "pr-123-worker-1",
+  "service": "worker",
+  "action": "restart",
+  "by": "alice",
+  "note": "Docker has started it. Whether it comes back healthy is what readiness reports."
+}
+```
+
+`start` · `stop` · `restart`. Synchronous, unlike a deploy: one `docker restart` takes seconds, and
+putting it behind the per-stack job lock would make it collide with a deploy for no benefit.
+`?grace=<seconds>` (1–120, default 10) is how long docker waits before SIGKILL on a stop or restart.
+
+**The container name is checked against what this deployment owns**, and anything else is a 404 — the
+same boundary the terminal has, for a bigger reason: `docker stop traefik` would take down every
+preview on the host, and `pstack-control` is the thing being asked.
+
+A **stop cancels the readiness watch** (a watch left running would report the stack failed about a
+container you meant to stop); a start or restart (re)starts it, so whether it came back healthy is
+answered without asking. Each verb also emits its own event — `container.started` / `stopped` /
+`restarted`, carrying `by`.
+
 ### Wait for it to actually be serving
 
 A green `up` means the commands ran: `compose up -d` returns as soon as the containers are

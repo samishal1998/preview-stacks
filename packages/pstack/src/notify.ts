@@ -309,6 +309,12 @@ export function summarize(e: PstackEvent): string {
       return `${d.container} healthcheck ${d.healthy === true ? 'passed' : 'FAILED'} on ${stack}.`;
     case 'healthcheck.timedout':
       return `${d.container} healthcheck never settled on ${stack} — still starting after ${Math.round(Number(d.waitedMs ?? 0) / 1000)}s.`;
+    case 'container.started':
+      return `${d.container} was started on ${stack}${d.by ? ` by ${String(d.by)}` : ''}.`;
+    case 'container.stopped':
+      return `${d.container} was STOPPED on ${stack}${d.by ? ` by ${String(d.by)}` : ''} — it stays stopped until something starts it.`;
+    case 'container.restarted':
+      return `${d.container} was restarted on ${stack}${d.by ? ` by ${String(d.by)}` : ''}.`;
     case 'container.ready':
       return `${d.container} is ready on ${stack}${d.hasHealthcheck === true ? ' (healthcheck passed)' : ' (running; no healthcheck to check)'}.`;
     case 'container.start-failed':

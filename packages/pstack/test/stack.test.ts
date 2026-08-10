@@ -26,7 +26,7 @@ import {
 } from '../src/registries.ts';
 import { Store } from '../src/store.ts';
 import { Webhooks } from '../src/webhooks.ts';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   augmentComposeDoc,
@@ -4825,4 +4825,164 @@ describe('stopping a job, and following logs', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 20_000);
+});
+
+describe('one container at a time: start, stop, restart', () => {
+  const TOKEN = 'tok';
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-cact-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  /**
+   * A fake `docker` that reports one container for this deployment and RECORDS every argv it is
+   * handed. The recording is the point: the guard below is only meaningful if the allowed path
+   * really shells out, and the refusals are only meaningful if they don't.
+   */
+  const dockerShim = () => {
+    const dir = tmpd();
+    mkdirSync(dir, { recursive: true });
+    const log = join(dir, 'calls');
+    writeFileSync(
+      join(dir, 'docker'),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(log)}
+case "$1 $2" in
+  "ps -aq") echo "c0ffee123456" ;;
+  "inspect "*) echo '[{"Id":"c0ffee123456","Name":"/probe-app-1","RestartCount":0,"Config":{"Image":"nginx","Labels":{"com.docker.compose.service":"app","com.docker.compose.project":"probe"}},"State":{"Status":"running","ExitCode":0},"NetworkSettings":{"Networks":{"preview-ingress":{"IPAddress":"172.20.0.5"}},"Ports":{}}}]' ;;
+  *) exit 0 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    return {
+      calls: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []),
+      restore: () => {
+        process.env.PATH = prev;
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  };
+
+  const boot = () => {
+    const server = createServer({
+      dataDir: tmpd(),
+      port: 0,
+      host: '127.0.0.1',
+      token: TOKEN,
+      // Keep the readiness watch a start/restart kicks off from outliving the test.
+      readiness: { pollMs: 20, timeoutMs: 200 },
+    });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+
+  const putSpec = (base: string) =>
+    fetch(`${base}/api/deployments/d`, {
+      method: 'PUT',
+      headers: H,
+      body: JSON.stringify({ spec: 'version: 1\nstack: probe\naxes:\n  - name: a\n    up: "true"\n' }),
+    });
+
+  const post = (base: string, name: string, action: string, headers = H) =>
+    fetch(
+      `${base}/api/deployments/d/containers/${encodeURIComponent(name)}/${action}`,
+      { method: 'POST', headers },
+    );
+
+  test('a container this deployment does not own is refused — never handed to docker', async () => {
+    // The same host escape the terminal guards, with more blast radius: `docker stop traefik` takes
+    // down every preview on the box at once, and `pstack-control` is the thing being asked.
+    const docker = dockerShim();
+    const { server, base } = boot();
+    try {
+      await putSpec(base);
+      for (const name of ['pstack-control', 'traefik', 'c0ffee999999', '../../etc/passwd']) {
+        const r = await post(base, name, 'restart');
+        expect(`${name} → ${r.status}`).toBe(`${name} → 404`);
+      }
+      // Nothing reached docker's own verbs — only the ownership lookup (ps/inspect) did.
+      expect(docker.calls().filter((c) => /^(stop|start|restart)/.test(c))).toEqual([]);
+
+      // …and the container it DOES own goes through, so the refusals refuse something real.
+      const ok = await post(base, 'probe-app-1', 'restart');
+      expect(ok.status).toBe(200);
+      expect(docker.calls()).toContain('restart -t 10 probe-app-1');
+    } finally {
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
+  test('each verb runs its own docker command, and start takes no grace period', async () => {
+    const docker = dockerShim();
+    const { server, base } = boot();
+    try {
+      await putSpec(base);
+      expect((await post(base, 'probe-app-1', 'stop')).status).toBe(200);
+      expect((await post(base, 'probe-app-1', 'start')).status).toBe(200);
+      const calls = docker.calls();
+      // `-t` is how long docker waits before SIGKILL — meaningless on start, so it is not sent.
+      expect(calls).toContain('stop -t 10 probe-app-1');
+      expect(calls).toContain('start probe-app-1');
+      expect(calls.some((c) => c.startsWith('start -t'))).toBe(false);
+
+      // Clamped, not passed through: an unbounded grace is a request that never returns.
+      await fetch(`${base}/api/deployments/d/containers/probe-app-1/stop?grace=9999`, {
+        method: 'POST',
+        headers: H,
+      });
+      expect(docker.calls()).toContain('stop -t 120 probe-app-1');
+    } finally {
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
+  test('stopping cancels the readiness watch; restarting starts one', async () => {
+    // A watch left running through a deliberate stop would announce `stack.failed` about a container
+    // someone meant to stop — a false alarm sent to every notifier.
+    const docker = dockerShim();
+    const { server, base } = boot();
+    const got: string[] = [];
+    const off = events.on((e) => {
+      got.push(e.event);
+    });
+    try {
+      await putSpec(base);
+      await post(base, 'probe-app-1', 'stop');
+      await Bun.sleep(300); // past the watch deadline, had one been left running
+      expect(got).toContain('container.stopped');
+      expect(got.filter((n) => n.startsWith('stack.'))).toEqual([]);
+
+      got.length = 0;
+      await post(base, 'probe-app-1', 'restart');
+      await Bun.sleep(300);
+      expect(got).toContain('container.restarted');
+      // The container the shim reports is running, so the watch settles ready — the answer to
+      // "did it come back" arrives without anyone asking for it.
+      expect(got).toContain('stack.ready');
+    } finally {
+      off();
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
+  test('unauthenticated, an unknown verb, and a GET are all refused', async () => {
+    const docker = dockerShim();
+    const { server, base } = boot();
+    try {
+      await putSpec(base);
+      expect((await post(base, 'probe-app-1', 'restart', {} as typeof H)).status).toBe(401);
+      // An unknown verb does not match the route at all — 404, and nothing is invented from it.
+      expect((await post(base, 'probe-app-1', 'obliterate')).status).toBe(404);
+      const g = await fetch(`${base}/api/deployments/d/containers/probe-app-1/stop`, { headers: H });
+      expect(g.status).toBe(405);
+      expect(docker.calls().filter((c) => /^(stop|start|restart)/.test(c))).toEqual([]);
+    } finally {
+      server.stop(true);
+      docker.restore();
+    }
+  });
 });

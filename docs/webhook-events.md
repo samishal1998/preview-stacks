@@ -242,6 +242,26 @@ emits `started` **and** `finished` — that is the honest report, not a duplicat
 | `healthy` | boolean | `finished` only. |
 | `waitedMs` | number | `timedout` only — how long the watch waited. |
 
+#### `container.started` / `container.stopped` / `container.restarted`
+
+A **person** acted on one container through
+`POST /api/deployments/:id/containers/:name/(start|stop|restart)`. Separate from the readiness
+family, which observes what docker did on its own: these carry `by`.
+
+`container.stopped` is worth a rule of its own — it also **cancels the readiness watch** for that
+stack, because a watch left running would report `stack.failed` about a container someone meant to
+stop. A start or restart (re)starts the watch instead, so "did it come back healthy" is answered
+without anyone asking.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `stack` | string | |
+| `deployment` | string | The deployment id the container belongs to. |
+| `container` | string | Container name. |
+| `service` | string \| null | Its compose service. |
+| `action` | `"start"` \| `"stop"` \| `"restart"` | |
+| `by` | string | Who did it — a username, or `root (PSTACK_TOKEN)`. |
+
 #### `container.ready` / `container.start-failed`
 
 The per-container verdict, at most once per container per watch.

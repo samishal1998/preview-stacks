@@ -59,6 +59,14 @@ export const EVENTS = [
   'healthcheck.timedout',
   'container.ready',
   'container.start-failed',
+  /**
+   * A person acted on ONE container through the API (`POST …/containers/:name/(start|stop|restart)`).
+   * Separate from the readiness family above, which observes what docker did on its own: these say
+   * somebody chose it, and carry `by`.
+   */
+  'container.started',
+  'container.stopped',
+  'container.restarted',
   'stack.ready',
   'stack.failed',
   'stack.timedout',
