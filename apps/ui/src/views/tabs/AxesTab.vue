@@ -26,7 +26,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
       <table class="cards">
         <thead>
           <tr>
-            <th>axis</th>
+            <th>Axis</th>
             <th>
               hooks
               <InfoHint label="what the four hooks do">
@@ -36,7 +36,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
                 carries a token inline.
               </InfoHint>
             </th>
-            <th>teardown provable?</th>
+            <th>Teardown provable?</th>
           </tr>
         </thead>
         <tbody class="stagger">

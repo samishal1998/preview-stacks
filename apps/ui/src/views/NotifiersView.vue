@@ -14,7 +14,7 @@
 import { computed, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
 import type { DeliveryRow, NotifierMeta, NotifierRow } from '../api/types';
-import { stamp } from '../composables/useFormat';
+import { sentence, stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
@@ -222,9 +222,9 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
         <table v-else-if="notifiers.length" class="cards">
           <thead>
             <tr>
-              <th>name</th>
-              <th>events</th>
-              <th>last delivery</th>
+              <th>Name</th>
+              <th>Events</th>
+              <th>Last delivery</th>
               <th></th>
             </tr>
           </thead>
@@ -236,7 +236,7 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
                   <div class="mute" style="font-size: var(--t-sm)">
                     <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
                          the credential) — so this shows dots for those rows, which is correct. -->
-                    {{ n.type }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
+                    {{ sentence(n.type) }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
                   </div>
                 </td>
                 <td data-label="events">
@@ -271,7 +271,7 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
                   <ul v-if="deliveries.length" class="kvlist">
                     <li v-for="d in deliveries" :key="d.id">
                       <span class="k">
-                        <span :class="d.status === 'ok' ? 's-ok' : 's-failed'">{{ d.status }}</span>
+                        <span :class="d.status === 'ok' ? 's-ok' : 's-failed'">{{ sentence(d.status) }}</span>
                       </span>
                       <span class="v">
                         {{ d.event }}

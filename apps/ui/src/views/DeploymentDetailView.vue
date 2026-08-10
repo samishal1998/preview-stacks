@@ -8,6 +8,7 @@
  * server cannot name the stack without the variables, and every action needs the stack name.
  */
 import { watch } from 'vue';
+import { sentence } from '../composables/useFormat';
 import { useRouter } from 'vue-router';
 import { dep, isShared, openDeployment } from '../composables/useDeployment';
 import {
@@ -69,7 +70,7 @@ watch(
     <div class="page-head">
       <div>
         <div class="mute" style="font-size: var(--t-sm)">
-          <RouterLink to="/deployments">← deployments</RouterLink>
+          <RouterLink to="/deployments">← Deployments</RouterLink>
         </div>
         <h1 style="font-size: var(--t-xl)">{{ id }}</h1>
         <div class="sub">
@@ -81,7 +82,7 @@ watch(
         </div>
       </div>
       <span class="grow" />
-      <span v-if="dep.detail" class="badge" :class="dep.detail.kind">{{ dep.detail.kind }}</span>
+      <span v-if="dep.detail" class="badge" :class="dep.detail.kind">{{ sentence(dep.detail.kind) }}</span>
       <span v-if="dep.detail?.busy === true" class="badge busy"><span class="dot pulse" />busy</span>
       <!--
         Deploy and Verify live HERE, on every tab — they are the product's routine actions, and they

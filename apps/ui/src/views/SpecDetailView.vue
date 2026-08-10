@@ -13,7 +13,7 @@ import { api, problem } from '../api/client';
 import type { SpecDetail } from '../api/types';
 import { state, loadDeployments } from '../composables/useControlPlane';
 import { settings } from '../composables/useSettings';
-import { stamp } from '../composables/useFormat';
+import { sentence, stamp } from '../composables/useFormat';
 import SkeletonList from '../components/SkeletonList.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
@@ -68,7 +68,7 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
         </div>
       </div>
       <span class="grow" />
-      <span v-if="spec" class="badge" :class="spec.kind">{{ spec.kind }}</span>
+      <span v-if="spec" class="badge" :class="spec.kind">{{ sentence(spec.kind) }}</span>
     </div>
 
     <ErrorNote v-if="error" :text="error" title="Could not load this spec." />
@@ -86,7 +86,7 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
         <ul v-else-if="spec" class="kvlist">
           <li>
             <span class="k">
-              needs
+              Needs
               <InfoHint label="what needs means">
                 Variables the spec uses but does not set. Every deployment referencing it supplies
                 these, which is how one spec serves many stacks — and a missing one is refused by
@@ -99,7 +99,7 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
             </span>
           </li>
           <li>
-            <span class="k">used by</span>
+            <span class="k">Used by</span>
             <span class="v">
               <template v-if="users.length">
                 <RouterLink
@@ -118,8 +118,8 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
               <span v-else class="mute">no deployments reference it</span>
             </span>
           </li>
-          <li><span class="k">created</span><span class="v">{{ stamp(spec.createdAt) }}</span></li>
-          <li><span class="k">updated</span><span class="v">{{ stamp(spec.updatedAt) }}</span></li>
+          <li><span class="k">Created</span><span class="v">{{ stamp(spec.createdAt) }}</span></li>
+          <li><span class="k">Updated</span><span class="v">{{ stamp(spec.updatedAt) }}</span></li>
         </ul>
       </section>
 

@@ -21,7 +21,8 @@
 export type Kind = 'isolated' | 'shared';
 export type HookName = 'up' | 'assert_live' | 'down' | 'assert_gone';
 export type JobAction = 'up' | 'down' | 'verify';
-export type JobState = 'running' | 'ok' | 'failed' | 'leaked';
+/** `cancelled` is a person stopping it part-way — not a failure, and nothing it did was undone. */
+export type JobState = 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled';
 export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
 export type Visibility = 'shown' | 'masked';
 
@@ -150,6 +151,8 @@ export type Job = {
   outcome?: Outcome;
   error?: string;
   log?: LogEvent[];
+  /** Who stopped it. Present only when `state === 'cancelled'`. */
+  cancelledBy?: string;
 };
 
 /** The 202 body from an action. */
@@ -198,6 +201,10 @@ export type RuntimeContainer = {
   image: string;
   state: string;
   health: string | null;
+  /** Meaningful once `state` is `exited`: a finished one-shot (0) vs a crash (non-zero). */
+  exitCode: number | null;
+  /** Restarts docker has performed — the only sample-independent sign of a crash loop. */
+  restartCount: number;
   networks: string[];
   /** The container's IP on `preview-ingress` — the address Traefik actually dials. */
   ingressIp: string | null;
@@ -322,6 +329,12 @@ export type LogsResponse = {
   /** The service the output is for, or null for the whole stack. Echoed so a stale response is
    *  detectable after switching services. */
   service?: string | null;
+  /** Whether the lines carry docker's own timestamp prefix. */
+  timestamps?: boolean;
+  since?: string | null;
+  until?: string | null;
+  /** Lines actually returned — tells a quiet service apart from a truncated read. */
+  lines?: number;
   ok: boolean;
   text: string;
 };

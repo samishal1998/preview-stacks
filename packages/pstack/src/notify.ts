@@ -282,6 +282,8 @@ export function summarize(e: PstackEvent): string {
       return `${actionWord(d.action)} started on ${stack}.`;
     case 'job.succeeded':
       return `${actionWord(d.action)} succeeded on ${stack}${took}.`;
+    case 'job.cancelled':
+      return `${actionWord(d.action)} on ${stack} was CANCELLED${d.cancelledBy ? ` by ${String(d.cancelledBy)}` : ''}${took}. Nothing was undone — verify what exists.`;
     case 'job.failed':
       return `${actionWord(d.action)} FAILED on ${stack}${took}.${d.error ? ` ${String(d.error)}` : ''}`;
     case 'job.leaked': {

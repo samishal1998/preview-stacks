@@ -6,6 +6,7 @@
  * host's worth of previews — a few dozen rows, already in memory from the shell's poll.
  */
 import { computed, ref } from 'vue';
+import { sentence } from '../composables/useFormat';
 import { state, summary } from '../composables/useControlPlane';
 
 import RunStateBadge from '../components/RunStateBadge.vue';
@@ -96,11 +97,11 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
         <table class="cards">
           <thead>
             <tr>
-              <th>id</th>
-              <th>kind</th>
-              <th>stack</th>
-              <th>state</th>
-              <th>updated</th>
+              <th>ID</th>
+              <th>Kind</th>
+              <th>Stack</th>
+              <th>State</th>
+              <th>Updated</th>
             </tr>
           </thead>
           <tbody class="stagger">
@@ -113,7 +114,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
                   spec: {{ d.specName }}
                 </div>
               </td>
-              <td data-label="kind"><span class="badge" :class="d.kind">{{ d.kind }}</span></td>
+              <td data-label="kind"><span class="badge" :class="d.kind">{{ sentence(d.kind) }}</span></td>
               <td class="name dim" data-label="stack">
                 <span v-if="d.stack">{{ d.stack }}</span>
                 <!--

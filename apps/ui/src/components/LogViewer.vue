@@ -62,7 +62,12 @@ function resume(): void {
 }
 
 async function copy(): Promise<void> {
-  const text = props.copyText ?? props.rows.filter((r) => !r.separator).map((r) => (r.gutter ? `${r.gutter}  ${r.text}` : r.text)).join('\n');
+  const text =
+    props.copyText ??
+    props.rows
+      .filter((r) => !r.separator)
+      .map((r) => [r.time, r.gutter, r.text].filter(Boolean).join('  '))
+      .join('\n');
   try {
     await navigator.clipboard.writeText(text);
     toast('ok', 'Copied.');
@@ -94,6 +99,7 @@ onBeforeUnmount(() => {});
       <template v-for="r in rows" :key="r.key">
         <div v-if="r.separator" class="lv-sep"><span>{{ r.text }}</span></div>
         <div v-else class="lv-row" :class="r.tone">
+          <span v-if="r.time !== undefined" class="lv-time" :title="r.timeTitle">{{ r.time }}</span>
           <span v-if="r.gutter !== undefined" class="lv-gutter" :title="r.gutterTitle">{{ r.gutter }}</span>
           <span class="lv-msg">{{ r.text }}</span>
         </div>

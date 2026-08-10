@@ -26,7 +26,8 @@
  *   GET    /api/specs                     named specs (store once, reference from many deployments)
  *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
- *   GET    /api/deployments/:id/logs?service=  compose logs, optionally for ONE service
+ *   GET    /api/deployments/:id/logs?service=&tail=&timestamps=1&since=10m   compose logs
+ *   GET    /api/deployments/:id/logs/stream   the same, FOLLOWED — SSE, one line per frame
  *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
  *   GET    /api/deployments/:id/readiness  is it SERVING yet — poll, or `?wait=<seconds>` to long-poll
  *   GET    /api/notifiers                 registrations — metadata only, NEVER the signing secret
@@ -50,6 +51,7 @@
  *   GET    /api/deployments/:id/logs      recent compose logs for a deployment (redacted)
  *   GET    /api/jobs                      recent job transcripts
  *   GET    /api/jobs/:jobId               one job (poll this for state)
+ *   POST   /api/jobs/:jobId/cancel        stop a running job — undoes NOTHING
  *   GET    /api/jobs/:jobId/stream        SSE live log
  *   GET    /                              the web UI
  *
@@ -94,7 +96,7 @@ import UI_HTML_ASSET from '../ui/index.html' with { type: 'text' };
 // `type: 'text'`, but the text loader really does hand back a string — verified by bundling and
 // running with the source file deleted. Cast once, here, rather than at the use site.
 const UI_HTML = UI_HTML_ASSET as unknown as string;
-import { composeLogs, shq } from './compose.ts';
+import { composeLogs, composeLogsCommand, shq } from './compose.ts';
 import { createRunner } from './exec.ts';
 import { JobRegistry } from './jobs.ts';
 import { Registry, RegistryError } from './registry.ts';
@@ -246,6 +248,14 @@ export function createServer(opts: ServerOptions) {
    * that has been stopped must not keep calling docker every two seconds for the life of the process.
    */
   const readiness = new ReadinessWatcher(opts.readiness ?? {});
+  /**
+   * Live `compose logs --follow` children, so stopping the server stops them too.
+   *
+   * Same reasoning as the readiness watcher and the event dispatcher: these outlive the request that
+   * created them, and a stopped server that leaves compose processes attached to containers is a
+   * leak the operator cannot see and did not cause.
+   */
+  const followers = new Set<() => void>();
   const dispatcher = new Dispatcher(hooks);
   /**
    * The bus is a module singleton and this listener is per-server. A process can host several servers
@@ -282,12 +292,15 @@ export function createServer(opts: ServerOptions) {
    *     deletes. That is safe only because DELETE refuses while containers exist, which makes the
    *     guard below load-bearing for data, not just for orphan visibility.
    */
-  const runnerFor = (spec: Stack, dir: string) =>
+  const runnerFor = (spec: Stack, dir: string, signal?: AbortSignal) =>
     createRunner({
       dryRun: false,
       level: 'quiet',
       cwd: dir,
       baseEnv: { ...process.env, ...spec.env } as Record<string, string>,
+      // Present only for a job's own runner: it is the handle `POST /api/jobs/:id/cancel` pulls, and
+      // without it a cancel would flip the record's state while the shell command kept running.
+      signal,
     });
 
   /**
@@ -342,7 +355,21 @@ export function createServer(opts: ServerOptions) {
         const user = auth.tokenUser(bearer);
         if (user) return { kind: 'user', user };
       }
-      return null;
+      /*
+       * A bearer that does not authenticate FALLS THROUGH to the cookie below — this used to
+       * `return null`, and that turned a stray header into a permanent lockout.
+       *
+       * What actually happened: Settings holds the token in a `type="password"` input, browsers and
+       * password managers autofill those regardless of `autocomplete="off"`, and the UI persists
+       * whatever lands there and attaches it to every request. One autofill and a perfectly good
+       * session 401'd on every route, with no way out but clearing site data. The input is hardened
+       * too, but THIS is the half that makes the whole class non-fatal: whatever else a request
+       * carries, a live session is still a live session.
+       *
+       * It grants nothing — falling through can only authenticate the caller as the session they
+       * already hold. A request with no cookie (CI, a script, a wrong PAT) still gets its 401 from
+       * the loop below finding nothing.
+       */
     }
     for (const candidate of sessionCandidates(req)) {
       const user = auth.sessionUser(candidate);
@@ -894,7 +921,6 @@ export function createServer(opts: ServerOptions) {
 
           const body = (await req.json().catch(() => ({}))) as { verify?: boolean; force?: boolean };
           const spec = await resolveDep(id, vars);
-          const runner = runnerFor(spec, dep.dir);
 
           // Answer the shared-kind refusal synchronously rather than handing back a job id that is
           // going to fail: the caller learns immediately, and the reason is not buried in a
@@ -919,8 +945,9 @@ export function createServer(opts: ServerOptions) {
           const job = jobs.start(
             spec.stack,
             action,
-            async (rawSink) => {
+            async (rawSink, signal) => {
               const sink = scrubbedSink(rawSink);
+              const runner = runnerFor(spec, dep.dir, signal);
               if (action === 'up') {
                 const outcome = await up(spec, runner, sink);
                 // Readiness picks up exactly where the job stops. `compose up -d` returns once the
@@ -929,7 +956,9 @@ export function createServer(opts: ServerOptions) {
                 // CI is watched without the client having to ask. Only after a success: watching a
                 // stack whose provisioning failed would report a truthful "not ready" about
                 // something nobody deployed.
-                if (outcome.ok) readiness.start(spec.stack, runner, { restart: true });
+                // NOT the job's runner: that one dies with the job's signal, and a watch is supposed
+                // to outlive the deploy that started it.
+                if (outcome.ok) readiness.start(spec.stack, runnerFor(spec, dep.dir), { restart: true });
                 return outcome;
               }
               if (action === 'verify') return verify(spec, runner, sink);
@@ -1134,7 +1163,36 @@ export function createServer(opts: ServerOptions) {
           if (svcRaw !== null && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(svcRaw)) {
             return json({ error: `"${svcRaw}" is not a valid compose service name` }, { status: 400 });
           }
-          const r = await composeLogs(spec, runnerFor(spec, dep.dir), tail, svcRaw ?? undefined);
+          /**
+           * A duration compose understands, or nothing.
+           *
+           * Validated against a narrow shape rather than passed through: it reaches a shell (shq is
+           * the second line of defence, not the first), and an unparseable value makes compose fail
+           * the whole read — a 400 naming the parameter beats "compose exited non-zero".
+           * `10m` / `2h` / `1h30m`, or an RFC3339 instant.
+           */
+          const duration = (v: string | null): string | undefined => {
+            if (!v) return undefined;
+            return /^(\d+[smhd])+$/.test(v) || /^\d{4}-\d{2}-\d{2}T[\d:.+Z-]{4,}$/.test(v)
+              ? v
+              : undefined;
+          };
+          for (const key of ['since', 'until'] as const) {
+            const raw = url.searchParams.get(key);
+            if (raw !== null && duration(raw) === undefined) {
+              return json(
+                { error: `${key}="${raw}" is not a duration (10m, 2h, 1h30m) or an RFC3339 time` },
+                { status: 400 },
+              );
+            }
+          }
+          const r = await composeLogs(spec, runnerFor(spec, dep.dir), tail, svcRaw ?? undefined, {
+            // Opt-in, because it doubles the width of every line and the pretty view lifts it into
+            // its own gutter only when asked.
+            timestamps: url.searchParams.get('timestamps') === '1',
+            since: duration(url.searchParams.get('since')),
+            until: duration(url.searchParams.get('until')),
+          });
           // Application logs are the one place a secret shows up as free text — an app echoing its
           // own config, a hook printing a connection string. Redact by content before it leaves the
           // host, and mask this process's own token explicitly since it is the worst thing to leak.
@@ -1145,7 +1203,153 @@ export function createServer(opts: ServerOptions) {
             ...hostVars.secretValues(),
           ]);
           // `service` echoed so a UI can tell a stale response from a current one after a switch.
-          return json({ stack: spec.stack, tail, service: svcRaw ?? null, ok: r.ok, text });
+          return json({
+            stack: spec.stack,
+            tail,
+            service: svcRaw ?? null,
+            timestamps: url.searchParams.get('timestamps') === '1',
+            since: duration(url.searchParams.get('since')) ?? null,
+            until: duration(url.searchParams.get('until')) ?? null,
+            // How many lines actually came back, so "tail 2000" and "there are only 12 lines" are
+            // distinguishable on the page — the difference between a quiet service and a truncated read.
+            lines: text ? text.split('\n').length : 0,
+            ok: r.ok,
+            text,
+          });
+        }
+
+        /**
+         * FOLLOW the logs — SSE, one `docker compose logs --follow` per connection.
+         *
+         * A stream rather than the poll the fetched read deliberately is NOT a reversal of that
+         * rule: polling re-runs a full `--tail 200` every few seconds and re-sends everything each
+         * time, while one followed process sends each line once and costs nothing between lines.
+         * The rule was "do not hammer the host", and this is the version that does not.
+         *
+         * The child process is the thing to get right. It is killed when the client disconnects
+         * (`cancel`), when the server stops, and after a hard cap — a forgotten tab must not leave a
+         * compose process attached to a container for a week. Without the cancel hook every reload
+         * would leak one.
+         */
+        const lstream = /^\/api\/deployments\/([^/]+)\/logs\/stream$/.exec(path);
+        if (lstream && req.method === 'GET') {
+          const id = decodeURIComponent(lstream[1]!);
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          const spec = await resolveDep(id, vars);
+          const svc = url.searchParams.get('service');
+          if (svc !== null && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(svc)) {
+            return json({ error: `"${svc}" is not a valid compose service name` }, { status: 400 });
+          }
+          const tailRaw = Number(url.searchParams.get('tail') ?? 200);
+          const built = await composeLogsCommand(
+            spec,
+            runnerFor(spec, dep.dir),
+            Number.isFinite(tailRaw) ? Math.min(Math.max(tailRaw, 1), 2000) : 200,
+            svc ?? undefined,
+            { follow: true, timestamps: url.searchParams.get('timestamps') === '1' },
+          );
+          if (!built) return json({ error: 'this spec has no compose section' }, { status: 400 });
+
+          const secrets = [opts.token ?? '', ...hostVars.secretValues()];
+          const proc = Bun.spawn(['bash', '-c', built.cmd], {
+            cwd: dep.dir,
+            env: { ...process.env, ...spec.env, ...built.env } as Record<string, string>,
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+
+          let closed = false;
+          let keepalive: ReturnType<typeof setInterval> | null = null;
+          let capTimer: ReturnType<typeof setTimeout> | null = null;
+          const stop = () => {
+            if (closed) return;
+            closed = true;
+            if (keepalive) clearInterval(keepalive);
+            if (capTimer) clearTimeout(capTimer);
+            try {
+              proc.kill('SIGTERM');
+            } catch {
+              /* already gone */
+            }
+          };
+
+          const stream = new ReadableStream({
+            start(controller) {
+              const enc = new TextEncoder();
+              const send = (data: unknown) => {
+                if (closed) return;
+                try {
+                  controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+                } catch {
+                  stop();
+                }
+              };
+              const finish = (reason: string) => {
+                if (!closed) send({ done: true, reason });
+                stop();
+                try {
+                  controller.close();
+                } catch {
+                  /* already closed by cancel */
+                }
+              };
+
+              // Comment frames, not events: they keep the connection off Bun's idle timeout on a
+              // silent stack without a consumer having to filter heartbeat "lines" out of the log.
+              keepalive = setInterval(() => {
+                if (closed) return;
+                try {
+                  controller.enqueue(enc.encode(': keepalive\n\n'));
+                } catch {
+                  stop();
+                }
+              }, 20_000);
+              // The forgotten-tab cap. Generous, because watching a deploy legitimately takes a
+              // while; finite, because a compose process per abandoned tab is a real leak.
+              capTimer = setTimeout(() => finish('reached the one-hour follow limit'), 3_600_000);
+
+              /** Split a byte stream on newlines, keeping the partial last line for the next chunk. */
+              const pump = async (readable: ReadableStream<Uint8Array>, level: string) => {
+                const decoder = new TextDecoder();
+                let buffer = '';
+                for await (const chunk of readable) {
+                  if (closed) return;
+                  buffer += decoder.decode(chunk, { stream: true });
+                  const lines = buffer.split('\n');
+                  buffer = lines.pop() ?? '';
+                  for (const line of lines) {
+                    // Redacted PER LINE, before it leaves the host — the same contract the fetched
+                    // read has. A followed log is exactly as likely to print a connection string.
+                    send({ level, line: redactText(line, secrets) });
+                  }
+                }
+                if (buffer && !closed) send({ level, line: redactText(buffer, secrets) });
+              };
+
+              void Promise.all([
+                pump(proc.stdout as ReadableStream<Uint8Array>, 'info'),
+                pump(proc.stderr as ReadableStream<Uint8Array>, 'error'),
+              ]).catch(() => {});
+              // compose exiting means the stack went away (or the project never existed): report it
+              // rather than leaving a live-looking stream that will never produce another line.
+              void proc.exited.then((code) =>
+                finish(code === 0 ? 'compose stopped following' : `compose exited (${code})`),
+              );
+            },
+            cancel() {
+              stop();
+            },
+          });
+          followers.add(stop);
+          void proc.exited.then(() => followers.delete(stop));
+          return new Response(stream, {
+            headers: {
+              'content-type': 'text/event-stream',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+            },
+          });
         }
 
         // ---- a deployment's stored source ----------------------------------------------
@@ -1535,6 +1739,44 @@ export function createServer(opts: ServerOptions) {
         // ---- jobs -------------------------------------------------------------------
         if (path === '/api/jobs') return json({ jobs: jobs.list() });
 
+        /**
+         * Stop a running job.
+         *
+         * NOTHING IS UNDONE. The abort reaches the shell command in flight; every resource created
+         * before it stays created, and a half-finished teardown has left whatever it had not reached
+         * yet. So the answer says so in the same breath as reporting success — this is the one place
+         * a caller learns that "stopped" is not "reverted".
+         */
+        const cancelm = /^\/api\/jobs\/([^/]+)\/cancel$/.exec(path);
+        if (cancelm) {
+          if (req.method !== 'POST') return json({ error: 'use POST' }, { status: 405 });
+          const jobId = decodeURIComponent(cancelm[1]!);
+          const job = jobs.get(jobId);
+          if (!job) return json({ error: `no such job: ${jobId}` }, { status: 404 });
+          // 409, not 404: the job exists and the caller's request is simply out of date, which is a
+          // different thing to fix than a wrong id.
+          if (job.state !== 'running') {
+            return json(
+              { error: `job ${jobId} already finished (${job.state})`, state: job.state },
+              { status: 409 },
+            );
+          }
+          // The route is behind the gate, so a principal exists; the fallback is for the type, not
+          // for a case that can happen.
+          const who = principal(req);
+          const by = who ? actorOf(who) : 'an operator';
+          jobs.cancel(jobId, by);
+          return json({
+            cancelled: jobId,
+            stack: job.stack,
+            action: job.action,
+            by,
+            warning:
+              'Nothing was undone. Whatever this job created or destroyed before it stopped is ' +
+              'still that way — run verify to see what exists.',
+          });
+        }
+
         const jm = /^\/api\/jobs\/([^/]+)(?:\/(stream))?$/.exec(path);
         if (jm) {
           const job = jobs.get(decodeURIComponent(jm[1]!));
@@ -1640,6 +1882,8 @@ export function createServer(opts: ServerOptions) {
   const stopServing = server.stop.bind(server);
   server.stop = (closeActiveConnections?: boolean) => {
     detachDispatcher();
+    for (const stop of followers) stop();
+    followers.clear();
     // Same reasoning one level down: a readiness watch is a poll loop, and a stopped server's loop
     // would go on shelling out to docker — and go on emitting events into a bus it no longer serves.
     readiness.stopAll();

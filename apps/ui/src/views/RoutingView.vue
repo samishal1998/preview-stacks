@@ -272,10 +272,10 @@ async function remove(): Promise<void> {
       <table v-else-if="live.length" class="cards">
         <thead>
           <tr>
-            <th>url</th>
-            <th>forwards to</th>
-            <th>deployment</th>
-            <th>router</th>
+            <th>URL</th>
+            <th>Forwards to</th>
+            <th>Deployment</th>
+            <th>Router</th>
           </tr>
         </thead>
         <tbody class="stagger">

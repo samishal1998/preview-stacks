@@ -151,7 +151,7 @@ async function remove(e: Entry): Promise<void> {
                 <td class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
                 <td class="right nowrap" data-label="">
                   <button class="ghost sm" @click="startEdit(e)">Edit</button>
-                  <ActionButton class="danger sm" :confirm="`Delete ${e.name}? Specs referencing it stop resolving.`" @run="remove(e)">
+                  <ActionButton class="danger sm" :confirm="`Delete ${e.name}?`" @run="remove(e)">
                     Delete
                   </ActionButton>
                 </td>
@@ -189,7 +189,7 @@ async function remove(e: Entry): Promise<void> {
                 <td class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
                 <td class="right nowrap" data-label="">
                   <button class="ghost sm" @click="startEdit(e)">Replace</button>
-                  <ActionButton class="danger sm" :confirm="`Delete ${e.name}? Specs referencing it stop resolving.`" @run="remove(e)">
+                  <ActionButton class="danger sm" :confirm="`Delete ${e.name}?`" @run="remove(e)">
                     Delete
                   </ActionButton>
                 </td>
@@ -273,6 +273,9 @@ td.right button {
   margin-inline-start: var(--s2);
 }
 .two-up > .field {
+  /* A form caps itself even though the page does not — a 1300px-wide text input reads as a text
+     editor, not a field. See docs/ui-rules.md. */
   flex: 1 1 200px;
+  max-width: 420px;
 }
 </style>

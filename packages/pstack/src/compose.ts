@@ -99,6 +99,36 @@ export async function composeDown(spec: Stack, runner: Runner): Promise<RunResul
 }
 
 /**
+ * The `logs` command line and the environment it needs, without running it.
+ *
+ * Split out because FOLLOWING logs cannot go through `Runner`: that buffers a process to completion,
+ * and `--follow` never completes. The SSE route spawns this itself and streams the pipe. Both paths
+ * building their command here is what stops the followed stream and the fetched one disagreeing
+ * about which project, profiles or files they are reading.
+ */
+export async function composeLogsCommand(
+  spec: Stack,
+  runner: Runner,
+  tail: number,
+  service?: string,
+  opts: { timestamps?: boolean; since?: string; until?: string; follow?: boolean } = {},
+): Promise<{ cmd: string; env: Record<string, string> } | null> {
+  const c = spec.compose;
+  if (!c) return null;
+  const only = service ? ` ${shq(service)}` : '';
+  const flags = [
+    opts.follow ? ' --follow' : '',
+    opts.timestamps ? ' --timestamps' : '',
+    opts.since ? ` --since ${shq(opts.since)}` : '',
+    opts.until ? ` --until ${shq(opts.until)}` : '',
+  ].join('');
+  return {
+    cmd: `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}${flags}${only}`,
+    env: composeEnv(spec),
+  };
+}
+
+/**
  * Recent logs for a stack. `--no-color` because the output is rendered in a browser, where ANSI
  * escapes are noise, and `--tail` because an unbounded fetch on a chatty stack would stream
  * megabytes into a tab. Every profile is enabled for the same reason `down` enables them: compose
@@ -116,16 +146,24 @@ export async function composeLogs(
    * Shell-quoted, because it arrives from a query parameter and is interpolated into a command.
    */
   service?: string,
+  /**
+   * The rest of what `docker compose logs` can tell you, which this used to throw away.
+   *
+   * `timestamps` is the one that matters most: without it a log line cannot be lined up against a
+   * deploy, a healthcheck flap or another service's line, and "when did this start" is unanswerable
+   * from the page. `since`/`until` are what make a long-lived container readable at all — a tail of
+   * 2000 on a service that logs every request is 2000 lines of the last four minutes.
+   */
+  opts: { timestamps?: boolean; since?: string; until?: string } = {},
 ): Promise<RunResult> {
-  const c = spec.compose;
-  if (!c) return { ok: true, code: 0, stdout: '', stderr: '(no compose section in spec)', skipped: false };
   // `logs [SERVICE...]` — an unknown name makes compose exit non-zero with its own message, which is
   // better than anything this layer could invent.
-  const only = service ? ` ${shq(service)}` : '';
-  return runner.run(
-    `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} logs --no-color --tail ${Math.trunc(tail)}${only}`,
-    { env: composeEnv(spec), label: service ? `compose logs ${service}` : 'compose logs' },
-  );
+  const built = await composeLogsCommand(spec, runner, tail, service, opts);
+  if (!built) return { ok: true, code: 0, stdout: '', stderr: '(no compose section in spec)', skipped: false };
+  return runner.run(built.cmd, {
+    env: built.env,
+    label: service ? `compose logs ${service}` : 'compose logs',
+  });
 }
 
 export async function composePs(spec: Stack, runner: Runner): Promise<RunResult> {

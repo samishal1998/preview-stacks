@@ -230,17 +230,32 @@
    * Radii — one step per nesting level, so a rounded thing inside a rounded thing never looks
    * pinched. r1 controls, r2 grouped boxes, r3 panels, r4 the shell's own floating surfaces.
    */
+  --r0: 6px;    /* inline code, kbd, a checkbox's own box — below the control step */
   --r1: 9px;
   --r2: 13px;
   --r3: 16px;
   --r4: 20px;
+  --r-full: 999px; /* pills and circles. ONE spelling: `50%` on a square element looks identical
+                      and drifts the moment the element stops being square. */
+
+  /*
+   * CONTROL HEIGHT. Every interactive control in a row agrees on this, or a toolbar reads as
+   * assembled from spare parts — which is exactly what it did: buttons at 32, select triggers at 34,
+   * search boxes at 34, small buttons at 27. Two steps, no exceptions.
+   */
+  --control-h: 34px;
+  --control-h-sm: 28px;
 
   --rail: 216px;
   /* The gutter the shell's floating panels sit in. */
   --gap-shell: 12px;
   /*
-   * A measure. Text and forms stop being readable somewhere past ~90 characters, and a control
-   * plane on a 34" monitor will happily stretch a table to 3000px if nothing says otherwise.
+   * A measure for PROSE and FORMS. Text stops being readable somewhere past ~90 characters.
+   *
+   * It is deliberately NOT the page width: tables, log panes and routing grids are the whole reason
+   * someone opens this on a wide monitor, and capping the page made every one of them scroll
+   * sideways inside a column with a thousand pixels of empty space beside it. Wide content gets the
+   * window; prose caps itself.
    */
   --measure: 1240px;
 

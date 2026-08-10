@@ -2,7 +2,7 @@
 /** The resolved spec, summarised. Read-only — everything that acts lives on Danger. */
 import { computed } from 'vue';
 import { dep, isShared, row } from '../../composables/useDeployment';
-import { stamp } from '../../composables/useFormat';
+import { sentence, stamp } from '../../composables/useFormat';
 import SkeletonList from '../../components/SkeletonList.vue';
 import InfoHint from '../../components/InfoHint.vue';
 
@@ -34,7 +34,7 @@ const kindBlurb = computed(() =>
       <ul class="kvlist">
         <li>
           <span class="k">
-            stack
+            Stack
             <InfoHint label="the difference between id and stack">
               The <b>id</b> is what you named this deployment. The <b>stack</b> is what its spec
               resolved to once the variables were filled in — the compose project name, the hostname
@@ -44,14 +44,14 @@ const kindBlurb = computed(() =>
           <span class="v mono">{{ dep.detail.stack || '—' }}</span>
         </li>
         <li>
-          <span class="k">kind</span>
+          <span class="k">Kind</span>
           <span class="v">
-            <span class="badge" :class="dep.detail.kind">{{ dep.detail.kind }}</span>
+            <span class="badge" :class="dep.detail.kind">{{ sentence(dep.detail.kind) }}</span>
             <span class="mute" style="margin-left: 8px; font-size: var(--t-sm)">{{ kindBlurb }}</span>
           </span>
         </li>
         <li v-if="row?.specName">
-          <span class="k">spec</span>
+          <span class="k">Spec</span>
           <span class="v">
             <b>{{ row.specName }}</b>
             <span class="mute" style="font-size: var(--t-sm)">
@@ -60,13 +60,13 @@ const kindBlurb = computed(() =>
           </span>
         </li>
         <li>
-          <span class="k">compose file</span>
+          <span class="k">Compose file</span>
           <span class="v mono">
             {{ dep.detail.compose ? dep.detail.compose.file : 'none' }}
           </span>
         </li>
         <li v-if="dep.detail.compose">
-          <span class="k">profiles</span>
+          <span class="k">Profiles</span>
           <span class="v">
             <span v-for="p in dep.detail.compose.profiles" :key="p" class="badge" style="margin-right: 4px">
               {{ p }}
@@ -78,7 +78,7 @@ const kindBlurb = computed(() =>
         </li>
         <li v-if="dep.detail.compose?.subdomains?.length">
           <span class="k">
-            subdomains
+            Subdomains
             <InfoHint label="how wildcard subdomains work">
               Anything one label under these hosts reaches the same service the bare host does.
               An exact hostname you route yourself always wins over the wildcard.
@@ -98,14 +98,14 @@ const kindBlurb = computed(() =>
           </span>
         </li>
         <li v-if="dep.detail.compose">
-          <span class="k">overlays</span>
+          <span class="k">Overlays</span>
           <span class="v">
             <span v-for="o in dep.detail.compose.overlays" :key="o" class="mono" style="margin-right: 8px">{{ o }}</span>
             <span v-if="!dep.detail.compose.overlays.length" class="mute">none</span>
           </span>
         </li>
         <li>
-          <span class="k">axes</span>
+          <span class="k">Axes</span>
           <span class="v">
             {{ dep.detail.axes.length }}
             <RouterLink v-if="dep.detail.axes.length" :to="`/deployments/${encodeURIComponent(dep.id)}/axes`">
@@ -114,11 +114,11 @@ const kindBlurb = computed(() =>
           </span>
         </li>
         <li>
-          <span class="k">requires</span>
+          <span class="k">Requires</span>
           <span class="v">{{ dep.detail.requires.length }}</span>
         </li>
-        <li><span class="k">created</span><span class="v">{{ stamp(dep.detail.createdAt) }}</span></li>
-        <li><span class="k">updated</span><span class="v">{{ stamp(dep.detail.updatedAt) }}</span></li>
+        <li><span class="k">Created</span><span class="v">{{ stamp(dep.detail.createdAt) }}</span></li>
+        <li><span class="k">Updated</span><span class="v">{{ stamp(dep.detail.updatedAt) }}</span></li>
       </ul>
     </template>
   </section>

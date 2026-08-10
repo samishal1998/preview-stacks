@@ -11,6 +11,7 @@
  * error, so it gets its own explanation instead of a red banner.
  */
 import { computed, ref } from 'vue';
+import { sentence } from '../composables/useFormat';
 import { api, problem } from '../api/client';
 import type { SpecMeta, SpecsResponse } from '../api/types';
 import { state, loadDeployments } from '../composables/useControlPlane';
@@ -107,8 +108,8 @@ const shown = computed(() => {
         <table class="cards" data-testid="specs.list">
           <thead>
             <tr>
-              <th>name</th>
-              <th>kind</th>
+              <th>Name</th>
+              <th>Kind</th>
               <th>
                 needs
                 <InfoHint label="what needs means">
@@ -116,8 +117,8 @@ const shown = computed(() => {
                   supply these, which is how one spec serves many stacks.
                 </InfoHint>
               </th>
-              <th>used by</th>
-              <th>updated</th>
+              <th>Used by</th>
+              <th>Updated</th>
             </tr>
           </thead>
           <tbody class="stagger">
@@ -129,7 +130,7 @@ const shown = computed(() => {
                 </div>
               </td>
               <td data-label="kind">
-                <span class="badge" :class="s.kind">{{ s.kind }}</span>
+                <span class="badge" :class="s.kind">{{ sentence(s.kind) }}</span>
               </td>
               <td data-label="needs">
                 <span v-if="s.requiredVars.length">{{ s.requiredVars.join(', ') }}</span>

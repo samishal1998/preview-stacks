@@ -27,6 +27,12 @@ export const EVENTS = [
   'job.succeeded',
   'job.failed',
   /**
+   * A person stopped it part-way. Distinct from `job.failed` for the same reason `job.leaked` is:
+   * a cancelled run did not try and lose, it was interrupted, and whatever it had already created
+   * or destroyed is still that way with nobody watching.
+   */
+  'job.cancelled',
+  /**
    * The one this product exists for: teardown ran and something survived it. Distinct from
    * `job.failed` — a failed job did not do what it was told, a leaked one left a resource behind
    * that nothing else will clean up.

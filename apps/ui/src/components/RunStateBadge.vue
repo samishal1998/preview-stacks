@@ -13,13 +13,13 @@ defineProps<{ busy: boolean | null; running: boolean | null }>();
 </script>
 
 <template>
-  <span v-if="busy === true" class="badge busy"><span class="dot pulse" />busy</span>
-  <span v-else-if="running === true" class="badge ok"><span class="dot" />running</span>
+  <span v-if="busy === true" class="badge busy"><span class="dot pulse" />Busy</span>
+  <span v-else-if="running === true" class="badge ok"><span class="dot" />Running</span>
   <span
     v-else-if="busy === null || running === null"
     class="badge unknown"
     title="the server could not determine this — it is not the same as idle"
-    >unknown</span
+    >Unknown</span
   >
-  <span v-else class="badge">idle</span>
+  <span v-else class="badge">Idle</span>
 </template>

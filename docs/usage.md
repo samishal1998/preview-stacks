@@ -887,8 +887,29 @@ $ curl -s https://api.preview.example.com/api/jobs/up-pr-123-1-apeq0d
 }
 ```
 
-`state` is the field to branch on: **`running` · `ok` · `failed` · `leaked`**. `leaked` is its own
-state for the same reason exit 2 is its own code.
+`state` is the field to branch on: **`running` · `ok` · `failed` · `cancelled` · `leaked`**.
+`leaked` is its own state for the same reason exit 2 is its own code, and `cancelled` for a related
+one — a person stopped the run, so it did not try and lose.
+
+### Stop a running job
+
+```console
+$ curl -s -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
+       https://api.preview.example.com/api/jobs/up-pr-123-1-apeq0d/cancel
+{
+  "cancelled": "up-pr-123-1-apeq0d",
+  "stack": "pr-123",
+  "action": "up",
+  "by": "alice",
+  "warning": "Nothing was undone. Whatever this job created or destroyed before it stopped is still that way — run verify to see what exists."
+}
+```
+
+The command in flight is killed (SIGTERM) and every later hook is refused — a teardown is
+best-effort and keeps going past failures, so without that second half pressing stop would leave the
+remaining axes running. **Nothing is rolled back.** Run `verify` afterwards; that is the whole point
+of having it. A job that has already finished answers 409, not 404: the id is fine, the request is
+out of date.
 
 The SSE stream replays the buffered log from the beginning, then streams live, then closes with a
 terminal frame — so attaching late still gets the whole story:

@@ -16,7 +16,9 @@ import LogViewer from '../components/LogViewer.vue';
 import type { LogRow } from '../components/log-viewer-types';
 import StepList from '../components/StepList.vue';
 import StateBadge from '../components/StateBadge.vue';
+import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
+import { toast } from '../composables/useToasts';
 
 const props = defineProps<{ jobId: string }>();
 
@@ -80,8 +82,14 @@ function closeStream(): void {
 
 function stream(): void {
   closeStream();
-  // No auth header: EventSource cannot send one. Reads are unauthenticated by design, which is
-  // exactly why the log is a GET.
+  /*
+   * The stream REPLAYS the whole buffer before going live, and `load()` has already seeded `lines`
+   * from the same buffer — so every line the job had produced before the page opened was rendered
+   * twice, with the count to match. Clearing here is the honest fix: the replay is complete by
+   * definition, so the seed is only ever the placeholder that keeps a finished job from flashing
+   * empty.
+   */
+  lines.value = [];
   source = new EventSource(api.url(`/api/jobs/${encodeURIComponent(props.jobId)}/stream`));
   streaming.value = true;
 
@@ -125,6 +133,32 @@ watch(
   { immediate: true },
 );
 
+const cancelling = ref(false);
+
+/**
+ * Stop the job.
+ *
+ * The stream is deliberately left open: the server writes the cancellation into the SAME log the
+ * page is already watching, so the operator sees the run stop where it stopped instead of watching a
+ * page that has gone quiet. `load()` afterwards picks up the final state and `cancelledBy`.
+ */
+async function cancel(): Promise<void> {
+  cancelling.value = true;
+  const r = await api.post<{ warning?: string }>(
+    `/api/jobs/${encodeURIComponent(props.jobId)}/cancel`,
+  );
+  cancelling.value = false;
+  if (!r.ok) {
+    // 409 means it finished on its own between the click and the request — not an error worth an
+    // alarm, just a stale page.
+    toast(r.status === 409 ? 'info' : 'error', problem(r, 'stop this job'));
+    void load();
+    return;
+  }
+  toast('ok', r.body.warning ?? 'Stopped.');
+  void load();
+}
+
 onBeforeUnmount(closeStream);
 </script>
 
@@ -144,8 +178,35 @@ onBeforeUnmount(closeStream);
           <template v-else>{{ jobId }}</template>
         </div>
       </div>
+      <span class="grow" />
       <StateBadge v-if="job" :state="job.state" />
+      <!--
+        Stopping is destructive in the way that matters here: it does not undo, so the confirmation
+        says what will be left behind rather than asking "are you sure".
+      -->
+      <ActionButton
+        v-if="job?.state === 'running'"
+        variant="danger"
+        :pending="cancelling"
+        confirm="Stop it? Nothing is undone."
+        title="Kills the command in flight. Anything already created or destroyed stays that way."
+        @run="cancel"
+      >
+        Stop
+      </ActionButton>
     </div>
+
+    <!--
+      Not a badge's worth of information. A cancelled job is the one state where the record is
+      complete and the INFRASTRUCTURE is not, and the next step is a person's to take.
+    -->
+    <section v-if="job?.state === 'cancelled'" class="panel banner-panel warn">
+      <b>Stopped by {{ job.cancelledBy ?? 'an operator' }} — nothing was undone.</b>
+      <p>
+        Whatever this job had already created or destroyed is still that way. Run
+        <b>Verify</b> on the deployment to see what actually exists.
+      </p>
+    </section>
 
     <ErrorNote v-if="error" :text="error" />
 

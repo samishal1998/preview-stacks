@@ -87,7 +87,7 @@ code,
   border-radius: var(--r1);
 }
 a:focus-visible {
-  border-radius: 4px;
+  border-radius: var(--r0);
 }
 
 /* Reachable by keyboard, invisible until then. */
@@ -208,7 +208,7 @@ a:focus-visible {
   color: var(--fg-mute);
   background: var(--panel-2);
   padding: 3px 6px;
-  border-radius: 999px;
+  border-radius: var(--r-full);
 }
 
 .rail .foot {
@@ -232,7 +232,13 @@ a:focus-visible {
   min-width: 0;
   /* The shell's gutter supplies the outer inset, so this only adds the reading margin. */
   padding: var(--s3) var(--s4) var(--s7);
-  max-width: 1180px;
+  /*
+   * FULL WIDTH, on purpose. This used to be `max-width: 1180px` with no `margin-inline: auto`, so on
+   * a wide monitor the content was both narrowed AND flush left — ~1100px of dead space down the
+   * right-hand side, while the tables inside it scrolled sideways. Prose and forms cap themselves
+   * (`--measure`, `.settings-form`); everything else earns the window it is given.
+   */
+  max-width: none;
 }
 
 /* < 800px: the rail becomes a floating bottom bar — still a panel, still four corners. */
@@ -280,9 +286,14 @@ a:focus-visible {
 
 /* ------------------------------------------------------------------ headings */
 
+/*
+ * Centred, not top-aligned. A 22px pill badge and a 34px button sitting on a shared TOP edge put
+ * their optical centres five pixels apart, which is what "the buttons are different sizes" in the
+ * deployment header actually was.
+ */
 .page-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--s3);
   flex-wrap: wrap;
   margin-bottom: var(--s5);
@@ -387,7 +398,7 @@ button,
   border: 1px solid var(--line);
   border-radius: var(--r1);
   padding: var(--s2) var(--s3);
-  min-height: 32px;
+  min-height: var(--control-h);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -399,7 +410,7 @@ button,
     box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 button:hover:not(:disabled),
-.btn:hover {
+.btn:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--fg-mute) 60%, var(--line));
   background: color-mix(in srgb, var(--hover) 100%, var(--panel-2));
   text-decoration: none;
@@ -445,10 +456,21 @@ button.ghost {
 button.ghost:hover:not(:disabled) {
   background: var(--hover);
 }
-button.sm {
-  min-height: 27px;
+button.sm,
+.btn.sm {
+  min-height: var(--control-h-sm);
   padding: var(--s1) var(--s2);
   font-size: var(--t-xs);
+}
+/*
+ * A button that is ARMED for confirmation (see ActionButton.vue). Deliberately loud: the next click
+ * is the destructive one, and the only thing standing between the two is that this looks different.
+ */
+button.armed {
+  background: var(--fail-soft);
+  border-color: color-mix(in srgb, var(--fail) 70%, transparent);
+  color: var(--fail);
+  font-weight: 600;
 }
 
 /* Inline progress on a button that has fired: a bar, not a spinner replacing the label. */
@@ -563,8 +585,37 @@ label {
  */
 .row > .field + .field,
 .row > .field + .hint,
-.row > .hint + .field {
+.row > .hint + .field,
+.phead > .field + .field,
+.phead > .field + .hint,
+.phead > .hint + .field {
   margin-top: 0;
+}
+/*
+ * A field whose label sits BESIDE its control, for toolbars. The stacked form (label above) is right
+ * in a form and wrong in a header row, where it makes one control taller than its neighbours and
+ * nothing shares a baseline.
+ */
+.field.inline {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: 0;
+}
+.field.inline > label {
+  color: var(--fg-mute);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+/* Every control in a toolbar agrees on height — the rule that used to cover `.check` alone. */
+.phead > button,
+.phead > .btn,
+.phead > input,
+.phead > select,
+.phead > .check,
+.phead > .field > input,
+.phead > .field > select {
+  min-height: var(--control-h);
 }
 /* Labels and inputs in a row line up on their tops, not their centres — a field with a hint under
  * it must not drag the input beside it downward to find a common centre. */
@@ -622,7 +673,7 @@ label {
   gap: 5px;
   font: 500 var(--t-xs) / 1 var(--sans);
   padding: 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--r-full);
   background: var(--neutral-soft);
   color: var(--fg-dim);
   border: 1px solid transparent;
@@ -666,7 +717,7 @@ label {
 .badge .dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--r-full);
   background: currentColor;
 }
 /* A running job pulses; nothing else does. Instant (and non-looping) under reduced motion. */
@@ -723,7 +774,7 @@ label {
 .banner code {
   background: var(--sunk);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--r0);
 }
 
 /* ------------------------------------------------------------------ tables → cards */
@@ -777,7 +828,13 @@ td.name {
  * < 640px: the SAME markup renders as cards. Each <td> carries `data-label`, so the header text
  * follows the value into the card and nothing has to be duplicated in a second component.
  */
-@media (max-width: 640px) {
+/*
+ * CONTAINER query, not a media query. The panel is what constrains the table — `.grid-2` can hand it
+ * a 320px track on a 1400px monitor — so keying card mode to the VIEWPORT meant a narrow panel kept
+ * the full desktop table and its columns painted straight over the panel beside it. `.panel` already
+ * declares `container-type: inline-size`; this is the query that was supposed to use it.
+ */
+@container (max-width: 460px) {
   table.cards,
   table.cards tbody,
   table.cards tr,
@@ -816,9 +873,137 @@ td.name {
   table.cards td[colspan] {
     text-align: left;
   }
-  table.cards td[colspan]::before {
+  table.cards td[colspan]::before,
+  /* An actions cell has no label to print, and an empty `::before` still takes a row's worth of
+     baseline alignment with it. */
+  table.cards td[data-label='']::before {
     content: '';
   }
+  table.cards td[data-label=''] {
+    justify-content: flex-end;
+  }
+}
+
+/*
+ * Wide tables scroll INSIDE their panel rather than out of it.
+ *
+ * A panel declares no `overflow`, so a table wider than its column simply painted over whatever sat
+ * beside it — the Variables/Secrets pair being the visible case. Card mode above handles genuinely
+ * narrow panels; this is the belt for the range in between, where the table is only slightly too
+ * wide and cards would be overkill.
+ */
+@container (min-width: 461px) {
+  .panel > table,
+  .table-scroll {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .panel > table > thead,
+  .panel > table > tbody {
+    /* `display: block` on the table would collapse column sizing; restore it on the sections. */
+    display: table;
+    width: 100%;
+    table-layout: auto;
+  }
+}
+
+/* ------------------------------------------------------------------ row actions */
+
+/*
+ * The per-row jump targets (Logs / Shell / Open). Right-aligned, never wrapping mid-pair, and
+ * `.btn` on an anchor so a link that acts like a button looks like one.
+ */
+.row-actions {
+  text-align: end;
+  white-space: nowrap;
+}
+.row-actions > * + * {
+  margin-inline-start: var(--s1);
+}
+
+/* ------------------------------------------------------------------ log split view */
+
+/*
+ * Container list beside the log, not a dropdown above it. `minmax(0, 1fr)` on the output half is
+ * what keeps a long unbroken log line from widening the grid and pushing the list off-screen.
+ */
+.logs-split {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: var(--s4);
+  align-items: start;
+}
+@container (max-width: 720px) {
+  .logs-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .clist {
+    max-height: 220px;
+  }
+}
+.clist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Scrolls, so twenty containers cannot push the log off the page. */
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-inline-end: var(--s1);
+}
+.clist-item {
+  display: grid;
+  gap: 2px;
+  text-align: start;
+  justify-items: start;
+  padding: var(--s2) var(--s3);
+  min-height: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  width: 100%;
+}
+.clist-item:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--line-soft);
+}
+.clist-item.on {
+  background: var(--panel-2);
+  border-color: var(--line);
+  box-shadow: var(--hairline);
+}
+.clist-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 560;
+}
+.clist-sub {
+  font-size: var(--t-xs);
+  color: var(--fg-mute);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.clist-state {
+  font-size: var(--t-xs);
+}
+.logs-main {
+  min-width: 0;
+}
+
+/* The log viewer's own time column, when a line carries a timestamp as well as a source. */
+.lv-time {
+  flex: none;
+  color: var(--fg-mute);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A banner that IS a panel (a page-level notice), rather than one nested inside a panel. */
+.panel.banner-panel {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
 }
 
 /* ------------------------------------------------------------------ key/value list */
@@ -1197,7 +1382,7 @@ pre.log mark {
   width: 8px;
   height: 8px;
   margin: 6px 0 0 var(--s2);
-  border-radius: 50%;
+  border-radius: var(--r-full);
   background: var(--neutral);
   box-shadow: 0 0 0 3px var(--neutral-soft);
 }
@@ -1279,7 +1464,7 @@ kbd {
   background: var(--sunk);
   border: 1px solid var(--line);
   border-bottom-width: 2px;
-  border-radius: 5px;
+  border-radius: var(--r0);
   padding: 4px 6px;
   color: var(--fg);
 }
@@ -1318,7 +1503,7 @@ kbd {
   min-height: 0;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-full);
   background: none;
   color: var(--fg-mute);
   cursor: pointer;
@@ -1501,7 +1686,7 @@ kbd {
   color: var(--fg-dim);
   background: var(--sunk);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--r0);
   padding: 3px 5px;
   margin-right: 3px;
 }
@@ -1733,10 +1918,10 @@ input[type='radio'] {
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 input[type='checkbox'] {
-  border-radius: 5px;
+  border-radius: var(--r0);
 }
 input[type='radio'] {
-  border-radius: 50%;
+  border-radius: var(--r-full);
 }
 input[type='checkbox']:hover:not(:disabled),
 input[type='radio']:hover:not(:disabled) {
@@ -1758,7 +1943,7 @@ input[type='checkbox']::before {
 input[type='radio']::before {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--r-full);
   background: #fff;
 }
 input[type='checkbox']:checked,
@@ -1786,7 +1971,7 @@ input[type='radio']:disabled {
   height: 18px;
   padding: 0;
   min-height: 0;
-  border-radius: 50%;
+  border-radius: var(--r-full);
   border: 1px solid var(--line);
   background: var(--panel-2);
   box-shadow: none;

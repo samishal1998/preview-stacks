@@ -52,3 +52,24 @@ export function actionLabel(action: string | undefined): string {
   if (!action) return '—';
   return ACTION_LABELS[action] ?? action;
 }
+
+/**
+ * An API enum, rendered for a person: `isolated` → `Isolated`, `start-failed` → `Start failed`.
+ *
+ * ONE helper rather than capitalising at each render site, because the two halves have to stay
+ * apart: the VALUE stays lowercase everywhere it is compared, stored, sent or put in a class name,
+ * and only the rendered text changes. Capitalising in place — `state === 'Running'` — is how a badge
+ * starts looking right and a comparison silently stops matching.
+ *
+ * Sentence case, not Title Case: `Start failed`, not `Start Failed`. Title Case on a status reads
+ * like a proper noun, and these are descriptions.
+ *
+ * Identifiers are NOT sentences and must never come through here — a stack name, container name,
+ * deployment id, file name, env var or hostname is a literal, and capitalising one produces a value
+ * that does not exist.
+ */
+export function sentence(value: string | null | undefined): string {
+  if (!value) return '—';
+  const words = value.replace(/[-_]+/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}

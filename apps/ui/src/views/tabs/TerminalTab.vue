@@ -59,7 +59,16 @@ async function loadContainers() {
   }
   loadError.value = '';
   rt.value = r.body;
-  if (!container.value) container.value = running.value[0]?.name ?? '';
+  if (container.value) return;
+  /*
+   * `?container=` is how the Containers table jumps straight to a shell here. Honoured only when it
+   * names a container this deployment actually owns and is running — an unknown name falls back to
+   * the first, because the alternative is a picker sitting on a container that does not exist and a
+   * Connect button that 404s. (The server checks the name again on upgrade; this is convenience.)
+   */
+  const wanted = typeof route.query.container === 'string' ? route.query.container : '';
+  const match = running.value.find((c) => c.name === wanted);
+  container.value = match?.name ?? running.value[0]?.name ?? '';
 }
 void loadContainers();
 
@@ -219,7 +228,7 @@ onBeforeUnmount(teardown);
 <style scoped>
 .terminal-host {
   min-height: 26rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: var(--r3);
   background: #0b0e14;
   padding: var(--s2);

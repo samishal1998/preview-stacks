@@ -433,7 +433,7 @@ function loadExample(): void {
 
       <template v-else>
         <div class="field">
-          <label for="spec">spec.yml</label>
+          <label for="spec">Spec.yml</label>
           <textarea
             id="spec"
             v-model="form.spec"

@@ -9,10 +9,26 @@ import { computed, ref } from 'vue';
 import { settings } from '../composables/useSettings';
 import { state, loadHealth } from '../composables/useControlPlane';
 import { toast } from '../composables/useToasts';
+import ActionButton from '../components/ActionButton.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SelectMenu from '../components/SelectMenu.vue';
 
 const checking = ref(false);
+const reveal = ref(false);
+
+/**
+ * What is in the token box, described without printing it.
+ *
+ * The point is to make a WRONG value visible at a glance. A password autofilled into this field is
+ * short and matches neither shape, and "12 characters, not a pstack token" is the sentence that
+ * ends the mystery — before this, the only symptom was every page 401ing.
+ */
+const tokenShape = computed(() => {
+  const t = settings.token;
+  if (t.startsWith('pstack_pat_')) return 'Looks like a personal token.';
+  if (/^[0-9a-f]{40,}$/i.test(t)) return 'Looks like a machine token.';
+  return `${t.length} characters — this does not look like a pstack token.`;
+});
 
 /**
  * The server tells us whether it enforces auth. When it does not, it is bound to loopback and a
@@ -66,14 +82,50 @@ async function recheck(): Promise<void> {
 
       <div class="field">
         <label for="token">Access token</label>
+        <!--
+          NOT `type="password"`, and none of these attributes are decorative.
+
+          This field is why "opening Settings signs me out" was a real bug. A password input is an
+          autofill magnet: Chrome and every password manager fill one on sight and ignore
+          `autocomplete="off"` while doing it. The filled value went straight through `v-model` into
+          localStorage and onto every request as `Authorization: Bearer <someone's password>` — and
+          the server used to treat a bad bearer as a hard refusal rather than falling back to the
+          session cookie, so a perfectly good login 401'd on every route until site data was cleared.
+
+          The server now falls through (that is the real fix), and this field stops inviting the
+          fill: a text input that masks itself only while it holds a value, named nothing like a
+          password, with the ignore hints the managers respect.
+        -->
         <input
           id="token"
           v-model.trim="settings.token"
-          type="password"
+          :type="reveal || !settings.token ? 'text' : 'password'"
+          name="pstack-access-token"
           autocomplete="off"
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore
+          data-form-type="other"
           spellcheck="false"
           placeholder="paste the token from pstack init"
         />
+        <div class="row" style="margin-top: var(--s2)">
+          <button v-if="settings.token" class="ghost sm" @click="reveal = !reveal">
+            {{ reveal ? 'Hide' : 'Show' }}
+          </button>
+          <ActionButton
+            v-if="settings.token"
+            variant="ghost"
+            class="sm"
+            confirm="Clear it?"
+            @run="settings.token = ''"
+          >
+            Clear
+          </ActionButton>
+          <span v-if="settings.token" class="mute" style="font-size: var(--t-xs)">
+            {{ tokenShape }}
+          </span>
+        </div>
         <div class="mute hint">
           Authenticates every request — signing in with an account does the same job, so set this
           only for token-based access (the machine token, or a personal token from your account).

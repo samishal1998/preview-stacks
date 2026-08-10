@@ -16,8 +16,9 @@
  * Findings come first because they are the reason anyone opened this tab.
  */
 import { computed, ref, watch } from 'vue';
+import { sentence } from '../../composables/useFormat';
 import { api, problem } from '../../api/client';
-import type { RuntimeResponse } from '../../api/types';
+import type { RuntimeContainer, RuntimeResponse } from '../../api/types';
 import { dep, varsQuery } from '../../composables/useDeployment';
 import { usePolling } from '../../composables/usePolling';
 import SkeletonList from '../../components/SkeletonList.vue';
@@ -49,6 +50,22 @@ const errors = computed(() => rt.value?.findings.filter((f) => f.level === 'erro
 const warns = computed(() => rt.value?.findings.filter((f) => f.level === 'warn') ?? []);
 const infos = computed(() => rt.value?.findings.filter((f) => f.level === 'info') ?? []);
 const running = computed(() => rt.value?.containers.filter((c) => c.state === 'running').length ?? 0);
+
+/**
+ * The hostname Traefik actually routes to this container, or null.
+ *
+ * Built from the ROUTES rather than guessed from the container: a router's rule is the only thing
+ * that decides what URL reaches it, and a link assembled from a service name and a domain would be
+ * a plausible-looking 404. Pattern hosts (`HostRegexp`) are skipped for the same reason — there is
+ * no single address to send someone to.
+ */
+function urlFor(c: RuntimeContainer): string | null {
+  const host = rt.value?.routes
+    .filter((r) => r.container === c.name)
+    .flatMap((r) => r.hosts)
+    .find((h) => !h.startsWith('(pattern)'));
+  return host ? `https://${host}` : null;
+}
 </script>
 
 <template>
@@ -110,9 +127,9 @@ const running = computed(() => rt.value?.containers.filter((c) => c.state === 'r
           <table v-if="rt.routes.length" class="cards">
             <thead>
               <tr>
-                <th>url</th>
+                <th>URL</th>
                 <th>
-                  forwards to
+                  Forwards to
                   <InfoHint label="how a URL reaches a port">
                     Traefik's docker provider resolves the container's IP on
                     <code>preview-ingress</code> and dials it on the port from
@@ -121,8 +138,8 @@ const running = computed(() => rt.value?.containers.filter((c) => c.state === 'r
                     and publishing a host port is unnecessary.
                   </InfoHint>
                 </th>
-                <th>router</th>
-                <th>tls</th>
+                <th>Router</th>
+                <th>TLS</th>
               </tr>
             </thead>
             <tbody class="stagger">
@@ -194,11 +211,12 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
           <table v-if="rt.containers.length" class="cards">
             <thead>
               <tr>
-                <th>service</th>
-                <th>state</th>
-                <th>ports</th>
-                <th>networks</th>
-                <th>image</th>
+                <th>Service</th>
+                <th>State</th>
+                <th>Ports</th>
+                <th>Networks</th>
+                <th>Image</th>
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody class="stagger">
@@ -208,14 +226,14 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                   <div class="mute" style="font-size: var(--t-sm)">{{ c.name }}</div>
                 </td>
                 <td data-label="state">
-                  <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ c.state }}</span>
+                  <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
                   <div
                     v-if="c.health"
                     class="mute"
                     style="font-size: var(--t-sm)"
                     :class="c.health === 'healthy' ? 's-ok' : 's-failed'"
                   >
-                    {{ c.health }}
+                    {{ sentence(c.health) }}
                   </div>
                 </td>
                 <td data-label="ports">
@@ -234,6 +252,35 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                   </div>
                 </td>
                 <td class="dim" data-label="image">{{ c.image }}</td>
+                <!--
+                  The three things anyone wants from a container row, without hunting for the tab
+                  that does it. Open goes to the URL Traefik actually assembled for THIS container
+                  (see `urlFor`), so it is absent rather than wrong when no router points here.
+                -->
+                <td class="row-actions" data-label="">
+                  <RouterLink
+                    class="btn sm ghost"
+                    :to="`/deployments/${encodeURIComponent(dep.id)}/logs?container=${encodeURIComponent(c.name)}`"
+                  >
+                    Logs
+                  </RouterLink>
+                  <RouterLink
+                    v-if="c.state === 'running'"
+                    class="btn sm ghost"
+                    :to="`/deployments/${encodeURIComponent(dep.id)}/terminal?container=${encodeURIComponent(c.name)}`"
+                  >
+                    Shell
+                  </RouterLink>
+                  <a
+                    v-if="urlFor(c)"
+                    class="btn sm ghost"
+                    :href="urlFor(c)!"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open
+                  </a>
+                </td>
               </tr>
             </tbody>
           </table>

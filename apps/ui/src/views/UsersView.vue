@@ -194,7 +194,7 @@ async function removeToken(t: Token): Promise<void> {
                 <button class="ghost sm" @click="pwFor = u; pwValue = ''">Change password</button>
                 <ActionButton
                   class="danger sm"
-                  :confirm="`Delete ${u.username}? Their sessions and tokens go too.`"
+                  :confirm="`Delete ${u.username}?`"
                   @run="removeUser(u)"
                   >Delete</ActionButton
                 >
@@ -258,7 +258,7 @@ async function removeToken(t: Token): Promise<void> {
               <td class="right nowrap" data-label="">
                 <ActionButton
                   class="danger sm"
-                  :confirm="`Revoke ${t.name}? Anything using it stops working.`"
+                  :confirm="`Revoke ${t.name}?`"
                   @run="removeToken(t)"
                   >Revoke</ActionButton
                 >

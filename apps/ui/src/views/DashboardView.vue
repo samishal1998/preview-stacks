@@ -126,10 +126,10 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           <table v-if="control.services.length" class="cards">
             <thead>
               <tr>
-                <th>service</th>
-                <th>state</th>
-                <th>health</th>
-                <th>image</th>
+                <th>Service</th>
+                <th>State</th>
+                <th>Health</th>
+                <th>Image</th>
               </tr>
             </thead>
             <tbody class="stagger">

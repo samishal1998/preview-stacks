@@ -155,9 +155,14 @@ Fires when a lifecycle action is accepted and its job begins.
 | `action` | `"up"` \| `"down"` \| `"verify"` | |
 | `startedAt` | number | Epoch ms. |
 
-### `job.succeeded` / `job.failed` / `job.leaked`
+### `job.succeeded` / `job.failed` / `job.cancelled` / `job.leaked`
 
-Exactly one fires per job, when it reaches a terminal state. All three share one payload shape.
+Exactly one fires per job, when it reaches a terminal state. All four share one payload shape.
+
+**`job.cancelled` is not a failure.** A person stopped the job with `POST /api/jobs/:id/cancel`; the
+shell command in flight was killed and every later one refused. **Nothing was undone** — whatever the
+job had already created or destroyed is still that way, which is why this is its own event and not a
+flavour of `job.failed`. `data.cancelledBy` names who stopped it.
 
 **`job.leaked` is the event this product exists for**: a teardown ran and `assert_gone` found
 resources still present. They will not be retried — nothing else will clean them up. If you page
@@ -168,7 +173,8 @@ on one thing, page on this.
 | `jobId` | string | |
 | `stack` | string | |
 | `action` | `"up"` \| `"down"` \| `"verify"` | |
-| `state` | `"ok"` \| `"failed"` \| `"leaked"` | Matches the event name. |
+| `state` | `"ok"` \| `"failed"` \| `"cancelled"` \| `"leaked"` | Matches the event name. |
+| `cancelledBy` | string? | `job.cancelled` only — the operator who stopped it. |
 | `startedAt`, `endedAt` | number | Epoch ms. |
 | `durationMs` | number | `endedAt - startedAt`. |
 | `leakedAxes` | string[] | The axes whose `assert_gone` failed — the operator-actionable part of a leak. Empty unless `leaked`. |

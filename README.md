@@ -45,5 +45,6 @@ bun run release:publish   # requires an npm OTP
 - [Bootstrap](docs/bootstrap.md) — build a host from nothing (Hetzner + cloud-init)
 - [Control plane](docs/control-plane.md) — architecture, registry contract, trust boundary
 - [Webhook events](docs/webhook-events.md) — every event a notifier receives: payloads, signature verification, delivery semantics
+- [UI rules](docs/ui-rules.md) — the conventions the advanced UI is held to: casing, alignment, spacing, roundness, width
 - [Secret exposure](docs/secret-exposure.md) — resolved in 0.10.0 (every route authenticated); kept as the design record
 - [AGENTS.md](AGENTS.md) — working on this codebase

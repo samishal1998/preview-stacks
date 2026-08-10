@@ -20,6 +20,14 @@ export type Runner = {
   run(cmd: string, opts?: { env?: Record<string, string>; label?: string }): Promise<RunResult>;
   readonly dryRun: boolean;
   /**
+   * Aborting this stops the CURRENT command and refuses every later one.
+   *
+   * A job is a sequence of shell hooks, and there was no other handle on them: without a signal the
+   * only way to stop a wedged 40-minute image build was to restart the control plane, which loses
+   * every other job's transcript with it.
+   */
+  readonly signal?: AbortSignal;
+  /**
    * The directory commands run in — the deployment directory for a registry-driven run, the spec's
    * own directory for a CLI one.
    *
@@ -37,13 +45,21 @@ export function createRunner(opts: {
   level?: LogLevel;
   cwd?: string;
   baseEnv?: Record<string, string>;
+  signal?: AbortSignal;
 }): Runner {
   const level = opts.level ?? 'normal';
   return {
     dryRun: opts.dryRun,
     cwd: opts.cwd,
+    signal: opts.signal,
     async run(cmd, o = {}) {
       const label = o.label ?? cmd;
+      // Refuse AFTER a cancel as firmly as during one. Teardown is best-effort and keeps going past
+      // failures (see stack.ts), so without this check a cancelled `down` would carry on running
+      // every remaining axis hook — the operator pressed stop and watched it continue.
+      if (opts.signal?.aborted) {
+        return { ok: false, code: 130, stdout: '', stderr: 'cancelled', skipped: false };
+      }
       if (opts.dryRun) {
         // Verbose shows the REAL command, not just the label. A dry-run exists to answer "what
         // exactly would run", and a label like `compose up` cannot answer it — you cannot check
@@ -60,11 +76,31 @@ export function createRunner(opts: {
         stdout: 'pipe',
         stderr: 'pipe',
       });
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
+      // SIGTERM first, so a hook can trap it and clean up. Registered per-command and removed in
+      // `finally`, or a long job accumulates one listener per step on the same signal.
+      const kill = () => {
+        try {
+          proc.kill('SIGTERM');
+        } catch {
+          /* already gone — racing between exiting and being killed is not an error */
+        }
+      };
+      opts.signal?.addEventListener('abort', kill, { once: true });
+      let stdout: string;
+      let stderr: string;
+      let code: number;
+      try {
+        [stdout, stderr, code] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ]);
+      } finally {
+        opts.signal?.removeEventListener('abort', kill);
+      }
+      if (opts.signal?.aborted) {
+        return { ok: false, code: code || 130, stdout, stderr: stderr || 'cancelled', skipped: false };
+      }
       if (level === 'verbose') {
         if (stdout.trim()) console.log(indent(stdout));
         if (stderr.trim()) console.log(indent(stderr));

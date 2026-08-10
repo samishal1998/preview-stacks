@@ -26,7 +26,7 @@ import {
 } from '../src/registries.ts';
 import { Store } from '../src/store.ts';
 import { Webhooks } from '../src/webhooks.ts';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   augmentComposeDoc,
@@ -3127,6 +3127,49 @@ describe('duplicate session cookies — the lockout that only clearing cookies u
       server.stop(true);
     }
   });
+
+  test('a junk bearer does not cancel a live session — the "opening Settings signs me out" lockout', async () => {
+    /*
+     * The second way one browser locked itself out. Settings holds the access token in an input the
+     * browser autofills on sight (it was `type="password"`; managers fill those and ignore
+     * `autocomplete="off"`), the UI persists whatever lands there and attaches it to every request,
+     * and a non-matching bearer used to be a hard refusal — the cookie was never consulted. One
+     * autofill and every route 401'd until site data was cleared.
+     *
+     * A bad bearer now falls through to the cookie. It grants nothing that the caller did not
+     * already hold, which the last two assertions are here to prove.
+     */
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    const base = `http://127.0.0.1:${server.port}`;
+    const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+    try {
+      await fetch(`${base}/api/auth/bootstrap`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ username: 'alice', password: 'a-long-password-here' }),
+      });
+      const login = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'alice', password: 'a-long-password-here' }),
+      });
+      const live = /pstack_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+
+      // A real data route, not just /auth/me: the lockout was total.
+      const get = (headers: Record<string, string>) => fetch(`${base}/api/deployments`, { headers });
+      const cookie = `pstack_session=${live}`;
+
+      for (const junk of ['hunter2', 'pstack_pat_not-a-real-token', TOKEN.slice(0, -1)]) {
+        const r = await get({ cookie, authorization: `Bearer ${junk}` });
+        expect(`${junk} → ${r.status}`).toBe(`${junk} → 200`);
+      }
+      // …and it grants nothing on its own: the same junk with no cookie is still refused.
+      expect((await get({ authorization: 'Bearer hunter2' })).status).toBe(401);
+      expect((await get({})).status).toBe(401);
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 describe('changing a password', () => {
@@ -4630,4 +4673,156 @@ esac
       }
     }
   });
+});
+
+describe('stopping a job, and following logs', () => {
+  // Long on purpose: redaction ignores short values (a 3-character "secret" would mask every
+  // ordinary word containing it), so a toy token would make the redaction assertion below vacuous.
+  const TOKEN = 'root-machine-token-value-0123456789';
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-cancel-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  const boot = () => {
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+
+  const put = (base: string, spec: string) =>
+    fetch(`${base}/api/deployments/d`, {
+      method: 'PUT',
+      headers: H,
+      body: JSON.stringify({ spec }),
+    });
+
+  const jobOf = async (base: string, jobId: string) =>
+    (await (await fetch(`${base}/api/jobs/${jobId}`, { headers: H })).json()) as {
+      job: { state: string; startedAt: number; endedAt?: number; cancelledBy?: string };
+    };
+
+  test('cancel kills the running command — the shell stops, not just the record', async () => {
+    /*
+     * The point of the whole feature: before this, the only way to stop a wedged 40-minute build was
+     * to restart the control plane and lose every other job's transcript. A cancel that merely
+     * flipped a field would be worse than none — the page would say "cancelled" while the host went
+     * on building. So the assertion is on the CLOCK: `sleep 45` has to end in well under 45 seconds.
+     */
+    const { server, base } = boot();
+    const got: string[] = [];
+    const off = events.on((e) => {
+      got.push(e.event);
+    });
+    try {
+      await put(base, 'version: 1\nstack: slow\naxes:\n  - name: a\n    up: "sleep 45"\n');
+      const started = await fetch(`${base}/api/deployments/d/up`, { method: 'POST', headers: H });
+      const { job } = (await started.json()) as { job: { id: string } };
+
+      // Wait until the hook is actually running, or the cancel would race the spawn.
+      for (let i = 0; i < 100 && (await jobOf(base, job.id)).job.state !== 'running'; i++) {
+        await Bun.sleep(10);
+      }
+      const at = Date.now();
+      const r = await fetch(`${base}/api/jobs/${job.id}/cancel`, { method: 'POST', headers: H });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { by: string; warning: string };
+      expect(body.by).toBe('root (PSTACK_TOKEN)');
+      // The answer says what stopping does NOT do, in the same breath as reporting success.
+      expect(body.warning).toContain('Nothing was undone');
+
+      let final = await jobOf(base, job.id);
+      for (let i = 0; i < 300 && final.job.state === 'running'; i++) {
+        await Bun.sleep(10);
+        final = await jobOf(base, job.id);
+      }
+      expect(final.job.state).toBe('cancelled'); // NOT 'failed' — it was stopped, it did not lose
+      expect(final.job.cancelledBy).toBe('root (PSTACK_TOKEN)');
+      expect(Date.now() - at).toBeLessThan(10_000); // `sleep 45` really died
+      expect(got).toContain('job.cancelled');
+      expect(got).not.toContain('job.failed');
+
+      // Cancelling a finished job is 409 (the request is out of date), not 404 (the id is wrong).
+      const again = await fetch(`${base}/api/jobs/${job.id}/cancel`, { method: 'POST', headers: H });
+      expect(again.status).toBe(409);
+      const missing = await fetch(`${base}/api/jobs/nope/cancel`, { method: 'POST', headers: H });
+      expect(missing.status).toBe(404);
+    } finally {
+      off();
+      server.stop(true);
+    }
+  }, 30_000);
+
+  test('a cancelled teardown stops at the current axis instead of running the rest', async () => {
+    // Teardown is best-effort and keeps going PAST failures by design (stack.ts), so a killed
+    // command alone would not stop it — the runner has to refuse every later one too. Without that,
+    // pressing stop and watching the remaining hooks run is exactly what happens.
+    const { server, base } = boot();
+    const marker = `${tmpd()}-ran`;
+    try {
+      await put(
+        base,
+        // `down` runs axes in REVERSE declaration order, so the sleeper is declared LAST to be the
+        // one running when the cancel lands, and `earlier` is what must never get its turn.
+        'version: 1\nstack: slowdown\naxes:\n' +
+          `  - name: earlier\n    down: "touch ${marker}"\n` +
+          '  - name: sleeper\n    down: "sleep 30"\n',
+      );
+      const started = await fetch(`${base}/api/deployments/d/down`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ verify: false }),
+      });
+      const { job } = (await started.json()) as { job: { id: string } };
+      for (let i = 0; i < 100 && (await jobOf(base, job.id)).job.state !== 'running'; i++) {
+        await Bun.sleep(10);
+      }
+      await Bun.sleep(150); // let it reach the first axis
+      await fetch(`${base}/api/jobs/${job.id}/cancel`, { method: 'POST', headers: H });
+
+      let final = await jobOf(base, job.id);
+      for (let i = 0; i < 300 && final.job.state === 'running'; i++) {
+        await Bun.sleep(10);
+        final = await jobOf(base, job.id);
+      }
+      expect(final.job.state).toBe('cancelled');
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(marker, { force: true });
+      server.stop(true);
+    }
+  }, 30_000);
+
+  test('following logs streams redacted lines and ends by itself', async () => {
+    // A fake `docker` that prints one line carrying this server's own token. Two things at once:
+    // the SSE framing is real (a line in, a frame out), and the redaction the fetched read promises
+    // applies to the followed one too — a live log is exactly as likely to print a credential.
+    const dir = tmpd();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'docker'),
+      `#!/bin/sh\nprintf 'app-1  | connecting with ${TOKEN}\\n'\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    const { server, base } = boot();
+    try {
+      await put(
+        base,
+        'version: 1\nstack: tailed\ncompose:\n  file: docker-compose.yml\n  profiles: [web]\n' +
+          'axes:\n  - name: a\n    up: "true"\n',
+      );
+      const res = await fetch(`${base}/api/deployments/d/logs/stream?tail=10`, { headers: H });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('text/event-stream');
+
+      const text = await res.text(); // compose exits at once, so the stream closes on its own
+      expect(text).toContain('connecting with');
+      expect(text).not.toContain(TOKEN); // …masked, never the token itself
+      expect(text).toContain('"done":true');
+    } finally {
+      server.stop(true);
+      process.env.PATH = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

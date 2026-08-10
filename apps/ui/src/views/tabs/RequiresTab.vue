@@ -20,8 +20,8 @@ import { dep } from '../../composables/useDeployment';
       <table class="cards">
         <thead>
           <tr>
-            <th>requirement</th>
-            <th>hint shown on failure</th>
+            <th>Requirement</th>
+            <th>Hint shown on failure</th>
           </tr>
         </thead>
         <tbody class="stagger">

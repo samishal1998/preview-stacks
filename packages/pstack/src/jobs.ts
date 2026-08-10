@@ -16,7 +16,15 @@ import { events } from './events.ts';
 import { redactText } from './redact.ts';
 
 export type JobAction = 'up' | 'down' | 'verify';
-export type JobState = 'running' | 'ok' | 'failed' | 'leaked';
+/**
+ * `cancelled` is its OWN state, not a flavour of `failed`.
+ *
+ * A failed job tried and did not succeed; a cancelled one was stopped part-way by a person, and
+ * what it had already created or destroyed is still out there. Collapsing the two would let a
+ * half-torn-down stack read as "the teardown failed, retry it" when the honest report is "someone
+ * stopped this and nobody has looked since".
+ */
+export type JobState = 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled';
 
 export type Job = {
   id: string;
@@ -28,6 +36,8 @@ export type Job = {
   outcome?: Outcome;
   error?: string;
   log: LogEvent[];
+  /** Who stopped it, when it was stopped. Absent on every other path. */
+  cancelledBy?: string;
 };
 
 /** Keep the last N job transcripts. Bounded so a long-lived server cannot grow without limit. */
@@ -43,6 +53,8 @@ export class JobRegistry {
   #locks = new Set<string>();
   #subscribers = new Map<string, Set<(e: LogEvent) => void>>();
   #seq = 0;
+  /** Per-job kill switch. Present only while the job runs; deleted in the same `finally` as the lock. */
+  #aborts = new Map<string, AbortController>();
 
   list(): Job[] {
     return [...this.#jobs.values()].sort((a, b) => b.startedAt - a.startedAt);
@@ -60,10 +72,34 @@ export class JobRegistry {
    * Start a job. Returns the job, or null when that stack already has one in flight — the caller
    * should surface that as HTTP 409 rather than queueing, so the operator sees the conflict.
    */
+  /**
+   * Stop a running job.
+   *
+   * Returns false when there is nothing to stop — an unknown id, or a job that already finished.
+   * The caller should say so rather than reporting success, because "it was already done" and "it
+   * has been stopped" are different facts about the infrastructure.
+   *
+   * What this does NOT do is undo anything. The abort reaches the current shell command; every
+   * resource created before it stays created. That is why the state is `cancelled` and why the API
+   * tells the operator to verify afterwards.
+   */
+  cancel(id: string, by: string): boolean {
+    const job = this.#jobs.get(id);
+    const abort = this.#aborts.get(id);
+    if (!job || !abort || job.state !== 'running') return false;
+    job.cancelledBy = by;
+    abort.abort();
+    return true;
+  }
+
   start(
     stack: string,
     action: JobAction,
-    work: (sink: Sink) => Promise<Outcome>,
+    /**
+     * The work, given a sink to narrate into and a signal to stop for. The signal is what a caller
+     * must thread into its `Runner`, or `cancel` will flip the state while the shell keeps running.
+     */
+    work: (sink: Sink, signal: AbortSignal) => Promise<Outcome>,
     /**
      * Applied to every string that lands in the RECORD: outcome step messages, captured outputs and
      * the crash error. The live sink is the caller's to wrap, but a failing hook's stderr goes into
@@ -74,6 +110,7 @@ export class JobRegistry {
   ): Job | null {
     if (this.#locks.has(stack)) return null;
     this.#locks.add(stack);
+    const abort = new AbortController();
 
     const id = `${action}-${stack}-${++this.#seq}-${Math.random().toString(36).slice(2, 8)}`;
     const sink = bufferSink((e) => this.#fanout(id, e));
@@ -86,6 +123,7 @@ export class JobRegistry {
       log: sink.events,
     };
     this.#jobs.set(id, job);
+    this.#aborts.set(id, abort);
     this.#evict();
 
     events.emit('job.started', { jobId: id, stack, action, startedAt: job.startedAt });
@@ -93,7 +131,7 @@ export class JobRegistry {
     // Fire and forget: the HTTP handler returns immediately with the job id.
     void (async () => {
       try {
-        const outcome = await work(sink);
+        const outcome = await work(sink, abort.signal);
         job.outcome = {
           ...outcome,
           steps: outcome.steps.map((s) => (s.message ? { ...s, message: scrub(s.message) } : s)),
@@ -102,14 +140,31 @@ export class JobRegistry {
           outputs: Object.fromEntries(Object.entries(outcome.outputs).map(([k, v]) => [k, scrub(v)])),
         };
         const leaked = outcome.steps.some((s) => s.phase === 'assert_gone' && !s.ok);
-        job.state = leaked ? 'leaked' : outcome.ok ? 'ok' : 'failed';
+        // Cancellation wins over the outcome it produced. A stopped run reports non-ok steps by
+        // construction (the killed command exits non-zero), and calling that `failed` would say the
+        // work was attempted and did not succeed — it was stopped, which is a different report.
+        job.state = abort.signal.aborted
+          ? 'cancelled'
+          : leaked
+            ? 'leaked'
+            : outcome.ok
+              ? 'ok'
+              : 'failed';
       } catch (err) {
-        job.state = 'failed';
+        job.state = abort.signal.aborted ? 'cancelled' : 'failed';
         job.error = scrub((err as Error).message);
         sink.emit('error', `job crashed: ${job.error}`);
       } finally {
         job.endedAt = Date.now();
+        if (job.state === 'cancelled') {
+          sink.emit(
+            'error',
+            `cancelled by ${job.cancelledBy ?? 'an operator'} — whatever ran before this point ` +
+              `was NOT undone. Run verify to see what exists.`,
+          );
+        }
         this.#locks.delete(stack);
+        this.#aborts.delete(id);
         // Wake any SSE stream so it can observe the terminal state and close.
         this.#fanout(id, { seq: -1, at: Date.now(), level: 'info', message: '__end__' });
 
@@ -131,7 +186,13 @@ export class JobRegistry {
         const unverifiable =
           job.outcome?.steps.filter((s) => s.message?.startsWith('unverifiable')).length ?? 0;
         events.emit(
-          job.state === 'leaked' ? 'job.leaked' : job.state === 'ok' ? 'job.succeeded' : 'job.failed',
+          job.state === 'leaked'
+            ? 'job.leaked'
+            : job.state === 'ok'
+              ? 'job.succeeded'
+              : job.state === 'cancelled'
+                ? 'job.cancelled'
+                : 'job.failed',
           {
             jobId: job.id,
             stack: job.stack,
@@ -158,6 +219,7 @@ export class JobRegistry {
                 ? null
                 : (job.outcome?.steps.some((s) => s.phase === 'assert_gone' && !s.skipped) ?? false),
             unverifiable,
+            cancelledBy: job.cancelledBy,
             // First line only, and only on the crash path. Hook stderr can carry a credential, so it
             // is redacted the way container logs are.
             error: job.error ? redactText(job.error).split('\n')[0]!.slice(0, 300) : undefined,

@@ -4,6 +4,7 @@
  * purpose, and the tab explains the difference rather than merging them into one table.
  */
 import { computed } from 'vue';
+import { sentence } from '../../composables/useFormat';
 import { applyVars, dep, persistVars, row } from '../../composables/useDeployment';
 import InfoHint from '../../components/InfoHint.vue';
 
@@ -111,10 +112,10 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
         <table class="cards">
           <thead>
             <tr>
-              <th>key</th>
-              <th>value</th>
-              <th>visibility</th>
-              <th>length</th>
+              <th>Key</th>
+              <th>Value</th>
+              <th>Visibility</th>
+              <th>Length</th>
             </tr>
           </thead>
           <tbody>
@@ -125,7 +126,7 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
               </td>
               <td data-label="visibility">
                 <span class="badge" :class="e.visibility === 'masked' ? 'warn' : ''">
-                  {{ e.visibility }}
+                  {{ sentence(e.visibility) }}
                 </span>
               </td>
               <!--

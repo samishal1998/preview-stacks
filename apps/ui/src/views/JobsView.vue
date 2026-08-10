@@ -79,12 +79,12 @@ const rows = computed(() => {
       <table v-else class="cards">
         <thead>
           <tr>
-            <th>state</th>
-            <th>action</th>
-            <th>stack</th>
-            <th>started</th>
-            <th>took</th>
-            <th>steps</th>
+            <th>State</th>
+            <th>Action</th>
+            <th>Stack</th>
+            <th>Started</th>
+            <th>Took</th>
+            <th>Steps</th>
           </tr>
         </thead>
         <tbody class="stagger">
