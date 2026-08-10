@@ -922,9 +922,11 @@ $ curl -s -H "Authorization: Bearer $PSTACK_TOKEN" \
   "state": "ready",
   "containers": [
     { "name": "pr-123-app-1", "service": "app", "state": "running",
-      "health": "healthy", "hasHealthcheck": true, "exitCode": 0, "ready": true, "failed": false },
+      "health": "healthy", "hasHealthcheck": true, "exitCode": 0, "restartCount": 0,
+      "ready": true, "failed": false },
     { "name": "pr-123-migrate-1", "service": "migrate", "state": "exited",
-      "health": null, "hasHealthcheck": false, "exitCode": 0, "ready": true, "failed": false }
+      "health": null, "hasHealthcheck": false, "exitCode": 0, "restartCount": 0,
+      "ready": true, "failed": false }
   ],
   "startedAt": 1785014256010,
   "endedAt": 1785014271044,
@@ -945,8 +947,13 @@ until [ "$(curl -sf -H "Authorization: Bearer $PSTACK_TOKEN" \
 Two things it is careful about. A container **without** a healthcheck is "ready" when it is merely
 running — nothing here knows what serving means for that image, so `hasHealthcheck: false` says so
 rather than implying a probe passed. And a container that **exited 0** is ready, not failed: one-shot
-migrations are supposed to finish. `failed` is an exit with a non-zero code, a dead container, or an
-`unhealthy` healthcheck, and `reason` names which.
+migrations are supposed to finish. `failed` is an exit with a non-zero code, a crash loop (3+
+restarts — with a `restart:` policy no single sample of `state` can tell a loop from a slow start,
+but the counter can), a dead container, or an `unhealthy` healthcheck; `reason` names which.
+
+Reading this endpoint for a stack that has no watch starts one, and that watch is **silent** — a
+page view must not put "did not become ready in time" in a notifier about a deploy nobody ran. Only
+a watch started by an actual `up` emits events.
 
 Add `?refresh=1` to re-run a watch that already settled, `?timeout=<seconds>` to override the
 180-second deadline. The same convergence is pushed to notifiers as `healthcheck.*`, `container.*`

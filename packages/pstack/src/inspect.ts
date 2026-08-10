@@ -56,6 +56,12 @@ export type ContainerInfo = {
    * readiness watch is asking — see `readiness.ts`.
    */
   exitCode: number | null;
+  /**
+   * How many times Docker has restarted it. With a `restart:` policy a container that dies on boot
+   * cycles exited → restarting → running → exited, so no single sample of `state` can tell a crash
+   * loop from a slow start; this counter can, because it only goes up.
+   */
+  restartCount: number;
   networks: string[];
   /**
    * The container's IP on the ingress network, which is the address Traefik actually dials. Null when
@@ -114,6 +120,7 @@ const INGRESS = 'preview-ingress';
 type RawInspect = {
   Id?: string;
   Name?: string;
+  RestartCount?: number;
   Args?: string[];
   Config?: { Image?: string; Labels?: Record<string, string>; Cmd?: string[] };
   State?: { Status?: string; ExitCode?: number; Health?: { Status?: string } };
@@ -183,6 +190,7 @@ function toContainer(raw: RawInspect): ContainerInfo {
     state: raw.State?.Status ?? 'unknown',
     health: raw.State?.Health?.Status ?? null,
     exitCode: typeof raw.State?.ExitCode === 'number' ? raw.State.ExitCode : null,
+    restartCount: typeof raw.RestartCount === 'number' ? raw.RestartCount : 0,
     networks: Object.keys(raw.NetworkSettings?.Networks ?? {}),
     ingressIp:
       (raw.NetworkSettings?.Networks?.[INGRESS] as { IPAddress?: string } | undefined)?.IPAddress ||

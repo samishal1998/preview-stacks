@@ -42,8 +42,10 @@ export type ContainerReadiness = {
   /** Whether a healthcheck was ever observed — what separates "probed and passing" from "it is up". */
   hasHealthcheck: boolean;
   exitCode: number | null;
+  /** Restarts Docker has performed. The only sample-independent evidence of a crash loop. */
+  restartCount: number;
   ready: boolean;
-  /** Terminal-bad: it exited non-zero, died, or its healthcheck reported unhealthy. */
+  /** Terminal-bad: it exited non-zero, died, crash-looped, or its healthcheck reported unhealthy. */
   failed: boolean;
   /** Why it failed, in one line. Undefined while pending or ready. */
   reason?: string;
@@ -66,6 +68,16 @@ export type StackReadiness = {
 type Watch = {
   snap: StackReadiness;
   cancelled: boolean;
+  /**
+   * Whether this watch announces itself on the bus.
+   *
+   * FALSE for a watch a mere READ started. `GET …/readiness` on a deployment that was never
+   * deployed finds no containers, converges on nothing, and 180 seconds later would emit
+   * `stack.timedout` — so opening a freshly submitted deployment's page put "pr-9 did not become
+   * ready in time" in someone's Slack. A read must not manufacture an event about something nobody
+   * did; the caller still gets every state in the snapshot it asked for.
+   */
+  emit: boolean;
   /** Last health string seen per container — the diff that drives `healthcheck.*`. */
   health: Map<string, string | null>;
   /** Containers that have already announced a per-container verdict; each announces once. */
@@ -78,6 +90,18 @@ const POLL_MS = 2_000;
 /** Long enough for an image pull plus a slow boot; short enough that a wedged stack is reported today. */
 const DEFAULT_TIMEOUT_MS = 180_000;
 
+/**
+ * Restarts tolerated before a container is called a crash loop.
+ *
+ * Not 1: an app that boots before its database is accepting connections dies once and comes back
+ * fine, and that pattern is everywhere in preview stacks — failing it would report half the world
+ * broken. Not unbounded either, or a container with `restart: unless-stopped` that dies on every
+ * boot is never reported at all: it cycles exited → restarting → running, so a 2s poll lands on a
+ * "healthy-looking" sample about a third of the time and the watch runs out the clock instead of
+ * naming the crash.
+ */
+const RESTART_LOOP = 3;
+
 function readinessOf(c: ContainerInfo): ContainerReadiness {
   const hasHealthcheck = c.health !== null;
   const base = {
@@ -87,9 +111,21 @@ function readinessOf(c: ContainerInfo): ContainerReadiness {
     health: c.health,
     hasHealthcheck,
     exitCode: c.exitCode,
+    restartCount: c.restartCount,
   };
   if (c.health === 'unhealthy') {
     return { ...base, ready: false, failed: true, reason: 'healthcheck reports unhealthy' };
+  }
+  // A PASSING healthcheck outranks the restart counter below: it is evidence about now, the counter
+  // is evidence about the past, and a container that crash-looped and then came good is good.
+  if (c.state === 'running' && c.health === 'healthy') return { ...base, ready: true, failed: false };
+  if (c.restartCount >= RESTART_LOOP) {
+    return {
+      ...base,
+      ready: false,
+      failed: true,
+      reason: `restarted ${c.restartCount} times — crash loop${c.exitCode ? ` (last exit ${c.exitCode})` : ''}`,
+    };
   }
   // A container that exited 0 is NOT a failure: one-shot migration and seed services are supposed to
   // finish. Calling that a crash would make every stack with a migration step permanently "failed".
@@ -99,9 +135,7 @@ function readinessOf(c: ContainerInfo): ContainerReadiness {
       : { ...base, ready: false, failed: true, reason: `exited with code ${c.exitCode ?? 'unknown'}` };
   }
   if (c.state === 'dead') return { ...base, ready: false, failed: true, reason: 'container is dead' };
-  if (c.state === 'running' && (c.health === null || c.health === 'healthy')) {
-    return { ...base, ready: true, failed: false };
-  }
+  if (c.state === 'running' && c.health === null) return { ...base, ready: true, failed: false };
   // created / restarting / paused / running-but-starting: still converging.
   return { ...base, ready: false, failed: false };
 }
@@ -136,7 +170,7 @@ export class ReadinessWatcher {
   start(
     stack: string,
     runner: Runner,
-    opts: { timeoutMs?: number; restart?: boolean } = {},
+    opts: { timeoutMs?: number; restart?: boolean; emit?: boolean } = {},
   ): StackReadiness {
     const existing = this.#byStack.get(stack);
     if (existing && existing.snap.state === 'watching' && !opts.restart) return existing.snap;
@@ -155,6 +189,7 @@ export class ReadinessWatcher {
         timeoutMs,
       },
       cancelled: false,
+      emit: opts.emit ?? true,
       health: new Map(),
       announced: new Set(),
       waiters: [],
@@ -233,7 +268,7 @@ export class ReadinessWatcher {
       if (w.announced.has(c.name)) continue;
       if (c.failed) {
         w.announced.add(c.name);
-        events.emit('container.start-failed', {
+        if (w.emit) events.emit('container.start-failed', {
           stack: w.snap.stack,
           container: c.name,
           service: c.service,
@@ -244,7 +279,7 @@ export class ReadinessWatcher {
         });
       } else if (c.ready) {
         w.announced.add(c.name);
-        events.emit('container.ready', {
+        if (w.emit) events.emit('container.ready', {
           stack: w.snap.stack,
           container: c.name,
           service: c.service,
@@ -269,7 +304,7 @@ export class ReadinessWatcher {
     const prev = w.health.get(c.name) ?? null;
     if (seen && prev === c.health) return;
     w.health.set(c.name, c.health);
-    if (c.health === null) return; // no healthcheck to narrate
+    if (c.health === null || !w.emit) return; // no healthcheck to narrate, or a silent watch
 
     const base = {
       stack: w.snap.stack,
@@ -291,7 +326,7 @@ export class ReadinessWatcher {
     w.snap.state = state;
     w.snap.endedAt = Date.now();
 
-    if (state === 'timedout') {
+    if (state === 'timedout' && w.emit) {
       // Name what was still in flight when the deadline hit. "Timed out" without the list is a
       // support thread; with it, it is a container name to go and look at.
       for (const c of w.snap.containers) {
@@ -309,7 +344,7 @@ export class ReadinessWatcher {
 
     const pending = w.snap.containers.filter((c) => !c.ready && !c.failed).map((c) => c.name);
     const failed = w.snap.containers.filter((c) => c.failed).map((c) => c.name);
-    events.emit(
+    if (w.emit) events.emit(
       state === 'ready' ? 'stack.ready' : state === 'failed' ? 'stack.failed' : 'stack.timedout',
       {
         stack: w.snap.stack,

@@ -2615,6 +2615,8 @@ describe('authentication — every route behind the gate, three ways through it'
       for (const path of [
         '/api/deployments',
         '/api/deployments/x',
+        // A read that STARTS something (a readiness watch) is the last route that may be left open.
+        '/api/deployments/x/readiness',
         '/api/jobs',
         '/api/jobs/nope',
         '/api/specs',
@@ -4291,8 +4293,9 @@ describe('readiness: did the stack actually come up', () => {
     `${process.env.TMPDIR ?? '/tmp'}/pstack-ready-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
 
   /**
-   * A `docker` on PATH whose inspect output the test REWRITES between polls — health transitions are
-   * the whole subject here, and a fixed shim could only ever prove the first observation.
+   * A `docker` on PATH whose inspect output the test REWRITES between polls — health transitions and
+   * crash loops are the whole subject here, and a fixed shim could only ever prove the first
+   * observation.
    */
   const mutableDocker = () => {
     const dir = tmpd();
@@ -4309,13 +4312,16 @@ esac
 `,
       { mode: 0o755 },
     );
-    const set = (over: { state?: string; health?: string; exit?: number } = {}) => {
+    const set = (
+      over: { state?: string; health?: string; exit?: number; restarts?: number } = {},
+    ) => {
       writeFileSync(
         join(dir, 'inspect.json'),
         JSON.stringify([
           {
             Id: 'c1',
             Name: '/probe-app-1',
+            RestartCount: over.restarts ?? 0,
             Config: {
               Image: 'nginx',
               Labels: { 'com.docker.compose.service': 'app', 'com.docker.compose.project': 'probe' },
@@ -4334,10 +4340,13 @@ esac
       );
     };
     set();
+    /** No containers at all — a deployment that was submitted and never deployed. */
+    const empty = () => writeFileSync(join(dir, 'ids'), '');
     const prev = process.env.PATH;
     process.env.PATH = `${dir}:${prev}`;
     return {
       set,
+      empty,
       restore: () => {
         process.env.PATH = prev;
         rmSync(dir, { recursive: true, force: true });
@@ -4363,6 +4372,29 @@ esac
       body: JSON.stringify({ spec: 'version: 1\nstack: probe\naxes:\n  - name: a\n    up: "true"\n' }),
     });
 
+  /**
+   * Submit and DEPLOY, then wait for the job to finish.
+   *
+   * The deploy is what a production watch hangs off, and it is not incidental to these tests: a
+   * watch started by a mere read is deliberately silent, so asserting events against a
+   * read-started watch would assert nothing. Waiting for the job to be terminal removes the race —
+   * `readiness.start` runs inside the job's work function, so once the job has ended the watch
+   * exists.
+   */
+  const deploy = async (base: string): Promise<void> => {
+    await putSpec(base);
+    const r = await fetch(`${base}/api/deployments/d/up`, { method: 'POST', headers: H });
+    const { job } = (await r.json()) as { job: { id: string } };
+    for (let i = 0; i < 200; i++) {
+      const j = (await (await fetch(`${base}/api/jobs/${job.id}`, { headers: H })).json()) as {
+        job: { state: string };
+      };
+      if (j.job.state !== 'running') return;
+      await Bun.sleep(10);
+    }
+    throw new Error('the deploy job never finished');
+  };
+
   /** Collect domain events for the duration of one test. */
   const capture = () => {
     const got: Array<{ event: string; data: Record<string, unknown> }> = [];
@@ -4374,7 +4406,14 @@ esac
 
   type Snap = {
     state: string;
-    containers: Array<{ name: string; ready: boolean; failed: boolean; hasHealthcheck: boolean; reason?: string }>;
+    containers: Array<{
+      name: string;
+      ready: boolean;
+      failed: boolean;
+      hasHealthcheck: boolean;
+      restartCount: number;
+      reason?: string;
+    }>;
   };
   const read = async (base: string, q = '?wait=5') =>
     (await (await fetch(`${base}/api/deployments/d/readiness${q}`, { headers: H })).json()) as Snap;
@@ -4384,7 +4423,7 @@ esac
     const { server, base } = boot();
     const cap = capture();
     try {
-      await putSpec(base);
+      await deploy(base);
       const started = Date.now();
       const snap = await read(base);
 
@@ -4415,7 +4454,7 @@ esac
       if (e.event === 'healthcheck.started') docker.set({ health: 'healthy' });
     });
     try {
-      await putSpec(base);
+      await deploy(base);
       const snap = await read(base);
       expect(snap.state).toBe('ready');
 
@@ -4450,7 +4489,7 @@ esac
     const a = boot();
     const cap = capture();
     try {
-      await putSpec(a.base);
+      await deploy(a.base);
       const snap = await read(a.base);
       expect(snap.state).toBe('failed');
       expect(snap.containers[0]!.failed).toBe(true);
@@ -4472,11 +4511,49 @@ esac
     done.set({ state: 'exited', exit: 0 });
     const b = boot();
     try {
-      await putSpec(b.base);
+      await deploy(b.base);
       expect((await read(b.base)).state).toBe('ready');
     } finally {
       b.server.stop(true);
       done.restore();
+    }
+  });
+
+  test('a crash LOOP is reported, and a single restart is forgiven', async () => {
+    // The commonest crash shape in a preview stack, and the one a state sample cannot see: with a
+    // `restart:` policy the container cycles exited → restarting → running, so a poll lands on a
+    // healthy-looking sample often enough that `state` alone is a coin flip. RestartCount only goes
+    // up, so it decides. The second half is the guard against over-eagerness: an app that dies once
+    // waiting for its database is the normal case, not a failure.
+    const loop = mutableDocker();
+    loop.set({ state: 'restarting', exit: 1, restarts: 5 });
+    // The DEFAULT deadline on purpose: this must settle because the crash loop was detected, not
+    // because a short clock ran out — a 400ms deadline made it settle `timedout` under a loaded CI
+    // box and the assertion below would then be measuring the wrong thing.
+    const a = boot();
+    const cap = capture();
+    try {
+      await deploy(a.base);
+      const snap = await read(a.base);
+      expect(snap.state).toBe('failed');
+      expect(snap.containers[0]!.restartCount).toBe(5);
+      expect(snap.containers[0]!.reason).toContain('crash loop');
+      expect(cap.names()).toContain('container.start-failed');
+    } finally {
+      cap.off();
+      a.server.stop(true);
+      loop.restore();
+    }
+
+    const blip = mutableDocker();
+    blip.set({ state: 'running', restarts: 1 });
+    const b = boot();
+    try {
+      await deploy(b.base);
+      expect((await read(b.base)).state).toBe('ready');
+    } finally {
+      b.server.stop(true);
+      blip.restore();
     }
   });
 
@@ -4486,7 +4563,7 @@ esac
     const { server, base } = boot({ timeoutMs: 150 });
     const cap = capture();
     try {
-      await putSpec(base);
+      await deploy(base);
       const snap = await read(base);
       expect(snap.state).toBe('timedout');
       expect(cap.got.find((g) => g.event === 'healthcheck.timedout')!.data).toMatchObject({
@@ -4504,20 +4581,45 @@ esac
     }
   });
 
+  test('merely READING readiness never emits — a page view must not invent a failure', async () => {
+    // The bug this guards: GET on a deployment nobody deployed finds no containers, converges on
+    // nothing, and at the deadline would announce "did not become ready in time" to every notifier.
+    // A read may start a watch; it may not narrate one.
+    const docker = mutableDocker();
+    docker.empty();
+    const { server, base } = boot({ timeoutMs: 120 });
+    const cap = capture();
+    try {
+      await putSpec(base); // submitted, never deployed
+      const snap = await read(base);
+      expect(snap.state).toBe('timedout'); // the CALLER is told, in full
+      expect(snap.containers).toEqual([]);
+      // …and the bus hears nothing about readiness at all.
+      expect(cap.names().filter((n) => /^(stack|container|healthcheck)\./.test(n))).toEqual([]);
+    } finally {
+      cap.off();
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
   test('every watch ends in exactly one terminal event — a subscriber never waits forever', async () => {
     // The property the whole design rests on. Asserted across all three outcomes, because a stream
     // that only fires on success is the failure mode this is guarding against.
-    for (const [setup, expected] of [
-      [{}, 'stack.ready'],
-      [{ state: 'exited', exit: 3 }, 'stack.failed'],
-      [{ health: 'starting' }, 'stack.timedout'],
+    // Only the timeout case gets a short deadline. Giving one to the ready/failed cases would let a
+    // slow machine settle them by running out the clock — the test would still be green and would
+    // have stopped testing convergence.
+    for (const [setup, expected, timeoutMs] of [
+      [{}, 'stack.ready', 5_000],
+      [{ state: 'exited', exit: 3 }, 'stack.failed', 5_000],
+      [{ health: 'starting' }, 'stack.timedout', 150],
     ] as const) {
       const docker = mutableDocker();
       docker.set(setup);
-      const { server, base } = boot({ timeoutMs: 150 });
+      const { server, base } = boot({ timeoutMs });
       const cap = capture();
       try {
-        await putSpec(base);
+        await deploy(base);
         await read(base);
         const terminal = cap.names().filter((n) => n.startsWith('stack.'));
         expect(terminal).toEqual([expected]);

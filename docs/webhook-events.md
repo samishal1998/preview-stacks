@@ -197,17 +197,26 @@ on one thing, page on this.
 are *created*. Whether the app booted, passed its healthcheck, or crashed two seconds later is a
 separate question, and these events are the answer to it.
 
-A **watch** starts automatically after every successful `up`, and on first request to
-`GET /api/deployments/:id/readiness` for a stack that has none (so a stack deployed from the CLI, or
-before a server restart, is still answerable). It polls Docker every 2s and ends in **exactly one**
-of `stack.ready`, `stack.failed`, `stack.timedout` — never in silence — after 180s by default. A
-teardown cancels the watch, so no terminal event fires for containers being removed on purpose.
+A **watch** starts automatically after every successful `up`. It polls Docker every 2s and ends in
+**exactly one** of `stack.ready`, `stack.failed`, `stack.timedout` — never in silence — after 180s
+by default. A teardown cancels the watch, so no terminal event fires for containers being removed on
+purpose.
+
+`GET /api/deployments/:id/readiness` also starts a watch when the stack has none (so a stack
+deployed from the CLI, or before a server restart, is still answerable) — but that one is **silent**:
+it emits nothing. A read must not manufacture an event about a deploy nobody ran, and without this a
+page view of a submitted-but-never-deployed deployment would post "did not become ready in time" to
+every notifier three minutes later. The reader still gets the full state in the response.
 
 **What "ready" means.** A container *with* a healthcheck is ready when Docker reports `healthy`. One
 *without* is ready when it is simply running — the honest ceiling, since nothing on the host knows
 what "serving" means for that image. Payloads carry `hasHealthcheck` so "ready" is never read as
 "probed". A container that **exited 0** counts as ready: one-shot migration and seed services are
-supposed to finish, and calling that a crash would fail every stack that has one.
+supposed to finish, and calling that a crash would fail every stack that has one. A container that
+has **restarted 3+ times** is a crash loop and fails — with a `restart:` policy a container that dies
+on boot cycles `exited → restarting → running`, so no single sample of its state can tell that from a
+slow start, but the restart counter can. One or two restarts are forgiven: an app that dies once
+waiting for its database is the normal case.
 
 #### `healthcheck.started` / `healthcheck.updated` / `healthcheck.finished` / `healthcheck.timedout`
 
@@ -239,7 +248,8 @@ The per-container verdict, at most once per container per watch.
 | `health` | string \| null | `null` when the image declares no healthcheck. |
 | `hasHealthcheck` | boolean | `container.ready` only — `false` means running, not probed. |
 | `exitCode` | number \| null | `container.start-failed` only. |
-| `reason` | string | `container.start-failed` only, one line: `exited with code 1`, `healthcheck reports unhealthy`, `container is dead`. |
+| `restartCount` | number | Restarts Docker has performed (snapshot only; see the crash-loop rule above). |
+| `reason` | string | `container.start-failed` only, one line: `exited with code 1`, `restarted 5 times — crash loop (last exit 1)`, `healthcheck reports unhealthy`, `container is dead`. |
 
 #### `stack.ready` / `stack.failed` / `stack.timedout`
 
@@ -273,7 +283,7 @@ containers still converging.
 
 **Polling or waiting instead of subscribing.** `GET /api/deployments/:id/readiness` returns the same
 snapshot the events narrate (`state`, plus a `containers[]` of `{ name, service, state, health,
-hasHealthcheck, exitCode, ready, failed, reason? }`). Add `?wait=<seconds>` (max 60) to long-poll —
+hasHealthcheck, exitCode, restartCount, ready, failed, reason? }`). Add `?wait=<seconds>` (max 60) to long-poll —
 it returns as soon as the state is terminal, or with `state: "watching"` when the wait expires, so a
 CI step loops while `state === "watching"` with no missed edge. `?refresh=1` re-runs a watch that
 already settled; `?timeout=<seconds>` overrides the deadline for a watch this request starts.

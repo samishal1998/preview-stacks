@@ -1288,7 +1288,16 @@ export function createServer(opts: ServerOptions) {
           // stands, `endedAt` and all, rather than being silently recomputed under the caller.
           const existing = readiness.get(spec.stack);
           if (!existing || (existing.state !== 'watching' && url.searchParams.get('refresh') === '1')) {
-            readiness.start(spec.stack, runnerFor(spec, dep.dir), { timeoutMs, restart: true });
+            // SILENT (`emit: false`): a watch a read started must not announce itself. On a
+            // deployment that was never deployed there are no containers to converge, so 180s later
+            // this would have posted "did not become ready in time" to every notifier — about a
+            // deploy nobody ran, triggered by someone opening a page. The caller still sees every
+            // state in the snapshot; only the bus is spared.
+            readiness.start(spec.stack, runnerFor(spec, dep.dir), {
+              timeoutMs,
+              restart: true,
+              emit: false,
+            });
           }
           const snap = waitMs > 0 ? await readiness.wait(spec.stack, waitMs) : readiness.get(spec.stack);
           return json({ id, ...(snap ?? { stack: spec.stack, state: 'watching', containers: [] }) });
