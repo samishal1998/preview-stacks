@@ -904,6 +904,54 @@ data: {"seq":3,"at":1785014283206,"level":"step","message":"→ verify (assertin
 data: {"done":true,"state":"ok"}
 ```
 
+### Wait for it to actually be serving
+
+A green `up` means the commands ran: `compose up -d` returns as soon as the containers are
+*created*. It returns exactly the same way when the app boots, throws, and exits two seconds later.
+So a CI step that posts the preview URL right after the job is racing the thing it is advertising.
+
+`readiness` is the second half. A watch starts on every successful `up`; poll it, or hand it a
+`wait` and let it answer when there is an answer:
+
+```console
+$ curl -s -H "Authorization: Bearer $PSTACK_TOKEN" \
+       'https://api.preview.example.com/api/deployments/pr-123/readiness?wait=60&PR=123'
+{
+  "id": "pr-123",
+  "stack": "pr-123",
+  "state": "ready",
+  "containers": [
+    { "name": "pr-123-app-1", "service": "app", "state": "running",
+      "health": "healthy", "hasHealthcheck": true, "exitCode": 0, "ready": true, "failed": false },
+    { "name": "pr-123-migrate-1", "service": "migrate", "state": "exited",
+      "health": null, "hasHealthcheck": false, "exitCode": 0, "ready": true, "failed": false }
+  ],
+  "startedAt": 1785014256010,
+  "endedAt": 1785014271044,
+  "reachable": true,
+  "timeoutMs": 180000
+}
+```
+
+`state` is **`watching` · `ready` · `failed` · `timedout`**. `?wait=<seconds>` (max 60) returns the
+moment it leaves `watching`, or hands back `watching` when the wait expires — so the CI loop is
+"re-issue while `watching`", with no edge to miss:
+
+```bash
+until [ "$(curl -sf -H "Authorization: Bearer $PSTACK_TOKEN" \
+    "$API/api/deployments/pr-$PR/readiness?wait=60&PR=$PR" | jq -r .state)" != watching ]; do :; done
+```
+
+Two things it is careful about. A container **without** a healthcheck is "ready" when it is merely
+running — nothing here knows what serving means for that image, so `hasHealthcheck: false` says so
+rather than implying a probe passed. And a container that **exited 0** is ready, not failed: one-shot
+migrations are supposed to finish. `failed` is an exit with a non-zero code, a dead container, or an
+`unhealthy` healthcheck, and `reason` names which.
+
+Add `?refresh=1` to re-run a watch that already settled, `?timeout=<seconds>` to override the
+180-second deadline. The same convergence is pushed to notifiers as `healthcheck.*`, `container.*`
+and `stack.*` events — see [webhook-events.md](webhook-events.md).
+
 ### One job per stack
 
 A second action on a busy stack is rejected, not queued — a `down` deleting the database branch an

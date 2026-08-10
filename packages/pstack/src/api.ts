@@ -28,6 +28,7 @@
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
  *   GET    /api/deployments/:id/logs?service=  compose logs, optionally for ONE service
  *   GET    /api/deployments/:id/runtime   containers, networks, ports, the routes their labels declare
+ *   GET    /api/deployments/:id/readiness  is it SERVING yet — poll, or `?wait=<seconds>` to long-poll
  *   GET    /api/notifiers                 registrations — metadata only, NEVER the signing secret
  *   POST   /api/notifiers                 register  { name, events[], config{}, type? } → 201 { notifier, secret }
  *   PATCH  /api/notifiers/:id             { enabled }
@@ -112,6 +113,7 @@ import { parseSpec, SpecError, type Stack } from './spec.ts';
 import { down, up, verify } from './stack.ts';
 import { publicConfig, redactForNotifier, typeOf } from './notify.ts';
 import { HostVars, HostVarsError } from './hostvars.ts';
+import { ReadinessWatcher } from './readiness.ts';
 import type { Sink } from './log.ts';
 import {
   actorOf,
@@ -145,6 +147,12 @@ export type ServerOptions = {
    * command nobody ran. Not a production knob.
    */
   terminalArgv?: (containerId: string, shell: Shell) => string[];
+  /**
+   * Readiness watch tuning: how often the watcher re-reads docker, and how long it waits before
+   * calling a stack timed out. Injectable so a test can converge in milliseconds instead of minutes;
+   * the defaults (2s / 180s) are what a host runs.
+   */
+  readiness?: { pollMs?: number; timeoutMs?: number };
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -233,6 +241,11 @@ export function createServer(opts: ServerOptions) {
     return { emit: (level, message) => inner.emit(level, redactText(message, secrets)) };
   };
   const terminalArgv = opts.terminalArgv ?? execArgv;
+  /**
+   * Per-server, like the dispatcher and for the same reason: its poll loops are timers, and a server
+   * that has been stopped must not keep calling docker every two seconds for the life of the process.
+   */
+  const readiness = new ReadinessWatcher(opts.readiness ?? {});
   const dispatcher = new Dispatcher(hooks);
   /**
    * The bus is a module singleton and this listener is per-server. A process can host several servers
@@ -906,10 +919,23 @@ export function createServer(opts: ServerOptions) {
           const job = jobs.start(
             spec.stack,
             action,
-            (rawSink) => {
+            async (rawSink) => {
               const sink = scrubbedSink(rawSink);
-              if (action === 'up') return up(spec, runner, sink);
+              if (action === 'up') {
+                const outcome = await up(spec, runner, sink);
+                // Readiness picks up exactly where the job stops. `compose up -d` returns once the
+                // containers are CREATED, so the job's success says nothing about whether the app
+                // booted — the watch is that second half, and it starts here so a deploy made from
+                // CI is watched without the client having to ask. Only after a success: watching a
+                // stack whose provisioning failed would report a truthful "not ready" about
+                // something nobody deployed.
+                if (outcome.ok) readiness.start(spec.stack, runner, { restart: true });
+                return outcome;
+              }
               if (action === 'verify') return verify(spec, runner, sink);
+              // Teardown makes every pending readiness question moot, and a watch left running would
+              // resolve `failed` on the containers it is in the middle of removing.
+              readiness.cancel(spec.stack);
               return down(spec, runner, { verify: body.verify ?? true, force: body.force ?? false }, sink);
             },
             // The outcome path: a FAILING hook's stderr lands in step messages, not the sink.
@@ -1231,6 +1257,41 @@ export function createServer(opts: ServerOptions) {
               allRouters: all.byName,
             })),
           });
+        }
+
+        // ---- did it actually come up? ---------------------------------------------------
+        // The job answers "did the commands run"; this answers "is it serving". Two ways to consume
+        // it, because two kinds of caller need it: a plain GET for a page that polls, and
+        // `?wait=<seconds>` for a CI step that would otherwise sleep-and-hope. Both return the same
+        // snapshot, so a client loops on `state === 'watching'` and never has to catch an edge.
+        const rdm = /^\/api\/deployments\/([^/]+)\/readiness$/.exec(path);
+        if (rdm && req.method === 'GET') {
+          const id = decodeURIComponent(rdm[1]!);
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          const spec = await resolveDep(id, vars);
+
+          const num = (key: string, fallback: number, max: number): number => {
+            const raw = Number(url.searchParams.get(key));
+            return Number.isFinite(raw) && raw > 0 ? Math.min(raw, max) : fallback;
+          };
+          // Seconds on the wire (a human writes `?wait=30`), milliseconds inside — named accordingly
+          // at the boundary so the two can never be confused.
+          const waitMs = num('wait', 0, 60) * 1000;
+          const timeoutMs = url.searchParams.has('timeout')
+            ? num('timeout', 180, 3600) * 1000
+            : undefined;
+
+          // No watch yet — start one, so readiness is answerable for a stack this process did not
+          // deploy (a restarted server, or a deploy made from the CLI). `refresh=1` re-asks a
+          // question that already has an answer; without it a settled verdict is returned as it
+          // stands, `endedAt` and all, rather than being silently recomputed under the caller.
+          const existing = readiness.get(spec.stack);
+          if (!existing || (existing.state !== 'watching' && url.searchParams.get('refresh') === '1')) {
+            readiness.start(spec.stack, runnerFor(spec, dep.dir), { timeoutMs, restart: true });
+          }
+          const snap = waitMs > 0 ? await readiness.wait(spec.stack, waitMs) : readiness.get(spec.stack);
+          return json({ id, ...(snap ?? { stack: spec.stack, state: 'watching', containers: [] }) });
         }
 
         // ---- every route Traefik has, from container labels -----------------------------
@@ -1570,6 +1631,9 @@ export function createServer(opts: ServerOptions) {
   const stopServing = server.stop.bind(server);
   server.stop = (closeActiveConnections?: boolean) => {
     detachDispatcher();
+    // Same reasoning one level down: a readiness watch is a poll loop, and a stopped server's loop
+    // would go on shelling out to docker — and go on emitting events into a bus it no longer serves.
+    readiness.stopAll();
     return stopServing(closeActiveConnections);
   };
   return server;

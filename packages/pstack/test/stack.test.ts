@@ -4283,3 +4283,249 @@ esac
     }
   });
 });
+
+describe('readiness: did the stack actually come up', () => {
+  const TOKEN = 'tok';
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-ready-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  /**
+   * A `docker` on PATH whose inspect output the test REWRITES between polls — health transitions are
+   * the whole subject here, and a fixed shim could only ever prove the first observation.
+   */
+  const mutableDocker = () => {
+    const dir = tmpd();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'ids'), 'c1\n');
+    writeFileSync(
+      join(dir, 'docker'),
+      `#!/bin/sh
+case "$1 $2" in
+  "ps -aq") cat ${JSON.stringify(join(dir, 'ids'))} ;;
+  "inspect "*) cat ${JSON.stringify(join(dir, 'inspect.json'))} ;;
+  *) exit 0 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const set = (over: { state?: string; health?: string; exit?: number } = {}) => {
+      writeFileSync(
+        join(dir, 'inspect.json'),
+        JSON.stringify([
+          {
+            Id: 'c1',
+            Name: '/probe-app-1',
+            Config: {
+              Image: 'nginx',
+              Labels: { 'com.docker.compose.service': 'app', 'com.docker.compose.project': 'probe' },
+            },
+            State: {
+              Status: over.state ?? 'running',
+              ExitCode: over.exit ?? 0,
+              ...(over.health ? { Health: { Status: over.health } } : {}),
+            },
+            NetworkSettings: {
+              Networks: { 'preview-ingress': { IPAddress: '172.20.0.5' } },
+              Ports: {},
+            },
+          },
+        ]),
+      );
+    };
+    set();
+    const prev = process.env.PATH;
+    process.env.PATH = `${dir}:${prev}`;
+    return {
+      set,
+      restore: () => {
+        process.env.PATH = prev;
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  };
+
+  const boot = (readiness: { pollMs?: number; timeoutMs?: number } = {}) => {
+    const server = createServer({
+      dataDir: tmpd(),
+      port: 0,
+      host: '127.0.0.1',
+      token: TOKEN,
+      readiness: { pollMs: 20, timeoutMs: 5_000, ...readiness },
+    });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+
+  const putSpec = (base: string) =>
+    fetch(`${base}/api/deployments/d`, {
+      method: 'PUT',
+      headers: H,
+      body: JSON.stringify({ spec: 'version: 1\nstack: probe\naxes:\n  - name: a\n    up: "true"\n' }),
+    });
+
+  /** Collect domain events for the duration of one test. */
+  const capture = () => {
+    const got: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const off = events.on((e) => {
+      got.push({ event: e.event, data: e.data });
+    });
+    return { got, off, names: () => got.map((g) => g.event) };
+  };
+
+  type Snap = {
+    state: string;
+    containers: Array<{ name: string; ready: boolean; failed: boolean; hasHealthcheck: boolean; reason?: string }>;
+  };
+  const read = async (base: string, q = '?wait=5') =>
+    (await (await fetch(`${base}/api/deployments/d/readiness${q}`, { headers: H })).json()) as Snap;
+
+  test('a container with no healthcheck is ready when it runs — and says nobody probed it', async () => {
+    const docker = mutableDocker();
+    const { server, base } = boot();
+    const cap = capture();
+    try {
+      await putSpec(base);
+      const started = Date.now();
+      const snap = await read(base);
+
+      expect(snap.state).toBe('ready');
+      expect(snap.containers).toHaveLength(1);
+      // The honest ceiling: ready, but nothing checked that it SERVES anything.
+      expect(snap.containers[0]!.hasHealthcheck).toBe(false);
+      expect(cap.names()).toContain('container.ready');
+      expect(cap.names()).toContain('stack.ready');
+      // A `wait` that returns as soon as the answer exists is the point of the long poll — if it
+      // slept the full 5s this would pass on the timeout instead of on convergence.
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally {
+      cap.off();
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
+  test('a healthcheck is narrated: started, updated, finished — then the container is ready', async () => {
+    const docker = mutableDocker();
+    docker.set({ health: 'starting' });
+    const { server, base } = boot();
+    const cap = capture();
+    // Flip on the FIRST observation rather than on a timer: a race here would make the test pass or
+    // fail on scheduling, and `starting → healthy` is exactly the transition being asserted.
+    const offFlip = events.on((e) => {
+      if (e.event === 'healthcheck.started') docker.set({ health: 'healthy' });
+    });
+    try {
+      await putSpec(base);
+      const snap = await read(base);
+      expect(snap.state).toBe('ready');
+
+      const hc = cap.got.filter((g) => g.event.startsWith('healthcheck.'));
+      expect(hc.map((g) => g.event)).toEqual([
+        'healthcheck.started',
+        'healthcheck.updated',
+        'healthcheck.finished',
+      ]);
+      expect(hc[0]!.data.status).toBe('starting');
+      expect(hc[1]!.data).toMatchObject({ previous: 'starting', status: 'healthy' });
+      expect(hc[2]!.data.healthy).toBe(true);
+      expect(hc.every((g) => g.data.container === 'probe-app-1')).toBe(true);
+      expect(cap.got.find((g) => g.event === 'container.ready')!.data).toMatchObject({
+        container: 'probe-app-1',
+        hasHealthcheck: true,
+      });
+    } finally {
+      offFlip();
+      cap.off();
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
+  test('a crash on boot fails the stack; a one-shot that exits 0 does not', async () => {
+    // Both halves in one test on purpose: "exited" alone must NOT mean failure, or every stack with
+    // a migration container would be permanently broken. The pair is what proves the rule is exit
+    // CODE, not exit.
+    const crash = mutableDocker();
+    crash.set({ state: 'exited', exit: 1 });
+    const a = boot();
+    const cap = capture();
+    try {
+      await putSpec(a.base);
+      const snap = await read(a.base);
+      expect(snap.state).toBe('failed');
+      expect(snap.containers[0]!.failed).toBe(true);
+      expect(snap.containers[0]!.reason).toBe('exited with code 1');
+      expect(cap.got.find((g) => g.event === 'container.start-failed')!.data).toMatchObject({
+        container: 'probe-app-1',
+        exitCode: 1,
+      });
+      expect(cap.got.find((g) => g.event === 'stack.failed')!.data).toMatchObject({
+        failedContainers: ['probe-app-1'],
+      });
+    } finally {
+      cap.off();
+      a.server.stop(true);
+      crash.restore();
+    }
+
+    const done = mutableDocker();
+    done.set({ state: 'exited', exit: 0 });
+    const b = boot();
+    try {
+      await putSpec(b.base);
+      expect((await read(b.base)).state).toBe('ready');
+    } finally {
+      b.server.stop(true);
+      done.restore();
+    }
+  });
+
+  test('a healthcheck that never settles times out, and names what it was still waiting on', async () => {
+    const docker = mutableDocker();
+    docker.set({ health: 'starting' }); // and never changes
+    const { server, base } = boot({ timeoutMs: 150 });
+    const cap = capture();
+    try {
+      await putSpec(base);
+      const snap = await read(base);
+      expect(snap.state).toBe('timedout');
+      expect(cap.got.find((g) => g.event === 'healthcheck.timedout')!.data).toMatchObject({
+        container: 'probe-app-1',
+        status: 'starting',
+      });
+      // The list is the difference between a support thread and a container to go and look at.
+      expect(cap.got.find((g) => g.event === 'stack.timedout')!.data).toMatchObject({
+        pendingContainers: ['probe-app-1'],
+      });
+    } finally {
+      cap.off();
+      server.stop(true);
+      docker.restore();
+    }
+  });
+
+  test('every watch ends in exactly one terminal event — a subscriber never waits forever', async () => {
+    // The property the whole design rests on. Asserted across all three outcomes, because a stream
+    // that only fires on success is the failure mode this is guarding against.
+    for (const [setup, expected] of [
+      [{}, 'stack.ready'],
+      [{ state: 'exited', exit: 3 }, 'stack.failed'],
+      [{ health: 'starting' }, 'stack.timedout'],
+    ] as const) {
+      const docker = mutableDocker();
+      docker.set(setup);
+      const { server, base } = boot({ timeoutMs: 150 });
+      const cap = capture();
+      try {
+        await putSpec(base);
+        await read(base);
+        const terminal = cap.names().filter((n) => n.startsWith('stack.'));
+        expect(terminal).toEqual([expected]);
+      } finally {
+        cap.off();
+        server.stop(true);
+        docker.restore();
+      }
+    }
+  });
+});

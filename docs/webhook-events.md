@@ -191,6 +191,93 @@ on one thing, page on this.
 }
 ```
 
+### Readiness: `healthcheck.*`, `container.*`, `stack.*`
+
+`job.succeeded` for an `up` means **the commands ran** — `compose up -d` returns once the containers
+are *created*. Whether the app booted, passed its healthcheck, or crashed two seconds later is a
+separate question, and these events are the answer to it.
+
+A **watch** starts automatically after every successful `up`, and on first request to
+`GET /api/deployments/:id/readiness` for a stack that has none (so a stack deployed from the CLI, or
+before a server restart, is still answerable). It polls Docker every 2s and ends in **exactly one**
+of `stack.ready`, `stack.failed`, `stack.timedout` — never in silence — after 180s by default. A
+teardown cancels the watch, so no terminal event fires for containers being removed on purpose.
+
+**What "ready" means.** A container *with* a healthcheck is ready when Docker reports `healthy`. One
+*without* is ready when it is simply running — the honest ceiling, since nothing on the host knows
+what "serving" means for that image. Payloads carry `hasHealthcheck` so "ready" is never read as
+"probed". A container that **exited 0** counts as ready: one-shot migration and seed services are
+supposed to finish, and calling that a crash would fail every stack that has one.
+
+#### `healthcheck.started` / `healthcheck.updated` / `healthcheck.finished` / `healthcheck.timedout`
+
+One container's health probe, as Docker's own status string changes. `started` on the first
+observation, `updated` on every change after it, `finished` when it settles (`healthy` or
+`unhealthy` — the probe is terminal even though the container keeps running), `timedout` when the
+watch's deadline arrived while it was still `starting`. A first observation that is already settled
+emits `started` **and** `finished` — that is the honest report, not a duplicate.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `stack` | string | |
+| `container` | string | Container name, e.g. `shopfront-pr-7-app-1`. |
+| `service` | string \| null | The compose service, when the container carries the label. |
+| `status` | `"starting"` \| `"healthy"` \| `"unhealthy"` | Docker's health status. |
+| `previous` | string | `updated` only — the status it changed from. |
+| `healthy` | boolean | `finished` only. |
+| `waitedMs` | number | `timedout` only — how long the watch waited. |
+
+#### `container.ready` / `container.start-failed`
+
+The per-container verdict, at most once per container per watch.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `stack` | string | |
+| `container`, `service` | string, string\|null | As above. |
+| `state` | string | Docker's word: `running`, `exited`, `restarting`, … |
+| `health` | string \| null | `null` when the image declares no healthcheck. |
+| `hasHealthcheck` | boolean | `container.ready` only — `false` means running, not probed. |
+| `exitCode` | number \| null | `container.start-failed` only. |
+| `reason` | string | `container.start-failed` only, one line: `exited with code 1`, `healthcheck reports unhealthy`, `container is dead`. |
+
+#### `stack.ready` / `stack.failed` / `stack.timedout`
+
+The aggregate verdict — **exactly one per watch**. `ready` when every container is ready (and there
+is at least one); `failed` as soon as any container fails; `timedout` when the deadline passed with
+containers still converging.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `stack` | string | |
+| `state` | `"ready"` \| `"failed"` \| `"timedout"` | Matches the event name. |
+| `containers` | number | How many were seen. |
+| `ready` | number | How many were ready at the verdict. |
+| `failedContainers` | string[] | Names that failed. |
+| `pendingContainers` | string[] | Names still converging — the list that makes a timeout actionable. |
+| `durationMs` | number | Watch duration. |
+| `reachable` | boolean | `false` means Docker stopped answering; every container field is then last-known, not current. |
+
+```json
+{
+  "stack": "shopfront-pr-7",
+  "state": "timedout",
+  "containers": 3,
+  "ready": 2,
+  "failedContainers": [],
+  "pendingContainers": ["shopfront-pr-7-worker-1"],
+  "durationMs": 180000,
+  "reachable": true
+}
+```
+
+**Polling or waiting instead of subscribing.** `GET /api/deployments/:id/readiness` returns the same
+snapshot the events narrate (`state`, plus a `containers[]` of `{ name, service, state, health,
+hasHealthcheck, exitCode, ready, failed, reason? }`). Add `?wait=<seconds>` (max 60) to long-poll —
+it returns as soon as the state is terminal, or with `state: "watching"` when the wait expires, so a
+CI step loops while `state === "watching"` with no missed edge. `?refresh=1` re-runs a watch that
+already settled; `?timeout=<seconds>` overrides the deadline for a watch this request starts.
+
 ### `spec.stored`
 
 Fires when `PUT /api/specs/:name` stores (`replaced: false`) or replaces (`replaced: true`) a

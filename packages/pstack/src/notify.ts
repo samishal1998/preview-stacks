@@ -295,6 +295,36 @@ export function summarize(e: PstackEvent): string {
       return `Spec ${d.name} deleted.`;
     case 'routing.changed':
       return `Routing file ${d.file} ${d.action}.`;
+    // Readiness. Deliberately NOT one line per healthcheck transition in chat — a `starting →
+    // healthy` for every container would bury the verdict it leads up to. The per-container and
+    // per-probe events still deliver (someone subscribed to them asked for them), but the wording
+    // stays proportionate: the stack-level line is the one that reads like news.
+    case 'healthcheck.started':
+      return `${d.container} healthcheck ${d.status} on ${stack}.`;
+    case 'healthcheck.updated':
+      return `${d.container} healthcheck ${d.previous} → ${d.status} on ${stack}.`;
+    case 'healthcheck.finished':
+      return `${d.container} healthcheck ${d.healthy === true ? 'passed' : 'FAILED'} on ${stack}.`;
+    case 'healthcheck.timedout':
+      return `${d.container} healthcheck never settled on ${stack} — still starting after ${Math.round(Number(d.waitedMs ?? 0) / 1000)}s.`;
+    case 'container.ready':
+      return `${d.container} is ready on ${stack}${d.hasHealthcheck === true ? ' (healthcheck passed)' : ' (running; no healthcheck to check)'}.`;
+    case 'container.start-failed':
+      return `${d.container} failed to start on ${stack}${d.reason ? ` — ${String(d.reason)}` : ''}.`;
+    case 'stack.ready':
+      return `${stack} is ready — ${d.ready}/${d.containers} container(s) up${took}.`;
+    case 'stack.failed': {
+      const which = Array.isArray(d.failedContainers) && d.failedContainers.length
+        ? ` Failed: ${(d.failedContainers as string[]).join(', ')}.`
+        : '';
+      return `${stack} did not come up${took}.${which}`;
+    }
+    case 'stack.timedout': {
+      const which = Array.isArray(d.pendingContainers) && d.pendingContainers.length
+        ? ` Still not ready: ${(d.pendingContainers as string[]).join(', ')}.`
+        : '';
+      return `${stack} did not become ready in time${took}.${which}`;
+    }
     default:
       return `${e.event} on ${stack || 'this host'}.`;
   }

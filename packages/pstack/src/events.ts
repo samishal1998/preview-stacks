@@ -35,6 +35,27 @@ export const EVENTS = [
   'spec.stored',
   'spec.deleted',
   'routing.changed',
+  /**
+   * Readiness convergence, observed by the watcher that starts after every successful deploy (see
+   * readiness.ts). `compose up -d` returning is not "the app works": containers still have to pass
+   * their healthchecks, and a crash-on-boot exits *after* the deploy job already reported success.
+   * These events carry that second half.
+   *
+   * The `healthcheck.*` family narrates one container's health probe: `started` when a probe is
+   * first observed, `updated` on every status change, `finished` when it settles (healthy or
+   * unhealthy), `timedout` when the watcher gave up while it was still starting. `container.*` is
+   * the per-container verdict; `stack.*` the aggregate one — exactly one of `stack.ready`,
+   * `stack.failed`, `stack.timedout` ends each watch.
+   */
+  'healthcheck.started',
+  'healthcheck.updated',
+  'healthcheck.finished',
+  'healthcheck.timedout',
+  'container.ready',
+  'container.start-failed',
+  'stack.ready',
+  'stack.failed',
+  'stack.timedout',
 ] as const;
 
 export type EventName = (typeof EVENTS)[number];

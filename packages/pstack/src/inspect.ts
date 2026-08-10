@@ -50,6 +50,12 @@ export type ContainerInfo = {
   state: string;
   /** `healthy` / `unhealthy` / `starting`, or null when the image declares no healthcheck. */
   health: string | null;
+  /**
+   * Exit status, meaningful only once `state` is `exited`. It is the difference between "the job
+   * container finished its work" and "the app crashed on boot", which is the whole question a
+   * readiness watch is asking — see `readiness.ts`.
+   */
+  exitCode: number | null;
   networks: string[];
   /**
    * The container's IP on the ingress network, which is the address Traefik actually dials. Null when
@@ -110,7 +116,7 @@ type RawInspect = {
   Name?: string;
   Args?: string[];
   Config?: { Image?: string; Labels?: Record<string, string>; Cmd?: string[] };
-  State?: { Status?: string; Health?: { Status?: string } };
+  State?: { Status?: string; ExitCode?: number; Health?: { Status?: string } };
   NetworkSettings?: {
     Networks?: Record<string, { IPAddress?: string } | undefined>;
     Ports?: Record<string, Array<{ HostPort?: string }> | null>;
@@ -176,6 +182,7 @@ function toContainer(raw: RawInspect): ContainerInfo {
     image: raw.Config?.Image ?? '',
     state: raw.State?.Status ?? 'unknown',
     health: raw.State?.Health?.Status ?? null,
+    exitCode: typeof raw.State?.ExitCode === 'number' ? raw.State.ExitCode : null,
     networks: Object.keys(raw.NetworkSettings?.Networks ?? {}),
     ingressIp:
       (raw.NetworkSettings?.Networks?.[INGRESS] as { IPAddress?: string } | undefined)?.IPAddress ||
