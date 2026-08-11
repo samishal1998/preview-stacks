@@ -10,7 +10,7 @@
 import { watch } from 'vue';
 import { sentence } from '../composables/useFormat';
 import { useRouter } from 'vue-router';
-import { dep, isShared, openDeployment } from '../composables/useDeployment';
+import { dep, isShared, loadDetail, openDeployment } from '../composables/useDeployment';
 import {
   act,
   actionError,
@@ -25,6 +25,7 @@ import ActionButton from '../components/ActionButton.vue';
 import ConflictNote from '../components/ConflictNote.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -92,6 +93,7 @@ watch(
       <!-- One flex unit, so on a narrow screen the pair wraps together instead of Verify being
            orphaned onto its own line under the title. -->
       <div v-if="dep.detail" class="row" style="flex-wrap: nowrap">
+        <RefreshButton :run="loadDetail" label="Re-resolve" title="Read this deployment again and re-run its variable substitution" />
         <ActionButton
           variant="primary"
           :pending="pending === 'up'"

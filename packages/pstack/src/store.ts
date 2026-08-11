@@ -156,6 +156,10 @@ const MIGRATIONS: string[] = [
     updated_at  INTEGER NOT NULL
   );
   `,
+  // 5 — the delivered payload, so a delivery can be REPLAYED rather than described.
+  `
+  ALTER TABLE deliveries ADD COLUMN payload TEXT;
+  `,
 ];
 
 export type UserRow = {

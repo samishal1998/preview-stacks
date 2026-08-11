@@ -263,6 +263,8 @@ export type DeliveryRow = {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  /** The envelope was stored, so this delivery can be replayed. False for old rows. */
+  replayable?: boolean;
 };
 /**
  * `GET /api/notifiers/meta` — what the server supports. The form is rendered FROM this, so adding a

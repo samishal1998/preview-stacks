@@ -7,12 +7,13 @@
  */
 import { computed, ref } from 'vue';
 import { sentence } from '../composables/useFormat';
-import { state, summary } from '../composables/useControlPlane';
+import { loadDeployments, state, summary } from '../composables/useControlPlane';
 
 import RunStateBadge from '../components/RunStateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const q = ref('');
 const kind = ref<'all' | 'isolated' | 'shared'>('all');
@@ -47,6 +48,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
         </div>
       </div>
       <span class="grow" />
+      <RefreshButton :run="loadDeployments" />
       <RouterLink to="/submit" class="btn">+ Submit</RouterLink>
     </div>
 

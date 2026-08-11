@@ -19,6 +19,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 type Entry = { name: string; value: string | null; secret: boolean; updatedAt: number };
 
@@ -110,6 +111,8 @@ async function remove(e: Entry): Promise<void> {
           </InfoHint>
         </div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="load" />
     </div>
 
     <ErrorNote v-if="listError" :text="listError" title="Something went wrong." />

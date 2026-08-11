@@ -26,6 +26,7 @@ import ActionButton from '../../components/ActionButton.vue';
 import ErrorNote from '../../components/ErrorNote.vue';
 import InfoHint from '../../components/InfoHint.vue';
 import { toast } from '../../composables/useToasts';
+import RefreshButton from '../../components/RefreshButton.vue';
 
 const rt = ref<RuntimeResponse | null>(null);
 const error = ref('');
@@ -234,6 +235,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
             <span class="mute" style="font-size: var(--t-sm)">
               {{ running }} of {{ rt.containers.length }} running
             </span>
+            <RefreshButton :run="load" :busy="loading" />
           </div>
 
           <table v-if="rt.containers.length" class="cards">

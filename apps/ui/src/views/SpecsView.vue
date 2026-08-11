@@ -21,6 +21,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const specs = ref<SpecMeta[]>([]);
 const loaded = ref(false);
@@ -82,6 +83,8 @@ const shown = computed(() => {
           </InfoHint>
         </div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="load" />
     </div>
 
     <ErrorNote v-if="error" :text="error" title="Could not load the specs." />

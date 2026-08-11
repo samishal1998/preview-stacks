@@ -4986,3 +4986,155 @@ esac
     }
   });
 });
+
+describe('delivery queueing and redelivery', () => {
+  /*
+   * The receivers below are on 127.0.0.1, which the notifier URL check refuses by default (see the
+   * SSRF note in notify.ts). Process-wide state, so it is restored rather than set and forgotten.
+   */
+  let allowPrivateBefore: string | undefined;
+  beforeEach(() => {
+    allowPrivateBefore = process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+    process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = '1';
+  });
+  afterEach(() => {
+    if (allowPrivateBefore === undefined) delete process.env.PSTACK_NOTIFY_ALLOW_PRIVATE;
+    else process.env.PSTACK_NOTIFY_ALLOW_PRIVATE = allowPrivateBefore;
+  });
+
+  const TOKEN = 'tok';
+  const H = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-redeliver-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  /** A receiver that records every request and can be made slow. */
+  const receiver = (opts: { delayMs?: number } = {}) => {
+    const got: Array<{ body: string; redelivery: string | null; timestamp: string | null }> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(req) {
+        const body = await req.text();
+        if (opts.delayMs) await Bun.sleep(opts.delayMs);
+        got.push({
+          body,
+          redelivery: req.headers.get('x-pstack-redelivery'),
+          timestamp: req.headers.get('x-pstack-timestamp'),
+        });
+        return new Response('ok');
+      },
+    });
+    return { got, server, url: `http://127.0.0.1:${server.port}/hook` };
+  };
+
+  const boot = () => {
+    const server = createServer({ dataDir: tmpd(), port: 0, host: '127.0.0.1', token: TOKEN });
+    return { server, base: `http://127.0.0.1:${server.port}` };
+  };
+
+  const register = async (base: string, url: string) => {
+    const r = await fetch(`${base}/api/notifiers`, {
+      method: 'POST',
+      headers: H,
+      body: JSON.stringify({ name: 'r', type: 'webhook', events: ['*'], config: { url } }),
+    });
+    return ((await r.json()) as { notifier: { id: number } }).notifier.id;
+  };
+
+  test('a burst QUEUES instead of dropping — the "still in progress" report', async () => {
+    /*
+     * The reported bug. One delivery can take 21s (3 attempts × 5s + backoff) and only one runs per
+     * notifier at a time, so a burst — readiness alone emits five events within seconds of a deploy —
+     * used to write every event after the first straight to the log as
+     * "dropped — a delivery to this notifier is still in progress", with nothing ever retrying it.
+     */
+    const rx = receiver({ delayMs: 120 });
+    const { server, base } = boot();
+    try {
+      const id = await register(base, rx.url);
+      for (let i = 0; i < 5; i++) events.emit('job.started', { jobId: `j${i}`, stack: 's', action: 'up' });
+
+      for (let i = 0; i < 200 && rx.got.length < 5; i++) await Bun.sleep(50);
+      expect(rx.got.length).toBe(5); // every one arrived…
+
+      const body = (await (
+        await fetch(`${base}/api/notifiers/${id}/deliveries`, { headers: H })
+      ).json()) as { deliveries: Array<{ status: string; error: string | null }> };
+      // …and none was recorded as dropped.
+      expect(body.deliveries.filter((d) => d.status === 'ok').length).toBe(5);
+      expect(body.deliveries.some((d) => (d.error ?? '').includes('still in progress'))).toBe(false);
+    } finally {
+      server.stop(true);
+      rx.server.stop(true);
+    }
+  }, 30_000);
+
+  test('a delivery can be replayed: same event id, fresh timestamp, marked as a replay', async () => {
+    const rx = receiver();
+    const { server, base } = boot();
+    try {
+      const id = await register(base, rx.url);
+      events.emit('job.leaked', { jobId: 'j1', stack: 'shopfront-pr-7', leakedAxes: ['db'] });
+      for (let i = 0; i < 100 && rx.got.length < 1; i++) await Bun.sleep(50);
+      expect(rx.got.length).toBe(1);
+      const first = JSON.parse(rx.got[0]!.body) as { id: string; event: string; data: { stack: string } };
+
+      const list = (await (
+        await fetch(`${base}/api/notifiers/${id}/deliveries`, { headers: H })
+      ).json()) as { deliveries: Array<{ id: number; replayable: boolean }>; queued: number };
+      expect(list.deliveries[0]!.replayable).toBe(true);
+
+      const r = await fetch(
+        `${base}/api/notifiers/${id}/deliveries/${list.deliveries[0]!.id}/redeliver`,
+        { method: 'POST', headers: H },
+      );
+      expect(r.status).toBe(200);
+      for (let i = 0; i < 100 && rx.got.length < 2; i++) await Bun.sleep(50);
+      expect(rx.got.length).toBe(2);
+
+      const replay = JSON.parse(rx.got[1]!.body) as { id: string; event: string; data: { stack: string } };
+      // The SAME event, so a receiver that already handled it dedupes on the id it saw before.
+      expect(replay.id).toBe(first.id);
+      expect(replay.event).toBe('job.leaked');
+      expect(replay.data.stack).toBe('shopfront-pr-7');
+      // …flagged, so a receiver that did NOT record it can tell this is a replay.
+      expect(rx.got[1]!.redelivery).toBe('1');
+      expect(rx.got[0]!.redelivery).toBeNull();
+      // Fresh timestamp: the signature covers it and receivers reject stale ones, so replaying the
+      // original stamp would be refused by a correct receiver.
+      expect(Number(rx.got[1]!.timestamp)).toBeGreaterThanOrEqual(Number(rx.got[0]!.timestamp));
+    } finally {
+      server.stop(true);
+      rx.server.stop(true);
+    }
+  }, 30_000);
+
+  test("another notifier's delivery cannot be replayed through this one", async () => {
+    const rx = receiver();
+    const { server, base } = boot();
+    try {
+      const a = await register(base, rx.url);
+      const b = await register(base, rx.url);
+      events.emit('job.started', { jobId: 'j1', stack: 's', action: 'up' });
+      for (let i = 0; i < 100 && rx.got.length < 2; i++) await Bun.sleep(50);
+
+      const aList = (await (
+        await fetch(`${base}/api/notifiers/${a}/deliveries`, { headers: H })
+      ).json()) as { deliveries: Array<{ id: number }> };
+      // A's delivery id, aimed at B.
+      const r = await fetch(
+        `${base}/api/notifiers/${b}/deliveries/${aList.deliveries[0]!.id}/redeliver`,
+        { method: 'POST', headers: H },
+      );
+      expect(r.status).toBe(404);
+      // …and an unauthenticated replay never happens at all.
+      const un = await fetch(`${base}/api/notifiers/${a}/deliveries/${aList.deliveries[0]!.id}/redeliver`, {
+        method: 'POST',
+      });
+      expect(un.status).toBe(401);
+    } finally {
+      server.stop(true);
+      rx.server.stop(true);
+    }
+  }, 30_000);
+});

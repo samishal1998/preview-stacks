@@ -891,6 +891,23 @@ $ curl -s https://api.preview.example.com/api/jobs/up-pr-123-1-apeq0d
 `leaked` is its own state for the same reason exit 2 is its own code, and `cancelled` for a related
 one — a person stopped the run, so it did not try and lose.
 
+### Use it from a script
+
+There is a client package, so a CI job does not have to hand-roll `fetch` calls and a job-polling
+loop:
+
+```ts
+import { createClient } from '@samyx/preview-stacks-client';
+
+const pstack = createClient({ baseUrl: process.env.PSTACK_API!, token: process.env.PSTACK_TOKEN });
+const job = await pstack.deployments.up(`pr-${pr}`, { PR: pr });
+const done = await pstack.waitForJob(job.id);          // returns the finished job, failure included
+const ready = await pstack.waitForReady(`pr-${pr}`, { vars: { PR: pr } });
+```
+
+Zero dependencies, and it ships `verifyWebhook` for the receiving end.
+See [packages/client/README.md](../packages/client/README.md).
+
 ### Stop a running job
 
 ```console

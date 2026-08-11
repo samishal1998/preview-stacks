@@ -2158,3 +2158,31 @@ input[type='radio']:disabled {
   flex: 1;
   border-top: 1px solid var(--line-soft);
 }
+
+/* ------------------------------------------------------------------ refresh */
+
+/*
+ * The turning arrow on a refresh. `will-change` is deliberately absent — one small glyph does not
+ * need a compositor layer, and reduced-motion callers get a static arrow rather than nothing (the
+ * button still says "Refreshing…", so the state survives the animation being off).
+ */
+.refresh-icon {
+  display: inline-block;
+  line-height: 1;
+}
+.refresh-icon.spin {
+  animation: refresh-spin 0.9s linear infinite;
+}
+@keyframes refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .refresh-icon.spin {
+    animation: none;
+  }
+}
+:root[data-motion='none'] .refresh-icon.spin {
+  animation: none;
+}

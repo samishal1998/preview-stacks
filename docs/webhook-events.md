@@ -40,6 +40,7 @@ Every delivery is an HTTP `POST` with a JSON body of exactly four fields:
 | `x-pstack-delivery` | same as `id` — the dedupe key |
 | `x-pstack-timestamp` | same as `at` |
 | `x-pstack-signature` | `sha256=` + HMAC (below) |
+| `x-pstack-redelivery` | `1` on a replay of an event already sent; absent otherwise |
 
 ### Verifying the signature
 
@@ -83,8 +84,19 @@ Bun.serve({
 - 3 attempts (immediately, then +1s, then +5s), 5s timeout each. Redirects are treated as failures,
   never followed.
 - **No ordering guarantee** across events or notifiers. Use `at` (and the job fields) to order.
-- Under pressure a delivery is **dropped and recorded as dropped** in the delivery log — never
-  queued unboundedly. One delivery per notifier is in flight at a time.
+- **One delivery per notifier is in flight at a time**, and further events **queue** behind it (up to
+  200 per notifier). A slow receiver therefore delays its own events and nobody else's.
+  Past that cap the oldest is dropped and recorded as dropped — bounded, so an outage cannot turn the
+  log into a disk leak, and visible, so it is never silent. (Before 0.25.0 there was no queue at all:
+  anything arriving while a delivery was in progress was dropped immediately, which made a burst —
+  the five readiness events one deploy emits — unsurvivable.)
+- **Redelivery.** Every delivery stores the envelope it sent, so
+  `POST /api/notifiers/:id/deliveries/:deliveryId/redeliver` (the **Redeliver** button in the
+  delivery log) replays it. The replay keeps the **original event `id`** — a receiver that already
+  processed it dedupes exactly as it should — with a **fresh timestamp and signature** (a correct
+  receiver rejects stale ones) and an `x-pstack-redelivery: 1` header so a receiver that never
+  recorded it can tell a replay from a new event. Rows written before 0.25.0 have no stored payload
+  and are refused rather than reconstructed.
 - Deleting a notifier stops pending retries.
 
 ## Chat types (`slack`, `discord`)

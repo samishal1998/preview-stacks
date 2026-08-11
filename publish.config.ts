@@ -43,7 +43,15 @@ export default {
    * package, so a user opting into the advanced UI installs it explicitly — and until it is
    * published, that command falls back to a workspace checkout.
    */
-  packages: { include: ['@samyx/preview-stacks', '@samyx/preview-stacks-ui'] },
+  packages: {
+    include: [
+      '@samyx/preview-stacks',
+      '@samyx/preview-stacks-ui',
+      // The API client. Its own package because the people who want it — a CI script calling the
+      // control plane — must not have to install a control plane to get it.
+      '@samyx/preview-stacks-client',
+    ],
+  },
 
   dependencies: {
     // Zero runtime dependencies by design — Bun's stdlib covers YAML parsing and HTTP. Everything

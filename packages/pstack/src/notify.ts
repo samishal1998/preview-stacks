@@ -52,6 +52,14 @@ const ATTEMPT_TIMEOUT_MS = 5_000;
 const RETRY_DELAYS_MS = [1_000, 5_000];
 /** Concurrent in-flight deliveries across all notifiers. */
 const MAX_IN_FLIGHT = 8;
+/**
+ * Events allowed to wait for ONE notifier before the oldest is dropped.
+ *
+ * Sized for a burst, not for an outage: a deploy emits under a dozen events, so this absorbs several
+ * deploys' worth back to back while a slow receiver catches up. A receiver that is down long enough
+ * to exceed it is not going to be saved by a bigger number — that is what redelivery is for.
+ */
+const MAX_QUEUED_PER_NOTIFIER = 200;
 
 export type DeliveryResult = {
   ok: boolean;
@@ -191,6 +199,16 @@ export function assertDeliverableUrl(raw: string): URL {
 
 // ── the webhook type ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The four fields a receiver gets, and the exact object stored for redelivery.
+ *
+ * One function so the two can never disagree: a stored "payload" that is not byte-identical to what
+ * was sent is a replay of something that never happened.
+ */
+export function envelope(e: PstackEvent): { id: string; event: string; at: number; data: Record<string, unknown> } {
+  return { id: e.id, event: e.event, at: e.at, data: e.data };
+}
+
 function sign(secret: string, timestamp: number, body: string): string {
   // Bun's builtin, keyed — byte-identical to node:crypto's createHmac, and this package carries zero
   // runtime dependencies.
@@ -214,7 +232,7 @@ export const webhookType: NotifierType = {
     const url = String(config.url);
     // SERIALISED EXACTLY ONCE. Signing one string and sending a separately-stringified object is how
     // signatures mysteriously fail against a receiver doing everything right.
-    const body = JSON.stringify({ id: e.id, event: e.event, at: e.at, data: e.data });
+    const body = JSON.stringify(envelope(e));
     try {
       const r = await fetch(url, {
         method: 'POST',
@@ -230,6 +248,10 @@ export const webhookType: NotifierType = {
           'x-pstack-delivery': e.id,
           'x-pstack-timestamp': String(e.at),
           'x-pstack-signature': sign(secret, e.at, body),
+          // A REPLAY of an event this receiver was already sent. It carries the original `id`, so a
+          // receiver that deduped it the first time still will; this header is how one that did NOT
+          // record it can tell the difference between a replay and a new event.
+          ...(e.replay ? { 'x-pstack-redelivery': '1' } : {}),
         },
         body,
         signal,
@@ -486,9 +508,31 @@ export class Dispatcher {
    * not everyone else.
    */
   #busy = new Set<number>();
+  /**
+   * PENDING EVENTS PER NOTIFIER — the fix for "dropped, a delivery is still in progress".
+   *
+   * That serialization is right, but the original response to it — drop the event and record the
+   * drop — was not. It made a burst unsurvivable: readiness alone emits `healthcheck.started`,
+   * `updated`, `finished`, `container.ready` and `stack.ready` within seconds of one deploy, while a
+   * single delivery can take 21s (3 attempts × 5s timeout plus backoff). Everything after the first
+   * event was written straight to the log as dropped, and nothing ever retried it — a notifier that
+   * worked perfectly reported four failures per deploy.
+   *
+   * So events QUEUE instead, and the queue is BOUNDED. The original objection to a queue was that
+   * one growing through an outage is a disk leak wearing a different hat; a hard cap answers that
+   * without throwing away the ordinary case. Past the cap the OLDEST is dropped and recorded as
+   * such — under sustained overload the recent events are the ones worth having, and the drop is
+   * still visible rather than silent.
+   */
+  #queues = new Map<number, Array<{ row: NotifierRow; event: PstackEvent }>>();
 
   constructor(hooks: Webhooks) {
     this.#hooks = hooks;
+  }
+
+  /** How many events are waiting, per notifier — so a UI can say "40 queued" instead of "nothing yet". */
+  queued(notifierId: number): number {
+    return this.#queues.get(notifierId)?.length ?? 0;
   }
 
   /** Bus listener. Returns immediately; every failure path is contained. */
@@ -500,18 +544,56 @@ export class Dispatcher {
       // A database that cannot be read must not break the operation that emitted.
       return;
     }
-    for (const row of rows) {
-      if (this.#busy.has(row.id)) {
-        this.#drop(row, e, 'dropped — a delivery to this notifier is still in progress');
+    for (const row of rows) this.#enqueue(row, e);
+    this.#pump();
+  }
+
+  /**
+   * Send this exact event to this notifier again, as a REPLAY.
+   *
+   * Queued like any other delivery — a redelivery of a hundred events must not be a hundred
+   * simultaneous sockets — and marked, so the receiver can tell a replay from the original.
+   */
+  redeliver(row: NotifierRow, e: PstackEvent): void {
+    this.#enqueue(row, e, true);
+    this.#pump();
+  }
+
+  #enqueue(row: NotifierRow, event: PstackEvent, replay = false): void {
+    const q = this.#queues.get(row.id) ?? [];
+    if (q.length >= MAX_QUEUED_PER_NOTIFIER) {
+      const oldest = q.shift();
+      if (oldest) {
+        this.#drop(
+          oldest.row,
+          oldest.event,
+          `dropped — ${MAX_QUEUED_PER_NOTIFIER} events already waiting for this notifier, and it is not keeping up`,
+        );
+      }
+    }
+    q.push({ row, event: replay ? { ...event, replay: true } : event });
+    this.#queues.set(row.id, q);
+  }
+
+  /**
+   * Start whatever can start now.
+   *
+   * Called after every enqueue and again as each delivery finishes, so a freed slot is used
+   * immediately rather than waiting for the next event to arrive and notice.
+   */
+  #pump(): void {
+    for (const [id, q] of this.#queues) {
+      if (q.length === 0) {
+        this.#queues.delete(id);
         continue;
       }
-      if (this.#inFlight >= MAX_IN_FLIGHT) {
-        this.#drop(row, e, 'dropped — too many deliveries in flight');
-        continue;
-      }
+      if (this.#busy.has(id)) continue;
+      if (this.#inFlight >= MAX_IN_FLIGHT) return; // globally saturated; the next `finally` re-pumps
+      const next = q.shift()!;
+      if (q.length === 0) this.#queues.delete(id);
       this.#inFlight++;
-      this.#busy.add(row.id);
-      void this.#deliver(row, e)
+      this.#busy.add(id);
+      void this.#deliver(next.row, next.event)
         .catch(() => {
           // Last resort. A notifier deleted mid-delivery makes the delivery INSERT violate its
           // foreign key, and with `PRAGMA foreign_keys = ON` that throws inside a voided promise —
@@ -519,7 +601,8 @@ export class Dispatcher {
         })
         .finally(() => {
           this.#inFlight--;
-          this.#busy.delete(row.id);
+          this.#busy.delete(id);
+          this.#pump();
         });
     }
   }
@@ -540,7 +623,7 @@ export class Dispatcher {
     const secret = this.#hooks.secretOf(row.id);
     if (secret === null) return; // deleted between the read and here
 
-    const deliveryId = this.#hooks.startDelivery(row.id, e.id, e.event);
+    const deliveryId = this.#hooks.startDelivery(row.id, e.id, e.event, envelope(e));
     let last: DeliveryResult = { ok: false, error: 'not attempted' };
     let attempt = 0;
 

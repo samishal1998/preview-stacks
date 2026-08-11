@@ -8,16 +8,27 @@
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
 import type { Control } from '../api/types';
-import { leakedJobs, state, summary } from '../composables/useControlPlane';
+import { leakedJobs, loadDeployments, loadJobs, state, summary } from '../composables/useControlPlane';
 import { usePolling } from '../composables/usePolling';
 import { actionLabel, ago, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import InfoHint from '../components/InfoHint.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const control = ref<Control | null>(null);
 const controlError = ref('');
 const controlLoaded = ref(false);
+
+/**
+ * Everything this page shows, in one press.
+ *
+ * The dashboard is four panels from three sources, so refreshing one of them would leave the others
+ * looking current while showing older data — worse than not refreshing at all.
+ */
+async function refreshAll(): Promise<void> {
+  await Promise.all([loadControl(), loadDeployments(), loadJobs()]);
+}
 
 async function loadControl(): Promise<void> {
   const r = await api.get<Control>('/api/control');
@@ -53,6 +64,8 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
         <h1>Dashboard</h1>
         <div class="sub">Everything running on this host.</div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="refreshAll" />
     </div>
 
     <!--

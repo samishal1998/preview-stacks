@@ -104,6 +104,12 @@ export type PstackEvent = {
    * and never the outcome object. See `docs/secret-exposure.md` for why that channel is the way it is.
    */
   data: Record<string, unknown>;
+  /**
+   * This is a REDELIVERY of an event already sent once — set only by `Dispatcher.redeliver`, never
+   * by `emit`. It travels as a header, not a body field: the envelope is a compatibility contract
+   * and a fifth field would change the bytes every receiver already verifies a signature over.
+   */
+  replay?: boolean;
 };
 
 /** May be async — the bus handles a returned promise's rejection; see `emit`. */

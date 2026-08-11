@@ -12,7 +12,7 @@
     },
     "apps/ui": {
       "name": "@samyx/preview-stacks-ui",
-      "version": "0.16.0",
+      "version": "0.23.0",
       "dependencies": {
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
@@ -28,9 +28,17 @@
         "vue-tsc": "^2.2.0",
       },
     },
+    "packages/client": {
+      "name": "@samyx/preview-stacks-client",
+      "version": "0.24.0",
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.2",
+      },
+    },
     "packages/pstack": {
       "name": "@samyx/preview-stacks",
-      "version": "0.16.0",
+      "version": "0.23.0",
       "bin": {
         "pstack": "./dist/cli.js",
       },
@@ -237,6 +245,8 @@
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.62.3", "", { "os": "win32", "cpu": "x64" }, "sha512-MOG/3gTOn4Fwf574RVOaY61I5o6P90legkFADiTyn1hyjNydT+cerU2rLUwPdZkKKyJ+iT+K9p7WXK4LM1Ka6g=="],
 
     "@samyx/preview-stacks": ["@samyx/preview-stacks@workspace:packages/pstack"],
+
+    "@samyx/preview-stacks-client": ["@samyx/preview-stacks-client@workspace:packages/client"],
 
     "@samyx/preview-stacks-ui": ["@samyx/preview-stacks-ui@workspace:apps/ui"],
 

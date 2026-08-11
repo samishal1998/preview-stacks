@@ -22,6 +22,7 @@ import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const notifiers = ref<NotifierRow[]>([]);
 const meta = ref<NotifierMeta | null>(null);
@@ -38,6 +39,9 @@ const formError = ref('');
 
 const openDeliveries = ref<number | null>(null);
 const deliveries = ref<DeliveryRow[]>([]);
+/** How many events are waiting for the open notifier — a quiet one and a backed-up one look alike. */
+const queued = ref(0);
+const redelivering = ref(0);
 
 /** Server-driven, so a new notifier type appears here with no change to this file. */
 const typeOptions = computed(() => (meta.value?.types ?? []).map((x) => ({ value: x.kind, label: x.label })));
@@ -154,13 +158,51 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
     openDeliveries.value = null;
     return;
   }
-  const r = await api.get<{ deliveries: DeliveryRow[] }>(`/api/notifiers/${n.id}/deliveries`);
+  const r = await api.get<{ deliveries: DeliveryRow[]; queued?: number }>(
+    `/api/notifiers/${n.id}/deliveries`,
+  );
   if (!r.ok) {
     listError.value = problem(r, 'load the delivery log');
     return;
   }
   deliveries.value = r.body.deliveries ?? [];
+  queued.value = r.body.queued ?? 0;
   openDeliveries.value = n.id;
+}
+
+/** Re-read the open delivery log — it changes on its own as queued events go out. */
+async function reloadDeliveries(): Promise<void> {
+  const id = openDeliveries.value;
+  if (id === null) return;
+  const r = await api.get<{ deliveries: DeliveryRow[]; queued?: number }>(
+    `/api/notifiers/${id}/deliveries`,
+  );
+  if (!r.ok) return;
+  deliveries.value = r.body.deliveries ?? [];
+  queued.value = r.body.queued ?? 0;
+}
+
+/**
+ * Send this event again.
+ *
+ * The recovery path for a receiver that was down or deployed broken. It replays the stored envelope
+ * with the ORIGINAL event id, so a receiver that already processed it dedupes — which is why the
+ * toast says "queued" rather than "delivered": whether it lands is the receiver's business, and the
+ * log below is where the answer shows up.
+ */
+async function redeliver(d: DeliveryRow): Promise<void> {
+  if (openDeliveries.value === null) return;
+  redelivering.value = d.id;
+  const r = await api.post<{ note?: string }>(
+    `/api/notifiers/${openDeliveries.value}/deliveries/${d.id}/redeliver`,
+  );
+  redelivering.value = 0;
+  if (!r.ok) {
+    toast('error', problem(r, 'redeliver this event'));
+    return;
+  }
+  toast('ok', r.body.note ?? 'Queued for redelivery.');
+  await reloadDeliveries();
 }
 </script>
 
@@ -178,6 +220,8 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
           </InfoHint>
         </div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="load" />
     </div>
 
     <ErrorNote v-if="listError" :text="listError" title="Could not load the notifiers." />
@@ -268,6 +312,17 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
               </tr>
               <tr v-if="openDeliveries === n.id" :key="`d${n.id}`">
                 <td colspan="4">
+                  <div class="row" style="margin-bottom: var(--s2)">
+                    <span v-if="queued > 0" class="badge busy">
+                      <span class="dot pulse" />{{ queued }} queued
+                    </span>
+                    <span class="mute" style="font-size: var(--t-xs)">
+                      Events wait their turn per notifier — one delivery at a time, so a slow
+                      receiver cannot starve the others.
+                    </span>
+                    <span class="grow" />
+                    <RefreshButton :run="reloadDeliveries" />
+                  </div>
                   <ul v-if="deliveries.length" class="kvlist">
                     <li v-for="d in deliveries" :key="d.id">
                       <span class="k">
@@ -286,6 +341,22 @@ async function showDeliveries(n: NotifierRow): Promise<void> {
                           {{ d.error }}
                         </div>
                       </span>
+                      <!--
+                        Only when the envelope was actually stored. A row from before payloads were
+                        captured has nothing to replay, and a button that explains itself after the
+                        click is worse than one that is not offered.
+                      -->
+                      <ActionButton
+                        v-if="d.replayable"
+                        class="sm"
+                        variant="ghost"
+                        :pending="redelivering === d.id"
+                        confirm="Send it again?"
+                        title="Sends this exact event again, with its original id so a receiver that already handled it can dedupe."
+                        @run="redeliver(d)"
+                      >
+                        Redeliver
+                      </ActionButton>
                     </li>
                   </ul>
                   <p v-else class="mute">Nothing delivered yet.</p>

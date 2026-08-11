@@ -38,6 +38,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import HelpModal from '../components/HelpModal.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 /**
  * The live routes, from container labels.
@@ -82,6 +83,11 @@ const STARTER = `http:
         sourceRange:
           - 203.0.113.0/24
 `;
+
+/** Both halves: the file provider's directory AND the routes Traefik actually has. */
+async function refreshAll(): Promise<void> {
+  await Promise.all([loadList(), loadLive()]);
+}
 
 async function loadList(): Promise<void> {
   const r = await api.get<RoutingListResponse>('/api/routing');
@@ -237,6 +243,8 @@ async function remove(): Promise<void> {
       </div>
       <span class="grow" />
       <button v-if="writable" class="btn primary" @click="startNew">New file</button>
+      <span class="grow" />
+      <RefreshButton :run="refreshAll" />
     </div>
 
     <ErrorNote v-if="listError" :text="listError" title="Could not load the routing files." />

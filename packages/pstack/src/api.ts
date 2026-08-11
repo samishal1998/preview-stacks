@@ -36,7 +36,8 @@
  *   PATCH  /api/notifiers/:id             { enabled }
  *   DELETE /api/notifiers/:id             forget it (deliveries cascade)
  *   POST   /api/notifiers/:id/test        send a synthetic delivery now
- *   GET    /api/notifiers/:id/deliveries  recent attempts
+ *   GET    /api/notifiers/:id/deliveries  recent attempts (+ how many are queued)
+ *   POST   /api/notifiers/:id/deliveries/:deliveryId/redeliver   send that event again
  *   GET    /api/notifiers/meta            event names + per-type form fields (drives the UI)
  *   GET    /api/registries                private-registry credentials: hosts + usernames, NEVER secrets
  *   PUT    /api/registries/:host           store one  { username, password }  (write-only)
@@ -109,7 +110,7 @@ import { Store } from './store.ts';
 import { Auth, AuthError, type Principal } from './auth.ts';
 import { Webhooks, WebhookError } from './webhooks.ts';
 import { Dispatcher, NotifierError, TYPES, validateConfig } from './notify.ts';
-import { EVENTS, WILDCARD, events } from './events.ts';
+import { EVENTS, WILDCARD, events, type EventName } from './events.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
@@ -1726,6 +1727,67 @@ export function createServer(opts: ServerOptions) {
           return json({ error: 'use GET or POST' }, { status: 405 });
         }
 
+        /**
+         * Send a past delivery's event to its notifier AGAIN.
+         *
+         * The recovery path for a receiver that was down, misconfigured, or deployed broken — before
+         * this, the only way to re-fire an event was to re-run the deploy that caused it.
+         *
+         * WHAT IS REPLAYED is the stored envelope, byte for byte, keeping the original event `id` so
+         * a receiver that already processed it still dedupes. Two deliberate differences: the
+         * timestamp is re-stamped to now (the signature covers it, and receivers are told to reject
+         * stale ones — an hour-old replay would be refused by a correct receiver), and the request
+         * carries `x-pstack-redelivery: 1`.
+         */
+        const rdl = /^\/api\/notifiers\/(\d+)\/deliveries\/(\d+)\/redeliver$/.exec(path);
+        if (rdl) {
+          if (req.method !== 'POST') return json({ error: 'use POST' }, { status: 405 });
+          const nid = Number(rdl[1]);
+          const did = Number(rdl[2]);
+          const row = hooks.get(nid);
+          if (!row) return json({ error: `no such notifier: ${nid}` }, { status: 404 });
+          const d = hooks.deliveryWithPayload(did);
+          // Belongs-to check, not just existence: `/notifiers/2/deliveries/9/redeliver` must not fire
+          // notifier 1's event at notifier 2.
+          if (!d || d.notifierId !== nid) {
+            return json({ error: `no delivery ${did} for notifier ${nid}` }, { status: 404 });
+          }
+          if (!d.payload) {
+            return json(
+              {
+                error:
+                  `delivery ${did} has no stored payload — it was recorded before payloads were ` +
+                  `captured (0.25.0), or it was dropped before an envelope existed. There is nothing ` +
+                  `to replay, and inventing one would send an event that never happened.`,
+              },
+              { status: 409 },
+            );
+          }
+          let stored: { id: string; event: string; data: Record<string, unknown> };
+          try {
+            stored = JSON.parse(d.payload);
+          } catch {
+            return json({ error: `delivery ${did} has an unreadable payload` }, { status: 409 });
+          }
+          dispatcher.redeliver(row, {
+            id: stored.id,
+            event: stored.event as EventName,
+            // NOW, not the original: the signature covers the timestamp and a receiver is told to
+            // reject stale ones, so replaying the old stamp would be refused by a correct receiver.
+            at: Date.now(),
+            data: stored.data ?? {},
+          });
+          return json({
+            redelivered: did,
+            notifier: nid,
+            event: stored.event,
+            eventId: stored.id,
+            note:
+              'Queued. It carries the original event id, so a receiver that already processed it ' +
+              'will dedupe — and x-pstack-redelivery: 1 so one that did not can tell.',
+          });
+        }
+
         const nm = /^\/api\/notifiers\/(\d+)(?:\/(test|deliveries))?$/.exec(path);
         if (nm) {
           const nid = Number(nm[1]);
@@ -1748,7 +1810,15 @@ export function createServer(opts: ServerOptions) {
             return json({ notifier: hooks.get(nid) });
           }
           if (sub === 'deliveries' && req.method === 'GET') {
-            return json({ deliveries: hooks.deliveries(nid) });
+            return json({
+              deliveries: hooks
+                .deliveries(nid)
+                // `replayable` rather than making the UI guess from the age of the row: whether a
+                // payload was stored is a fact the server has and the client cannot infer.
+                .map((d) => ({ ...d, replayable: hooks.deliveryWithPayload(d.id)?.payload != null })),
+              // What is WAITING. Without it a quiet notifier and a backed-up one look identical.
+              queued: dispatcher.queued(nid),
+            });
           }
           if (sub === 'test' && req.method === 'POST') {
             // Sent DIRECTLY, never through the bus: emitting a real event to test one notifier would

@@ -246,16 +246,44 @@ export class Webhooks {
 
   // ── deliveries ────────────────────────────────────────────────────────────────────────────────
 
-  /** Open a delivery row. Everything needed is captured NOW — the source job may be evicted later. */
-  startDelivery(notifierId: number, eventId: string, event: string): number {
+  /**
+   * Open a delivery row. Everything needed is captured NOW — the source job may be evicted later.
+   *
+   * `payload` is the whole envelope as it was sent, and it is what makes REDELIVERY possible: a row
+   * that records only "job.failed at 11:04 failed" can be described but not replayed, so recovering
+   * from a receiver outage meant re-running the deploy. It is the event, not the request: identity
+   * and status only, the same fields any subscriber already received (see events.ts).
+   */
+  startDelivery(notifierId: number, eventId: string, event: string, payload?: unknown): number {
     const now = Date.now();
     const r = this.#store.db
       .query(
-        `INSERT INTO deliveries (notifier_id, event_id, event, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'pending', ?, ?) RETURNING id`,
+        `INSERT INTO deliveries (notifier_id, event_id, event, status, created_at, updated_at, payload)
+         VALUES (?, ?, ?, 'pending', ?, ?, ?) RETURNING id`,
       )
-      .get(notifierId, eventId, event, now, now) as { id: number };
+      .get(notifierId, eventId, event, now, now, payload === undefined ? null : JSON.stringify(payload)) as {
+      id: number;
+    };
     return r.id;
+  }
+
+  /**
+   * One delivery, with its stored payload — the read behind redelivery.
+   *
+   * `payload` is null for rows written before 0.25.0 and for drops that never had an envelope. The
+   * caller must refuse those by name rather than inventing an event to replay.
+   */
+  deliveryWithPayload(
+    id: number,
+  ): { id: number; notifierId: number; eventId: string; event: string; payload: string | null } | null {
+    const r = this.#store.db
+      .query('SELECT id, notifier_id, event_id, event, payload FROM deliveries WHERE id = ?')
+      .get(id) as
+      | { id: number; notifier_id: number; event_id: string; event: string; payload: string | null }
+      | undefined;
+    return r
+      ? { id: r.id, notifierId: r.notifier_id, eventId: r.event_id, event: r.event, payload: r.payload }
+      : null;
   }
 
   finishDelivery(

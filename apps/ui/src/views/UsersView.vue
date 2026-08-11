@@ -24,6 +24,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SkeletonList from '../components/SkeletonList.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 type User = { id: number; username: string; role: string; createdAt: number };
 type Token = { id: number; name: string; createdAt: number; lastUsedAt: number | null };
@@ -151,6 +152,8 @@ async function removeToken(t: Token): Promise<void> {
           </InfoHint>
         </div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="load" />
     </div>
 
     <ErrorNote v-if="listError" :text="listError" title="Something went wrong." />

@@ -27,6 +27,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import HelpModal from '../components/HelpModal.vue';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const entries = ref<RegistryEntry[]>([]);
 const helpers = ref<string[]>([]);
@@ -115,6 +116,8 @@ async function forget(registry: string): Promise<void> {
           </InfoHint>
         </div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="load" />
     </div>
 
     <ErrorNote v-if="listError" :text="listError" title="Could not load the registry credentials." />

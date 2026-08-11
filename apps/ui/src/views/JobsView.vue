@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** Job history. Polled by the shell already, so this view only filters what is in memory. */
 import { computed, ref } from 'vue';
-import { state } from '../composables/useControlPlane';
+import { loadJobs, state } from '../composables/useControlPlane';
 import { actionLabel, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
@@ -9,6 +9,7 @@ import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
 import InfoHint from '../components/InfoHint.vue';
 import type { JobState } from '../api/types';
+import RefreshButton from '../components/RefreshButton.vue';
 
 const q = ref('');
 const only = ref<'all' | JobState>('all');
@@ -37,6 +38,8 @@ const rows = computed(() => {
           </InfoHint>
         </div>
       </div>
+      <span class="grow" />
+      <RefreshButton :run="loadJobs" />
     </div>
 
     <section class="panel">
