@@ -1161,6 +1161,23 @@ $ BUN_INSTALL=/usr/local bun install -g @samyx/preview-stacks@latest
 $ pstack upgrade --resume                # phase 2 only: rebuild + re-init, token intact
 ```
 
+#### If an upgrade dropped your advanced UI
+
+0.25.1 and 0.25.2 detected the UI mode by looking for a compose service named `pstack-ui` — a name
+that only ever appears as a Traefik *router*, so **every host read as `basic`** and the upgrade
+removed the advanced UI container it was meant to preserve. Fixed in 0.25.3, which reads the real
+service name (`advanced-ui`). To put a flipped host back:
+
+```console
+$ pstack ui advanced
+```
+
+That switches which UI `control.<domain>` serves, reusing the stored token and domain, and building
+the SPA image on the way in. It does not touch the version — that is `upgrade` — and it recreates
+nothing when the host is already in the mode you asked for. `pstack ui basic` goes back; it builds
+nothing, since the API already carries the embedded UI. `pstack upgrade --ui advanced` does the same
+override as part of an upgrade.
+
 It reads `<DATA_DIR>/control/.env` for the **existing token, domain and ACME email**, and reads the
 generated `control/docker-compose.yml` for the **challenge mode and whether the advanced UI is
 running** — then installs the new version, rebuilds the image (or both images), and re-runs `init`

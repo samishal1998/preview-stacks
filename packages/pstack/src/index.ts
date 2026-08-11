@@ -53,7 +53,7 @@ export {
 } from './notify.ts';
 export type { DeliveryResult, NotifierField, NotifierType } from './notify.ts';
 
-export { readControlState, planUpgrade, upgrade, UpgradeError } from './upgrade.ts';
+export { readControlState, planUpgrade, planUiSwitch, switchUi, upgrade, UpgradeError } from './upgrade.ts';
 export type { ControlState, UpgradeStep } from './upgrade.ts';
 export { Store } from './store.ts';
 export type { UserRow } from './store.ts';

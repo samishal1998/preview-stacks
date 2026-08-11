@@ -113,8 +113,17 @@ export async function readControlState(dataDir: string): Promise<ControlState> {
     acmeEmail: need('ACME_EMAIL'),
     dnsProvider: env.get('DNS_PROVIDER') ?? '',
     challenge: /dnschallenge/i.test(compose) ? 'dns01' : 'http01',
-    // The advanced UI is its own service in the generated file; `basic` embeds the UI in the API.
-    ui: /^\s{2}pstack-ui:/m.test(compose) ? 'advanced' : 'basic',
+    /*
+     * The service init injects is `advanced-ui`. It used to look for `pstack-ui:` — which appears in
+     * every generated file as a Traefik ROUTER name (`traefik.http.routers.pstack-ui.rule=…`), never
+     * as a service key — so the anchored pattern matched nothing, every host read as `basic`, and an
+     * upgrade silently removed the advanced UI it was supposed to preserve.
+     *
+     * The fixture that "passed" was hand-written with the name I assumed. The test now generates a
+     * real control directory with `init` and reads THAT, which is the only version of this check that
+     * could have failed honestly.
+     */
+    ui: /^\s{2}advanced-ui:/m.test(compose) ? 'advanced' : 'basic',
   };
 }
 
@@ -136,6 +145,22 @@ export function installPrefixFor(binPath: string | null): string | null {
 }
 
 export type UpgradeStep = { label: string; cmd: string; env?: Record<string, string> };
+
+/**
+ * The `init` flags that reproduce a host's current configuration.
+ *
+ * One builder for both the upgrade and the UI switch: two copies would drift, and the failure mode of
+ * a drifted copy here is a re-init that quietly changes something nobody asked to change.
+ */
+function initFlags(state: ControlState): string {
+  return [
+    `--domain ${shq(state.domain)}`,
+    `--acme-email ${shq(state.acmeEmail)}`,
+    `--challenge ${state.challenge}`,
+    ...(state.challenge === 'dns01' && state.dnsProvider ? [`--dns-provider ${shq(state.dnsProvider)}`] : []),
+    ...(state.ui === 'advanced' ? ['--ui advanced'] : []),
+  ].join(' ');
+}
 
 /**
  * The commands, in order, without running any of them.
@@ -171,14 +196,6 @@ export function planUpgrade(args: {
     ];
   }
 
-  const initFlags = [
-    `--domain ${shq(state.domain)}`,
-    `--acme-email ${shq(state.acmeEmail)}`,
-    `--challenge ${state.challenge}`,
-    ...(state.challenge === 'dns01' && state.dnsProvider ? [`--dns-provider ${shq(state.dnsProvider)}`] : []),
-    ...(state.ui === 'advanced' ? ['--ui advanced'] : []),
-  ].join(' ');
-
   return [
     { label: 'build the control image', cmd: 'pstack build-image' },
     ...(state.ui === 'advanced'
@@ -186,12 +203,76 @@ export function planUpgrade(args: {
       : []),
     {
       label: 're-run init (same domain, same token)',
-      cmd: `pstack init ${initFlags}`,
+      cmd: `pstack init ${initFlags(state)}`,
       // THE line this command exists for. Without it `init` generates a new token and every CI job
       // holding the old one starts getting 401s.
       env: { PSTACK_TOKEN: state.token },
     },
   ];
+}
+
+/**
+ * The steps for changing ONLY the UI mode.
+ *
+ * Not `planUpgrade`'s resume list: that rebuilds the control image, which takes minutes and has
+ * nothing to do with which UI is served. Switching to `advanced` builds the SPA image (init refuses
+ * without it, by name); switching back to `basic` builds nothing, because the API already carries
+ * the embedded UI.
+ */
+export function planUiSwitch(state: ControlState): UpgradeStep[] {
+  return [
+    ...(state.ui === 'advanced'
+      ? [{ label: 'build the advanced UI image', cmd: 'pstack build-image --ui' }]
+      : []),
+    {
+      label: `re-run init with the ${state.ui} UI`,
+      cmd: `pstack init ${initFlags(state)}`,
+      // Same reason as an upgrade: without it `init` mints a new token and every CI job breaks.
+      env: { PSTACK_TOKEN: state.token },
+    },
+  ];
+}
+
+/**
+ * Switch a host between the embedded UI and the standalone SPA container.
+ *
+ * Everything needed is already on disk, which is the whole point — the alternative is re-typing
+ * `init`'s full command line with the token, and getting the token wrong is how a working host stops
+ * answering CI.
+ */
+export async function switchUi(opts: {
+  dataDir: string;
+  ui: 'basic' | 'advanced';
+  runner: Runner;
+  log?: (line: string) => void;
+}): Promise<{ changed: boolean; steps: UpgradeStep[] }> {
+  const say = opts.log ?? ((l: string) => console.log(l));
+  const current = await readControlState(opts.dataDir);
+  if (current.ui === opts.ui) {
+    // No container recreation for a no-op: recreating the control stack is a brief outage, and
+    // "already advanced" is an answer, not a reason to cause one.
+    say(`Already serving the ${opts.ui} UI. Nothing to do.`);
+    return { changed: false, steps: [] };
+  }
+
+  const state: ControlState = { ...current, ui: opts.ui };
+  const steps = planUiSwitch(state);
+  say(`${current.ui} UI → ${opts.ui} UI   (${state.domain})`);
+  for (const step of steps) {
+    say(`  → ${step.label}`);
+    const r = await opts.runner.run(step.cmd, {
+      env: { ...process.env, ...step.env } as Record<string, string>,
+      label: step.label,
+    });
+    if (!r.ok && !r.skipped) {
+      throw new UpgradeError(
+        `${step.label} failed (exit ${r.code}).\n` +
+          `${(r.stderr || r.stdout).trim().split('\n').slice(-8).join('\n')}`,
+      );
+    }
+    if (r.stdout.trim()) say(indent(r.stdout));
+  }
+  return { changed: true, steps };
 }
 
 /**
@@ -206,13 +287,22 @@ export async function upgrade(opts: {
   /** npm dist-tag or exact version. `latest` is resolved by bun, not by us. */
   target?: string;
   phase?: 'install' | 'resume';
+  /**
+   * Force the UI mode instead of reading it back.
+   *
+   * Exists because detection was wrong once: a host whose advanced UI was dropped by a bad upgrade
+   * now reads as `basic` — truthfully, since that IS its current state — so putting it back needs a
+   * way to say so without hand-writing the whole `init` line and its token.
+   */
+  ui?: 'basic' | 'advanced';
   runner: Runner;
   log?: (line: string) => void;
 }): Promise<{ from: string; to: string; steps: UpgradeStep[] }> {
   const say = opts.log ?? ((l: string) => console.log(l));
   const phase = opts.phase ?? 'install';
   const target = opts.target ?? 'latest';
-  const state = await readControlState(opts.dataDir);
+  const detected = await readControlState(opts.dataDir);
+  const state: ControlState = opts.ui ? { ...detected, ui: opts.ui } : detected;
 
   // `Bun.which` resolves the same PATH the re-exec below will use, so the prefix and the handoff
   // can never disagree about which `pstack` is being talked about.
@@ -220,7 +310,10 @@ export async function upgrade(opts: {
   const steps = planUpgrade({ phase, target, state, binPath });
 
   if (phase === 'install') {
-    say(`pstack ${pkg.version} → ${target}   (${state.domain}, ${state.challenge}, ${state.ui} UI)`);
+    say(
+      `pstack ${pkg.version} → ${target}   (${state.domain}, ${state.challenge}, ${state.ui} UI` +
+        `${opts.ui && opts.ui !== detected.ui ? ` — overriding the detected ${detected.ui}` : ''})`,
+    );
     if (!binPath) {
       say('  note: `pstack` is not on PATH, so the global install prefix could not be derived.');
       say('        bun will use its own default, which may not be where this binary lives.');

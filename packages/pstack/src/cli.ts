@@ -61,6 +61,8 @@ type Parsed = {
   to: string;
   /** upgrade: phase 2, executed by the NEWLY installed binary. See upgrade.ts. */
   resume: boolean;
+  /** The second positional word, e.g. the mode in `pstack ui advanced`. */
+  sub: string;
 };
 
 function parseArgs(argv: string[]): Parsed {
@@ -93,6 +95,7 @@ function parseArgs(argv: string[]): Parsed {
     yes: false,
     to: 'latest',
     resume: false,
+    sub: '',
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -152,6 +155,7 @@ function parseArgs(argv: string[]): Parsed {
     else rest.push(a);
   }
   p.cmd = rest[0] ?? '';
+  p.sub = rest[1] ?? '';
   return p;
 }
 
@@ -160,7 +164,7 @@ function usage(): void {
     [
       `pstack ${pkg.version} — declarative lifecycle for ephemeral preview stacks`,
       '',
-      'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|serve> [flags]',
+      'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|serve> [flags]',
       '',
       'Flags:',
       '  -f, --file <path>   spec file (default: preview.yml)',
@@ -188,8 +192,13 @@ function usage(): void {
       '            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)',
       '',
       'upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]',
+      '            [--ui basic|advanced to override what it detects]',
       '            Reads control/.env for the token, domain and email so NOTHING rotates, rebuilds',
       '            the image and re-runs init. Over SSH — never from inside the control stack.',
+      '',
+      'ui:         pstack ui <basic|advanced>   switch which UI control.<domain> serves.',
+      '            Reuses the stored token and domain; builds the SPA image when switching to',
+      '            advanced. No version change — that is `upgrade`.',
       '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
       '            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)',
@@ -229,6 +238,7 @@ const COMMANDS = new Set([
   'cloud-init',
   'dockerfile',
   'upgrade',
+  'ui',
 ]);
 
 if (!COMMANDS.has(args.cmd)) {
@@ -464,6 +474,28 @@ switch (args.cmd) {
     process.exit(EXIT.ok);
   }
 
+  case 'ui': {
+    // Switching UI mode used to mean re-typing init's whole command line — including the token,
+    // which is the one thing you cannot get wrong without breaking every CI job on the host.
+    const mode = args.sub || (process.argv.includes('--ui') ? args.ui : '');
+    if (mode !== 'basic' && mode !== 'advanced') {
+      fail('usage: pstack ui <basic|advanced>   (basic = embedded in the API, advanced = the SPA container)');
+    }
+    const { switchUi, UpgradeError } = await import('./upgrade.ts');
+    const { dataDir } = await import('./registry.ts');
+    try {
+      const r = await switchUi({ dataDir: dataDir(), ui: mode, runner });
+      if (r.changed && !args.dryRun) {
+        console.log('');
+        console.log(`  Now serving the ${mode} UI on control.<domain>. The token and domain are unchanged.`);
+      }
+    } catch (err) {
+      if (err instanceof UpgradeError) fail(err.message);
+      throw err;
+    }
+    process.exit(EXIT.ok);
+  }
+
   case 'upgrade': {
     const { upgrade, UpgradeError } = await import('./upgrade.ts');
     const { dataDir } = await import('./registry.ts');
@@ -472,6 +504,9 @@ switch (args.cmd) {
         dataDir: dataDir(),
         target: args.to,
         phase: args.resume ? 'resume' : 'install',
+        // Only when typed: `ui` defaults to 'basic' in the parser, and passing that unconditionally
+        // would override the detection with a default and re-create the exact bug this fixes.
+        ...(process.argv.includes('--ui') ? { ui: args.ui } : {}),
         runner,
       });
     } catch (err) {
