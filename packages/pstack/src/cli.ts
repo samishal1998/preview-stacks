@@ -56,6 +56,10 @@ type Parsed = {
   configRepo: string;
   out: string;
   yes: boolean;
+  /** upgrade: the npm version or dist-tag to move to. */
+  to: string;
+  /** upgrade: phase 2, executed by the NEWLY installed binary. See upgrade.ts. */
+  resume: boolean;
 };
 
 function parseArgs(argv: string[]): Parsed {
@@ -86,6 +90,8 @@ function parseArgs(argv: string[]): Parsed {
     distro: process.env.PSTACK_DISTRO ?? 'ubuntu',
     out: '',
     yes: false,
+    to: 'latest',
+    resume: false,
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -106,6 +112,8 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--config-repo') p.configRepo = argv[++i] ?? p.configRepo;
     else if (a === '-o' || a === '--out') p.out = argv[++i] ?? p.out;
     else if (a === '-y' || a === '--yes') p.yes = true;
+    else if (a === '--to') p.to = argv[++i] ?? p.to;
+    else if (a === '--resume') p.resume = true;
     else if (a === '--ui') {
       // `build-image --ui` is a switch (build the SPA image); `init --ui <mode>` takes a value.
       // Peek rather than always consuming, so neither form has to be spelled differently.
@@ -147,7 +155,7 @@ function usage(): void {
     [
       'pstack — declarative lifecycle for ephemeral preview stacks',
       '',
-      'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|serve> [flags]',
+      'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|serve> [flags]',
       '',
       'Flags:',
       '  -f, --file <path>   spec file (default: preview.yml)',
@@ -173,6 +181,10 @@ function usage(): void {
       'cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui]',
       '            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)',
       '',
+      'upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]',
+      '            Reads control/.env for the token, domain and email so NOTHING rotates, rebuilds',
+      '            the image and re-runs init. Over SSH — never from inside the control stack.',
+      '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
       '            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)',
       '',
@@ -194,7 +206,7 @@ if (!args.cmd) {
 
 // `init` and `serve` are control-plane commands: they operate on the HOST and on the registry,
 // not on a single spec file, so neither should fail because ./preview.yml happens to be absent.
-const SPEC_FREE = new Set(['init', 'serve', 'build-image', 'cloud-init', 'dockerfile']);
+const SPEC_FREE = new Set(['init', 'serve', 'build-image', 'cloud-init', 'dockerfile', 'upgrade']);
 
 let spec: Awaited<ReturnType<typeof loadSpec>> | undefined;
 if (!SPEC_FREE.has(args.cmd)) {
@@ -418,6 +430,32 @@ switch (args.cmd) {
       dryRun: args.dryRun,
       runner,
     });
+    process.exit(EXIT.ok);
+  }
+
+  case 'upgrade': {
+    const { upgrade, UpgradeError } = await import('./upgrade.ts');
+    const { dataDir } = await import('./registry.ts');
+    try {
+      await upgrade({
+        dataDir: dataDir(),
+        target: args.to,
+        phase: args.resume ? 'resume' : 'install',
+        runner,
+      });
+    } catch (err) {
+      if (err instanceof UpgradeError) fail(err.message);
+      throw err;
+    }
+    // Never claim an upgrade a dry run did not perform.
+    if (args.dryRun) {
+      console.log('');
+      console.log('  Dry run — nothing was installed, built or recreated.');
+    } else if (!args.resume) {
+      console.log('');
+      console.log('  Upgraded. The control stack was recreated with the same token and domain.');
+      console.log('  Check it: curl -sf https://<domain>/api/health   (or `docker compose -p pstack-control ps`)');
+    }
     process.exit(EXIT.ok);
   }
 

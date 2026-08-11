@@ -1139,6 +1139,39 @@ someone loosened to `0644` is tightened back on the next run.)
 PSTACK_TOKEN=<new> pstack init --domain preview.example.com --acme-email <you>@example.com
 ```
 
+### Upgrading a host
+
+```console
+$ ssh preview-host
+$ pstack upgrade                 # to the latest published version
+$ pstack upgrade --to 0.25.1     # or an exact one
+$ pstack upgrade -n              # print the plan, change nothing
+```
+
+It reads `<DATA_DIR>/control/.env` for the **existing token, domain and ACME email**, and reads the
+generated `control/docker-compose.yml` for the **challenge mode and whether the advanced UI is
+running** — then installs the new version, rebuilds the image (or both images), and re-runs `init`
+with exactly those settings.
+
+Reading them back is the point. The upgrade was always three commands, and the third had a trap:
+`init` takes `PSTACK_TOKEN` from the environment and **mints a fresh one when it is absent**, so a
+hand-typed `pstack init --domain … --acme-email …` silently rotates the machine token and every CI
+job starts getting 401s — from a command whose purpose was "change nothing but the version".
+
+Two things worth knowing:
+
+- **It runs in two phases**, and the second is a real new process (`pstack upgrade --resume`, which
+  you can also run by hand). `build-image` pins the image to the *running* CLI's version, so a single
+  process would install the new version and then faithfully build an image of the old one — an
+  upgrade that reports success and moves nothing.
+- **It is CLI-only**, like `init`, and for the same reason: the API is a container inside the stack
+  being recreated, so a self-upgrade kills the process mid-request and a broken image leaves the host
+  with no control plane and no remote way to repair it.
+
+Your data survives — deployments and the SQLite database are host-path mounts under `DATA_DIR`, not
+container filesystem. In-flight **job history does not**: it is in memory by design, so do not upgrade
+mid-deploy.
+
 ### Why `init` is CLI-only, and always will be
 
 `init` — and the `self-upgrade` that will follow it — are CLI-only and will never be HTTP routes,

@@ -13,6 +13,7 @@ import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.t
 import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer, crToNl } from '../src/api.ts';
+import { installPrefixFor, planUpgrade, readControlState, upgrade } from '../src/upgrade.ts';
 import { NotifierError, TYPES, redactForNotifier, summarize } from '../src/notify.ts';
 import { events } from '../src/events.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
@@ -5137,4 +5138,192 @@ describe('delivery queueing and redelivery', () => {
       rx.server.stop(true);
     }
   }, 30_000);
+});
+
+describe('pstack upgrade', () => {
+  const tmpd = () =>
+    `${process.env.TMPDIR ?? '/tmp'}/pstack-upgrade-${process.pid}-${Math.trunc(performance.now() * 1000)}`;
+
+  /** A control directory as a previous `init` would have left it. */
+  const control = (over: { env?: string; compose?: string } = {}) => {
+    const dataDir = tmpd();
+    const dir = join(dataDir, 'control');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, '.env'),
+      over.env ??
+        [
+          'DATA_DIR=/var/lib/pstack',
+          'DOMAIN=preview.example.com',
+          'PSTACK_UI_IMAGE=pstack-ui:local',
+          'ACME_EMAIL=ops@example.com',
+          'DNS_PROVIDER=',
+          'PSTACK_IMAGE=pstack:local',
+          'PSTACK_TOKEN=the-existing-machine-token-0123456789',
+        ].join('\n'),
+    );
+    writeFileSync(
+      join(dir, 'docker-compose.yml'),
+      over.compose ??
+        'services:\n  traefik:\n    command:\n      - --certificatesresolvers.le.acme.httpchallenge=true\n  pstack:\n    image: x\n',
+    );
+    return { dataDir, dir, cleanup: () => rmSync(dataDir, { recursive: true, force: true }) };
+  };
+
+  test('reads back what init decided, including the two facts that are not in .env', async () => {
+    const http = control();
+    try {
+      const s = await readControlState(http.dataDir);
+      expect(s.token).toBe('the-existing-machine-token-0123456789');
+      expect(s.domain).toBe('preview.example.com');
+      expect(s.acmeEmail).toBe('ops@example.com');
+      // Neither of these is in `.env` — both are read back out of the GENERATED compose file.
+      expect(s.challenge).toBe('http01');
+      expect(s.ui).toBe('basic');
+    } finally {
+      http.cleanup();
+    }
+
+    const dns = control({
+      compose:
+        'services:\n  traefik:\n    command:\n      - --certificatesresolvers.le.acme.dnschallenge=true\n  pstack-ui:\n    image: y\n',
+      env: [
+        'DOMAIN=preview.example.com',
+        'ACME_EMAIL=ops@example.com',
+        'DNS_PROVIDER=cloudflare',
+        'PSTACK_TOKEN=tok-abcdefghijklmnop',
+      ].join('\n'),
+    });
+    try {
+      const s = await readControlState(dns.dataDir);
+      expect(s.challenge).toBe('dns01');
+      expect(s.ui).toBe('advanced');
+      expect(s.dnsProvider).toBe('cloudflare');
+    } finally {
+      dns.cleanup();
+    }
+  });
+
+  test('the token is carried into init — the trap this command exists to remove', async () => {
+    const c = control();
+    try {
+      const state = await readControlState(c.dataDir);
+      const steps = planUpgrade({ phase: 'resume', target: '0.25.1', state, binPath: '/usr/local/bin/pstack' });
+      const init = steps.find((s) => s.cmd.startsWith('pstack init'))!;
+      /*
+       * Without this, `init` generates a fresh PSTACK_TOKEN and every CI job holding the old one
+       * starts getting 401s — from a command whose entire purpose was "change nothing but the
+       * version". This assertion is the reason `upgrade` exists at all.
+       */
+      expect(init.env?.PSTACK_TOKEN).toBe('the-existing-machine-token-0123456789');
+      // …and it carries settings an operator would otherwise have to remember exactly.
+      expect(init.cmd).toContain("--domain 'preview.example.com'");
+      expect(init.cmd).toContain("--acme-email 'ops@example.com'");
+      expect(init.cmd).toContain('--challenge http01');
+      // A basic-UI host does not build the SPA image it does not run.
+      expect(steps.some((s) => s.cmd.includes('--ui'))).toBe(false);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test('an advanced-UI, dns01 host rebuilds both images and keeps its challenge mode', async () => {
+    const c = control({
+      compose:
+        'services:\n  traefik:\n    command:\n      - --certificatesresolvers.le.acme.dnschallenge=true\n  pstack-ui:\n    image: y\n',
+      env: [
+        'DOMAIN=p.example.com',
+        'ACME_EMAIL=o@example.com',
+        'DNS_PROVIDER=cloudflare',
+        'PSTACK_TOKEN=tok-abcdefghijklmnop',
+      ].join('\n'),
+    });
+    try {
+      const steps = planUpgrade({
+        phase: 'resume',
+        target: 'latest',
+        state: await readControlState(c.dataDir),
+        binPath: '/usr/local/bin/pstack',
+      });
+      expect(steps.map((s) => s.cmd)).toEqual([
+        'pstack build-image',
+        'pstack build-image --ui',
+        "pstack init --domain 'p.example.com' --acme-email 'o@example.com' --challenge dns01 --dns-provider 'cloudflare' --ui advanced",
+      ]);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test('the install phase targets the prefix this binary actually lives in', async () => {
+    // The cloud-config installs with BUN_INSTALL=/usr/local. A plain `bun install -g` on that host
+    // writes to ~/.bun and leaves /usr/local/bin/pstack at the old version — an upgrade that reports
+    // success and changes nothing.
+    expect(installPrefixFor('/usr/local/bin/pstack')).toBe('/usr/local');
+    expect(installPrefixFor('/home/deploy/.bun/bin/pstack')).toBe('/home/deploy/.bun');
+    // Not `<prefix>/bin/…` — a linked checkout. Reported as unknown rather than guessed at.
+    expect(installPrefixFor('/opt/weird/pstack')).toBeNull();
+    expect(installPrefixFor(null)).toBeNull();
+
+    const c = control();
+    try {
+      const steps = planUpgrade({
+        phase: 'install',
+        target: '0.25.1',
+        state: await readControlState(c.dataDir),
+        binPath: '/usr/local/bin/pstack',
+      });
+      expect(steps[0]!.cmd).toBe("bun install -g @samyx/preview-stacks@'0.25.1'");
+      expect(steps[0]!.env?.BUN_INSTALL).toBe('/usr/local');
+      /*
+       * The handoff, and it is load-bearing: `build-image` pins the image to the RUNNING CLI's
+       * version, so a single process would install 0.25.1 and then faithfully build a 0.25.0 image.
+       * The second phase has to be a new process running the new code.
+       */
+      expect(steps[1]!.cmd).toBe('pstack upgrade --resume');
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test('a host with no control stack is refused by name, not by a stack trace', async () => {
+    const empty = tmpd();
+    mkdirSync(empty, { recursive: true });
+    try {
+      await expect(readControlState(empty)).rejects.toThrow(/no control stack found/);
+
+      // A .env that predates a field, or was hand-edited, names the missing key and the fix.
+      const partial = control({ env: 'DOMAIN=x.example.com\nACME_EMAIL=o@example.com' });
+      await expect(readControlState(partial.dataDir)).rejects.toThrow(/PSTACK_TOKEN/);
+      partial.cleanup();
+
+      // No compose file ⇒ the challenge cannot be read back. Refused rather than defaulted:
+      // defaulting to http01 on a dns01 host makes every PR order its own certificate.
+      const noCompose = control();
+      rmSync(join(noCompose.dir, 'docker-compose.yml'));
+      await expect(readControlState(noCompose.dataDir)).rejects.toThrow(/challenge mode cannot be read back/);
+      noCompose.cleanup();
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test('--dry-run walks the plan without executing anything', async () => {
+    const c = control();
+    const said: string[] = [];
+    try {
+      const runner = createRunner({ dryRun: true, level: 'quiet' });
+      const r = await upgrade({
+        dataDir: c.dataDir,
+        target: '0.25.1',
+        phase: 'resume',
+        runner,
+        log: (l) => said.push(l),
+      });
+      expect(r.steps).toHaveLength(2); // basic UI: build + init
+      expect(said.join('\n')).toContain('rebuilding and recreating');
+    } finally {
+      c.cleanup();
+    }
+  });
 });
