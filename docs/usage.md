@@ -1148,6 +1148,19 @@ $ pstack upgrade --to 0.25.1     # or an exact one
 $ pstack upgrade -n              # print the plan, change nothing
 ```
 
+**The first hop has to be by hand**, because a host cannot run a command it does not have yet. On a
+box older than 0.25.1, `pstack upgrade` is simply not installed — and before 0.25.2 the error for that
+was the confusing `spec not found: preview.yml` (spec-loading was gated by an allowlist, so any
+unknown command fell into it; it now says `unknown command` and names the installed version). Install
+once, then use the command from then on:
+
+```console
+$ pstack --version                       # what this host actually has (0.25.2+)
+0.25.0
+$ BUN_INSTALL=/usr/local bun install -g @samyx/preview-stacks@latest
+$ pstack upgrade --resume                # phase 2 only: rebuild + re-init, token intact
+```
+
 It reads `<DATA_DIR>/control/.env` for the **existing token, domain and ACME email**, and reads the
 generated `control/docker-compose.yml` for the **challenge mode and whether the advanced UI is
 running** — then installs the new version, rebuilds the image (or both images), and re-runs `init`

@@ -31,6 +31,7 @@ import { augmentComposeDoc } from './autolabel.ts';
 import { loadSpec, SpecError, warnings } from './spec.ts';
 import { createRunner, type LogLevel } from './exec.ts';
 import { down, report, status, up, verify } from './stack.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 const EXIT = { ok: 0, failed: 1, leaked: 2, usage: 3 } as const;
 
@@ -143,6 +144,10 @@ function parseArgs(argv: string[]): Parsed {
     } else if (a === '-h' || a === '--help') {
       usage();
       process.exit(EXIT.ok);
+    } else if (a === '-V' || a === '--version') {
+      // Bare, so it is scriptable: `[ "$(pstack --version)" = 0.25.1 ] || pstack upgrade`.
+      console.log(pkg.version);
+      process.exit(EXIT.ok);
     } else if (a.startsWith('-')) fail(`unknown flag ${a}`);
     else rest.push(a);
   }
@@ -153,7 +158,7 @@ function parseArgs(argv: string[]): Parsed {
 function usage(): void {
   console.log(
     [
-      'pstack — declarative lifecycle for ephemeral preview stacks',
+      `pstack ${pkg.version} — declarative lifecycle for ephemeral preview stacks`,
       '',
       'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|serve> [flags]',
       '',
@@ -162,6 +167,7 @@ function usage(): void {
       '  -n, --dry-run       print what would run, change nothing',
       '  -v, --verbose       echo commands and their output',
       '  -q, --quiet         suppress per-step chatter',
+      '  -V, --version       print the version and exit',
       '      --set K=V       override/define a variable (repeatable)',
       '      --no-verify     down: skip the post-teardown leak check',
       '      --force         down: allow tearing down a `kind: shared` deployment',
@@ -204,12 +210,37 @@ if (!args.cmd) {
   process.exit(EXIT.usage);
 }
 
-// `init` and `serve` are control-plane commands: they operate on the HOST and on the registry,
-// not on a single spec file, so neither should fail because ./preview.yml happens to be absent.
-const SPEC_FREE = new Set(['init', 'serve', 'build-image', 'cloud-init', 'dockerfile', 'upgrade']);
+/**
+ * Which commands READ A SPEC, and — the point of listing it this way round — which commands exist.
+ *
+ * This was an allowlist of the spec-FREE commands, so anything not on it fell into the spec loader:
+ * a typo, and every command added later, failed with `spec not found: preview.yml`. Which is exactly
+ * what `pstack upgrade` did on a host still running the version before it existed — an error naming
+ * a file the operator never mentioned, about a command that was simply not installed yet.
+ *
+ * An unknown command now says so, and says what to check.
+ */
+const SPEC_COMMANDS = new Set(['up', 'down', 'verify', 'status', 'validate']);
+const COMMANDS = new Set([
+  ...SPEC_COMMANDS,
+  'init',
+  'serve',
+  'build-image',
+  'cloud-init',
+  'dockerfile',
+  'upgrade',
+]);
+
+if (!COMMANDS.has(args.cmd)) {
+  fail(
+    `unknown command "${args.cmd}". This build is pstack ${pkg.version} — if you expected a newer ` +
+      `command, the host is on an older version than you think (\`pstack --version\`).\n\n` +
+      `Commands: ${[...COMMANDS].join(', ')}`,
+  );
+}
 
 let spec: Awaited<ReturnType<typeof loadSpec>> | undefined;
-if (!SPEC_FREE.has(args.cmd)) {
+if (SPEC_COMMANDS.has(args.cmd)) {
   try {
     spec = await loadSpec(args.file, { ...process.env, ...args.overrides });
   } catch (err) {

@@ -1,6 +1,6 @@
 {
   "name": "@samyx/preview-stacks",
-  "version": "0.25.1",
+  "version": "0.25.2",
   "description": "Declarative lifecycle for ephemeral per-PR preview stacks: isolation axes with provision/destroy/leak-verification, over Docker Compose.",
   "repository": {
     "type": "git",

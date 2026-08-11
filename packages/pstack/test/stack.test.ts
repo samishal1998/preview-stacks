@@ -5327,3 +5327,54 @@ describe('pstack upgrade', () => {
     }
   });
 });
+
+describe('the CLI surface: version, and unknown commands', () => {
+  const run = async (args: string[]) => {
+    const proc = Bun.spawn(['bun', 'src/cli.ts', ...args], {
+      cwd: import.meta.dir.replace(/\/test$/, ''),
+      env: { ...process.env, PSTACK_DATA: `${process.env.TMPDIR ?? '/tmp'}/pstack-cli-${process.pid}` },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code, all: stdout + stderr };
+  };
+
+  test('--version prints the version alone, so a script can compare it', async () => {
+    const r = await run(['--version']);
+    expect(r.code).toBe(0);
+    // Bare — no prefix, no banner: `[ "$(pstack --version)" = 0.25.1 ] || pstack upgrade`.
+    expect(r.stdout.trim()).toBe(pkgJson.version);
+    expect((await run(['-V'])).stdout.trim()).toBe(pkgJson.version);
+  }, 20_000);
+
+  test('an unknown command says so — it does not go looking for a spec file', async () => {
+    /*
+     * The reported confusion. Spec-loading used to be gated by an allowlist of spec-FREE commands,
+     * so anything NOT on it fell into the loader: a typo, and every command added later, failed with
+     * `spec not found: preview.yml`. That is what `pstack upgrade` printed on a host still running
+     * the version before `upgrade` existed — an error naming a file the operator never mentioned.
+     */
+    const r = await run(['upgradee']);
+    expect(r.code).toBe(3);
+    expect(r.all).toContain('unknown command "upgradee"');
+    // It names the version, because "this host is older than you think" is the usual cause.
+    expect(r.all).toContain(pkgJson.version);
+    expect(r.all).not.toContain('preview.yml');
+  }, 20_000);
+
+  test('a spec command still reports a missing spec, and upgrade never asks for one', async () => {
+    // The other half: the spec error is right for a command that reads a spec.
+    const spec = await run(['status']);
+    expect(spec.all).toContain('preview.yml');
+
+    // `upgrade` reads the HOST, not a spec — so with no control stack it says THAT.
+    const up = await run(['upgrade', '-n']);
+    expect(up.all).toContain('no control stack found');
+    expect(up.all).not.toContain('preview.yml');
+  }, 20_000);
+});
