@@ -25,11 +25,27 @@
  * passwords and API tokens live. Nothing here passes an inspect payload through: each field is picked
  * out by name, and the label values that are kept get `redactText` applied, because a
  * `traefik.http.middlewares.*.basicauth.users` label is a credential too.
+ *
+ * ── SWARM ────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * A swarm stack is discovered differently in three ways, all handled here so no caller has to know:
+ *   - its containers carry `com.docker.stack.namespace=<stack>`, not the compose project label, and
+ *     the service name is `<stack>_<svc>` under `com.docker.swarm.service.name`;
+ *   - Traefik's routes come from SERVICE labels (`docker service inspect … .Spec.Labels`), which no
+ *     task container carries — so the routes and the findings about them are computed per service;
+ *   - a task may run on another node, where this daemon's `docker ps` cannot see it. Those come from
+ *     `docker stack ps` and appear as containers with `remote: true` and a `node` — listed honestly,
+ *     and refused by the routes that would have to `docker exec` into them.
+ * Only tasks whose desired state is `running` count: swarm replaces a failed task rather than
+ * restarting the container, so `docker ps -a` on a manager accumulates corpses that would otherwise
+ * read as a stack that "failed".
  */
 
 import type { Runner } from './exec.ts';
 import { redactText } from './redact.ts';
 import { shq } from './compose.ts';
+import type { Orchestrator } from './spec.ts';
+import { NODE_LABEL, SERVICE_LABEL, STACK_LABEL, TASK_LABEL } from './swarm.ts';
 
 /** One published port mapping, as `docker inspect` reports it. */
 export type PortMap = {
@@ -71,6 +87,15 @@ export type ContainerInfo = {
   ports: PortMap[];
   /** Traefik labels only, values redacted. Never the container's environment. */
   traefikLabels: Record<string, string>;
+  /** When the process started (epoch ms); null when docker did not say. The scheduler's "last deploy". */
+  startedAt: number | null;
+  /** The swarm node it runs on (hostname), or null under compose. */
+  node: string | null;
+  /**
+   * True when this is a swarm task on ANOTHER node: listed from `docker stack ps`, not inspected, and
+   * out of reach of `docker exec`/`stop` from here. Every field above is what the manager knows.
+   */
+  remote: boolean;
 };
 
 /** A Traefik router as declared by labels, joined to the service (and port) it points at. */
@@ -123,7 +148,7 @@ type RawInspect = {
   RestartCount?: number;
   Args?: string[];
   Config?: { Image?: string; Labels?: Record<string, string>; Cmd?: string[] };
-  State?: { Status?: string; ExitCode?: number; Health?: { Status?: string } };
+  State?: { Status?: string; ExitCode?: number; StartedAt?: string; Health?: { Status?: string } };
   NetworkSettings?: {
     Networks?: Record<string, { IPAddress?: string } | undefined>;
     Ports?: Record<string, Array<{ HostPort?: string }> | null>;
@@ -168,8 +193,21 @@ function traefikLabelsOf(labels: Record<string, string>): Record<string, string>
   return out;
 }
 
-function toContainer(raw: RawInspect): ContainerInfo {
+/** `2026-08-21T10:00:00.123456789Z` → epoch ms, or null. Docker's zero time (`0001-01-01…`) is null too. */
+function epochMs(iso: string | undefined): number | null {
+  if (!iso || iso.startsWith('0001-')) return null;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+
+function toContainer(raw: RawInspect, stack?: string): ContainerInfo {
   const labels = raw.Config?.Labels ?? {};
+  // Compose stamps the service name; swarm stamps `<stack>_<service>`.
+  const swarmService = labels[SERVICE_LABEL];
+  const service =
+    labels['com.docker.compose.service'] ??
+    (swarmService && stack && swarmService.startsWith(`${stack}_`) ? swarmService.slice(stack.length + 1) : swarmService) ??
+    null;
   const ports: PortMap[] = [];
   for (const [spec, bindings] of Object.entries(raw.NetworkSettings?.Ports ?? {})) {
     const [portStr, protocol = 'tcp'] = spec.split('/');
@@ -185,7 +223,7 @@ function toContainer(raw: RawInspect): ContainerInfo {
     id: (raw.Id ?? '').slice(0, 12),
     // Docker prefixes container names with a slash.
     name: (raw.Name ?? '').replace(/^\//, ''),
-    service: labels['com.docker.compose.service'] ?? null,
+    service,
     image: raw.Config?.Image ?? '',
     state: raw.State?.Status ?? 'unknown',
     health: raw.State?.Health?.Status ?? null,
@@ -197,20 +235,167 @@ function toContainer(raw: RawInspect): ContainerInfo {
       null,
     ports,
     traefikLabels: traefikLabelsOf(labels),
+    startedAt: epochMs(raw.State?.StartedAt),
+    node: labels[NODE_LABEL] ? 'this node' : null,
+    remote: false,
   };
+}
+
+// ── swarm services and tasks ────────────────────────────────────────────────────────────────────
+
+/** `docker service inspect` output, the fields read here. */
+type RawService = {
+  ID?: string;
+  UpdatedAt?: string;
+  CreatedAt?: string;
+  Spec?: {
+    Name?: string;
+    Labels?: Record<string, string>;
+    TaskTemplate?: { ContainerSpec?: { Image?: string }; Networks?: Array<{ Target?: string }> };
+  };
+};
+
+export type SwarmService = {
+  id: string;
+  /** Full swarm name, `<stack>_<service>`. */
+  name: string;
+  /** The compose service name (the part after `<stack>_`). */
+  service: string;
+  stack: string | null;
+  image: string;
+  networks: string[];
+  traefikLabels: Record<string, string>;
+  updatedAt: number | null;
+};
+
+type RawTask = { ID?: string; Name?: string; Image?: string; Node?: string; DesiredState?: string; CurrentState?: string; Error?: string };
+
+async function inspectServices(runner: Runner, ids: string[], networkNames: Map<string, string>): Promise<SwarmService[]> {
+  if (ids.length === 0) return [];
+  const r = await runner.run(`docker service inspect ${ids.map(shq).join(' ')}`, { label: 'docker service inspect' });
+  if (!r.ok) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(r.stdout || '[]');
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return (parsed as RawService[]).map((raw) => {
+    const labels = raw.Spec?.Labels ?? {};
+    const stack = labels[STACK_LABEL] ?? null;
+    const name = raw.Spec?.Name ?? '';
+    return {
+      id: (raw.ID ?? '').slice(0, 12),
+      name,
+      service: stack && name.startsWith(`${stack}_`) ? name.slice(stack.length + 1) : name,
+      stack,
+      image: raw.Spec?.TaskTemplate?.ContainerSpec?.Image ?? '',
+      networks: (raw.Spec?.TaskTemplate?.Networks ?? [])
+        .map((n) => (n.Target ? networkNames.get(n.Target) ?? networkNames.get(n.Target.slice(0, 12)) ?? n.Target : ''))
+        .filter(Boolean),
+      traefikLabels: traefikLabelsOf(labels),
+      updatedAt: epochMs(raw.UpdatedAt ?? raw.CreatedAt),
+    };
+  });
+}
+
+/** Network id → name, so a service's `Networks[].Target` can be read by a human and checked for the ingress. */
+async function networkNames(runner: Runner): Promise<Map<string, string>> {
+  const r = await runner.run(`docker network ls --format '{{.ID}} {{.Name}}'`, { label: 'docker network ls' });
+  const out = new Map<string, string>();
+  if (!r.ok) return out;
+  for (const line of r.stdout.split('\n')) {
+    const [id, name] = line.trim().split(/\s+/);
+    if (id && name) out.set(id, name);
+  }
+  return out;
+}
+
+/** `docker stack ps`, running-desired tasks only. Null when docker did not answer. */
+async function stackTasks(runner: Runner, stack: string): Promise<RawTask[] | null> {
+  const r = await runner.run(
+    `docker stack ps ${shq(stack)} --no-trunc --filter desired-state=running --format '{{json .}}'`,
+    { label: 'docker stack ps' },
+  );
+  // "Nothing found in stack" is an exit 1 with nothing running — not a failure to answer.
+  if (!r.ok) return /nothing found/i.test(r.stderr + r.stdout) ? [] : null;
+  const tasks: RawTask[] = [];
+  for (const line of r.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      tasks.push(JSON.parse(line) as RawTask);
+    } catch {
+      /* a non-JSON line from an older CLI — skip it, the rest still parse */
+    }
+  }
+  return tasks;
+}
+
+/**
+ * `Running 3 minutes ago` → `running`; `Complete 2 minutes ago` → `exited`.
+ *
+ * A FAILED or REJECTED task whose desired state is still `running` is one swarm is about to replace
+ * — the swarm equivalent of a container in `restarting`, and reported as that, so the readiness
+ * watcher keeps converging instead of settling on a verdict swarm itself has not reached. A crash
+ * loop under swarm is still caught: the watch times out, and the task's error is in its name.
+ */
+function taskState(current: string | undefined): string {
+  const word = (current ?? '').trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  if (word === 'running') return 'running';
+  if (word === 'failed' || word === 'rejected') return 'restarting';
+  if (word === 'shutdown' || word === 'complete') return 'exited';
+  return word || 'unknown';
+}
+
+/**
+ * The arguments of every `<name>(…)` call in a Traefik rule, by name.
+ *
+ * A scanner rather than a regexp, because a `HostRegexp` argument routinely contains parentheses —
+ * `([a-z0-9-]*[a-z0-9])?` — and `\(([^)]*)\)` stops at the first one, handing back half a pattern
+ * that compiles to nothing. Backticks delimit the argument; nothing inside them counts.
+ */
+function ruleArgs(rule: string, name: string): string[] {
+  const out: string[] = [];
+  let from = 0;
+  for (;;) {
+    const at = rule.indexOf(`${name}(`, from);
+    if (at === -1) break;
+    // Only a whole matcher name: `HostRegexp(` must not be read as `Host(`.
+    if (at > 0 && /[A-Za-z]/.test(rule[at - 1]!)) {
+      from = at + 1;
+      continue;
+    }
+    let i = at + name.length + 1;
+    let depth = 1;
+    let quote: string | null = null;
+    const start = i;
+    for (; i < rule.length && depth > 0; i++) {
+      const c = rule[i]!;
+      if (quote) {
+        if (c === quote) quote = null;
+      } else if (c === '`' || c === '"' || c === "'") quote = c;
+      else if (c === '(') depth++;
+      else if (c === ')') depth--;
+    }
+    if (depth !== 0) break;
+    out.push(rule.slice(start, i - 1));
+    from = i;
+  }
+  return out;
 }
 
 /** Hostnames out of a Traefik rule. `Host(` a`,` b`)` yields both; a HostRegexp yields its pattern. */
 export function hostsFromRule(rule: string): string[] {
   const hosts: string[] = [];
-  for (const m of rule.matchAll(/Host\(([^)]*)\)/g)) {
-    for (const h of m[1]!.split(',')) {
+  for (const arg of ruleArgs(rule, 'Host')) {
+    for (const h of arg.split(',')) {
       const cleaned = h.trim().replace(/^[`'"]|[`'"]$/g, '');
       if (cleaned) hosts.push(cleaned);
     }
   }
-  for (const m of rule.matchAll(/HostRegexp\(([^)]*)\)/g)) {
-    const cleaned = m[1]!.trim().replace(/^[`'"]|[`'"]$/g, '');
+  for (const arg of ruleArgs(rule, 'HostRegexp')) {
+    const cleaned = arg.trim().replace(/^[`'"]|[`'"]$/g, '');
     if (cleaned) hosts.push(`(pattern) ${cleaned}`);
   }
   return hosts;
@@ -313,17 +498,94 @@ export async function deploymentRuntime(args: {
   challenge?: 'http01' | 'dns01' | 'unknown';
   /** router name → container names, across the WHOLE host, for the collision check. */
   allRouters?: Map<string, string[]>;
+  /** Decides which labels name this stack's containers. Default compose. */
+  orchestrator?: Orchestrator;
 }): Promise<Runtime> {
   const { stack, runner } = args;
-  const ids = await idsByLabel(runner, `com.docker.compose.project=${stack}`);
-  if (ids === null) {
-    return { stack, containers: [], routes: [], findings: [], challenge: 'unknown', reachable: false };
+  const swarm = args.orchestrator === 'swarm';
+  const empty = (): Runtime => ({ stack, containers: [], routes: [], findings: [], challenge: 'unknown', reachable: false });
+
+  const ids = await idsByLabel(runner, `${swarm ? STACK_LABEL : 'com.docker.compose.project'}=${stack}`);
+  if (ids === null) return empty();
+
+  const inspected = await inspectIds(runner, ids);
+  let containers = inspected.map((raw) => toContainer(raw, stack));
+  let routes: RouteInfo[];
+  /**
+   * What the findings are ABOUT. Under compose a container carries its own labels; under swarm the
+   * labels are on the service, so the checks run once per service and the containers are its tasks.
+   */
+  let subjects: Array<{ name: string; traefikLabels: Record<string, string>; networks: string[]; state: string; health: string | null }>;
+
+  if (swarm) {
+    const serviceIds = await runner.run(`docker service ls -q --filter ${shq(`label=${STACK_LABEL}=${stack}`)}`, {
+      label: 'docker service ls',
+    });
+    if (!serviceIds.ok) return empty();
+    const sids = serviceIds.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    const services = sids.length ? await inspectServices(runner, sids, await networkNames(runner)) : [];
+    const tasks = sids.length ? await stackTasks(runner, stack) : [];
+    if (tasks === null) return empty();
+
+    // Only the tasks swarm still wants running; a replaced task's container is a corpse, not a failure.
+    const wanted = new Map(tasks.map((t) => [t.ID ?? '', t]));
+    const local = inspected.map((raw) => ({ info: toContainer(raw, stack), task: raw.Config?.Labels?.[TASK_LABEL] ?? '' }));
+    containers = local.filter((l) => !l.task || wanted.has(l.task)).map((l) => {
+      const t = wanted.get(l.task);
+      return { ...l.info, node: t?.Node ?? l.info.node };
+    });
+    const seenTasks = new Set(local.map((l) => l.task));
+    const byName = new Map(services.map((svc) => [svc.name, svc]));
+    for (const t of tasks) {
+      if (!t.ID || seenTasks.has(t.ID)) continue;
+      // `<stack>_<svc>.<slot>` → the service; the slot keeps replicas distinguishable.
+      const svcName = (t.Name ?? '').replace(/\.[^.]+$/, '');
+      const svc = byName.get(svcName);
+      containers.push({
+        id: t.ID.slice(0, 12),
+        name: t.Name ?? t.ID.slice(0, 12),
+        service: svc?.service ?? (svcName.startsWith(`${stack}_`) ? svcName.slice(stack.length + 1) : svcName || null),
+        image: t.Image ?? svc?.image ?? '',
+        state: taskState(t.CurrentState),
+        health: null,
+        // `Complete` is a one-shot that finished — exit 0 as far as swarm is concerned. Anything
+        // else swarm does not say, and "unknown" must not read as a crash.
+        exitCode: /^complete/i.test((t.CurrentState ?? '').trim()) ? 0 : null,
+        restartCount: 0,
+        networks: svc?.networks ?? [],
+        ingressIp: null,
+        ports: [],
+        traefikLabels: svc?.traefikLabels ?? {},
+        startedAt: svc?.updatedAt ?? null,
+        node: t.Node ?? null,
+        remote: true,
+      });
+    }
+    routes = services.flatMap((svc) => routesFromLabels(svc.service, svc.traefikLabels, null));
+    subjects = services.map((svc) => {
+      const mine = containers.filter((c) => c.service === svc.service);
+      return {
+        name: svc.service,
+        traefikLabels: svc.traefikLabels,
+        networks: svc.networks,
+        state: mine.some((c) => c.state === 'running') ? 'running' : mine[0]?.state ?? 'no tasks',
+        health: mine.find((c) => c.health === 'unhealthy')?.health ?? mine.find((c) => c.health)?.health ?? null,
+      };
+    });
+  } else {
+    routes = containers.flatMap((c) => routesFromLabels(c.name, c.traefikLabels, c.ingressIp));
+    subjects = containers.map((c) => ({
+      name: c.service ?? c.name,
+      traefikLabels: c.traefikLabels,
+      networks: c.networks,
+      state: c.state,
+      health: c.health,
+    }));
   }
 
-  const containers = (await inspectIds(runner, ids)).map(toContainer);
-  const routes = containers.flatMap((c) => routesFromLabels(c.name, c.traefikLabels, c.ingressIp));
   const challenge = args.challenge ?? (await detectChallenge(runner));
   const findings: Finding[] = [];
+  const networkKey = swarm ? 'traefik.swarm.network' : 'traefik.docker.network';
 
   if (containers.length === 0) {
     findings.push({
@@ -334,7 +596,7 @@ export async function deploymentRuntime(args: {
     });
   }
 
-  for (const c of containers) {
+  for (const c of subjects) {
     const enabled = c.traefikLabels['traefik.enable'] === 'true';
     const hasAnyTraefik = Object.keys(c.traefikLabels).length > 0;
     const cRoutes = routes.filter((r) => r.container === c.name);
@@ -343,16 +605,16 @@ export async function deploymentRuntime(args: {
       findings.push({
         level: 'warn',
         message:
-          `${c.service ?? c.name} has no Traefik labels, so no hostname reaches it. If it is meant ` +
-          `to be reachable it needs traefik.enable=true, traefik.docker.network=${INGRESS}, a ` +
+          `${c.name} has no Traefik labels, so no hostname reaches it. If it is meant ` +
+          `to be reachable it needs traefik.enable=true, ${networkKey}=${INGRESS}, a ` +
           `router rule, and a loadbalancer.server.port — see examples/docker-compose.preview.yml.`,
       });
     } else if (!enabled) {
       findings.push({
         level: 'error',
         message:
-          `${c.service ?? c.name} has Traefik labels but not traefik.enable=true. The control stack ` +
-          `runs with exposedbydefault=false, so Traefik ignores this container entirely — the ` +
+          `${c.name} has Traefik labels but not traefik.enable=true. The control stack ` +
+          `runs with exposedbydefault=false, so Traefik ignores this ${swarm ? 'service' : 'container'} entirely — the ` +
           `hostname will 404 with nothing logged anywhere.`,
       });
     }
@@ -362,20 +624,20 @@ export async function deploymentRuntime(args: {
       findings.push({
         level: 'error',
         message: lookalike
-          ? `${c.service ?? c.name} is on "${lookalike}", not "${INGRESS}". Compose created its own ` +
+          ? `${c.name} is on "${lookalike}", not "${INGRESS}". Compose created its own ` +
             `network because the compose file declares it without \`external: true\`. The container ` +
             `is healthy and unreachable, and Traefik answers 404.`
-          : `${c.service ?? c.name} is not attached to "${INGRESS}" (on: ${c.networks.join(', ') || 'none'}). ` +
+          : `${c.name} is not attached to "${INGRESS}" (on: ${c.networks.join(', ') || 'none'}). ` +
             `Traefik dials containers over that network, so it cannot reach this one.`,
       });
     }
 
-    if (c.networks.length > 1 && enabled && !c.traefikLabels['traefik.docker.network']) {
+    if (c.networks.length > 1 && enabled && !c.traefikLabels[networkKey]) {
       findings.push({
         level: 'warn',
         message:
-          `${c.service ?? c.name} is on ${c.networks.length} networks and does not set ` +
-          `traefik.docker.network=${INGRESS}. Traefik has to pick one, and picking the per-project ` +
+          `${c.name} is on ${c.networks.length} networks and does not set ` +
+          `${networkKey}=${INGRESS}. Traefik has to pick one, and picking the per-project ` +
           `network yields an unreachable backend.`,
       });
     }
@@ -383,14 +645,23 @@ export async function deploymentRuntime(args: {
     if (enabled && cRoutes.length === 0) {
       findings.push({
         level: 'warn',
-        message: `${c.service ?? c.name} is Traefik-enabled but declares no router rule, so nothing routes to it.`,
+        message: `${c.name} is Traefik-enabled but declares no router rule, so nothing routes to it.`,
       });
     }
 
     if (c.state === 'running' && c.health === 'unhealthy') {
       findings.push({
         level: 'warn',
-        message: `${c.service ?? c.name} is running but unhealthy — Traefik will not route to it while it stays that way.`,
+        message: `${c.name} is running but unhealthy — Traefik will not route to it while it stays that way.`,
+      });
+    }
+  }
+
+  for (const c of containers) {
+    if (c.remote) {
+      findings.push({
+        level: 'info',
+        message: `${c.name} runs on node ${c.node ?? '?'}. Logs reach it through the manager; a terminal and stop/start do not.`,
       });
     }
   }
@@ -464,6 +735,18 @@ export async function allTraefikRouters(runner: Runner): Promise<{
     for (const r of routesFromLabels(c.name, c.traefikLabels, c.ingressIp)) {
       routes.push({ ...r, project });
       byName.set(r.router, [...(byName.get(r.router) ?? []), c.name]);
+    }
+  }
+  // Swarm services declare their routers on the SERVICE. A daemon that is not a manager answers this
+  // with an error — which is "no swarm routes", not "docker did not answer".
+  const svc = await runner.run(`docker service ls -q --filter 'label=traefik.enable=true'`, { label: 'docker service ls' });
+  if (svc.ok) {
+    const sids = svc.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    for (const s of sids.length ? await inspectServices(runner, sids, await networkNames(runner)) : []) {
+      for (const r of routesFromLabels(s.name, s.traefikLabels, null)) {
+        routes.push({ ...r, project: s.stack });
+        byName.set(r.router, [...(byName.get(r.router) ?? []), s.name]);
+      }
     }
   }
   routes.sort((a, b) => a.router.localeCompare(b.router));

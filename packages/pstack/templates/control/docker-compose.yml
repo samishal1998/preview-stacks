@@ -65,8 +65,20 @@ services:
       # preview-ingress, preview-shared AND its own project default; without this Traefik may pick
       # one it cannot reach and you get a 502 that looks like an app bug.
       - --providers.docker.network=preview-ingress
+      # `pstack init --orchestrator swarm` adds the swarm provider here: previews then deploy as
+      # swarm stacks whose routers live on SERVICE labels (deploy.labels), which only this provider
+      # reads. The docker provider stays on for THIS stack's own containers.
+      #__SWARM_PROVIDER__
       - --providers.file.directory=/etc/traefik/dynamic
       - --providers.file.watch=true
+      # ── metrics, for pstack only ──
+      # Per-router request counters on an entrypoint that is NOT published: pstack reads
+      # http://traefik:8082/metrics over preview-ingress to decide when a preview is idle
+      # (`sleep.idle` in a spec — src/scheduler.ts). Nothing outside the control stack can reach it.
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --metrics.prometheus.addrouterslabels=true
       # ── entrypoints: all plaintext redirected to TLS ──
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -152,6 +164,13 @@ services:
       # publishes no host port. `serve` refuses a non-loopback bind without PSTACK_TOKEN anyway.
       PSTACK_HOST: 0.0.0.0
       PSTACK_PORT: "7878"
+      # The preview domain, so the API can build an absolute share-link URL and name the control
+      # host. Same value the routers below interpolate.
+      PSTACK_DOMAIN: ${DOMAIN}
+      # `compose` or `swarm` — what `pstack init` decided; the default for a spec that does not say.
+      PSTACK_ORCHESTRATOR: ${PSTACK_ORCHESTRATOR:-compose}
+      # Where the idle meter reads Traefik's request counters (the `metrics` entrypoint above).
+      PSTACK_TRAEFIK_METRICS: http://traefik:8082/metrics
     labels:
       - traefik.enable=true
       - traefik.docker.network=preview-ingress
@@ -172,6 +191,13 @@ services:
       - traefik.http.routers.pstack-api.entrypoints=websecure
       - traefik.http.routers.pstack-api.service=pstack
       #__ACME_ROUTER_TLS__
+      # THE WAKE-ON-CALL CATCH-ALL. Priority 1 — the lowest — so any preview's own router wins while
+      # its containers run. When they do not (asleep, torn down, never deployed), the request lands on
+      # pstack with the original Host: a sleeping stack is woken and the visitor sees "spinning up…";
+      # anything else gets the UI. `tls=true` alone: under DNS-01 the wildcard covers it, under HTTP-01
+      # Traefik serves the certificate it already issued for that hostname while the stack was live.
+      # Rendered by `pstack init` (the domain's dots must be escaped in the regexp).
+      #__WAKE_ROUTER__
 
       - traefik.http.services.pstack.loadbalancer.server.port=7878
 #__ADVANCED_UI_SERVICE__

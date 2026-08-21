@@ -14,7 +14,7 @@
 
 import { type Stack } from './spec.ts';
 import { captureOutputs, type Runner } from './exec.ts';
-import { composeDown, composeUp, composePs } from './compose.ts';
+import { composeDown, composeSleep, composeUp, composePs } from './compose.ts';
 import { consoleSink, type Sink } from './log.ts';
 
 export type StepResult = {
@@ -101,8 +101,9 @@ export async function up(spec: Stack, runner: Runner, sink: Sink = consoleSink()
   }
 
   if (spec.compose) {
-    sink.emit('step', `→ compose up (${spec.compose.profiles.join(', ') || 'no profiles'})`);
-    const r = await composeUp(spec, runner, outputs);
+    const verb = spec.compose.orchestrator === 'swarm' ? 'stack deploy' : 'compose up';
+    sink.emit('step', `→ ${verb} (${spec.compose.profiles.join(', ') || 'no profiles'})`);
+    const r = await composeUp(spec, runner, outputs, (line) => sink.emit('info', line));
     steps.push({ axis: '(compose)', phase: 'compose', ok: r.ok, code: r.code, skipped: r.skipped,
       message: r.ok ? undefined : firstLine(r.stderr || r.stdout) });
   }
@@ -150,7 +151,7 @@ export async function down(
   }
 
   if (spec.compose) {
-    sink.emit('step', '→ compose down (all profiles)');
+    sink.emit('step', spec.compose.orchestrator === 'swarm' ? '→ stack rm' : '→ compose down (all profiles)');
     const r = await composeDown(spec, runner);
     // Best-effort: a missing project directory or an already-removed stack is normal on a retry.
     steps.push({ axis: '(compose)', phase: 'compose', ok: true, code: r.code, skipped: r.skipped,
@@ -178,6 +179,52 @@ export async function down(
   }
 
   return { ok: ok({ ok: true, steps, outputs: {} }), steps, outputs: {} };
+}
+
+/**
+ * Put a stack to SLEEP: the compose project goes down, its volumes and every axis stay.
+ *
+ * Not a teardown and not reported as one: there is no `verify`, because nothing is supposed to be
+ * gone — the database branch, the queue namespace and the images are all still there, by design, so
+ * that `up` alone brings the preview back. (`up` re-runs the axis hooks, which are idempotent by
+ * contract, so nothing needs to be remembered between sleep and wake.)
+ *
+ * Best-effort like `down`: an already-sleeping stack is a normal retry, not an error.
+ *
+ * Refused for `kind: shared`, for a reason one step removed from `down`'s: sleeping a singleton
+ * stops every preview that depends on it, and the request that wakes it would be one of theirs
+ * failing a health check — which is not how anyone wants to learn the database is off.
+ */
+export async function sleep(spec: Stack, runner: Runner, sink: Sink = consoleSink()): Promise<Outcome> {
+  if (spec.kind === 'shared') {
+    sink.emit('error', `refusing to put shared deployment "${spec.stack}" to sleep`);
+    return {
+      ok: false,
+      outputs: {},
+      steps: [{
+        axis: spec.stack,
+        phase: 'compose',
+        ok: false,
+        code: 1,
+        skipped: false,
+        message: 'refused: kind is `shared`. Every preview that depends on this singleton would go with it.',
+      }],
+    };
+  }
+  if (!spec.compose) {
+    return { ok: true, outputs: {}, steps: [] };
+  }
+  sink.emit('step', spec.compose.orchestrator === 'swarm' ? '→ stack rm (sleep: volumes kept)' : '→ compose down (sleep: volumes kept)');
+  const r = await composeSleep(spec, runner);
+  const steps: StepResult[] = [{
+    axis: '(compose)',
+    phase: 'compose',
+    ok: true,
+    code: r.code,
+    skipped: r.skipped,
+    message: r.ok ? undefined : `non-fatal: ${firstLine(r.stderr || r.stdout)}`,
+  }];
+  return { ok: true, steps, outputs: {} };
 }
 
 /**

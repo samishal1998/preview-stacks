@@ -9,7 +9,7 @@
  *   $PSTACK_DATA/deployments/<id>/
  *     spec.yml       the submitted spec
  *     compose.yml    the submitted compose file, when one was sent with it
- *     meta.json      { id, kind, createdAt, updatedAt }
+ *     meta.json      { id, kind, createdAt, updatedAt, specName?, vars?, sleep? }
  *
  * Why no database: the registry is a cache of intent, never the source of truth about what exists.
  * Truth lives in Docker and in each axis's own `assert_*` probe — the same rule the CLI follows.
@@ -44,6 +44,27 @@ export type DeploymentMeta = {
    * REQUIRES the caller to remember.
    */
   vars?: Record<string, string>;
+  /**
+   * Present while the scheduler (or an operator) has the compose project asleep.
+   *
+   * This is the one record here that looks like state, so the line is worth drawing: it is NOT a claim
+   * that nothing is running — docker answers that, and `up` clears it regardless. It is the INTENT
+   * "wake this on a request" plus the only fact that cannot be recovered from docker once the
+   * containers are gone: which hostnames the catch-all router should recognise as this deployment's.
+   * Those are captured from the live labels the moment before teardown (inspect.ts), which is why a
+   * hand-written router is recognised exactly as a generated one is.
+   */
+  sleep?: SleepRecord;
+};
+
+export type SleepRecord = {
+  since: number;
+  /** Why — `idle 2h`, `after 3d`, or `operator` / the actor who asked. */
+  reason: string;
+  /** Exact hostnames from `Host(...)` rules. */
+  hosts: string[];
+  /** `HostRegexp(...)` patterns (wildcard subdomains), Go syntax — evaluated with JS RegExp. */
+  rules: string[];
 };
 
 export type Deployment = DeploymentMeta & {
@@ -185,9 +206,23 @@ export class Registry {
       specName: opts.specName ?? prev?.specName,
       // Already merged above, so validation and storage agree on exactly one variable set.
       vars: mergedVars,
+      // A replace does not wake anything: the sleeping project is still the one these hostnames name.
+      ...(prev?.sleep ? { sleep: prev.sleep } : {}),
     };
     await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
     return { ...meta, dir, specPath };
+  }
+
+  /**
+   * Record that the project is asleep (and what hostnames wake it), or clear that record.
+   * Rewrites meta.json in place; nothing else in the record changes, `updatedAt` included — a sleep is
+   * not an edit of what was asked for.
+   */
+  async setSleep(id: string, sleep: SleepRecord | null): Promise<void> {
+    const meta = await this.#readMeta(id);
+    if (sleep) meta.sleep = sleep;
+    else delete meta.sleep;
+    await writeFile(join(this.#dir(id), 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
   }
 
   /**

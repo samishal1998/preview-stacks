@@ -15,7 +15,12 @@ import { bufferSink, type LogEvent, type Sink } from './log.ts';
 import { events } from './events.ts';
 import { redactText } from './redact.ts';
 
-export type JobAction = 'up' | 'down' | 'verify';
+/**
+ * `sleep` and `wake` are the scheduler's verbs (stack.ts `sleep`; wake IS `up`, recorded under its own
+ * name so a transcript says why the stack came back). They hold the same per-stack lock as the rest:
+ * a wake racing a `down` over one database branch is the corruption the lock exists to prevent.
+ */
+export type JobAction = 'up' | 'down' | 'verify' | 'sleep' | 'wake';
 /**
  * `cancelled` is its OWN state, not a flavour of `failed`.
  *

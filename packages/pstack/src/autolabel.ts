@@ -41,15 +41,24 @@
  * YAML would mean trusting a stringifier's quoting to match Go's parser on values like
  * ``Host(`app.example.com`)`` — a mismatch that would only show up on the user's host. Your original
  * file is never modified; this is written beside it.
+ *
+ * ── SWARM ────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * Under `compose.orchestrator: swarm` the same pipeline ALWAYS writes the derived file, whether or not
+ * anything asked for routing: the submitted file is converted to the swarm subset first (swarm.ts —
+ * profiles resolved, `restart`/`mem_limit` mapped to `deploy`, unsupported keys dropped and named).
+ * Generated labels go under `deploy.labels` with `traefik.swarm.network`, because Traefik's swarm
+ * provider reads service labels and its docker provider must not see a second copy on the task.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Runner } from './exec.ts';
 import { SpecError } from './errors.ts';
 import { resolvePreviewDomain, type Stack } from './spec.ts';
 import { detectChallenge } from './inspect.ts';
 import { wildcardRule } from './subdomains.ts';
+import { swarmify } from './swarm.ts';
 
 /** The file pstack writes beside the submitted compose file. JSON, despite the extension — see above. */
 export const GENERATED_COMPOSE = 'compose.generated.yml';
@@ -162,14 +171,19 @@ export function augmentComposeDoc(args: {
     if (!svcRaw || typeof svcRaw !== 'object') continue;
     const svc = svcRaw as Record<string, unknown>;
     const labels = labelsToMap(svc.labels);
+    // A swarm-shaped file may already carry its labels where the swarm provider reads them.
+    const deploy = (svc.deploy && typeof svc.deploy === 'object' && !Array.isArray(svc.deploy)
+      ? svc.deploy
+      : {}) as Record<string, unknown>;
+    const deployLabels = labelsToMap(deploy.labels);
 
     // Your labels win, entirely. Not merged, not partially applied.
-    if (Object.keys(labels).some((k) => k.startsWith('traefik.'))) {
+    if ([...Object.keys(labels), ...Object.keys(deployLabels)].some((k) => k.startsWith('traefik.'))) {
       skipped[name] = 'has its own traefik.* labels';
       continue;
     }
 
-    const req = readRoutingRequest(name, labels);
+    const req = readRoutingRequest(name, { ...deployLabels, ...labels });
     if (!req) {
       skipped[name] = 'no pstack.routing.port — not routed (a database or worker needs no hostname)';
       continue;
@@ -192,12 +206,14 @@ export function augmentComposeDoc(args: {
     const id = `${req.name}-${spec.stack}`;
     const host = req.host ?? `${req.name}-${spec.stack}.${domain}`;
 
+    const swarm = spec.compose?.orchestrator === 'swarm';
     const added = [
       // The host runs `--providers.docker.exposedbydefault=false`, so without this the container is
       // invisible to Traefik and the hostname 404s with nothing logged anywhere.
       'traefik.enable=true',
-      // This container is on more than one network; Traefik must be told which to dial.
-      `traefik.docker.network=${INGRESS}`,
+      // This container is on more than one network; Traefik must be told which to dial. The swarm
+      // provider has its own key for the same setting.
+      `traefik.${swarm ? 'swarm' : 'docker'}.network=${INGRESS}`,
       `traefik.http.routers.${id}.rule=Host(\`${host}\`)`,
       `traefik.http.routers.${id}.entrypoints=websecure`,
       `traefik.http.routers.${id}.tls=true`,
@@ -229,7 +245,15 @@ export function augmentComposeDoc(args: {
 
     // Keep whatever the user wrote (the pstack.routing.* labels included, so the file stays
     // self-describing) and append. Always a list: mixing forms in one file is legal but confusing.
-    svc.labels = [...Object.entries(labels).map(([k, v]) => (v === '' ? k : `${k}=${v}`)), ...added];
+    // Under swarm the generated labels are SERVICE labels (`deploy.labels`) — that is where Traefik's
+    // swarm provider looks, and the container labels stay exactly as submitted.
+    const asList = (m: Record<string, string>) => Object.entries(m).map(([k, v]) => (v === '' ? k : `${k}=${v}`));
+    if (swarm) {
+      deploy.labels = [...asList(deployLabels), ...added];
+      svc.deploy = deploy;
+    } else {
+      svc.labels = [...asList(labels), ...added];
+    }
 
     // Networks: append, never replace. A service already on its own networks keeps them.
     const existing = Array.isArray(svc.networks)
@@ -263,6 +287,10 @@ export function augmentComposeDoc(args: {
 /**
  * Read the submitted compose file, augment it, and write the derived file next to it.
  *
+ * `dir` is what relative paths in the spec resolve against: the deployment directory under the API,
+ * the process's working directory under the CLI (exec.ts: the CLI runner sets no cwd, so docker
+ * runs from the shell's).
+ *
  * Returns the filename compose should use — the derived one when anything was generated, and the
  * original otherwise, so a deployment that writes its own labels gets exactly the file it submitted
  * with no derived artefact left lying around.
@@ -277,10 +305,22 @@ export async function materializeCompose(args: {
   runner: Runner;
   /** Skip the docker probe when the caller already knows (tests, or a batch). */
   challenge?: 'http01' | 'dns01' | 'unknown';
-}): Promise<{ file: string; generated: Record<string, string[]>; skipped: Record<string, string> }> {
+}): Promise<{
+  file: string;
+  generated: Record<string, string[]>;
+  skipped: Record<string, string>;
+  /** What the swarm conversion changed, one line each. Empty under compose. */
+  notes: string[];
+}> {
   const { dir, spec, runner } = args;
   const original = spec.compose!.file;
   const source = join(dir, original);
+  const swarm = spec.compose!.orchestrator === 'swarm';
+  // Beside the ORIGINAL, not at `dir`: compose resolves a file's relative paths (bind mounts,
+  // env_file) against the first `-f` file's directory, so the derived file must sit where the
+  // submitted one does. In a deployment directory that is `dir` itself; under the CLI it is
+  // wherever `-f` pointed.
+  const generatedRel = join(dirname(original), GENERATED_COMPOSE);
 
   let raw: string;
   try {
@@ -288,7 +328,7 @@ export async function materializeCompose(args: {
   } catch {
     // Not an error here: the file may legitimately live somewhere this process cannot read, and
     // compose will report a missing file far better than a guess would.
-    return { file: original, generated: {}, skipped: {} };
+    return { file: original, generated: {}, skipped: {}, notes: [] };
   }
 
   let doc: unknown;
@@ -301,19 +341,36 @@ export async function materializeCompose(args: {
     throw new SpecError(`compose file ${original} must be a mapping`);
   }
 
-  // Cheap pre-check: no pstack.routing.* anywhere means nothing to do, and no reason to shell out to
-  // docker for the challenge mode.
-  if (!raw.includes('pstack.routing.')) {
-    return { file: original, generated: {}, skipped: {} };
+  // Cheap pre-check: no pstack.routing.* anywhere means nothing to generate, and no reason to shell
+  // out to docker for the challenge mode. Under swarm the conversion still has to run.
+  const wantsRouting = raw.includes('pstack.routing.');
+  if (!wantsRouting && !swarm) {
+    return { file: original, generated: {}, skipped: {}, notes: [] };
   }
 
-  const challenge = args.challenge ?? (await detectChallenge(runner));
-  const result = augmentComposeDoc({ doc: doc as Record<string, unknown>, spec, challenge });
-  if (Object.keys(result.generated).length === 0) {
-    return { file: original, generated: {}, skipped: result.skipped };
+  let out = doc as Record<string, unknown>;
+  let generated: Record<string, string[]> = {};
+  let skipped: Record<string, string> = {};
+  if (wantsRouting) {
+    const challenge = args.challenge ?? (await detectChallenge(runner));
+    const result = augmentComposeDoc({ doc: out, spec, challenge });
+    out = result.doc;
+    generated = result.generated;
+    skipped = result.skipped;
+  }
+  let notes: string[] = [];
+  if (swarm) {
+    // After the labels, so the generated ones are already where the swarm provider reads them and the
+    // conversion only has to move what the author wrote by hand.
+    const converted = swarmify(out, { profiles: spec.compose!.profiles });
+    out = converted.doc;
+    notes = converted.notes;
+  }
+  if (!swarm && Object.keys(generated).length === 0) {
+    return { file: original, generated: {}, skipped, notes: [] };
   }
 
   // JSON, which every YAML parser reads identically. Written beside the original, never over it.
-  await writeFile(join(dir, GENERATED_COMPOSE), `${JSON.stringify(result.doc, null, 2)}\n`, 'utf8');
-  return { file: GENERATED_COMPOSE, generated: result.generated, skipped: result.skipped };
+  await writeFile(join(dir, generatedRel), `${JSON.stringify(out, null, 2)}\n`, 'utf8');
+  return { file: generatedRel, generated, skipped, notes };
 }

@@ -56,6 +56,12 @@ export type ControlState = {
   challenge: 'http01' | 'dns01';
   /** `advanced` when the control stack has the separate UI container, so it gets rebuilt too. */
   ui: 'basic' | 'advanced';
+  /**
+   * `swarm` or `compose`, from `.env`. A host provisioned before 0.26.0 has no such line and IS a
+   * compose host — so absent means compose, never the new-host default. Switching is explicit
+   * (`--orchestrator`) because it recreates the networks, which needs every preview down.
+   */
+  orchestrator: 'swarm' | 'compose';
 };
 
 /**
@@ -124,6 +130,7 @@ export async function readControlState(dataDir: string): Promise<ControlState> {
      * could have failed honestly.
      */
     ui: /^\s{2}advanced-ui:/m.test(compose) ? 'advanced' : 'basic',
+    orchestrator: env.get('PSTACK_ORCHESTRATOR') === 'swarm' ? 'swarm' : 'compose',
   };
 }
 
@@ -159,6 +166,7 @@ function initFlags(state: ControlState): string {
     `--challenge ${state.challenge}`,
     ...(state.challenge === 'dns01' && state.dnsProvider ? [`--dns-provider ${shq(state.dnsProvider)}`] : []),
     ...(state.ui === 'advanced' ? ['--ui advanced'] : []),
+    `--orchestrator ${state.orchestrator}`,
   ].join(' ');
 }
 
@@ -295,6 +303,8 @@ export async function upgrade(opts: {
    * way to say so without hand-writing the whole `init` line and its token.
    */
   ui?: 'basic' | 'advanced';
+  /** Switch the host's orchestrator. Only when typed; init refuses while previews hold the networks. */
+  orchestrator?: 'swarm' | 'compose';
   runner: Runner;
   log?: (line: string) => void;
 }): Promise<{ from: string; to: string; steps: UpgradeStep[] }> {
@@ -302,7 +312,11 @@ export async function upgrade(opts: {
   const phase = opts.phase ?? 'install';
   const target = opts.target ?? 'latest';
   const detected = await readControlState(opts.dataDir);
-  const state: ControlState = opts.ui ? { ...detected, ui: opts.ui } : detected;
+  const state: ControlState = {
+    ...detected,
+    ...(opts.ui ? { ui: opts.ui } : {}),
+    ...(opts.orchestrator ? { orchestrator: opts.orchestrator } : {}),
+  };
 
   // `Bun.which` resolves the same PATH the re-exec below will use, so the prefix and the handoff
   // can never disagree about which `pstack` is being talked about.
@@ -311,8 +325,9 @@ export async function upgrade(opts: {
 
   if (phase === 'install') {
     say(
-      `pstack ${pkg.version} → ${target}   (${state.domain}, ${state.challenge}, ${state.ui} UI` +
-        `${opts.ui && opts.ui !== detected.ui ? ` — overriding the detected ${detected.ui}` : ''})`,
+      `pstack ${pkg.version} → ${target}   (${state.domain}, ${state.challenge}, ${state.ui} UI, ${state.orchestrator}` +
+        `${opts.ui && opts.ui !== detected.ui ? ` — overriding the detected ${detected.ui}` : ''}` +
+        `${opts.orchestrator && opts.orchestrator !== detected.orchestrator ? ` — switching from ${detected.orchestrator}` : ''})`,
     );
     if (!binPath) {
       say('  note: `pstack` is not on PATH, so the global install prefix could not be derived.');

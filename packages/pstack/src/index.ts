@@ -16,7 +16,12 @@
  */
 
 export { loadSpec, parseSpec, interpolate, warnings, SpecError } from './spec.ts';
-export type { Axis, ComposeSpec, Stack } from './spec.ts';
+export type { Axis, ComposeSpec, Orchestrator, SleepPolicy, Stack } from './spec.ts';
+export { parseDuration } from './spec.ts';
+export { swarmify, swarmInfo, workerJoinToken, joinCommand, joinScript, SWARM_PORTS } from './swarm.ts';
+export type { SwarmInfo, SwarmNode, SwarmifyResult } from './swarm.ts';
+export { signShare, verifyShare, SHARE_VIEWS } from './share.ts';
+export type { ShareClaims, ShareView } from './share.ts';
 
 export { createRunner, captureOutputs, maskSecrets } from './exec.ts';
 export type { Runner, RunResult, LogLevel } from './exec.ts';
@@ -24,7 +29,7 @@ export type { Runner, RunResult, LogLevel } from './exec.ts';
 export { consoleSink, bufferSink, nullSink } from './log.ts';
 export type { Sink, LogEvent } from './log.ts';
 
-export { up, down, verify, status, report } from './stack.ts';
+export { up, down, sleep, verify, status, report } from './stack.ts';
 export type { Outcome, StepResult } from './stack.ts';
 
 export { composeUp, composeDown, composePs, composeLogs, shq } from './compose.ts';

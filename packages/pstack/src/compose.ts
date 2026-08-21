@@ -14,17 +14,22 @@
  *
  * Second rule: `down -v` removes containers, volumes and networks — but NOT images. Per-stack
  * images are removed by an explicit axis (see examples/), not by compose.
+ *
+ * Third, since 0.26.0: every function here DISPATCHES on `spec.compose.orchestrator`. Under `swarm`
+ * the same verbs become `docker stack deploy` / `docker stack rm` / `docker service logs` /
+ * `docker stack ps` (built in swarm.ts), and the file passed is the converted one. The callers in
+ * stack.ts and api.ts do not know which; that is the point of keeping one seam.
+ *
+ * `sleep` is the fourth verb: `down` WITHOUT `-v` (swarm: `stack rm`, which never touches volumes).
+ * The containers and networks go, the data stays, the axes are not consulted — a sleeping preview is
+ * one that can be brought back by `up` alone.
  */
 
 import type { Stack } from './spec.ts';
 import type { Runner, RunResult } from './exec.ts';
 import { subdomainEnv } from './subdomains.ts';
 import { materializeCompose } from './autolabel.ts';
-
-function fileArgs(spec: Stack): string {
-  const c = spec.compose!;
-  return [c.file, ...(c.overlays ?? [])].map((f) => `-f ${shq(f)}`).join(' ');
-}
+import { stackDeployCmd, stackLogsCmd, stackPsCmd, stackRmCmd } from './swarm.ts';
 
 /**
  * The prefix every subcommand shares.
@@ -45,18 +50,29 @@ async function baseFor(spec: Stack, runner: Runner): Promise<string> {
  * so regenerating each time is what stops `up` and `down` disagreeing about what a router was called —
  * and compose reads the file on every subcommand anyway.
  *
- * `runner.cwd` is the deployment directory (the registry sets it) or the spec's own directory (the
- * CLI). With neither there is nowhere to write, so the submitted file is used unchanged.
+ * `runner.cwd` is the deployment directory (the registry sets it); the CLI sets none and docker runs
+ * from the shell's directory, which is then where the compose file is read from and the derived one
+ * written (beside it — see materializeCompose).
  */
 async function fileArgsFor(spec: Stack, runner: Runner): Promise<string> {
+  const { files } = await filesFor(spec, runner);
+  return files.map((f) => `-f ${shq(f)}`).join(' ');
+}
+
+/** The compose files to pass, in order, plus what the swarm conversion changed (for the job log). */
+async function filesFor(spec: Stack, runner: Runner): Promise<{ files: string[]; notes: string[] }> {
   const c = spec.compose!;
-  const dir = runner.cwd;
   // Nothing is written under --dry-run: a dry run must not have side effects, and the point of it is
   // to show what WOULD happen.
-  if (!dir || runner.dryRun) return fileArgs(spec);
-  const { file } = await materializeCompose({ dir, spec, runner });
-  return [file, ...(c.overlays ?? [])].map((f) => `-f ${shq(f)}`).join(' ');
+  if (runner.dryRun) return { files: [c.file, ...(c.overlays ?? [])], notes: [] };
+  // The deployment directory under the API; the shell's directory under the CLI — which is also
+  // where docker itself will resolve the `-f` path, so the two cannot disagree.
+  const dir = runner.cwd ?? process.cwd();
+  const { file, notes } = await materializeCompose({ dir, spec, runner });
+  return { files: [file, ...(c.overlays ?? [])], notes };
 }
+
+const isSwarm = (spec: Stack) => spec.compose?.orchestrator === 'swarm';
 
 function profileArgs(profiles: string[]): string {
   return profiles.map((p) => `--profile ${shq(p)}`).join(' ');
@@ -83,8 +99,16 @@ export async function composeUp(
   spec: Stack,
   runner: Runner,
   extraEnv: Record<string, string>,
+  /** Where the swarm conversion's notes go. Optional: the CLI has no job log. */
+  note: (line: string) => void = () => {},
 ): Promise<RunResult> {
   const c = spec.compose!;
+  if (isSwarm(spec)) {
+    const { files, notes } = await filesFor(spec, runner);
+    for (const n of notes) note(`swarm: ${n}`);
+    // `--prune` is `--remove-orphans`; profiles were resolved into the file by the conversion.
+    return runner.run(stackDeployCmd(spec.stack, files), { env: composeEnv(spec, extraEnv), label: 'stack deploy' });
+  }
   const cmd = `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} up -d --remove-orphans`;
   // --remove-orphans drops services that were in a previous deploy but are not selected now, so a
   // relabel from "backend+frontend" to "backend" actually stops the frontend instead of orphaning it.
@@ -93,9 +117,29 @@ export async function composeUp(
 
 export async function composeDown(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
+  if (isSwarm(spec)) {
+    // `stack rm` takes nothing but the name; the conversion is not consulted and the labelled volumes
+    // are removed afterwards (the `-v` equivalent — see swarm.ts for the worker-node ceiling).
+    return runner.run(stackRmCmd(spec.stack, { volumes: true }), { env: composeEnv(spec), label: 'stack rm' });
+  }
   // EVERY profile — see the file header.
   const cmd = `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} down -v --remove-orphans`;
   return runner.run(cmd, { env: composeEnv(spec), label: 'compose down' });
+}
+
+/**
+ * Put the project to sleep: containers and networks go, VOLUMES STAY. That is the whole difference
+ * from `composeDown`, and it is a separate function rather than a flag so the `down -v` the leak tests
+ * assert on cannot be weakened by a default.
+ */
+export async function composeSleep(spec: Stack, runner: Runner): Promise<RunResult> {
+  const c = spec.compose!;
+  if (isSwarm(spec)) {
+    return runner.run(stackRmCmd(spec.stack, { volumes: false }), { env: composeEnv(spec), label: 'stack rm (sleep)' });
+  }
+  // Every profile, for the same reason `down` passes them: a profile left out is a network left behind.
+  const cmd = `${await baseFor(spec, runner)} ${profileArgs(c.profiles)} down --remove-orphans`;
+  return runner.run(cmd, { env: composeEnv(spec), label: 'compose down (sleep)' });
 }
 
 /**
@@ -115,6 +159,11 @@ export async function composeLogsCommand(
 ): Promise<{ cmd: string; env: Record<string, string> } | null> {
   const c = spec.compose;
   if (!c) return null;
+  if (isSwarm(spec)) {
+    // `docker service logs` reads every node's tasks from the manager — the one thing swarm makes
+    // easier. It has no `--until`; the API refuses that parameter in swarm mode rather than dropping it.
+    return { cmd: stackLogsCmd(spec.stack, tail, service, opts), env: composeEnv(spec) };
+  }
   const only = service ? ` ${shq(service)}` : '';
   const flags = [
     opts.follow ? ' --follow' : '',
@@ -168,6 +217,7 @@ export async function composeLogs(
 
 export async function composePs(spec: Stack, runner: Runner): Promise<RunResult> {
   const c = spec.compose!;
+  if (isSwarm(spec)) return runner.run(stackPsCmd(spec.stack), { env: composeEnv(spec), label: 'stack ps' });
   return runner.run(`${await baseFor(spec, runner)} ${profileArgs(c.profiles)} ps`, {
     env: composeEnv(spec),
     label: 'compose ps',

@@ -47,6 +47,8 @@ type Parsed = {
   acmeEmail: string;
   dnsProvider: string;
   challenge: 'http01' | 'dns01';
+  /** init/cloud-init/upgrade: how previews deploy. Swarm is the default for a NEW host. */
+  orchestrator: 'swarm' | 'compose';
   distro: string;
   tag: string;
   ui: 'basic' | 'advanced';
@@ -80,6 +82,9 @@ function parseArgs(argv: string[]): Parsed {
     // HTTP-01 by default: it needs no DNS credential, so `init` works with nothing but a domain
     // pointed at the box. See the ceiling documented on InitOptions.challenge before scaling PRs.
     challenge: (process.env.PSTACK_CHALLENGE as 'http01' | 'dns01') || 'http01',
+    // Swarm by default for a new host (one manager, workers can join later). `upgrade` reads back what
+    // the host already runs and does NOT use this default.
+    orchestrator: (process.env.PSTACK_ORCHESTRATOR as 'swarm' | 'compose') || 'swarm',
     // Matches init's PSTACK_IMAGE default, so `build-image` then `init` need no flags at all.
     tag: process.env.PSTACK_IMAGE ?? 'pstack:local',
     // Basic by default: it is embedded in the API bundle, so it costs no extra container and
@@ -139,6 +144,11 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--distro') {
       p.distro = argv[++i] ?? '';
     }
+    else if (a === '--orchestrator') {
+      const o = argv[++i] ?? '';
+      if (o !== 'swarm' && o !== 'compose') fail(`--orchestrator must be swarm or compose, got "${o}"`);
+      p.orchestrator = o;
+    }
     else if (a === '--set') {
       const kv = argv[++i] ?? '';
       const eq = kv.indexOf('=');
@@ -187,12 +197,13 @@ function usage(): void {
       '            --challenge http01|dns01        (default http01 — no DNS credential needed)',
       '            --ui basic|advanced             (default basic — embedded, no extra container)',
       '            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)',
+      '            --orchestrator swarm|compose    (default swarm — one manager; workers join from the Swarm page)',
       '',
-      'cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui]',
+      'cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator]',
       '            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)',
       '',
       'upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]',
-      '            [--ui basic|advanced to override what it detects]',
+      '            [--ui basic|advanced to override what it detects]  [--orchestrator swarm|compose to switch — previews must be down]',
       '            Reads control/.env for the token, domain and email so NOTHING rotates, rebuilds',
       '            the image and re-runs init. Over SSH — never from inside the control stack.',
       '',
@@ -202,6 +213,7 @@ function usage(): void {
       '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
       '            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)',
+      '            PSTACK_ORCHESTRATOR (compose) · PSTACK_DOMAIN · PSTACK_TRAEFIK_METRICS (for sleep.idle)',
       '',
       'Exit: 0 ok · 1 failed · 2 leaked · 3 bad spec/usage',
     ].join('\n'),
@@ -399,6 +411,7 @@ switch (args.cmd) {
         challenge: args.challenge,
         dnsProvider: args.dnsProvider || undefined,
         ui: args.ui,
+        orchestrator: args.orchestrator,
         configRepo: configRepo || undefined,
         // Validated by renderCloudInit against the DISTROS list, so the CLI and the library cannot
         // hold two different opinions about what is supported.
@@ -467,6 +480,7 @@ switch (args.cmd) {
       dnsProvider: args.dnsProvider || undefined,
       challenge: args.challenge,
       ui: args.ui,
+      orchestrator: args.orchestrator,
       token: process.env.PSTACK_DNS_TOKEN,
       dryRun: args.dryRun,
       runner,
@@ -507,6 +521,8 @@ switch (args.cmd) {
         // Only when typed: `ui` defaults to 'basic' in the parser, and passing that unconditionally
         // would override the detection with a default and re-create the exact bug this fixes.
         ...(process.argv.includes('--ui') ? { ui: args.ui } : {}),
+        // Same rule: only an explicit flag switches a host's orchestrator; the default must not.
+        ...(process.argv.includes('--orchestrator') ? { orchestrator: args.orchestrator } : {}),
         runner,
       });
     } catch (err) {
@@ -567,7 +583,16 @@ switch (args.cmd) {
       process.env.DOCKER_CONFIG ??
       ((await isDir('/docker-config')) ? '/docker-config' : join(dataDir(), 'control', 'docker'));
 
-    const server = createServer({ dataDir: dataDir(), port, host, token, routingDir, registryDir });
+    const server = createServer({
+      dataDir: dataDir(),
+      port,
+      host,
+      token,
+      routingDir,
+      registryDir,
+      domain: process.env.PSTACK_DOMAIN || undefined,
+      metricsUrl: process.env.PSTACK_TRAEFIK_METRICS || undefined,
+    });
 
     // First-admin bootstrap from the environment. Honoured only while no users exist (the Auth
     // layer enforces that), so a compose file carrying this pair cannot mint extra admins later.
