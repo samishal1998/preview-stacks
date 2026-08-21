@@ -69,6 +69,47 @@ for (const c of rt.containers.filter((c) => c.restartCount > 2)) {
 const logs = await pstack.deployments.logs('pr-7', { service: 'web', tail: 500, timestamps: true, vars: { PR: 7 } });
 ```
 
+### Sleep and wake
+
+A stack that is only looked at now and then can be put to sleep — its compose project goes down, its
+volumes and axes stay — and comes back on the next request to any of its hostnames, or on `wake`.
+(The spec can do this on a timer with a `sleep:` block; see the pstack docs.)
+
+```ts
+const job = await pstack.deployments.sleep('pr-7', { PR: 7 });
+await pstack.waitForJob(job.id);
+const d = await pstack.deployments.get('pr-7', { PR: 7 });
+d.asleep;          // { since, reason, hosts, rules } while asleep, null otherwise
+await pstack.deployments.wake('pr-7', { PR: 7 });   // the same as `up`, recorded as a wake
+```
+
+### Share a read-only link
+
+Hand someone the logs of one deployment without creating an account for them. The link carries a
+signed token that reaches exactly the views you name, on that deployment, until it expires (7 days
+by default, 30 at most). The token is returned once and stored nowhere; rotating the server's
+`PSTACK_TOKEN` is the only revocation.
+
+```ts
+const link = await pstack.deployments.share('pr-7', { views: ['logs'], ttl: '24h' });
+console.log(link.url);   // https://control.preview.example.com/deployments/pr-7/public-logs-view?token=…
+
+// The token also works as this client's bearer, for the reads the link allows:
+const viewer = createClient({ baseUrl, token: link.token });
+await viewer.deployments.logs('pr-7');          // ok
+await viewer.deployments.up('pr-7');            // PstackError 403
+```
+
+### The swarm
+
+On a host that runs previews as swarm stacks, the nodes and the material a new worker needs:
+
+```ts
+const swarm = await pstack.swarm.info();        // { reachable, active, managerAddr, nodes, ports, … }
+const script = await pstack.swarm.join({ format: 'script' });   // a SECRET: treat like a password
+// formats: 'token' | 'command' | 'script' | 'cloud-config' (+ distro for cloud-config)
+```
+
 ### Verify a webhook
 
 The half that lives in your receiver. It prevents the two mistakes that make a correct signature look

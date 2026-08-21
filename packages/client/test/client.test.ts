@@ -131,6 +131,60 @@ describe('the client speaks the real API', () => {
   }, 20_000);
 });
 
+describe('0.26.0: sleep/wake, share links, the swarm', () => {
+  test('sleep and wake start jobs under their own names', async () => {
+    await client.deployments.put('pr-nap', { spec: SPEC.replace('client-probe', 'nap') + 'compose: {file: compose.yml, profiles: []}\n', compose: 'services: {}\n' });
+    const s = await client.deployments.sleep('pr-nap');
+    expect(s.action).toBe('sleep');
+    const done = await client.waitForJob(s.id, { intervalMs: 10 });
+    // No docker here: the compose step is best-effort and the job still finishes.
+    expect(['ok', 'failed']).toContain(done.state);
+    const asleep = await client.deployments.get('pr-nap');
+    expect(asleep.asleep).toMatchObject({ reason: expect.stringContaining('operator') });
+    const w = await client.deployments.wake('pr-nap');
+    expect(w.action).toBe('wake');
+    const woke = await client.waitForJob(w.id, { intervalMs: 10 });
+    const d = await client.deployments.get('pr-nap');
+    expect(d.orchestrator).toBe('compose');
+    expect(d.sleep).toBeNull();
+    // A wake that could not bring the project up (no docker here) leaves the record — the next
+    // request to its hostname tries again. One that did clears it.
+    if (woke.state === 'ok') expect(d.asleep).toBeNull();
+    else expect(d.asleep).not.toBeNull();
+  }, 20_000);
+
+  test('a share link reaches its deployment and nothing else', async () => {
+    await client.deployments.put('pr-shared', { spec: SPEC.replace('client-probe', 'shared') });
+    await client.deployments.put('pr-other', { spec: SPEC.replace('client-probe', 'other') });
+    const link = await client.deployments.share('pr-shared', { views: ['details'], ttl: '1h' });
+    expect(link.views).toEqual(['details']);
+    expect(link.url).toContain('/deployments/pr-shared/public-logs-view?token=');
+    expect(link.expiresAt).toBeGreaterThan(Date.now());
+
+    const viewer = createClient({ baseUrl: `http://127.0.0.1:${server.port}`, token: link.token });
+    const seen = await viewer.deployments.get('pr-shared');
+    expect(seen.stack).toBe('shared');
+    await expect(viewer.deployments.logs('pr-shared')).rejects.toMatchObject({ status: 403 });
+    await expect(viewer.deployments.get('pr-other')).rejects.toMatchObject({ status: 403 });
+    await expect(viewer.deployments.up('pr-shared')).rejects.toMatchObject({ status: 403 });
+    await expect(viewer.deployments.share('pr-shared')).rejects.toMatchObject({ status: 403 });
+    await expect(client.deployments.share('pr-shared', { ttl: '90d' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  test('the swarm panel is honest when docker does not answer, and the join material is text', async () => {
+    const info = await client.swarm.info();
+    expect(typeof info.reachable).toBe('boolean');
+    expect(Array.isArray(info.nodes)).toBe(true);
+    expect(info.ports.map((p) => p.port)).toEqual(['2377/tcp', '7946/tcp+udp', '4789/udp']);
+    if (!info.reachable || !info.active) {
+      // Not a manager (or no docker at all): joining is refused with the server's reason, never a token.
+      await expect(client.swarm.join({ format: 'command' })).rejects.toMatchObject({ status: expect.any(Number) });
+    } else {
+      expect(await client.swarm.join({ format: 'command' })).toContain('docker swarm join --token');
+    }
+  });
+});
+
 describe('verifyWebhook — the half that lives in the receiver', () => {
   const secret = 'shhh-a-long-signing-secret';
   const body = JSON.stringify({ id: 'evt_1', event: 'job.leaked', at: 1, data: { stack: 's' } });

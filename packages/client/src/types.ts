@@ -12,7 +12,22 @@
  */
 
 export type Kind = 'isolated' | 'shared';
-export type JobAction = 'up' | 'down' | 'verify';
+/** `sleep` takes the compose project down (volumes and axes stay); `wake` is `up` recorded under its own name. */
+export type JobAction = 'up' | 'down' | 'verify' | 'sleep' | 'wake';
+export type Orchestrator = 'compose' | 'swarm';
+export type ShareView = 'details' | 'logs';
+
+/**
+ * Present while a deployment is asleep: when, why, and the hostnames a request to which wakes it
+ * (captured from its Traefik labels the moment before teardown).
+ */
+export type SleepRecord = {
+  since: number;
+  reason: string;
+  hosts: string[];
+  /** `HostRegexp` patterns (wildcard subdomains), Go syntax. */
+  rules: string[];
+};
 /** `cancelled` = a person stopped it; nothing it had done was undone. */
 export type JobState = 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled';
 export type ReadinessState = 'watching' | 'ready' | 'failed' | 'timedout';
@@ -41,10 +56,53 @@ export type DeploymentRow = {
    */
   busy: boolean | null;
   running: boolean | null;
+  /** The sleep record, or null when awake. A sleeping stack is neither running nor torn down. */
+  asleep?: SleepRecord | null;
+  /** `compose` or `swarm`; null when the spec has no compose section or could not be resolved. */
+  orchestrator?: Orchestrator | null;
+  /** The spec's `sleep:` policy as durations (`2h`), on the detail route only. */
+  sleep?: { idle: string | null; after: string | null } | null;
   /** Why the spec could not be resolved — usually a variable this call did not supply. */
   unresolved?: string;
   createdAt?: number;
   updatedAt?: number;
+};
+
+export type SwarmNode = {
+  id: string;
+  hostname: string;
+  role: 'manager' | 'worker';
+  status: string;
+  availability: string;
+  managerStatus: string | null;
+  engineVersion: string;
+  /** The node this API runs on. */
+  self: boolean;
+};
+
+export type SwarmInfo = {
+  /** False when docker did not answer — every other field is then unknown, not empty. */
+  reachable: boolean;
+  /** Whether this daemon is a swarm manager. Inactive hosts run previews with compose. */
+  active: boolean;
+  nodeId: string | null;
+  /** `<advertise-addr>:2377`, what a worker joins. */
+  managerAddr: string | null;
+  nodes: SwarmNode[];
+  error?: string;
+  /** The ports a worker must reach on the manager (and nodes on each other). */
+  ports: Array<{ port: string; why: string }>;
+  note: string;
+};
+
+export type ShareLink = {
+  /** `https://control.<domain>/deployments/<id>/public-logs-view?token=…` */
+  url: string;
+  /** The JWT. Returned ONCE; stored nowhere on the server. Works as this client's `token` for the GETs it allows. */
+  token: string;
+  views: ShareView[];
+  /** Epoch ms. */
+  expiresAt: number;
 };
 
 export type StepResult = {
@@ -107,6 +165,12 @@ export type RuntimeContainer = {
   ingressIp: string | null;
   ports: Array<{ containerPort: number; protocol: string; hostPort?: string }>;
   traefikLabels: Record<string, string>;
+  /** Epoch ms when the process started; null when docker did not say. */
+  startedAt?: number | null;
+  /** The swarm node it runs on, or null under compose. */
+  node?: string | null;
+  /** A swarm task on ANOTHER node: listed, but out of reach of exec/stop from the manager. */
+  remote?: boolean;
 };
 
 export type RuntimeRoute = {
@@ -125,6 +189,8 @@ export type RuntimeRoute = {
 
 export type Runtime = {
   id?: string;
+  orchestrator?: Orchestrator | null;
+  asleep?: SleepRecord | null;
   stack: string;
   containers: RuntimeContainer[];
   routes: RuntimeRoute[];
