@@ -340,10 +340,16 @@ const stateTone = (c: RuntimeContainer): string =>
         never brought up — not a server fault, so it is a note rather than an error.
       -->
       <div v-else-if="logs && !logs.ok" class="banner warn">
-        <b>Compose exited non-zero.</b>
+        <b>{{ dep.detail?.orchestrator === 'swarm' ? 'docker service logs' : 'Compose' }} exited non-zero.</b>
         <p>
-          Most often the project does not exist yet (nothing has been brought up), or a profile is
-          missing. Any output it did produce is below.
+          <template v-if="dep.detail?.asleep">
+            This deployment is <b>asleep</b> — its containers are gone until something wakes it, and
+            there is nothing to read logs from.
+          </template>
+          <template v-else>
+            Most often the project does not exist yet (nothing has been brought up), or a profile is
+            missing. Any output it did produce is below.
+          </template>
         </p>
       </div>
 

@@ -16,7 +16,7 @@ import { usePolling } from './composables/usePolling';
 import { loadDeployments, loadHealth, loadJobs, state } from './composables/useControlPlane';
 import { settings } from './composables/useSettings';
 import { authState, logout } from './composables/useAuth';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import InfoHint from './components/InfoHint.vue';
 // Named imports, so the bundler ships only these glyphs — not the whole set.
 import {
@@ -26,6 +26,7 @@ import {
   FileCode2,
   KeyRound,
   LayoutDashboard,
+  Network,
   Package,
   Plus,
   Settings2,
@@ -58,6 +59,10 @@ watch(
 );
 
 const router = useRouter();
+// A share link's page: no rail (nobody is signed in) and NOT the centred login card — a log pane
+// wants the whole width.
+const route = useRoute();
+const isPublic = computed(() => route.meta.public === true);
 async function signOut(): Promise<void> {
   await logout();
   void router.push('/login');
@@ -77,7 +82,7 @@ void settings;
 <template>
   <a class="skip" href="#main">Skip to content</a>
 
-  <div class="shell" :class="{ 'no-rail': !authState.authed }">
+  <div class="shell" :class="{ 'no-rail': !authState.authed, public: isPublic }">
     <!-- Signed out there is nothing to navigate to — every link would bounce back to /login — so
          the rail is dead chrome and the login card gets the whole viewport. -->
     <aside v-if="authState.authed" class="rail">
@@ -106,6 +111,11 @@ void settings;
         <RouterLink to="/routing" class="navlink">
           <Waypoints :size="17" aria-hidden="true" />
           <span>Routing</span>
+        </RouterLink>
+
+        <RouterLink to="/swarm" class="navlink">
+          <Network :size="17" aria-hidden="true" />
+          <span>Swarm</span>
         </RouterLink>
 
         <RouterLink to="/registries" class="navlink">

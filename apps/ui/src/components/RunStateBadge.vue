@@ -9,11 +9,20 @@
  *
  * So unknown says unknown, and it gets its own colour.
  */
-defineProps<{ busy: boolean | null; running: boolean | null }>();
+import type { SleepRecord } from '../api/types';
+defineProps<{ busy: boolean | null; running: boolean | null; asleep?: SleepRecord | null }>();
 </script>
 
 <template>
   <span v-if="busy === true" class="badge busy"><span class="dot pulse" />Busy</span>
+  <!-- Asleep is its own state, before the running/idle question: the compose project is down on
+       purpose, the data and axes are still there, and a request to its hostname brings it back. -->
+  <span
+    v-else-if="asleep"
+    class="badge asleep"
+    :title="`asleep since ${new Date(asleep.since).toLocaleString()} (${asleep.reason}) — a request to its hostname wakes it`"
+    ><span class="dot" />Asleep</span
+  >
   <span v-else-if="running === true" class="badge ok"><span class="dot" />Running</span>
   <span
     v-else-if="busy === null || running === null"

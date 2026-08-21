@@ -44,6 +44,7 @@ const PAGES: Item[] = [
   { id: 'p.jobs', label: 'Jobs', hint: 'g j', group: 'Go to', to: '/jobs', base: 7 },
   { id: 'p.specs', label: 'Specs', group: 'Go to', to: '/specs', base: 6 },
   { id: 'p.routing', label: 'Routing', group: 'Go to', to: '/routing', base: 5 },
+  { id: 'p.swarm', label: 'Swarm', group: 'Go to', to: '/swarm', base: 4.5 },
   { id: 'p.reg', label: 'Registries', group: 'Go to', to: '/registries', base: 4 },
   { id: 'p.notif', label: 'Notifiers', group: 'Go to', to: '/notifiers', base: 3 },
   { id: 'p.hostvars', label: 'Variables & secrets', group: 'Go to', to: '/variables', base: 2.7 },

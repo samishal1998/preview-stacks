@@ -22,7 +22,7 @@
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api, problem } from '../../api/client';
-import type { ConflictBody } from '../../api/types';
+import type { ConflictBody, ShareLink, ShareView } from '../../api/types';
 import { dep, isShared, varsQuery } from '../../composables/useDeployment';
 import {
   act,
@@ -42,8 +42,51 @@ import ActionButton from '../../components/ActionButton.vue';
 import ConflictNote from '../../components/ConflictNote.vue';
 import InfoHint from '../../components/InfoHint.vue';
 import ErrorNote from '../../components/ErrorNote.vue';
+import EquivalentCommand from '../../components/EquivalentCommand.vue';
+import SelectMenu from '../../components/SelectMenu.vue';
 
 const router = useRouter();
+
+// ── share link ──────────────────────────────────────────────────────────────────────────────────
+// Here rather than on Overview because it MINTS A CREDENTIAL: a URL that reads this deployment's
+// logs until it expires, with no per-link revocation. The result is shown once and held in
+// component state only — never in Settings, never in storage, never in a toast.
+const shareDetails = ref(true);
+const shareLogs = ref(true);
+const shareTtl = ref('7d');
+const shareLink = ref<ShareLink | null>(null);
+const shareError = ref('');
+const sharePending = ref(false);
+const shareViews = computed<ShareView[]>(() => [
+  ...(shareDetails.value ? (['details'] as const) : []),
+  ...(shareLogs.value ? (['logs'] as const) : []),
+]);
+
+async function share(): Promise<void> {
+  sharePending.value = true;
+  shareError.value = '';
+  shareLink.value = null;
+  const r = await api.post<ShareLink>(`/api/deployments/${encodeURIComponent(dep.id)}/share`, {
+    views: shareViews.value,
+    ttl: shareTtl.value,
+  });
+  sharePending.value = false;
+  if (r.status === 201) {
+    shareLink.value = r.body;
+    return;
+  }
+  shareError.value = problem(r, 'mint a share link');
+}
+
+async function copyShare(): Promise<void> {
+  if (!shareLink.value) return;
+  try {
+    await navigator.clipboard.writeText(shareLink.value.url);
+    toast('ok', 'Link copied.');
+  } catch {
+    toast('error', 'Could not reach the clipboard — select the link and copy it.');
+  }
+}
 
 const downVerify = ref(true);
 const forceTyped = ref('');
@@ -78,6 +121,99 @@ async function forget(): Promise<void> {
 
 <template>
   <div>
+    <!-- ============================ sleep ============================ -->
+    <section v-if="dep.detail && !isShared" class="panel">
+      <h2 class="section" style="margin-bottom: var(--s3)">Sleep</h2>
+      <p class="dim">
+        Takes the {{ dep.detail.orchestrator === 'swarm' ? 'swarm stack' : 'compose project' }} down and
+        <b>keeps its volumes and every axis</b>. The next request to any of its hostnames brings it
+        back — the visitor sees “spinning up…” for the length of a deploy — and so does <b>Wake</b> in
+        the header.
+        <InfoHint label="what sleep runs">
+          <code>{{ dep.detail.orchestrator === 'swarm' ? 'docker stack rm' : 'docker compose down' }}</code>
+          — without <code>-v</code>, which is the whole difference from tearing down. A spec can
+          schedule this itself with a <code>sleep:</code> block (idle / after).
+        </InfoHint>
+      </p>
+      <div class="row" style="margin-top: var(--s3)">
+        <ActionButton
+          :pending="pending === 'sleep'"
+          :disabled="!!pending || busy || !!whyDisabled('sleep')"
+          :title="whyDisabled('sleep')"
+          @click="act('sleep')"
+        >
+          Sleep now
+        </ActionButton>
+        <span v-if="dep.detail.asleep" class="mute">
+          Asleep since {{ new Date(dep.detail.asleep.since).toLocaleString() }} ({{ dep.detail.asleep.reason }}).
+        </span>
+      </div>
+    </section>
+
+    <!-- ============================ share ============================ -->
+    <section v-if="dep.detail" class="panel">
+      <div class="phead">
+        <h2 class="section">Share a read-only link</h2>
+        <span class="grow" />
+        <EquivalentCommand
+          what="this link"
+          method="POST"
+          :path="`/api/deployments/${encodeURIComponent(dep.id)}/share`"
+          :body="{ views: shareViews, ttl: shareTtl }"
+        />
+      </div>
+      <p class="dim">
+        A URL that opens <b>this deployment only</b>, for someone without an account. It carries a
+        signed token that reaches exactly the views below until it expires.
+        <InfoHint label="what a link can and cannot do">
+          Read-only, and scoped: details and logs of this deployment, nothing else — no actions, no
+          terminal, no other deployment. There is no per-link revocation; rotating the host's
+          PSTACK_TOKEN invalidates every link at once, so keep the expiry short.
+        </InfoHint>
+      </p>
+      <div class="row" style="margin-top: var(--s3); flex-wrap: wrap; gap: var(--s3)">
+        <label class="check"><input v-model="shareDetails" type="checkbox" /> Details &amp; containers</label>
+        <label class="check"><input v-model="shareLogs" type="checkbox" /> Logs</label>
+        <div class="field inline">
+          <label for="share-ttl">Expires</label>
+          <SelectMenu
+            id="share-ttl"
+            v-model="shareTtl"
+            label="How long the link works"
+            :options="[
+              { value: '1h', label: 'In 1 hour' },
+              { value: '24h', label: 'In 24 hours' },
+              { value: '7d', label: 'In 7 days' },
+              { value: '30d', label: 'In 30 days' },
+            ]"
+          />
+        </div>
+        <ActionButton
+          variant="primary"
+          :pending="sharePending"
+          :disabled="sharePending || shareViews.length === 0"
+          :title="shareViews.length === 0 ? 'Pick at least one view.' : undefined"
+          @click="share"
+        >
+          Create link
+        </ActionButton>
+      </div>
+      <div v-if="shareLink" class="banner ok" style="margin-top: var(--s3)">
+        <b>Your link — copy it now.</b>
+        <p>
+          Opens {{ shareLink.views.join(' and ') }} of <b>{{ dep.id }}</b> until
+          {{ new Date(shareLink.expiresAt).toLocaleString() }}. It is shown once and stored nowhere.
+        </p>
+        <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ shareLink.url }}</pre>
+        <div class="row">
+          <button @click="copyShare">Copy</button>
+          <a :href="shareLink.url" target="_blank" rel="noopener">Open ↗</a>
+          <button @click="shareLink = null">Done</button>
+        </div>
+      </div>
+      <ErrorNote v-if="shareError" :text="shareError" title="No link was created." />
+    </section>
+
     <section class="panel">
       <h2 class="section" style="margin-bottom: var(--s3)">Tear down</h2>
 
@@ -144,7 +280,8 @@ async function forget(): Promise<void> {
             <b>every preview on this host breaks</b> until someone rebuilds it by hand. The button is
             the same one that is routine on a single preview.
             <InfoHint label="what tearing down runs">
-              <code>docker compose down -v</code> — the <code>-v</code> is what removes the volumes.
+              <code>{{ dep.detail.orchestrator === 'swarm' ? 'docker stack rm, then docker volume rm on its volumes' : 'docker compose down -v' }}</code>
+              — removing the volumes is what makes this different from sleeping.
             </InfoHint>
           </p>
           <div class="field" style="margin-top: var(--s3); max-width: 380px">

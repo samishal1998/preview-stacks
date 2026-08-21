@@ -16,6 +16,16 @@ const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
   { path: '/', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
   { path: '/deployments', name: 'deployments', component: () => import('./views/DeploymentsView.vue') },
+  // The page a share link opens. Public: the link's token authenticates every call it makes, and a
+  // visitor has no session to be redirected to. A top-level route, not a detail tab — the detail
+  // view acts on its deployment and this page must not be able to.
+  {
+    path: '/deployments/:id/public-logs-view',
+    name: 'public-logs',
+    component: () => import('./views/PublicLogsView.vue'),
+    props: true,
+    meta: { public: true },
+  },
   {
     path: '/deployments/:id',
     component: () => import('./views/DeploymentDetailView.vue'),
@@ -33,6 +43,7 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   { path: '/routing', name: 'routing', component: () => import('./views/RoutingView.vue') },
+  { path: '/swarm', name: 'swarm', component: () => import('./views/SwarmView.vue') },
   { path: '/registries', name: 'registries', component: () => import('./views/RegistriesView.vue') },
   { path: '/notifiers', name: 'notifiers', component: () => import('./views/NotifiersView.vue') },
   { path: '/specs', name: 'specs', component: () => import('./views/SpecsView.vue') },
@@ -59,6 +70,7 @@ export const router = createRouter({
  * destination so signing in lands where they were going, not on the dashboard.
  */
 router.beforeEach(async (to) => {
+  if (to.meta.public) return true;
   const { authState, checkAuth } = await import('./composables/useAuth');
   if (!authState.checked) await checkAuth();
   if (to.name === 'login') {

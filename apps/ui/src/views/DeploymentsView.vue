@@ -25,7 +25,8 @@ const rows = computed(() => {
     if (kind.value !== 'all' && d.kind !== kind.value) return false;
     // "Live" means DEMONSTRABLY live. An unknown is not evidence of either state, so it is not
     // silently included here — the filter says what it filters.
-    if (onlyLive.value && !(d.running === true || d.busy === true)) return false;
+    // Asleep counts as live: it is deliberately down and comes back on a request — not torn down.
+    if (onlyLive.value && !(d.running === true || d.busy === true || d.asleep)) return false;
     if (!needle) return true;
     return (
       d.id.toLowerCase().includes(needle) ||
@@ -127,7 +128,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
                   needs variables
                 </span>
               </td>
-              <td data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" /></td>
+              <td data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" :asleep="d.asleep" /></td>
               <td class="dim nowrap" data-label="updated"><RelativeTime :at="d.updatedAt" /></td>
             </tr>
             <tr v-if="!rows.length">

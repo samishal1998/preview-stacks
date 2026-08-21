@@ -98,6 +98,48 @@ const kindBlurb = computed(() =>
           </span>
         </li>
         <li v-if="dep.detail.compose">
+          <span class="k">
+            Orchestrator
+            <InfoHint label="compose or swarm">
+              <b>compose</b> runs the project with docker compose on this host. <b>swarm</b> deploys
+              it as a swarm stack — the file you submitted is converted on every deploy (profiles
+              resolved, <code>restart</code> and limits moved under <code>deploy</code>, Traefik
+              labels onto the service), and its tasks may land on any node of the swarm.
+            </InfoHint>
+          </span>
+          <span class="v">{{ dep.detail.orchestrator ?? 'compose' }}</span>
+        </li>
+        <li v-if="dep.detail.sleep">
+          <span class="k">
+            Sleep policy
+            <InfoHint label="what the scheduler does">
+              The scheduler takes the compose project down — volumes and axes stay — when the policy
+              says so, and the next request to any of its hostnames brings it back. <b>idle</b> counts
+              requests through Traefik; <b>after</b> counts from the last deploy.
+            </InfoHint>
+          </span>
+          <span class="v">
+            <span v-if="dep.detail.sleep.idle">after <b>{{ dep.detail.sleep.idle }}</b> without a request</span>
+            <span v-if="dep.detail.sleep.idle && dep.detail.sleep.after" class="mute"> · </span>
+            <span v-if="dep.detail.sleep.after"><b>{{ dep.detail.sleep.after }}</b> after the last deploy</span>
+          </span>
+        </li>
+        <li v-if="dep.detail.asleep">
+          <span class="k">Asleep</span>
+          <span class="v">
+            since {{ stamp(dep.detail.asleep.since) }}
+            <span class="mute">({{ dep.detail.asleep.reason }})</span>
+            <div v-if="dep.detail.asleep.hosts.length || dep.detail.asleep.rules.length" class="mute" style="font-size: var(--t-sm)">
+              wakes on a request to
+              <span v-for="h in dep.detail.asleep.hosts" :key="h" class="mono" style="margin-right: 8px">{{ h }}</span>
+              <span v-for="r in dep.detail.asleep.rules" :key="r" class="mono" style="margin-right: 8px">/{{ r }}/</span>
+            </div>
+            <div v-else class="mute" style="font-size: var(--t-sm)">
+              no hostnames were found on its containers — only Wake brings it back
+            </div>
+          </span>
+        </li>
+        <li v-if="dep.detail.compose">
           <span class="k">Overlays</span>
           <span class="v">
             <span v-for="o in dep.detail.compose.overlays" :key="o" class="mono" style="margin-right: 8px">{{ o }}</span>
