@@ -164,7 +164,7 @@ Fires when a lifecycle action is accepted and its job begins.
 |---|---|---|
 | `jobId` | string | Follow it at `/jobs/<jobId>` (UI) or `GET /api/jobs/<jobId>`. |
 | `stack` | string | The stack being acted on. |
-| `action` | `"up"` \| `"down"` \| `"verify"` | |
+| `action` | `"up"` \| `"down"` \| `"verify"` \| `"sleep"` \| `"wake"` | `sleep` takes the compose project down and keeps its volumes and axes; `wake` is `up` recorded under its own name (0.26.0). |
 | `startedAt` | number | Epoch ms. |
 
 ### `job.succeeded` / `job.failed` / `job.cancelled` / `job.leaked`
@@ -355,6 +355,43 @@ only — the content can hold credentials and is never sent.
 |---|---|---|
 | `file` | string | e.g. `auth.yml`. |
 | `action` | `"created"` \| `"replaced"` \| `"deleted"` | |
+
+### `stack.slept`
+
+Fires when a stack's compose project was taken down **while its volumes and axes stayed** — by the
+scheduler (`sleep: { idle, after }` in the spec) or by `POST …/sleep`. A request to any of `hosts`
+wakes it. (0.26.0)
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `stack` | string | |
+| `deployment` | string | The registry id. |
+| `reason` | string | `idle 2h`, `after 3d`, or `operator: <actor>`. |
+| `hosts` | string[] | The exact hostnames captured from its Traefik labels before teardown — what wakes it. Wildcard patterns are not listed here. |
+
+### `stack.woken`
+
+Fires when a sleeping stack starts coming back — at the **start** of the wake job, so a notifier sees
+the request that caused it, not only the outcome (the `job.*` family reports that). (0.26.0)
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `stack` | string | |
+| `deployment` | string | |
+| `by` | string | `request:<hostname>` when traffic through the catch-all router woke it; otherwise the actor who called `POST …/wake`. |
+
+### `share.created`
+
+Fires when a read-only link to one deployment is minted (`POST …/share`). Says **what was granted**
+— never the token, which exists only in the 201 response. (0.26.0)
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `deployment` | string | The registry id. |
+| `stack` | `null` | Present for shape stability; the link is keyed on the deployment, not the resolved stack. |
+| `views` | `("details" \| "logs")[]` | What the link can open. |
+| `expiresAt` | number | Epoch ms. |
+| `by` | string | The actor who minted it. |
 
 ---
 

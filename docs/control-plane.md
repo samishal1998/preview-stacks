@@ -802,6 +802,97 @@ differently. A missing reference fails the resolve loudly, naming the Variables 
 | The bare CLI errors on `${vars.*}`/`${secrets.*}` | Host values live in the control plane's database. The error names the boundary ("submit this spec to a pstack server") instead of pretending the variable is merely undefined. |
 | Stored plainly, like notifier signing secrets | The server must hand the plaintext to hooks and compose, so one-way storage is impossible. The protection is the 0700 directory, the 0600 database file, and the absence of a read path. |
 
+## 5e. Swarm, the scheduler, and share links (0.26.0)
+
+Three features, each with one structural decision that is refused below because it would have been
+the obvious one.
+
+### Swarm: the control stack stays a compose project on the manager
+
+Previews deploy as swarm stacks; the control stack (Traefik + the API) does not. It is a plain
+compose project on the manager, exactly as before, with the two external networks recreated as
+**attachable overlays** so its containers reach tasks on any node, and Traefik running **both**
+providers — `docker` for the control stack's own routers, `swarm` for the stacks. The obvious
+alternative, deploying the control stack as a swarm stack too, was refused: §2 is the reason. The
+API must never depend on the orchestrator it manages, `init`'s health wait and `detectChallenge`
+read the control containers by compose label, and a broken swarm must still leave a control plane
+that can say so.
+
+**Conversion happens at invocation time, not at store time.** The registry keeps the submitted
+compose file byte for byte (§4) — `source()` hands it back to the replace form, and a named spec's
+copy lands in every referencing deployment. Converting it on the way in would have to happen in two
+places and would make the stored file disagree with what the author wrote. Instead the same
+pipeline that generates Traefik labels (`autolabel.ts`, §4a) converts on **every** `docker stack`
+invocation and writes `compose.generated.yml` beside the original: `up`, `down`, `logs` and `ps`
+cannot disagree about what was deployed, and a dry run shows the original because nothing is
+written under it. The rules are faithful (a missing `restart:` is `none`, which is what compose
+does, not swarm's `any`) and everything dropped is named in the job log, because "Additional
+property mem_limit is not allowed" teaches nothing.
+
+Discovery (`inspect.ts`) answers for both: a swarm stack's containers carry
+`com.docker.stack.namespace`, its routers live on **service** labels, and a task on another node is
+listed from `docker stack ps` with `remote: true` — honestly out of reach of `docker exec` and
+`stop`, which are node-local, and refused by name on the routes that would need them.
+
+### The scheduler: policy in the spec, the record in the registry, activity in memory
+
+**Where the policy lives** — `sleep: { idle, after }` in the spec. It is the author's intent about
+their preview, it travels with CI like everything else in the spec, and a named spec gives every PR
+the same policy for free.
+
+**Where the record lives** — `meta.json`, as `sleep: { since, reason, hosts, rules }`. This is the
+one record in the registry that looks like state, so the line is drawn precisely: it is **not** a
+claim that nothing is running (docker answers that, and `up` clears the record regardless). It is
+the intent "wake this on a request", plus the one fact that cannot be recovered from docker once the
+containers are gone — which hostnames are this deployment's. Those are captured from the live
+Traefik labels the moment before teardown, which is why a hand-written router is recognised exactly
+like a generated one. A SQLite table of sleeping stacks was refused by the amended invariant 10: it
+would be a row describing what is running.
+
+**Where activity lives** — memory. `idle` reads Traefik's per-router request counters (a Prometheus
+entrypoint the control stack exposes to the API container only; nothing in the request path) and
+notes, per stack, the last tick on which any of its routers moved. A restart forgets that, and the
+idle clock restarts from the process start — the cost is one extra `idle` period awake, never a
+sleep that comes early. A `last_seen` table was refused for the same reason job records are in
+memory: it is observation history, and losing it loses nothing about correctness.
+
+**Why the catch-all is labels on the pstack container, not a file.** The wake router (priority 1,
+`HostRegexp` over the whole domain) used to exist only on cloud-init hosts, as `fallback.yml` in
+Traefik's file directory. It is now rendered by `init` as labels on the pstack container, for the
+reason §4b gives for `control.<domain>`: nothing written to the dynamic directory — by an operator,
+by the routing page, by a bad edit — can take it away, and the docker provider resolves the
+container's IP directly rather than trusting a DNS alias across an overlay network. A request that
+reaches the API through it carries the preview's `Host`; the `SleepIndex` (rebuilt on every record
+change) answers in one Map lookup, so the dispatch costs nothing when nothing sleeps.
+
+**Why wake is `up`.** Axis `up` hooks are idempotent by contract ("re-run on every redeploy") and
+re-capture their outputs, so a wake needs nothing remembered from before the sleep — no persisted
+`outputs`, no second code path. It runs under the same per-stack lock as every other job, so a wake
+racing a `down` over one database branch is refused, not queued.
+
+### Share links: a JWT signed with PSTACK_TOKEN, and no table
+
+A share link is an HS256 JWT — `{ sub: 'share', dep, views, iat, exp }` — signed with
+`PSTACK_TOKEN`. Three refusals:
+
+- **No table of issued links.** It would be a row describing a credential (invariant 10 again), and
+  the only thing it would buy is per-link revocation. The TTL bounds a leak (7 days by default, 30 at
+  most), and rotating `PSTACK_TOKEN` revokes everything at once; `pstack upgrade` deliberately does
+  not rotate it, so links survive upgrades.
+- **No separate signing key.** `PSTACK_TOKEN` is the one secret every host already has, 192 bits when
+  `init` generates it, and a leaked link reveals nothing about it — verifying one needs the key, but
+  holding one does not yield it.
+- **No header-only transport.** The token travels as `?token=` because the log view follows logs over
+  an `EventSource`, and a browser cannot put a header on one — the same constraint that made
+  sessions cookies (§5). The raw `PSTACK_TOKEN` is never accepted from a query string; a JWT is a
+  bounded grant, the bearer is root.
+
+What a link reaches is decided **before any route** — right after the auth gate, `shareAllows`
+checks method, deployment and view, so a route added next year is closed to share principals until
+someone lists it. Request variables are ignored for them (a `?PR=8` would otherwise resolve another
+stack's logs), `mayOpenTerminal` answers by kind, and `actorOf` names the link so the audit rows
+stay honest.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves

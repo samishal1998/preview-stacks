@@ -1110,6 +1110,7 @@ Everything `init` reads:
 | `--acme-email <addr>` | `PSTACK_ACME_EMAIL` | — | **required.** Let's Encrypt mails expiry warnings here |
 | `--challenge http01\|dns01` | `PSTACK_CHALLENGE` | `http01` | see [Choose a TLS mode](#choose-a-tls-mode). Anything else exits 3 |
 | `--dns-provider <lego-code>` | `PSTACK_DNS_PROVIDER` | — | **required for `dns01` only**, ignored by `http01` |
+| `--orchestrator swarm\|compose` | `PSTACK_ORCHESTRATOR` | `swarm` | how previews deploy. `swarm` makes this daemon a one-node manager (overlay networks, the swarm provider in Traefik); `compose` is what every host before 0.26.0 ran. `upgrade` keeps whatever the host has — see [Swarm mode](#swarm-mode) |
 | — | `PSTACK_DNS_TOKEN` | *unset* | the DNS-01 credential, written to `dns.env`. Omit for the tokenless providers |
 | — | `PSTACK_TOKEN` | *generated* | the API bearer token. Supply it to keep or rotate a known one; leave it unset to be handed a fresh one **printed exactly once** |
 | — | `PSTACK_IMAGE` | `pstack:local` | the control image. A property of the installation, not the host |
@@ -1125,8 +1126,9 @@ What it does, in order:
 |---|---|
 | 0. Preconditions | Docker socket at `/var/run/docker.sock`, the Compose v2 plugin, and the control image present. Fails by name, before anything is created — run `pstack build-image` if the image is missing — it builds from the installed package, no checkout needed |
 | 1. State dirs | `<data>/deployments` (the registry) and `<data>/control/traefik-dynamic` (Traefik's file provider, created empty so the mount does not fail) |
-| 2. Networks | `preview-ingress` and `preview-shared`, created idempotently. **Both must be declared `external: true` in every per-PR compose file** — declare one non-external and Compose silently makes `pr-123_preview-ingress` instead, so the container comes up healthy and unreachable |
-| 3. Config | `control/docker-compose.yml` (the template, with the two challenge-dependent blocks rendered), `control/.env` (`0600`, holds `PSTACK_TOKEN`), `control/dns.env` (`0600`, holds the DNS credential; written either way so switching modes needs no extra step) |
+| 1b. Swarm | under `--orchestrator swarm`: `docker swarm init` if this daemon is not already a manager. Never leaves a swarm |
+| 2. Networks | `preview-ingress` and `preview-shared`, created idempotently — `bridge` under compose, `overlay --attachable` under swarm. A network that exists with the other driver is swapped only when nothing but the control stack is on it; a preview still attached is a hard stop naming it. **Both must be declared `external: true` in every per-PR compose file** — declare one non-external and Compose silently makes `pr-123_preview-ingress` instead, so the container comes up healthy and unreachable |
+| 3. Config | `control/docker-compose.yml` (the template, with the challenge, UI, swarm-provider and wake-router blocks rendered), `control/.env` (`0600`, holds `PSTACK_TOKEN` and `PSTACK_ORCHESTRATOR`), `control/dns.env` (`0600`, holds the DNS credential; written either way so switching modes needs no extra step). Traefik gains a metrics entrypoint on `:8082` (unpublished; the API reads it for `sleep.idle`) and the pstack container the catch-all `pstack-wake` router |
 | 4. Up | `docker compose -p pstack-control -f <path> up -d --remove-orphans` |
 | 5. **Prove it** | polls the container's `HEALTHCHECK` for ~60s. `up -d` exits 0 as soon as containers are *created*, so a crash-looping API would otherwise be reported as success |
 | 6. Next steps | the URLs, the rotation recipe, and the generated `PSTACK_TOKEN` — **the only time it is printed** |
@@ -1513,6 +1515,217 @@ For CI, prefer the CLI with `-f` and `--set` (section 8): it needs no host acces
 
 ---
 
+## 7b. Scale out, sleep, and share (0.26.0)
+
+Three things a preview host grows into once it has more than a handful of PRs on it: a second
+machine, previews that cost nothing while nobody looks at them, and a way to show one person one
+stack's logs without making them an account.
+
+### Swarm mode
+
+A new host stood up with `pstack init` is a **one-node Docker Swarm manager**, and previews deploy as
+swarm stacks. You will not notice until you need a second box — then it is one command on the new
+machine (below) and previews start landing on it.
+
+**You write plain compose.** `docker stack deploy` reads the compose v3 schema strictly — `mem_limit`,
+`cpus`, `profiles` and `pull_policy` are hard errors, `restart:` is silently ignored and swarm's own
+default (`any`) would loop a one-shot migration container forever. pstack converts the submitted file
+on **every** deploy and names what it changed in the job log (`swarm: service app: restart: always →
+deploy.restart_policy.condition: any`). The file in the registry is never modified.
+
+| In the file you submit | In the stack that deploys |
+|---|---|
+| `profiles:` | services behind a profile the spec does not select are left out; `--prune` removes a service that was in last time (the `--remove-orphans` equivalent) |
+| `restart: always` / `unless-stopped` | `deploy.restart_policy.condition: any` |
+| `restart: on-failure[:N]` | `condition: on-failure` (+ `max_attempts: N`) |
+| no `restart:` / `restart: no` | `condition: none` — what compose does; not swarm's default |
+| `mem_limit`, `cpus`, `pids_limit`, `mem_reservation` | `deploy.resources.limits.memory` / `.cpus` / `.pids`, `reservations.memory` |
+| `labels: traefik.*` | moved to `deploy.labels` (the swarm provider reads **service** labels); `traefik.docker.network` → `traefik.swarm.network` |
+| `build`, `container_name`, `privileged`, `devices`, `network_mode`, `depends_on` | dropped, with a note saying why and what to do instead |
+| any key outside the v3 schema (`pull_policy`, `platform`, `extends`, …) | dropped, with a note |
+| top-level `name:`, `version: "2.x"` | dropped |
+| a `deploy:` block you wrote yourself | kept; only missing keys are inferred |
+
+A service that genuinely cannot run under swarm (`privileged`, a device mount) can stay on compose on
+the manager: set `compose.orchestrator: compose` in that spec. The host default comes from
+`PSTACK_ORCHESTRATOR`, which `init` writes into the control stack.
+
+```yaml
+compose:
+  file: docker-compose.yml
+  orchestrator: compose        # this one deployment only; everything else follows the host
+```
+
+Three ceilings, stated rather than hidden:
+
+- `docker stack rm` never removes volumes. Teardown removes the stack's labelled volumes on the
+  **manager**; a volume a task created on a worker stays there. Use named volumes only for data you
+  can lose, and an axis (with its `assert_gone`) for data you cannot.
+- `docker exec`, `stop`, `start` are node-local. A task on a worker is listed on the Containers tab
+  (with its node, marked *remote*), logs reach it through the manager, but the terminal and the
+  per-container buttons refuse it with a 409 that names the node.
+- A relative bind mount (`./data:/data`) resolves against the compose file's directory **on each
+  node**. It works on the manager and fails on a worker that has no such directory.
+
+**Adding a worker.** Open the ports first, between the new machine and every other node:
+
+| Port | For |
+|---|---|
+| `2377/tcp` | cluster management (worker → manager) |
+| `7946/tcp+udp` | node discovery (every node ↔ every node) |
+| `4789/udp` | overlay network traffic, VXLAN (every node ↔ every node) |
+
+Then take the join material from the **Swarm** page (Add a worker → Reveal) or the API, in whichever
+shape the new machine wants:
+
+```bash
+# one line, for a machine that already runs Docker
+curl -s https://api.preview.example.com/api/swarm/join?format=command -H "Authorization: Bearer $PSTACK_TOKEN"
+# → docker swarm join --token SWMTKN-1-… 203.0.113.10:2377
+
+# a script that installs Docker (get.docker.com) if missing, then joins
+curl -s "…/api/swarm/join?format=script" -H "Authorization: Bearer $PSTACK_TOKEN" > join.sh
+
+# cloud-init user-data for a fresh machine: Docker from the distro's repositories, then join
+curl -s "…/api/swarm/join?format=cloud-config&distro=debian" -H "Authorization: Bearer $PSTACK_TOKEN" > worker.yaml
+hcloud server create --name worker-1 --image debian-12 --user-data-from-file worker.yaml
+```
+
+The token is a **secret**: whoever holds it can add a node that runs any task on the cluster. The
+route is admin-only, the Swarm page fetches it only when you click Reveal and forgets it when you
+leave, and `docker swarm join-token --rotate worker` on the manager invalidates it. `GET /api/swarm`
+(the polled view) never carries it.
+
+```bash
+curl -s https://api.preview.example.com/api/swarm -H "Authorization: Bearer $PSTACK_TOKEN"
+```
+```json
+{ "reachable": true, "active": true, "nodeId": "n1…", "managerAddr": "203.0.113.10:2377",
+  "nodes": [ { "id": "n1…", "hostname": "preview-host", "role": "manager", "status": "ready",
+               "availability": "active", "managerStatus": "leader", "engineVersion": "28.0.1", "self": true } ],
+  "ports": [ … ], "note": "…" }
+```
+
+`reachable: false` means docker did not answer — nothing is known, which is not "no nodes".
+`active: false` means the host runs previews with compose; `pstack init --orchestrator swarm` (on
+the host, with every preview torn down first — the networks have to be recreated) switches it.
+
+### Sleep and wake-on-call
+
+Most previews are deployed to be looked at once, then sit there until the PR merges. **Sleep** takes
+the compose project down and **keeps its volumes and every axis** — the database branch, the seeded
+data, the images. The next request to any of its hostnames brings it back: the visitor sees *"Your
+preview is spinning up…"* for the length of a deploy, and then the app.
+
+Declare it in the spec:
+
+```yaml
+sleep:
+  idle: 2h      # no request reached any of its routers for 2 hours
+  after: 3d     # 3 days after the last deploy, whether anyone looked or not
+```
+
+Either, both, or neither. Durations are `90s`, `30m`, `2h`, `3d`, `1h30m`. A spec without a `sleep:`
+block is never put to sleep by the scheduler.
+
+- **`idle`** reads Traefik's per-router request counters (a metrics entrypoint the control stack
+  exposes to the API container only — nothing in the request path). The idle clock starts at the
+  later of the last deploy and the API's own start: a restarted control plane forgets when a stack
+  was last visited, so the cost of a restart is one extra `idle` period awake, never an early sleep.
+  If the metrics endpoint cannot be read (a control stack from before 0.26.0), `idle` never triggers
+  — the server logs that once — and `after` still works.
+- **`after`** reads the newest container's start time from docker. No clock to lose.
+- Never for `kind: shared` (every preview that depends on it would go with it), never while a job is
+  in flight, never twice.
+
+What sleep runs is `docker compose down --remove-orphans` — **without `-v`** — or `docker stack rm`
+under swarm, which never touches volumes. That is the whole difference from tearing down. Waking is
+`up`, exactly: axis `up` hooks are idempotent by contract and re-capture their outputs, so nothing has
+to be remembered between the two. Readiness watches the wake like any deploy.
+
+By hand, the same two verbs:
+
+```bash
+curl -s -X POST https://api.preview.example.com/api/deployments/pr-123/sleep -H "Authorization: Bearer $PSTACK_TOKEN"
+# → 202 { "job": { "id": "sleep-pr-123-…", "action": "sleep", … } }
+curl -s -X POST https://api.preview.example.com/api/deployments/pr-123/wake  -H "Authorization: Bearer $PSTACK_TOKEN"
+# → 202 { "job": { "action": "wake", … } }
+```
+
+`GET /api/deployments/:id` carries the policy and the state, separately — `sleep` is what the spec
+asks for, `asleep` is the record written when it happened:
+
+```json
+"orchestrator": "swarm",
+"sleep":  { "idle": "2h", "after": "3d" },
+"asleep": { "since": 1787000000000, "reason": "idle 2h",
+            "hosts": ["app-pr-123.preview.example.com"], "rules": [] }
+```
+
+`hosts` and `rules` are what the catch-all router recognises as this deployment's: they are captured
+from its live Traefik labels the moment before teardown, so a router you wrote by hand is recognised
+exactly like a generated one, and a wildcard subdomain (`*.app-pr-123.…`) still wakes it. A deploy
+or a teardown clears the record; replacing the spec keeps it.
+
+How a request finds its way back: `init` renders a **catch-all router** on the pstack container
+(priority 1, `HostRegexp` over the whole `*.<domain>`). While a preview's containers run, its own
+router wins; when they do not, the request lands on the API with the original `Host`, and if that
+hostname belongs to a sleeping deployment a wake starts and the page answers `503` with
+`Retry-After: 5` and an `x-pstack-wake: 1` header — so a script sees "not yet" rather than a
+misleading 200. The page polls itself and reloads the moment Traefik routes the hostname to the app
+again. If the last wake **failed** (an image that no longer pulls), the page says so instead of
+spinning forever; reloading retries.
+
+Under HTTP-01, Traefik serves the certificate it already issued for the hostname while the stack
+was live. Under DNS-01 the wildcard covers it. A hostname that was never live has no certificate
+under HTTP-01 — that is the one case the spinning-up page appears behind a browser warning.
+
+Two events narrate it: `stack.slept { stack, deployment, reason, hosts }` and
+`stack.woken { stack, deployment, by }` — `by` is `request:<hostname>` when traffic woke it, or who
+asked. One thing to know about swarm logs: `docker service logs` has no `--until`, so
+`GET …/logs?until=` answers 400 on a swarm stack rather than quietly widening the read.
+
+### Share links
+
+"Can you look at the logs of PR 123?" used to mean creating an account for someone who will sign in
+once. A share link is a URL that opens **that deployment's details and log view, and nothing else**,
+until it expires:
+
+```bash
+curl -s -X POST https://api.preview.example.com/api/deployments/pr-123/share \
+  -H "Authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' \
+  -d '{ "views": ["details", "logs"], "ttl": "24h" }'
+```
+```json
+{ "url": "https://control.preview.example.com/deployments/pr-123/public-logs-view?token=eyJ…",
+  "token": "eyJ…", "views": ["details", "logs"], "expiresAt": 1787086400000 }
+```
+
+`views` default to both; `ttl` defaults to `7d` and caps at `30d`. The same panel is on the
+deployment's **Danger** tab (it mints a credential, so that is where it lives): pick the views and the
+expiry, copy the link once.
+
+What the token is: an HS256 JWT signed with `PSTACK_TOKEN`, carrying `{ dep, views, exp }`. It
+travels as `?token=` in the query string — by design, because the log view follows logs over an
+`EventSource`, and a browser cannot put a header on one. It also works as a bearer for a script:
+
+```bash
+curl -s "https://api.preview.example.com/api/deployments/pr-123/logs?tail=200&token=eyJ…"
+curl -s https://api.preview.example.com/api/deployments/pr-123 -H "Authorization: Bearer eyJ…"
+```
+
+What a link can reach, enforced before any route: `GET /api/deployments/:id` (+ `/runtime`,
+`/readiness`) with the `details` view; `GET …/logs` and `…/logs/stream` with the `logs` view; its
+own deployment only; stored variables only (a `?PR=8` from a link holder does not resolve another
+stack). Everything else answers 403. An expired or tampered token answers 401. The raw `PSTACK_TOKEN`
+is **never** accepted from a query string — only a JWT is.
+
+There is no per-link revocation: nothing about a link is stored (a table of issued links would be a
+row describing a credential), so the TTL is what bounds a leaked one. Rotating `PSTACK_TOKEN`
+(`PSTACK_TOKEN=<new> pstack init …`) invalidates every link at once; `pstack upgrade` deliberately
+does not rotate it, so links survive upgrades. The event `share.created { deployment, views,
+expiresAt, by }` says a link was minted — never the token.
+
 ## 8. Wire it into CI
 
 Two jobs: bring the preview up on demand, tear it down when the PR closes. Keep previews **opt-in by
@@ -1801,6 +2014,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--acme-email <addr>` | `init` | **required** (or `PSTACK_ACME_EMAIL`). |
 | `--challenge http01\|dns01` | `init` | default **`http01`** (or `PSTACK_CHALLENGE`). Any other value exits 3. |
 | `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
+| `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
 | `-h`, `--help` | — | usage, exit 0 |
 
 An unknown flag, an unknown command, no command, a malformed `--set`, a bad `--challenge`, a missing
@@ -1832,6 +2046,9 @@ different problems with different owners.
 | `PSTACK_DNS_PROVIDER` | `init` | — | same as `--dns-provider` |
 | `PSTACK_DNS_TOKEN` | `init` | *unset* | the DNS-01 credential; written to `control/dns.env` (`0600`) under the provider's own variable name. **Flag-less on purpose** — a secret does not belong in a shell history. |
 | `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
+| `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
+| `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
+| `PSTACK_TRAEFIK_METRICS` | `serve` | — | Traefik's Prometheus endpoint, what `sleep.idle` reads. `http://traefik:8082/metrics` inside the control stack; unset means `idle` never triggers. |
 
 `serve` needs **no** spec and no stack variable to start.
 
@@ -1852,6 +2069,13 @@ ingress in front of this is the only gate on reads.
 | POST | `/api/deployments/:id/up` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
 | POST | `/api/deployments/:id/down` | `{ verify?, force? }` (`verify` defaults true) | **202** `{ job }` · 409 if busy · 409 on `kind: shared` without `force` |
 | POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
+| POST | `/api/deployments/:id/sleep` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy or `kind: shared` · 400 without a compose section. Compose project down, volumes and axes kept |
+| POST | `/api/deployments/:id/wake` | spec variables as `?K=V` | **202** `{ job }` — `up`, recorded as a wake |
+| POST | `/api/deployments/:id/share` | `{ views?: ["details","logs"], ttl?: "7d" }` | **201** `{ url, token, views, expiresAt }` — a read-only link; 400 with no `PSTACK_TOKEN` to sign with, or a ttl over `30d` |
+| GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
+| GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **admin only**; 409 when this daemon is not a manager |
+| GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
+| ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the spinning-up page, and a wake job |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |
 | GET | `/api/jobs/:jobId` | — | `{ job }` · 404 |
 | GET | `/api/jobs/:jobId/stream` | — | SSE: buffered log replay, then live, then `{done:true,state}` |
@@ -1861,7 +2085,8 @@ Status codes: **202** accepted · **400** bad spec or missing variable · **401*
 **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 
-Job `state`: `running` · `ok` · `failed` · `leaked`.
+Job `state`: `running` · `ok` · `failed` · `leaked` · `cancelled`. Job `action`: `up` · `down` ·
+`verify` · `sleep` · `wake`.
 
 ### Control-stack hostnames
 
@@ -1889,6 +2114,11 @@ compose:                          # optional
   file: docker-compose.preview.yml   # required within `compose`
   profiles: [backend, frontend]      # up: these · down: ALL of them
   overlays: [docker-compose.tls.yml] # extra -f files, applied in order after `file`
+  orchestrator: swarm                # optional; `swarm` or `compose`. Default: PSTACK_ORCHESTRATOR, else compose
+
+sleep:                            # optional; the scheduler puts the compose project to sleep (volumes + axes stay)
+  idle: 2h                        # no request through Traefik for this long
+  after: 3d                       # this long after the last deploy, unconditionally
 
 requires:                         # optional; asserted BEFORE anything is created, in order
   - name: shared-db               # required — what the failure is reported as
@@ -1907,6 +2137,8 @@ axes:                             # optional; up in order, down in REVERSE
 |---|---|
 | `kind: shared` | a host singleton. **May declare no axes** — a hard error, not a warning. `down` is refused unless `--force`, and the HTTP API never passes `force`, so it cannot be torn down over HTTP at all. |
 | `kind: isolated` | the default. With no axes you get a warning: nothing per-tenant is provisioned or verified, so it is just a Compose project. |
+| `compose.orchestrator` | `compose` or `swarm`; anything else is an error. Resolution: the spec, then `PSTACK_ORCHESTRATOR`, then `compose`. Under `swarm` the file is converted on every invocation — see [Swarm mode](#swarm-mode). |
+| `sleep` | a mapping with `idle` and/or `after` (durations `90s` `30m` `2h` `3d` `1h30m`); anything else is an error, and an empty block is too. Never honoured on `kind: shared`. Without a `compose:` section it is a warning — there is nothing to put to sleep. |
 | `requires` | every `assert` runs before the first axis, in declaration order; the first failure aborts `up` with exit 1 and nothing has been created. `hint` is appended to the failure message. |
 | interpolation | `${VAR}` only, resolved **once** at parse time, so a value containing `${…}` is never re-expanded |
 | precedence | spec `env:` **wins over** `--set`, which wins over the ambient environment. `--set` cannot override a key the spec's `env:` also defines — that is a spec edit, not a CLI override. |

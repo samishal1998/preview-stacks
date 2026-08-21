@@ -3,7 +3,7 @@
 Instructions for an AI agent changing **this codebase**. Using `pstack` is a different job; this is
 about editing it.
 
-**Current version: 0.25.3.** Three published packages, one workspace.
+**Current version: 0.26.0.** Three published packages, one workspace.
 
 ## Read this first
 
@@ -55,7 +55,8 @@ docs/                See docs/README.md.
 |---|---|
 | `spec.ts` | Parse + validate `preview.yml` → resolved `Stack`. Owns interpolation, the stack-name charset rule, axis dedupe, `warnings`. |
 | `stack.ts` | `up` / `down` / `verify` / `status` / `report`. Owns the failure semantics — **the whole product is in this file**. |
-| `compose.ts` | Builds `docker compose` command strings. Owns the all-profiles-on-down rule and `shq`. |
+| `compose.ts` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm.ts`. Owns the all-profiles-on-down rule, `composeSleep` (down **without** `-v`) and `shq`. |
+| `swarm.ts` | Docker Swarm: `swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing and join material. Its header states the ceilings (worker volumes, node-local exec). |
 | `exec.ts` | The only place a process is spawned. Dry-run, output capture, `captureOutputs`, cancellation via `AbortSignal`. |
 | `log.ts` | The `Sink` seam: `consoleSink` (CLI), `bufferSink` (API jobs), `nullSink` (tests). |
 
@@ -68,6 +69,8 @@ docs/                See docs/README.md.
 | `jobs.ts` | In-memory job registry: one in-flight job per stack, bounded to 50 transcripts, SSE fan-out, cancellation. |
 | `registry.ts` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
 | `specs.ts` | Named specs: store once, reference from many deployments. |
+| `scheduler.ts` | Sleep/wake: the `SleepIndex` (hostname → sleeping deployment, for the catch-all router), the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
+| `share.ts` | Share links: an HS256 JWT signed with `PSTACK_TOKEN`. Sign, verify, and nothing stored. |
 | `init.ts` | `pstack init` — stands up the control stack. CLI-only, permanently; its header explains why. |
 | `upgrade.ts` | `pstack upgrade` and `pstack ui <mode>`. Reads back what `init` decided so nothing rotates. |
 | `image.ts` | `pstack build-image` — builds the control image, pinned to the running CLI's version. |
@@ -95,8 +98,10 @@ docs/                See docs/README.md.
 | `webhooks.ts` | Notifier registrations + the delivery log. |
 | `notify.ts` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
 
-`test/stack.test.ts` is the whole server suite (265 tests). `packages/client/test/client.test.ts`
-drives the client against a real in-process server — that is the anti-drift check for the SDK.
+`test/stack.test.ts` is the server suite (265 tests); `test/features.test.ts` covers swarm, sleep/wake
+and share links (25, with fake `docker` shims that use `printf`, not `echo` — `sh`'s `echo` mangles
+the backslashes in a `HostRegexp`). `packages/client/test/client.test.ts` drives the client against a
+real in-process server — that is the anti-drift check for the SDK.
 
 ## Invariants — do not break these
 
@@ -180,6 +185,20 @@ fields — receivers verify a signature over those exact bytes.
 passwords go in and never come back out. `Webhooks.get()`/`list()` mask; `rawConfigOf()` does not and
 is for the delivery path only. Conflating them is how a masked value gets POSTed to a masked URL —
 which happened.
+
+**16. A share principal is closed by default.** `shareAllows` in `api.ts` runs right after the auth
+gate and **before any route**: a `{ kind: 'share' }` principal reaches exactly the GETs its views
+name, on its own deployment, with the stored variables only. A new route is unreachable to it until
+someone lists it there. The raw `PSTACK_TOKEN` is never read from a query string — only a JWT is.
+
+**17. Sleep never removes volumes; wake IS `up`.** `composeSleep` is `down` without `-v` (swarm:
+`stack rm`, which never touches volumes), its own function rather than a flag so the `down -v` the
+leak tests assert on cannot be weakened by a default. A wake runs `up()` exactly — axis hooks are
+idempotent by contract and re-capture their outputs, so nothing is persisted between the two.
+
+**18. Template substitution uses function replacements.** `String.replace(marker, string)` reads
+`$$` in the replacement as one `$`, and the wake router's rule ends in `$$` precisely so compose
+hands Traefik a literal `$`. `init.ts` passes `() => text`; keep it that way for every marker.
 
 ### Gotcha: dry-run proves ordering, never absence
 
@@ -276,6 +295,14 @@ UI if it consumes it, and `packages/client` if a script would want it.
 
 `events.ts` (`EVENTS`), a chat line in `notify.ts`'s `summarize`, the emit site, the catalogue in
 `docs/webhook-events.md`, and a test. Add-only — invariant 14.
+
+### A new lifecycle action
+
+`sleep`/`wake` are the template. `JobAction` in `jobs.ts`; the branch in `startLifecycle` (`api.ts`)
+— the ONE place jobs start, shared by the POST route, the wake dispatch and the scheduler; the
+lifecycle regex on the `:id` route; `actionWord` in `notify.ts`; `LifecycleAction` + `ACTION_LABELS`
+in both UIs; the client SDK's method and `JobAction`; `docs/webhook-events.md` (`job.started`'s
+`action`). If it can leave a leak behind, the step scan in three files (invariant 8).
 
 ### A new notifier type
 
