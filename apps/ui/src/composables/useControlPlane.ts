@@ -53,6 +53,8 @@ export async function loadDeployments(): Promise<void> {
     busy: d.busy ?? null,
     running: d.running ?? null,
     stack: d.stack ?? null,
+    asleep: d.asleep ?? null,
+    orchestrator: d.orchestrator ?? null,
   }));
 }
 
@@ -75,6 +77,7 @@ export const summary = computed(() => {
     shared: 0,
     running: 0,
     busy: 0,
+    asleep: 0,
     unknown: 0,
     unresolved: 0,
   };
@@ -83,6 +86,7 @@ export const summary = computed(() => {
     if (d.kind === 'shared') c.shared++;
     else c.isolated++;
     if (d.busy === true) c.busy++;
+    if (d.asleep) c.asleep++;
     if (d.running === true) c.running++;
     if (d.busy === null || d.running === null) c.unknown++;
     if (d.unresolved) c.unresolved++;

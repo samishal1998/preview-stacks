@@ -46,6 +46,8 @@ const ACTION_LABELS: Record<string, string> = {
   up: 'Deploy',
   down: 'Tear down',
   verify: 'Verify',
+  sleep: 'Sleep',
+  wake: 'Wake',
 };
 
 export function actionLabel(action: string | undefined): string {

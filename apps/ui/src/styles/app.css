@@ -133,6 +133,12 @@ a:focus-visible {
   place-items: center;
   padding: var(--s5);
 }
+/* The public share page: no rail either, but a full-width reading column, not a centred card. */
+.shell.public .view {
+  display: block;
+  max-width: 1400px;
+  margin: 0 auto;
+}
 
 /*
  * The rail is a PANEL, not an edge: rounded on all four corners and inset by the shell gutter, so
@@ -702,6 +708,11 @@ label {
 .badge.unknown {
   background: var(--neutral-soft);
   color: var(--neutral);
+}
+/* Asleep: deliberately down, wakes on a request. Amber, between running and idle. */
+.badge.asleep {
+  background: var(--leak-soft);
+  color: var(--leak);
 }
 .badge.shared {
   background: var(--leak-soft);

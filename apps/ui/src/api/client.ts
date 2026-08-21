@@ -48,7 +48,20 @@ export function query(pairs: VarPair[], extra: Record<string, string | number> =
  */
 function url(path: string): string {
   const base = settings.apiBase.replace(/\/$/, '');
-  return base ? base + path : path;
+  const full = base ? base + path : path;
+  // A share link's token rides on every request the public page makes — the query string, because
+  // an EventSource cannot carry a header, which is also why the server accepts it there.
+  if (publicToken) return `${full}${full.includes('?') ? '&' : '?'}token=${encodeURIComponent(publicToken)}`;
+  return full;
+}
+
+/**
+ * The token of a share link, while the public page is open. Module state, never persisted: it is
+ * a bounded credential for one deployment that belongs to the visitor, not to this browser.
+ */
+let publicToken = '';
+export function setPublicToken(token: string): void {
+  publicToken = token;
 }
 
 /**
@@ -117,6 +130,17 @@ export const api = {
    *  full-replace PUT would be lying about its own semantics. */
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
+  /** A route that answers text, not JSON (the swarm join material). */
+  getText: async (path: string): Promise<{ status: number; ok: boolean; text: string }> => {
+    const headers: Record<string, string> = {};
+    if (settings.token) headers.authorization = `Bearer ${settings.token}`;
+    try {
+      const res = await fetch(url(path), { headers });
+      return { status: res.status, ok: res.ok, text: await res.text() };
+    } catch (e) {
+      return { status: 0, ok: false, text: `unreachable: ${(e as Error).message}` };
+    }
+  },
   /** For `EventSource`, which builds its own connection and cannot go through `request`. */
   url,
 };

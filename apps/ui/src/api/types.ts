@@ -20,7 +20,46 @@
 
 export type Kind = 'isolated' | 'shared';
 export type HookName = 'up' | 'assert_live' | 'down' | 'assert_gone';
-export type JobAction = 'up' | 'down' | 'verify';
+/** `sleep` takes the compose project down (volumes and axes stay); `wake` is `up` recorded under its own name. */
+export type JobAction = 'up' | 'down' | 'verify' | 'sleep' | 'wake';
+export type Orchestrator = 'compose' | 'swarm';
+export type ShareView = 'details' | 'logs';
+
+/** Present while a deployment is asleep: when, why, and the hostnames a request to which wakes it. */
+export type SleepRecord = {
+  since: number;
+  reason: string;
+  hosts: string[];
+  /** `HostRegexp` patterns (wildcard subdomains). */
+  rules: string[];
+};
+
+/** `GET /api/swarm` — unwrapped. */
+export type SwarmNode = {
+  id: string;
+  hostname: string;
+  role: 'manager' | 'worker';
+  status: string;
+  availability: string;
+  managerStatus: string | null;
+  engineVersion: string;
+  self: boolean;
+};
+export type SwarmInfo = {
+  /** false ⇒ docker did not answer. Every other field is then unknown, NOT empty. */
+  reachable: boolean;
+  /** Whether this daemon is a swarm manager. */
+  active: boolean;
+  nodeId: string | null;
+  managerAddr: string | null;
+  nodes: SwarmNode[];
+  error?: string;
+  ports: Array<{ port: string; why: string }>;
+  note: string;
+};
+
+/** `POST /api/deployments/:id/share` → 201, unwrapped. The token appears here and nowhere else. */
+export type ShareLink = { url: string; token: string; views: ShareView[]; expiresAt: number };
 /** `cancelled` is a person stopping it part-way — not a failure, and nothing it did was undone. */
 export type JobState = 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled';
 export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
@@ -56,6 +95,10 @@ export type DeploymentRow = {
   stack: string | null;
   busy: boolean | null;
   running: boolean | null;
+  /** The sleep record while asleep, null when awake. A sleeping stack is neither running nor torn down. */
+  asleep: SleepRecord | null;
+  /** null when the spec has no compose section or could not be resolved. */
+  orchestrator: Orchestrator | null;
   /** The 400 text from the failed resolve. It names the missing variable; render it verbatim. */
   unresolved?: string;
 };
@@ -87,6 +130,10 @@ export type Deployment = {
   updatedAt: number;
   stack: string;
   busy: boolean | null;
+  orchestrator: Orchestrator | null;
+  /** The spec's `sleep:` policy as durations (`2h`), or null when it has none. */
+  sleep: { idle: string | null; after: string | null } | null;
+  asleep: SleepRecord | null;
   compose: {
     file: string;
     profiles: string[];
@@ -210,6 +257,12 @@ export type RuntimeContainer = {
   ingressIp: string | null;
   ports: Array<{ containerPort: number; protocol: string; hostPort?: string }>;
   traefikLabels: Record<string, string>;
+  /** Epoch ms when the process started; null when docker did not say. */
+  startedAt: number | null;
+  /** The swarm node it runs on; null under compose. */
+  node: string | null;
+  /** A swarm task on ANOTHER node: listed, but `docker exec`/`stop` cannot reach it from here. */
+  remote: boolean;
 };
 export type RuntimeRoute = {
   router: string;

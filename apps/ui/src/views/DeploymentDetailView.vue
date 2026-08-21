@@ -85,6 +85,13 @@ watch(
       <span class="grow" />
       <span v-if="dep.detail" class="badge" :class="dep.detail.kind">{{ sentence(dep.detail.kind) }}</span>
       <span v-if="dep.detail?.busy === true" class="badge busy"><span class="dot pulse" />busy</span>
+      <span
+        v-else-if="dep.detail?.asleep"
+        class="badge asleep"
+        :title="`asleep since ${new Date(dep.detail.asleep.since).toLocaleString()} (${dep.detail.asleep.reason})`"
+        ><span class="dot" />asleep</span
+      >
+      <span v-if="dep.detail?.orchestrator === 'swarm'" class="badge" title="deployed as a swarm stack">swarm</span>
       <!--
         Deploy and Verify live HERE, on every tab — they are the product's routine actions, and they
         used to be reachable only through a tab named "Danger". Teardown stays there: the header
@@ -94,7 +101,19 @@ watch(
            orphaned onto its own line under the title. -->
       <div v-if="dep.detail" class="row" style="flex-wrap: nowrap">
         <RefreshButton :run="loadDetail" label="Re-resolve" title="Read this deployment again and re-run its variable substitution" />
+        <!-- Asleep: the primary action is to wake it — the same `up`, recorded as a wake. -->
         <ActionButton
+          v-if="dep.detail.asleep"
+          variant="primary"
+          :pending="pending === 'wake'"
+          :disabled="!!pending || busy"
+          :title="whyDisabled('wake')"
+          @click="act('wake')"
+        >
+          Wake
+        </ActionButton>
+        <ActionButton
+          v-else
           variant="primary"
           :pending="pending === 'up'"
           :disabled="!!pending || busy"

@@ -243,6 +243,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
               <tr>
                 <th>Service</th>
                 <th>State</th>
+                <th v-if="rt.containers.some((c) => c.node)">Node</th>
                 <th>Ports</th>
                 <th>Networks</th>
                 <th>Image</th>
@@ -254,6 +255,11 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                 <td class="name" data-label="service">
                   {{ c.service ?? c.name }}
                   <div class="mute" style="font-size: var(--t-sm)">{{ c.name }}</div>
+                </td>
+                <td v-if="rt.containers.some((x) => x.node)" data-label="node">
+                  {{ c.node ?? '—' }}
+                  <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
+                  <span v-if="c.remote" class="badge" title="runs on another swarm node — logs reach it through the manager; a shell and stop/start do not">remote</span>
                 </td>
                 <td data-label="state">
                   <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
@@ -298,8 +304,12 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     not running and Stop only when it is, so the control on screen is the one that
                     would do something. Both destructive ones confirm in place.
                   -->
+                  <!-- None of these reach a task on another node; docker's verbs are node-local. -->
+                  <span v-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="runs on another swarm node — redeploy the stack, or act on the worker itself">
+                    on {{ c.node }}
+                  </span>
                   <ActionButton
-                    v-if="c.state !== 'running'"
+                    v-else-if="c.state !== 'running'"
                     class="sm"
                     variant="ghost"
                     :pending="busy === `start:${c.name}`"
@@ -322,6 +332,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     Stop
                   </ActionButton>
                   <ActionButton
+                    v-if="!c.remote"
                     class="sm"
                     variant="ghost"
                     :pending="busy === `restart:${c.name}`"
@@ -338,7 +349,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     Logs
                   </RouterLink>
                   <RouterLink
-                    v-if="c.state === 'running'"
+                    v-if="c.state === 'running' && !c.remote"
                     class="btn sm ghost"
                     :to="`/deployments/${encodeURIComponent(dep.id)}/terminal?container=${encodeURIComponent(c.name)}`"
                   >

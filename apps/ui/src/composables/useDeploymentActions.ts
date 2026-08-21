@@ -22,7 +22,7 @@ import { toast } from './useToasts';
 import { actionLabel } from './useFormat';
 import { router } from '../router';
 
-export type LifecycleAction = 'up' | 'verify' | 'down';
+export type LifecycleAction = 'up' | 'verify' | 'down' | 'sleep' | 'wake';
 
 export const pending = ref<'' | LifecycleAction | 'forget'>('');
 export const actionError = ref('');
@@ -59,6 +59,11 @@ export function whyDisabled(action: LifecycleAction, forceArmed = false): string
   if (action === 'down' && isShared.value && !forceArmed) {
     return `Type the stack name "${dep.detail.stack}" below to confirm a shared teardown.`;
   }
+  if (action === 'sleep' && isShared.value) {
+    return 'A shared deployment cannot sleep — every preview that depends on it would go with it.';
+  }
+  if (action === 'sleep' && !dep.detail.compose) return 'This spec has no compose section — there is nothing to put to sleep.';
+  if (action === 'sleep' && dep.detail.asleep) return 'Already asleep.';
   return undefined;
 }
 

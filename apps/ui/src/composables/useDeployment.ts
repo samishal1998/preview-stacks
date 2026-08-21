@@ -59,6 +59,9 @@ export async function loadDetail(): Promise<void> {
     updatedAt: b.updatedAt,
     stack: typeof b.stack === 'string' ? b.stack : '',
     busy: b.busy ?? null,
+    orchestrator: b.orchestrator ?? null,
+    sleep: b.sleep ?? null,
+    asleep: b.asleep ?? null,
     compose: b.compose
       ? {
           file: b.compose.file ?? '?',
