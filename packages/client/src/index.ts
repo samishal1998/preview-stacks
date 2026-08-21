@@ -37,7 +37,10 @@ import type {
   NotifierRow,
   Readiness,
   Runtime,
+  ShareLink,
+  ShareView,
   SpecMeta,
+  SwarmInfo,
 } from './types.ts';
 
 export * from './types.ts';
@@ -61,7 +64,9 @@ export type ClientOptions = {
   /** e.g. `https://api.preview.example.com`. A trailing slash is fine. */
   baseUrl: string;
   /**
-   * `PSTACK_TOKEN` (the machine credential CI holds) or a personal token (`pstack_pat_…`).
+   * `PSTACK_TOKEN` (the machine credential CI holds), a personal token (`pstack_pat_…`), or the
+   * token of a share link (`deployments.share`) — which then reaches exactly the reads that link
+   * allows, on that one deployment.
    *
    * Optional only because a server with no token configured is loopback-only dev mode. Anywhere
    * else, every route needs it.
@@ -102,6 +107,8 @@ export function createClient(opts: ClientOptions) {
       signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
     });
     const text = await res.text();
+    // A route that answers text (the swarm join material) is read as-is; everything else is JSON.
+    if (res.ok && (res.headers.get('content-type') ?? '').startsWith('text/plain')) return text as unknown as T;
     let parsed: unknown = null;
     try {
       parsed = text ? JSON.parse(text) : null;
@@ -152,6 +159,20 @@ export function createClient(opts: ClientOptions) {
        */
       down: (id: string, body: { verify?: boolean; force?: boolean } = {}, vars?: Vars) =>
         post<{ job: Job }>(`/api/deployments/${enc(id)}/down${qs(vars)}`, body).then((r) => r.job),
+      /**
+       * Take the compose project down and KEEP its volumes and axes. A request to any of its
+       * hostnames brings it back (wake-on-call), as does `wake`. Refused (409) for `kind: shared`.
+       */
+      sleep: (id: string, vars?: Vars) => post<{ job: Job }>(`/api/deployments/${enc(id)}/sleep${qs(vars)}`).then((r) => r.job),
+      /** `up`, recorded as a wake. */
+      wake: (id: string, vars?: Vars) => post<{ job: Job }>(`/api/deployments/${enc(id)}/wake${qs(vars)}`).then((r) => r.job),
+      /**
+       * Mint a read-only link to this deployment: `views` default to both `details` and `logs`,
+       * `ttl` to 7 days (30 at most). The token is returned once and stored nowhere; rotating
+       * PSTACK_TOKEN is the only revocation.
+       */
+      share: (id: string, body: { views?: ShareView[]; ttl?: string } = {}) =>
+        post<ShareLink>(`/api/deployments/${enc(id)}/share`, body),
 
       runtime: (id: string, vars?: Vars) => get<Runtime>(`/api/deployments/${enc(id)}/runtime${qs(vars)}`),
 
@@ -190,6 +211,17 @@ export function createClient(opts: ClientOptions) {
         post<{ container: string; action: string; note: string }>(
           `/api/deployments/${enc(id)}/containers/${enc(name)}/restart${qs(o.vars, { grace: o.grace })}`,
         ),
+    },
+
+    /** The swarm this daemon manages. `reachable: false` means docker did not answer — nothing else is known. */
+    swarm: {
+      info: () => get<SwarmInfo>('/api/swarm'),
+      /**
+       * What a new worker runs. A SECRET — whoever holds the token can add a node that runs any
+       * task. `cloud-config` renders a user-data file; `distro` picks its Docker install steps.
+       */
+      join: (o: { format: 'token' | 'command' | 'script' | 'cloud-config'; distro?: string } = { format: 'command' }) =>
+        get<string>(`/api/swarm/join${qs(undefined, { format: o.format, distro: o.distro })}`),
     },
 
     jobs: {
