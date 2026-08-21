@@ -102,6 +102,7 @@ name that is not "the UI host". (The older `pstack.<domain>` is gone.)
 | `hcloud` CLI, authenticated (`hcloud context create preview`) | server + firewall management |
 | A domain you control the DNS for | the apex + wildcard A records (§3) |
 | **Port 80 reachable from the internet** | HTTP-01 answers the ACME challenge there. This is the one hard requirement of the default path — and it is needed for **renewals**, not just first issuance |
+| `2377/tcp`, `7946/tcp+udp`, `4789/udp` **between nodes** | only once you add a swarm worker (§7). A single-node swarm — what `init` creates — needs none of them open to the internet |
 | A **control image** on the box | `pstack init` refuses to run without one, and it does **not** pull. See [§4](#the-control-image-the-one-thing-a-global-install-does-not-give-you) |
 | An SSH public key uploaded to the project (`hcloud ssh-key create`) | you will not be using a password |
 | ~~A DNS provider API token~~ | **not needed.** Only the opt-in `--challenge dns01` path wants one (§3) |
@@ -263,6 +264,7 @@ pin it in the environment rather than relying on anyone retyping the flags:
 | `--acme-email` | `PSTACK_ACME_EMAIL` | *(fails: `init needs --acme-email`)* |
 | `--challenge http01\|dns01` | `PSTACK_CHALLENGE` | **`http01`** |
 | `--dns-provider <lego-code>` | `PSTACK_DNS_PROVIDER` | *(fails on dns01 only)* |
+| `--orchestrator swarm\|compose` | `PSTACK_ORCHESTRATOR` | **`swarm`** (a new host). `upgrade` re-passes what the host runs |
 | *(no flag)* | `PSTACK_DNS_TOKEN` | empty `dns.env` |
 | *(no flag)* | `PSTACK_IMAGE` | `pstack:local` |
 | *(no flag)* | `PSTACK_TOKEN` | generated, printed once |
@@ -424,36 +426,14 @@ write_files:
   #
   # NOTHING but dynamic configuration may live in that directory — see the htpasswd trap in §5.
 
-  # ── Optional: a fallback router (DNS-01 setups only) ────────────────────────────────────
-  # Serves a stable upstream for `<surface>-pr-<n>` hostnames whose stack is torn down (or not
-  # deployed yet), so a stale preview link degrades to something useful instead of a 404.
-  #
-  # It sets only `tls: {}` — it requests NO certificate, it borrows one. Under DNS-01 the wildcard
-  # already covers those names, so the handshake succeeds. Under the default HTTP-01 setup there is
-  # no wildcard and a regexp rule names no single host to certify, so this router can only serve
-  # Traefik's self-signed default: useful as a plain-HTTP courtesy at best. Skip it on HTTP-01.
-  - path: /var/lib/pstack/control/traefik-dynamic/fallback.yml
-    permissions: '0644'
-    owner: root:root
-    content: |
-      http:
-        routers:
-          preview-fallback:
-            # Anchored Go regexp with escaped dots — Traefik v3 dropped v2's `{name:...}` syntax.
-            rule: "HostRegexp(`^[a-z]+-pr-[0-9]+\\.preview\\.example\\.com$`)"
-            # Priority 1 loses to every per-PR router (which are exact Host() matches at 100),
-            # so it only answers when that PR's stack is not running.
-            priority: 1
-            entryPoints: [websecure]
-            service: fallback
-            tls: {}
-        services:
-          fallback:
-            loadBalancer:
-              servers:
-                - url: "https://api.dev.example.com"
-              # The upstream should see its own Host, not backend-pr-7.preview.example.com.
-              passHostHeader: false
+  # ── No fallback router file here (since 0.26.0) ──────────────────────────────────────────
+  # Earlier versions of this file dropped a `fallback.yml` catch-all into traefik-dynamic/. That
+  # router is now rendered by `pstack init` itself, as labels on the pstack container (priority 1,
+  # `HostRegexp` over the whole `*.<domain>`) — it exists on every host, and it is what wakes a
+  # sleeping preview (usage.md §7b). A second copy here would be two priority-1 routers for the same
+  # hostnames. The TLS caveat is unchanged: it sets `tls=true` and requests NO certificate. Under
+  # DNS-01 the wildcard covers it; under HTTP-01 Traefik serves the certificate it already issued
+  # for a hostname that was live once, and the self-signed default for one that never was.
 
 runcmd:
   # 1. Docker CE + the compose plugin, from the official apt repository.
@@ -847,6 +827,50 @@ PR=123 pstack up --dry-run    # prints every command, runs none
 operators and cron sweeps ([§9](#9-hardening-checklist)); it is **not** how the control plane runs
 deployments — a spec submitted to the API travels over HTTP as a string and is executed inside the
 pstack container, which mounts only the registry.
+
+### Adding a swarm worker
+
+A new host is a one-node swarm manager (`pstack init --orchestrator swarm`, the default), and
+previews deploy as swarm stacks. A second machine joins with material the manager hands out —
+`GET /api/swarm/join?format=…` or the Swarm page — in four shapes: the bare token, the
+`docker swarm join` line, a shell script that installs Docker first, or a cloud-config:
+
+```bash
+curl -s "https://api.preview.example.com/api/swarm/join?format=cloud-config&distro=ubuntu" \
+  -H "Authorization: Bearer $PSTACK_TOKEN" > worker.yaml
+hcloud server create --name preview-worker-1 --type cx32 --image ubuntu-24.04 \
+  --ssh-key <your-key> --user-data-from-file worker.yaml
+# on the manager, a minute later:
+docker node ls
+```
+
+The worker runs Docker and nothing else: no Bun, no pstack, no control stack. Everything is managed
+from the manager. Before booting it, open — between the worker and **every** other node, not to the
+internet —
+
+| Port | For |
+|---|---|
+| `2377/tcp` | cluster management (worker → manager) |
+| `7946/tcp+udp` | node discovery (every node ↔ every node) |
+| `4789/udp` | overlay network traffic, VXLAN (every node ↔ every node) |
+
+```bash
+hcloud firewall add-rule preview-host --direction in --protocol tcp --port 2377 --source-ips <worker.ip>/32
+hcloud firewall add-rule preview-host --direction in --protocol tcp --port 7946 --source-ips <worker.ip>/32
+hcloud firewall add-rule preview-host --direction in --protocol udp --port 7946 --source-ips <worker.ip>/32
+hcloud firewall add-rule preview-host --direction in --protocol udp --port 4789 --source-ips <worker.ip>/32
+```
+
+**The join token is a secret** — whoever holds it can add a node that runs any task on the cluster.
+The route is admin-only, the rendered cloud-config holds it in plain text (treat the file like
+`control/.env`), and `docker swarm join-token --rotate worker` on the manager invalidates it.
+
+**A host from before 0.26.0 stays on compose.** `pstack upgrade` reads `PSTACK_ORCHESTRATOR` back
+from `control/.env` — absent means `compose` — and re-passes it, so an upgrade never switches a
+host's orchestrator by itself. Switching is explicit: `pstack upgrade --orchestrator swarm` (or
+`init` with the flag), and it needs **every preview torn down first**, because the two networks have
+to be recreated as attachable overlays. `init` swaps them only when nothing but the control stack is
+attached; a preview still on one is a hard stop that names it.
 
 ### Driving the API
 

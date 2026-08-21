@@ -305,6 +305,9 @@ racing an `up` over the same database branch is corruption, not contention.
 | `GET /api/deployments` | every submitted deployment, with `busy` and `running` |
 | `GET`/`PUT`/`DELETE` `/api/deployments/:id` | read · submit or replace (`{spec, compose?, env?}`) · forget (refused while containers exist) |
 | `POST /api/deployments/:id/{up,down,verify}` | start a job → `202 {job}` / `409` if busy. `down` body: `{verify?, force?}` |
+| `POST /api/deployments/:id/{sleep,wake}` | compose project down with volumes and axes kept → `202 {job}`; wake is `up`. A request to a sleeping stack's hostname wakes it too |
+| `POST /api/deployments/:id/share` | a read-only link (details, logs) to this one deployment — a JWT, no account needed |
+| `GET /api/swarm` · `GET /api/swarm/join?format=…` | the swarm's nodes · what a new worker runs (token, command, script, cloud-config) |
 | `GET /api/jobs/:id` · `GET /api/jobs/:id/stream` | job transcript · live SSE log |
 
 `:id` is a **registry id**, not a compose project name — the server owns the stored spec and
@@ -320,6 +323,11 @@ history is in-memory and unpersisted, consistent with the no-state-store rule.
 [docs/control-plane.md §6](docs/control-plane.md#6-submitting-a-deployment) has the worked
 `curl` flow and the five behaviours that surface is carrying — why variables are not persisted, why
 `PUT` parses before it writes, and why `DELETE` fails closed.
+
+Since 0.26.0 a new host runs previews as **Docker Swarm** stacks (one manager; workers join from
+the Swarm page — you keep writing plain compose, the file is converted on every deploy), a spec can
+carry a `sleep:` policy so an idle preview **goes to sleep and wakes on the next request**, and a
+deployment can be **shared** by link. [docs/usage.md §7b](docs/usage.md#7b-scale-out-sleep-and-share-0260).
 
 See [docs/control-plane.md](docs/control-plane.md) for the architecture,
 [docs/usage.md](docs/usage.md) for worked examples, and [docs/bootstrap.md](docs/bootstrap.md) to

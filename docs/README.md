@@ -25,13 +25,17 @@ what this tool is actually for.
 
 Later sections cover the control plane: `pstack init`, hostnames and TLS modes, `shared` vs
 `isolated`, wildcard subdomains, the API with worked `curl` calls, jobs and their states, readiness,
-container actions, stopping a job, upgrading a host, and the web UI.
+container actions, stopping a job, upgrading a host, and the web UI. §7b (0.26.0) covers **swarm
+mode** (what the automatic compose→swarm conversion changes, adding a worker), **sleep and
+wake-on-call** (the `sleep:` block, the catch-all router, the spinning-up page) and **share links**.
 
 ### [`control-plane.md`](control-plane.md) — the architecture (~1000 lines)
 
 Why the control plane is shaped the way it is: the CLI/API split (and why `init` can never move into
 the API), the registry as a cache of intent rather than a state store, what SQLite is allowed to
-hold, the job model, and the delivery rules for notifiers. Read this before proposing a structural
+hold, the job model, the delivery rules for notifiers, and (§5e) why the sleep record is in the
+registry, activity is in memory, the control stack stays a compose project under swarm, and a share
+link is a JWT with no table. Read this before proposing a structural
 change — most "obvious" restructurings are refused here with a reason.
 
 ### [`bootstrap.md`](bootstrap.md) — from nothing to a running host (~1100 lines)

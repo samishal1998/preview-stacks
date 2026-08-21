@@ -31,6 +31,13 @@
 #    There is no memory isolation between stacks on a shared host. One PR's runaway heap OOMs
 #    every other preview on the box. The numbers below are conservative starting points.
 #
+# ── SWARM: this file is fine as it is ────────────────────────────────────────────────────────
+# On a swarm host (a new host's default) pstack converts this file on every deploy: the profiles
+# above are resolved, `mem_limit` moves under `deploy.resources`, `restart` becomes
+# `deploy.restart_policy` (absent → `none`, exactly like compose), and every `traefik.*` label moves
+# to `deploy.labels` with `traefik.docker.network` renamed to `traefik.swarm.network`. Anything
+# swarm cannot honour is dropped and named in the job log. Keep writing plain compose.
+#
 # ── TLS: these labels assume HTTP-01 (pstack's default) ──────────────────────────────────────
 # Under HTTP-01 each hostname resolves its OWN certificate, so every per-PR router needs
 # `tls.certresolver=le` — as written below.

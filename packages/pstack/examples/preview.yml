@@ -58,6 +58,17 @@ compose:
   # Every service sits behind a profile so a bare `up` starts nothing. `up` enables only what you
   # list here; `down` always enables ALL of them (otherwise the unselected profiles' network leaks).
   profiles: [backend, frontend]
+  # How this stack is deployed: `swarm` (a new host's default — the file above is converted on every
+  # deploy) or `compose`. Omit it to follow the host; set `compose` here only for a service swarm
+  # cannot run (privileged, a device mount).
+  # orchestrator: swarm
+
+# Let the scheduler put this preview to SLEEP: its containers go, its volumes and every axis stay,
+# and the next request to any of its hostnames brings it back ("Your preview is spinning up…").
+# `idle` counts requests through Traefik; `after` counts from the last deploy. Either or both.
+# sleep:
+#   idle: 2h
+#   after: 3d
 
 axes:
   # ── 1. Database ─────────────────────────────────────────────────────────────────────────
