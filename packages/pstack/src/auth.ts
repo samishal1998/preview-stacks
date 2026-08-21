@@ -39,8 +39,17 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const USERNAME = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 
-/** Who a request is. `root` is PSTACK_TOKEN; a user carries its row. */
-export type Principal = { kind: 'root' } | { kind: 'user'; user: UserRow };
+/**
+ * Who a request is. `root` is PSTACK_TOKEN; a user carries its row; `share` is a signed read-only
+ * link to ONE deployment (share.ts) — it can see what its `views` allow on that deployment and
+ * nothing else, which api.ts enforces right after the gate, before any route.
+ */
+export type Principal =
+  | { kind: 'root' }
+  | { kind: 'user'; user: UserRow }
+  | { kind: 'share'; deployment: string; views: ShareView[] };
+
+export type ShareView = 'details' | 'logs';
 
 function sha256(input: string): string {
   return new Bun.CryptoHasher('sha256').update(input).digest('hex');

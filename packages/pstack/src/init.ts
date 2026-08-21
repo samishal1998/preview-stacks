@@ -29,6 +29,9 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { shq } from './compose.ts';
 import type { Runner } from './exec.ts';
+import { escapeHostRegexp } from './subdomains.ts';
+import { SWARM_PORTS } from './swarm.ts';
+import type { Orchestrator } from './spec.ts';
 // Embedded at BUILD time, not read from disk at runtime: the published package is a single bundled
 // file, so `new URL('../templates/…', import.meta.url)` would point at a path that does not ship.
 import CONTROL_TEMPLATE from '../templates/control/docker-compose.yml' with { type: 'text' };
@@ -117,6 +120,18 @@ export type InitOptions = {
    * never leaves the host with no usable interface.
    */
   ui: 'basic' | 'advanced';
+  /**
+   * How previews are deployed on this host.
+   *
+   *   'swarm'    DEFAULT for a new host. This daemon becomes a one-node swarm manager; previews deploy
+   *              as swarm stacks; workers can join later from the swarm panel. The control stack
+   *              itself stays a plain compose project on the manager (it must never depend on the
+   *              orchestrator it manages), and the two external networks become attachable overlays
+   *              so its containers reach tasks on any node.
+   *   'compose'  What every host before 0.26.0 ran. `pstack upgrade` keeps it: switching an existing
+   *              host means recreating its networks, which needs every preview torn down first.
+   */
+  orchestrator: Orchestrator;
   /** lego DNS-01 provider code, e.g. `cloudflare`. Required for, and only used by, `dns01`. */
   dnsProvider?: string;
   /**
@@ -140,7 +155,7 @@ function randomToken(): string {
 }
 
 export async function init(opts: InitOptions): Promise<void> {
-  const { dataDir, domain, acmeEmail, dnsProvider, challenge, ui, dryRun, runner } = opts;
+  const { dataDir, domain, acmeEmail, dnsProvider, challenge, ui, orchestrator, dryRun, runner } = opts;
   const image = defaultImage();
   const uiImage = process.env.PSTACK_UI_IMAGE ?? 'pstack-ui:local';
   const controlDir = join(dataDir, 'control');
@@ -216,11 +231,61 @@ export async function init(opts: InitOptions): Promise<void> {
   // WAL siblings carry live data, so the directory is the permission boundary, not the file.
   await ensureDir(join(dataDir, 'db'), dryRun, 0o700);
 
+  // ── 1b. Swarm ───────────────────────────────────────────────────────────────────────────────
+  // `swarm init` on a node that is already a manager fails, so it is guarded by the state docker
+  // reports — this is the idempotent path. Leaving a swarm is never done here: that is a decision
+  // with workers attached to it, and it belongs to an operator at a shell.
+  if (orchestrator === 'swarm') {
+    const state = await runner.run(`docker info --format '{{.Swarm.LocalNodeState}}'`, { label: 'swarm state' });
+    if (state.stdout.trim() !== 'active') {
+      const r = await runner.run('docker swarm init', { label: 'swarm init' });
+      if (!r.ok) {
+        throw new Error(
+          `docker swarm init failed:\n${indent(r.stderr || r.stdout)}\n` +
+            `  A host with several addresses needs --advertise-addr; run \`docker swarm init --advertise-addr <ip>\` ` +
+            `once by hand, then re-run pstack init.`,
+        );
+      }
+    }
+  }
+
   // ── 2. External networks ────────────────────────────────────────────────────────────────────
   // `network create` exits non-zero when the network exists, and this must be re-runnable, so the
   // failure is swallowed — this is the idempotent path, not an ignored error.
+  //
+  // Under swarm they must be OVERLAY networks (a task on a worker is not on this host's bridge) and
+  // `--attachable`, or the control stack's plain containers could not join them. A network that
+  // exists with the other driver is the one thing that cannot be fixed quietly: it has to be removed,
+  // which is only possible while nothing is attached — so the control stack is taken down for it,
+  // and a preview still attached is a hard stop naming it.
+  const driver = orchestrator === 'swarm' ? 'overlay' : 'bridge';
+  const createArgs = orchestrator === 'swarm' ? '-d overlay --attachable ' : '';
   for (const net of [NET_INGRESS, NET_SHARED]) {
-    await runner.run(`docker network create ${net} 2>/dev/null || true`, { label: `network ${net}` });
+    const have = await runner.run(`docker network inspect -f '{{.Driver}}' ${net} 2>/dev/null`, { label: `network ${net} driver` });
+    const current = have.ok ? have.stdout.trim() : '';
+    // Only a driver docker could have meant. Anything else is "could not tell", and a network that
+    // cannot be read is not one to remove.
+    if ((current === 'bridge' || current === 'overlay') && current !== driver) {
+      const attached = await runner.run(
+        `docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' ${net}`,
+        { label: `network ${net} members` },
+      );
+      const names = attached.stdout.trim().split(/\s+/).filter(Boolean);
+      const foreign = names.filter((n) => !n.startsWith(`${CONTROL_PROJECT}-`));
+      if (foreign.length > 0) {
+        throw new Error(
+          `network ${net} is a ${current} network and must become ${driver} for --orchestrator ${orchestrator}, ` +
+            `but these containers are attached to it: ${foreign.join(', ')}.\n` +
+            `  Tear those previews down (pstack down / the API), then re-run init. Or keep the host as it ` +
+            `is with --orchestrator ${current === 'overlay' ? 'swarm' : 'compose'}.`,
+        );
+      }
+      // Only the control stack is on it: take that down (it is recreated below anyway), swap the network.
+      await runner.run(`docker compose -p ${CONTROL_PROJECT} down 2>/dev/null || true`, { label: 'control stack down (network swap)' });
+      const rm = await runner.run(`docker network rm ${net}`, { label: `network ${net} rm` });
+      if (!rm.ok) throw new Error(`could not replace network ${net}:\n${indent(rm.stderr || rm.stdout)}`);
+    }
+    await runner.run(`docker network create ${createArgs}${net} 2>/dev/null || true`, { label: `network ${net}` });
   }
 
   // ── 3. Configuration ────────────────────────────────────────────────────────────────────────
@@ -230,16 +295,20 @@ export async function init(opts: InitOptions): Promise<void> {
   // The two `#__MARKER__` lines are different: Compose cannot conditionally include CLI arguments,
   // and the ACME challenge changes both Traefik's flags and the router's TLS labels. So init
   // renders those two blocks and leaves everything else byte-for-byte.
+  // Function replacements, not strings: `String.replace` reads `$$` in a string replacement as one
+  // `$`, and the wake router's rule ends in `$$` precisely so compose hands Traefik a literal `$`.
   const template = CONTROL_TEMPLATE
-    .replace('      #__ACME_CHALLENGE__', acmeChallengeArgs(challenge, dnsProvider))
-    .replace('      #__ACME_ROUTER_TLS__', acmeRouterLabels(challenge))
-    .replace('      #__CONTROL_UI_SERVICE__', controlUiService(ui))
-    .replace('#__ADVANCED_UI_SERVICE__', advancedUiService(ui));
+    .replace('      #__ACME_CHALLENGE__', () => acmeChallengeArgs(challenge, dnsProvider))
+    .replace('      #__ACME_ROUTER_TLS__', () => acmeRouterLabels(challenge))
+    .replace('      #__CONTROL_UI_SERVICE__', () => controlUiService(ui))
+    .replace('      #__SWARM_PROVIDER__', () => swarmProviderArgs(orchestrator))
+    .replace('      #__WAKE_ROUTER__', () => wakeRouterLabels(domain))
+    .replace('#__ADVANCED_UI_SERVICE__', () => advancedUiService(ui));
   await write(composePath, template, 0o644, dryRun);
 
   await write(
     join(controlDir, '.env'),
-    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken, ui, uiImage }),
+    envFile({ dataDir, domain, acmeEmail, dnsProvider: dnsProvider ?? '', image, pstackToken, ui, uiImage, orchestrator }),
     // 0600: this file holds PSTACK_TOKEN, and that token drives an API with a read-write Docker
     // socket — i.e. root on this host. Anyone who can read it owns the box.
     0o600,
@@ -282,7 +351,11 @@ export async function init(opts: InitOptions): Promise<void> {
       `control stack up  (project ${CONTROL_PROJECT}${dryRun ? ', dry-run' : ''})`,
       `  config    ${composePath}`,
       `  registry  ${join(dataDir, 'deployments')}`,
-      `  networks  ${NET_INGRESS}, ${NET_SHARED}   (declare both as \`external: true\` in every per-PR compose file)`,
+      `  networks  ${NET_INGRESS}, ${NET_SHARED}   (${driver}; declare both as \`external: true\` in every per-PR compose file)`,
+      `  previews  ${orchestrator === 'swarm' ? 'docker stack deploy on this swarm (one manager; add workers from the Swarm page)' : 'docker compose on this host'}`,
+      ...(orchestrator === 'swarm'
+        ? [`            workers need ${SWARM_PORTS.map((p) => p.port).join(', ')} open to and from this host`]
+        : []),
       '',
       'next:',
       `  1. UI          ${uiUrl}`,
@@ -340,6 +413,7 @@ async function waitHealthy(runner: Runner): Promise<string> {
 function envFile(v: {
   ui?: 'basic' | 'advanced';
   uiImage?: string;
+  orchestrator: Orchestrator;
   dataDir: string;
   domain: string;
   acmeEmail: string;
@@ -361,6 +435,8 @@ function envFile(v: {
     `ACME_EMAIL=${v.acmeEmail}`,
     `DNS_PROVIDER=${v.dnsProvider}`,
     `PSTACK_IMAGE=${v.image}`,
+    '# How previews deploy: swarm (docker stack deploy) or compose. `pstack upgrade` keeps it.',
+    `PSTACK_ORCHESTRATOR=${v.orchestrator}`,
     '',
     '# Bearer token for the API. Mutating routes require it; GETs do not, so ingress auth is still',
     '# the only gate on job transcripts and the stack list (docs/bootstrap.md §9).',
@@ -432,6 +508,36 @@ function acmeRouterLabels(challenge: 'http01' | 'dns01'): string {
     '      - traefik.http.routers.pstack-ui.tls.domains[0].main=${DOMAIN}',
     '      - traefik.http.routers.pstack-ui.tls.domains[0].sans=*.${DOMAIN}',
     '      - traefik.http.routers.pstack-api.tls=true',
+  ].join('\n');
+}
+
+/**
+ * Traefik's swarm provider, in swarm mode only. Both providers run: docker for the control stack's
+ * own containers (and any compose-mode preview), swarm for the stacks. `exposedbydefault=false` on
+ * both for the same reason — routing is opt-in.
+ */
+function swarmProviderArgs(orchestrator: Orchestrator): string {
+  if (orchestrator !== 'swarm') return '      # (compose mode: no swarm provider)';
+  return [
+    '      - --providers.swarm=true',
+    '      - --providers.swarm.exposedbydefault=false',
+    '      - --providers.swarm.network=preview-ingress',
+  ].join('\n');
+}
+
+/**
+ * The catch-all router for wake-on-call. A Go regexp over one label under the domain; `$$` is how a
+ * literal `$` survives compose's interpolation of this file, and the dots are escaped here (the
+ * template cannot, it only knows `${DOMAIN}`).
+ */
+function wakeRouterLabels(domain: string): string {
+  const re = escapeHostRegexp(domain);
+  return [
+    `      - traefik.http.routers.pstack-wake.rule=HostRegexp(\`^[a-z0-9-]+\\.${re}$$\`)`,
+    '      - traefik.http.routers.pstack-wake.priority=1',
+    '      - traefik.http.routers.pstack-wake.entrypoints=websecure',
+    '      - traefik.http.routers.pstack-wake.tls=true',
+    '      - traefik.http.routers.pstack-wake.service=pstack',
   ].join('\n');
 }
 

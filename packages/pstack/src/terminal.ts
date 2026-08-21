@@ -54,7 +54,9 @@ export function execArgv(containerId: string, shell: Shell): string[] {
 
 /** Who did it, in one string, for the audit row. */
 export function actorOf(who: Principal): string {
-  return who.kind === 'root' ? 'root (PSTACK_TOKEN)' : who.user.username;
+  if (who.kind === 'root') return 'root (PSTACK_TOKEN)';
+  if (who.kind === 'share') return `share-link (${who.deployment})`;
+  return who.user.username;
 }
 
 /**
@@ -65,6 +67,8 @@ export function actorOf(who: Principal): string {
  * must already be in the code path, not a thing someone remembers to add.
  */
 export function mayOpenTerminal(who: Principal): boolean {
+  // A share link is read-only by construction; it never reaches a shell.
+  if (who.kind === 'share') return false;
   return who.kind === 'root' || who.user.role === 'admin';
 }
 

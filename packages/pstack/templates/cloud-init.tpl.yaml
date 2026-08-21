@@ -81,36 +81,15 @@ packages:
   - jq
   - openssl{{EXTRA_PACKAGES}}
 
-write_files:
-  # Optional but recommended: a fallback router.
-  #
-  # A per-PR router exists only while that PR's containers run. Without this, a stale preview link
-  # (torn-down PR, or one that was never deployed) returns a bare Traefik 404 that tells nobody
-  # anything. This catch-all sits at priority 1, so ANY exact per-PR router beats it, and answers
-  # with a plain explanation instead.
-  #
-  # It sets `tls: {}` and NO certResolver on purpose — see the note in the init call below about
-  # which routers may request certificates.
-  - path: /var/lib/pstack/control/traefik-dynamic/fallback.yml
-    permissions: '0644'
-    owner: root:root
-    content: |
-      http:
-        routers:
-          preview-fallback:
-            # Anchored Go regexp, escaped dots. Traefik v3 dropped v2's `{name:...}` syntax.
-            rule: "HostRegexp(`^[a-z0-9-]+-pr-[0-9]+\\.{{DOMAIN_RE}}$`)"
-            priority: 1
-            entryPoints: [websecure]
-            service: preview-gone
-            tls: {}
-        services:
-          preview-gone:
-            loadBalancer:
-              servers:
-                # Points at the control plane, which serves the UI for any unmatched path — so a
-                # dead preview link lands on something that explains itself rather than a 404.
-                - url: "http://pstack:7878"
+# No `write_files:` here any more. The catch-all router a dead or sleeping preview link lands on is
+# rendered by `pstack init` itself since 0.26.0 (labels on the pstack container, priority 1 over the
+# whole `*.{{DOMAIN}}`), so it exists on every host — and it is what wakes a sleeping preview.
+#
+# SWARM. `init` below runs with the default orchestrator (swarm: this host becomes a one-node manager,
+# previews deploy as swarm stacks, workers can join from the Swarm page). For workers to join, open
+# 2377/tcp, 7946/tcp+udp and 4789/udp between this host and each worker. Pass
+#     --orchestrator compose
+# to `pstack init` instead to run previews with plain docker compose on this host only.
 
 runcmd:
   # ── 1. Docker + the compose plugin ────────────────────────────────────────────────────────

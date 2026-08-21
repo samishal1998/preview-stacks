@@ -56,8 +56,25 @@ export type Requirement = {
   hint?: string;
 };
 
+/**
+ * How a compose project is driven.
+ *
+ *   compose  `docker compose` on this daemon. The bare CLI's default, and what a host stood up before
+ *            0.26.0 runs.
+ *   swarm    `docker stack deploy` on a swarm this daemon manages. One manager by default; workers join
+ *            when a host needs to scale out. The submitted compose file is converted to the swarm
+ *            subset on every invocation (see swarm.ts) — a spec author writes plain compose.
+ *
+ * Resolution, most specific first: `compose.orchestrator` in the spec, then PSTACK_ORCHESTRATOR in the
+ * environment (the control stack sets it from what `pstack init` decided), then `compose`. A spec-level
+ * override exists for the service that genuinely cannot run under swarm (`privileged`, a device mount):
+ * on a swarm host it may still be a plain compose project on the manager.
+ */
+export type Orchestrator = 'compose' | 'swarm';
+
 export type ComposeSpec = {
   file: string;
+  orchestrator: Orchestrator;
   /**
    * Profiles to bring up. Every service in a preview compose file should be behind a profile so a
    * bare `up` starts nothing. Teardown always passes ALL of these regardless of what was selected
@@ -75,12 +92,25 @@ export type ComposeSpec = {
   subdomains?: SubdomainRoute[];
 };
 
+/**
+ * When the scheduler may put the compose project to sleep (axes stay; see stack.ts `sleep`).
+ *
+ *   idle   no request reached any of the stack's routers for this long (read from Traefik's metrics).
+ *   after  this long after the last deploy, unconditionally — for previews that exist to be built and
+ *          verified, never visited.
+ *
+ * Either, both, or neither. A stack without a `sleep:` section is never put to sleep by the scheduler.
+ * A request to a sleeping stack's hostname wakes it (the catch-all router, api.ts).
+ */
+export type SleepPolicy = { idleMs?: number; afterMs?: number };
+
 export type Stack = {
   version: number;
   kind: Kind;
   /** Resolved stack identity, e.g. `pr-123`. Exported to every hook as $STACK. */
   stack: string;
   compose?: ComposeSpec;
+  sleep?: SleepPolicy;
   requires: Requirement[];
   axes: Axis[];
   /**
@@ -225,6 +255,19 @@ function isNaiveNegation(script: string): boolean {
   return !/\bexit\b|\|\||&&/.test(only);
 }
 
+/**
+ * `90s`, `30m`, `2h`, `3d`, `1h30m` → milliseconds. Integers only; a bare number is refused because
+ * "sleep after 30" cannot be read without guessing the unit. Returns null on anything else.
+ */
+export function parseDuration(v: string): number | null {
+  const s = v.trim();
+  if (!/^(\d+[smhd])+$/.test(s)) return null;
+  const unit = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
+  let ms = 0;
+  for (const m of s.matchAll(/(\d+)([smhd])/g)) ms += Number(m[1]) * unit[m[2] as keyof typeof unit];
+  return ms > 0 ? ms : null;
+}
+
 function asString(v: unknown, where: string): string {
   if (typeof v === 'string') return v;
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
@@ -323,8 +366,18 @@ export function parseSpec(
     const resolvedProfiles = profiles.map((p, i) =>
       interpolate(asString(p, `compose.profiles[${i}]`), vars, `compose.profiles[${i}]`, host),
     );
+    const orchRaw = cm.orchestrator === undefined
+      ? (vars.PSTACK_ORCHESTRATOR || 'compose')
+      : interpolate(asString(cm.orchestrator, 'compose.orchestrator'), vars, 'compose.orchestrator', host);
+    if (orchRaw !== 'compose' && orchRaw !== 'swarm') {
+      throw new SpecError(
+        `compose.orchestrator must be "compose" or "swarm", got "${orchRaw}"` +
+          (cm.orchestrator === undefined ? ' (from PSTACK_ORCHESTRATOR)' : ''),
+      );
+    }
     compose = {
       file: interpolate(asString(cm.file, 'compose.file'), vars, 'compose.file', host),
+      orchestrator: orchRaw,
       profiles: resolvedProfiles,
       overlays: overlays.map((o, i) =>
         interpolate(asString(o, `compose.overlays[${i}]`), vars, `compose.overlays[${i}]`, host),
@@ -343,6 +396,32 @@ export function parseSpec(
         domain: resolvePreviewDomain(vars, declaredEnv),
       });
     }
+  }
+
+  let sleep: SleepPolicy | undefined;
+  if (raw.sleep !== undefined) {
+    const sl = raw.sleep;
+    if (typeof sl !== 'object' || sl === null || Array.isArray(sl)) {
+      throw new SpecError('`sleep` must be a mapping with `idle` and/or `after` durations (30m, 2h, 3d)');
+    }
+    const sm = sl as Record<string, unknown>;
+    const dur = (k: 'idle' | 'after'): number | undefined => {
+      if (sm[k] === undefined) return undefined;
+      const text = interpolate(asString(sm[k], `sleep.${k}`), vars, `sleep.${k}`, host);
+      const ms = parseDuration(text);
+      if (ms === null) {
+        throw new SpecError(`sleep.${k}: "${text}" is not a duration — use 90s, 30m, 2h, 3d or 1h30m`);
+      }
+      return ms;
+    };
+    for (const k of Object.keys(sm)) {
+      if (k !== 'idle' && k !== 'after') throw new SpecError(`sleep.${k}: unknown key (idle, after)`);
+    }
+    sleep = { idleMs: dur('idle'), afterMs: dur('after') };
+    if (sleep.idleMs === undefined && sleep.afterMs === undefined) {
+      throw new SpecError('`sleep` declares neither `idle` nor `after` — remove it');
+    }
+    if (!compose) warnings.push('`sleep` is set but there is no `compose` section — nothing to put to sleep.');
   }
 
   const rawRequires = raw.requires === undefined ? [] : raw.requires;
@@ -436,7 +515,7 @@ export function parseSpec(
     );
   }
 
-  return { version, kind, stack, compose, requires, axes, env: vars, declaredEnv };
+  return { version, kind, stack, compose, sleep, requires, axes, env: vars, declaredEnv };
 }
 
 /** Parse a spec file from disk. `parseSpec` resets `warnings`. */

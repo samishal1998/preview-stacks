@@ -119,6 +119,9 @@ export function redactText(text: string, extraSecrets: string[] = []): string {
   for (const s of [...extraSecrets].filter((s) => s.length >= 8).sort((a, b) => b.length - a.length)) {
     out = out.split(s).join('••••••');
   }
+  // A swarm join token. Whoever holds one can add a node that runs any task on the cluster, and
+  // `docker swarm join-token` prints it in a line a hook could easily echo.
+  out = out.replace(/SWMTKN-[A-Za-z0-9-]+/g, 'SWMTKN-••••••');
   // scheme://user:password@host  →  keep the shape, drop the password
   out = out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@]+@/gi, '$1:••••@');
   // NAME=value where NAME reads as a secret

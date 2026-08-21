@@ -16,6 +16,7 @@
 
 import CLOUD_INIT_TEMPLATE from '../templates/cloud-init.tpl.yaml' with { type: 'text' };
 import pkg from '../package.json';
+import { joinCommand, SWARM_PORTS } from './swarm.ts';
 
 /**
  * The distros the generator can target.
@@ -139,6 +140,8 @@ export type CloudInitAnswers = {
   configRepo?: string;
   /** Target distro; decides the Docker install/enable fragments. Default ubuntu. */
   distro?: Distro;
+  /** `swarm` (the default for a new host) or `compose`. Passed to `pstack init --orchestrator`. */
+  orchestrator?: 'swarm' | 'compose';
 };
 
 export class CloudInitError extends Error {}
@@ -190,12 +193,10 @@ export function renderCloudInit(a: CloudInitAnswers): string {
     initFlags.push(`--challenge dns01`, `--dns-provider ${a.dnsProvider}`);
   }
   if (a.ui === 'advanced') initFlags.push('--ui advanced');
+  if (a.orchestrator) initFlags.push(`--orchestrator ${a.orchestrator}`);
 
   const values: Record<string, string> = {
     DOMAIN: a.domain,
-    // The fallback router's rule is a Go regexp inside YAML, so every dot must be escaped or it
-    // would match `backend-pr-1Xpreview.example.com` too.
-    DOMAIN_RE: a.domain.replace(/\./g, '\\\\.'),
     ACME_EMAIL: a.acmeEmail,
     // Omit the key list entirely rather than emit an empty one: cloud-init would accept
     // `ssh_authorized_keys:` with nothing under it, and the result is a user with no way in and no
@@ -265,6 +266,81 @@ export function renderCloudInit(a: CloudInitAnswers): string {
     throw new CloudInitError(`template left unrendered placeholders: ${[...new Set(missed)].join(', ')}`);
   }
   return out;
+}
+
+/**
+ * User-data for a swarm WORKER: install Docker, join the manager. Nothing else — no Bun, no pstack,
+ * no control stack; a worker runs tasks the manager schedules and is managed from the manager.
+ *
+ * Its own small template rather than a third of the manager's with conditionals: the generator has
+ * no conditional syntax (deliberately — see the header), and the two files share only the Docker
+ * install fragments, which are reused here verbatim.
+ *
+ * THE TOKEN IS A SECRET: whoever can read this file can add a node that runs any task on the cluster.
+ * Treat the rendered file like the manager's `.env`.
+ */
+export function renderWorkerCloudInit(a: { token: string; managerAddr: string; distro?: Distro; sshKey?: string }): string {
+  const distro = a.distro ?? 'ubuntu';
+  if (!DISTROS.includes(distro)) {
+    throw new CloudInitError(`unknown distro "${distro}" — expected one of ${DISTROS.join(', ')}`);
+  }
+  if (!/^SWMTKN-[A-Za-z0-9-]+$/.test(a.token)) throw new CloudInitError('that is not a swarm join token (SWMTKN-…)');
+  if (!/^[A-Za-z0-9.:\[\]-]+$/.test(a.managerAddr)) throw new CloudInitError('manager address must be host:port');
+  if (a.sshKey && !/^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+) \S+/.test(a.sshKey)) {
+    throw new CloudInitError('ssh key must be an authorized_keys line, e.g. "ssh-ed25519 AAAA… you@laptop"');
+  }
+  const profile = DISTRO_PROFILES[distro];
+  const ports = SWARM_PORTS.map((p) => `#     ${p.port.padEnd(14)} ${p.why}`).join('\n');
+  return [
+    '#cloud-config',
+    '#',
+    `# pstack swarm WORKER — joins the manager at ${a.managerAddr}.`,
+    `# Rendered by pstack ${pkg.version} for ${distro}. Boot a machine with it; nothing to run afterwards.`,
+    '#',
+    '# ── FIREWALL, BEFORE YOU BOOT ────────────────────────────────────────────────────────────────',
+    '# Between this machine and every other node (the manager included):',
+    ports,
+    '#',
+    '# ── THIS FILE HOLDS THE JOIN TOKEN ──────────────────────────────────────────────────────────',
+    '# Whoever has it can add a node that runs any task on the cluster. Rotate it from the manager',
+    '# with `docker swarm join-token --rotate worker` if this file leaks.',
+    '# ─────────────────────────────────────────────────────────────────────────────────────────────',
+    '',
+    'groups:',
+    '  - docker',
+    '',
+    'users:',
+    '  - default',
+    '  - name: preview',
+    '    gecos: preview stack operator',
+    '    shell: /bin/bash',
+    '    groups: [docker]',
+    "    sudo: 'ALL=(ALL) NOPASSWD:ALL'",
+    '    lock_passwd: true',
+    a.sshKey
+      ? `    ssh_authorized_keys:\n      - ${a.sshKey}`
+      : '    # No key here: the provider injects its own at boot (e.g. `hcloud server create --ssh-key`).',
+    '',
+    'package_update: true',
+    'packages:',
+    '  - ca-certificates',
+    '  - curl',
+    ...profile.extraPackages.map((p) => `  - ${p}`),
+    '',
+    'runcmd:',
+    '  # ── 1. Docker ───────────────────────────────────────────────────────────────────────────',
+    profile.pkgSetup,
+    profile.dockerEnable,
+    '  - docker --version',
+    '  # ── 2. Join ─────────────────────────────────────────────────────────────────────────────',
+    `  - ${joinCommand(a.token, a.managerAddr)}`,
+    "  - docker info --format 'joined as {{.Swarm.NodeID}} ({{.Swarm.LocalNodeState}})'",
+    '',
+    'final_message: |',
+    `  swarm worker is up after $UPTIME seconds — joined ${a.managerAddr}.`,
+    '  Check from the manager: docker node ls',
+    '',
+  ].join('\n');
 }
 
 /**

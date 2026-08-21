@@ -122,6 +122,8 @@
      must not be mistakable for `failed` (red) or `ok` (green) at a glance. */
   .badge.leaked { color: #2a1e08; background: var(--leak); border-color: var(--leak); font-weight: 600; }
   .badge.unknown { color: var(--fg-mute); border-style: dashed; }
+  /* asleep is its own state — not running, not torn down — so it gets its own colour. */
+  .badge.asleep { color: #c4a7e7; border-color: #4e3a66; }
   /*
    * The kind badge is the most consequential glance on the list: `down` on a shared deployment
    * destroys volumes every tenant depends on. Amber = handle with care, and it is filled rather
@@ -255,6 +257,7 @@
             Jobs <span class="n">{{ jobs.length }}</span>
           </a>
         </li>
+        <li><a href="#/swarm" :aria-current="route.view === 'swarm' ? 'page' : null">Swarm</a></li>
       </ul>
       <div class="meta">
         <div v-if="health.dataDir">data <span class="mono">{{ health.dataDir }}</span></div>
@@ -414,7 +417,7 @@
             <div class="scroll-x">
               <table>
                 <thead>
-                  <tr><th>id</th><th>kind</th><th>stack</th><th>state</th><th>updated</th></tr>
+                  <tr><th>id</th><th>kind</th><th>stack</th><th>orchestrator</th><th>state</th><th>updated</th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="d in deployments" :key="d.id">
@@ -426,14 +429,19 @@
                         needs variables
                       </span>
                     </td>
+                    <td class="mono dim">{{ d.orchestrator || '—' }}</td>
                     <!--
                       busy/running are SERVER-provided tri-state: true / false / null. `null` means
                       "could not determine" — an unresolved spec has no stack name to look up, and a
                       docker that did not answer is not the same fact as "nothing is running".
                       Rendering either as "idle" would be a guess, so unknown says unknown.
+                      `asleep` is the sleep RECORD (invariant 11): not running AND not torn down, so
+                      it is never folded into running/idle — it comes before both.
                     -->
                     <td>
                       <span v-if="d.busy === true" class="badge busy">busy</span>
+                      <span v-else-if="d.asleep" class="badge asleep"
+                            :title="'asleep since ' + stamp(d.asleep.since) + ' — ' + d.asleep.reason">asleep</span>
                       <span v-else-if="d.running === true" class="badge running">running</span>
                       <span v-else-if="d.busy === null || d.running === null"
                             class="badge unknown" title="the server could not determine this">unknown</span>
@@ -442,7 +450,7 @@
                     <td class="dim mono nowrap">{{ stamp(d.updatedAt) }}</td>
                   </tr>
                   <tr v-if="!deployments.length">
-                    <td colspan="5" class="muted">
+                    <td colspan="6" class="muted">
                       nothing submitted &mdash; use <a href="#/submit">Submit</a> to PUT a spec
                     </td>
                   </tr>
@@ -471,6 +479,7 @@
           <span class="name">{{ route.id }}</span>
           <span v-if="detail" class="badge" :class="'k-' + detail.kind">{{ detail.kind }}</span>
           <span v-if="detail && detail.busy === true" class="badge busy">busy</span>
+          <span v-if="detail && detail.asleep" class="badge asleep">asleep</span>
           <span class="grow"></span>
           <button class="small" @click="loadDetail">Refresh</button>
         </div>
@@ -520,6 +529,27 @@
               <span class="stretch">
                 <span v-for="o in detail.compose.overlays" :key="o" class="name" style="margin-right:8px">{{ o }}</span>
                 <span v-if="!detail.compose.overlays.length" class="muted">none</span>
+              </span>
+            </li>
+            <li v-if="detail.compose"><span class="dim" style="width:120px">orchestrator</span>
+              <span class="mono stretch">{{ detail.orchestrator || '—' }}</span>
+            </li>
+            <li v-if="detail.sleep"><span class="dim" style="width:120px">sleep policy</span>
+              <span class="stretch">
+                <span v-if="detail.sleep.idle" class="badge" style="margin-right:4px">idle {{ detail.sleep.idle }}</span>
+                <span v-if="detail.sleep.after" class="badge" style="margin-right:4px">after {{ detail.sleep.after }}</span>
+                <span class="muted">&mdash; sleeps on its own; a request to its hostname wakes it</span>
+              </span>
+            </li>
+            <li v-if="detail.asleep"><span class="dim" style="width:120px">asleep</span>
+              <span class="stretch">
+                since <span class="mono">{{ stamp(detail.asleep.since) }}</span>
+                <span class="muted">({{ detail.asleep.reason }})</span>
+                <span v-if="detail.asleep.hosts.length || detail.asleep.rules.length">
+                  &mdash; wakes on a request to
+                  <span class="name">{{ detail.asleep.hosts.concat(detail.asleep.rules.map((r) => '/' + r + '/')).join(', ') }}</span>
+                </span>
+                <span v-else class="muted">&mdash; no hostnames were found, so only <b>wake</b> brings it back</span>
               </span>
             </li>
             <li><span class="dim" style="width:120px">axes</span><span class="stretch">{{ detail.axes.length }}</span></li>
@@ -780,9 +810,29 @@
                         @click="act('down')">
                   {{ isShared ? 'down (force)' : 'down' }}
                 </button>
+                <!--
+                  Sleep is hidden, not merely disabled, for a shared deployment: every preview that
+                  depends on the singleton would go with it, and the server 409s it anyway.
+                -->
+                <button v-if="detail.asleep" class="primary" :disabled="acting || detail.busy === true"
+                        @click="act('wake')">wake</button>
+                <button v-else-if="!isShared" :disabled="acting || detail.busy === true || !detail.compose"
+                        @click="act('sleep')">sleep</button>
                 <span class="grow"></span>
                 <a :href="'#/submit/' + encodeURIComponent(route.id)">replace spec &rarr;</a>
               </div>
+              <div v-if="detail.asleep" class="banner info" style="margin-top:10px">
+                <b>asleep</b> since {{ stamp(detail.asleep.since) }} ({{ detail.asleep.reason }}).
+                Its volumes and axes are still there. <code>wake</code> brings it back, and so does
+                <span v-if="detail.asleep.hosts.length || detail.asleep.rules.length">a request to
+                  <span class="mono">{{ detail.asleep.hosts.concat(detail.asleep.rules.map((r) => '/' + r + '/')).join(', ') }}</span>.</span>
+                <span v-else>&hellip; nothing else: no hostnames were found on its containers.</span>
+              </div>
+              <p class="hint" v-else-if="!isShared && detail.compose">
+                <code>sleep</code> stops the containers but keeps <b>volumes and axes</b> &mdash;
+                unlike <code>down</code>, nothing is destroyed. A request to its hostname wakes it,
+                as does <code>wake</code> here.
+              </p>
               <p class="hint" v-if="detail.busy === true">
                 A job is in flight for <b>{{ detail.stack }}</b>. One job per stack, deliberately not
                 queued &mdash; a <code>down</code> racing an <code>up</code> over the same database
@@ -894,6 +944,153 @@
             </template>
           </div>
         </template>
+
+        <!-- ---------------- tab: share ---------------- -->
+        <div class="panel" v-if="route.tab === 'share'">
+          <h2>Share a read-only link</h2>
+          <p class="dim">
+            <code>POST /api/deployments/:id/share</code> mints a link scoped to <em>this</em>
+            deployment and the views ticked below &mdash; <code>GET</code> only, nothing else on
+            this API. There is no per-link revocation, so the TTL is the only thing bounding a link
+            that leaks.
+          </p>
+          <div class="row" style="margin-top:10px">
+            <label><input type="checkbox" v-model="share.details"> details</label>
+            <label><input type="checkbox" v-model="share.logs"> logs</label>
+            <label for="share-ttl">expires in</label>
+            <select id="share-ttl" v-model="share.ttl">
+              <option value="1h">1 hour</option>
+              <option value="24h">24 hours</option>
+              <option value="7d">7 days</option>
+              <option value="30d">30 days</option>
+            </select>
+            <button class="primary" :disabled="sharing || (!share.details && !share.logs)" @click="mintShare">
+              {{ sharing ? 'minting…' : 'Create link' }}
+            </button>
+          </div>
+          <div v-if="shareError" class="banner failed" style="margin-top:12px">{{ shareError }}</div>
+          <!--
+            Shown ONCE, kept only in this component's memory: the link carries the bearer, so it is
+            never written to localStorage and goes away with the next navigation.
+          -->
+          <div v-if="shareResult" class="banner warn" style="margin-top:12px">
+            <b>This link is the credential.</b> Shown once &mdash; it is stored nowhere, so copy it now.
+            Grants <span class="mono">{{ shareResult.views.join(', ') }}</span> until
+            <span class="mono">{{ stamp(shareResult.expiresAt) }}</span>.
+            <pre class="text-out" style="margin:8px 0 0">{{ shareResult.url }}</pre>
+            <div class="row" style="margin-top:8px">
+              <button class="small" @click="copy(shareResult.url)">{{ copied === shareResult.url ? 'copied' : 'Copy' }}</button>
+              <span v-if="copyError" class="err">{{ copyError }}</span>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ============================== swarm ============================== -->
+      <template v-else-if="route.view === 'swarm'">
+        <div class="panel">
+          <div class="phead">
+            <h2>Swarm</h2>
+            <span v-if="swarm && swarm.reachable && swarm.active" class="badge ok">active</span>
+            <span class="grow"></span>
+            <button class="small" @click="loadSwarm">Refresh</button>
+          </div>
+          <p v-if="swarmError" class="err">{{ swarmError }}</p>
+          <p v-else-if="!swarm" class="muted">loading…</p>
+          <template v-else>
+            <!--
+              Three states, never collapsed (invariant 11):
+                reachable:false  docker did not answer — we know NOTHING, not "no swarm"
+                active:false     docker answered: this host runs compose, not a swarm manager
+                active:true      the cluster below is real
+            -->
+            <div v-if="!swarm.reachable" class="banner warn">
+              <b>docker did not answer.</b> Whether this host is a swarm manager, and what nodes it
+              has, is unknown for this refresh &mdash; that is <em>not</em> the same as &ldquo;no
+              swarm&rdquo;. Check the daemon and the socket mount. Polled every 10s while you are here.
+            </div>
+            <div v-else-if="!swarm.active" class="banner plain">
+              <b>not a swarm manager.</b>
+              <p style="margin:6px 0 0">{{ swarm.note }}</p>
+            </div>
+            <template v-else>
+              <ul class="list" style="margin-bottom:12px">
+                <li><span class="dim" style="width:120px">manager</span>
+                  <span class="name stretch">{{ swarm.managerAddr || '—' }}</span></li>
+                <li><span class="dim" style="width:120px">this node</span>
+                  <span class="name stretch">{{ swarm.nodeId || '—' }}</span></li>
+              </ul>
+              <div v-if="swarm.error" class="banner warn">{{ swarm.error }}</div>
+              <div class="scroll-x">
+                <table>
+                  <thead>
+                    <tr><th></th><th>hostname</th><th>role</th><th>status</th><th>availability</th><th>manager status</th><th>engine</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="n in swarm.nodes" :key="n.id">
+                      <td class="mark" :title="n.self ? 'this node — the API runs here' : ''">{{ n.self ? '●' : '' }}</td>
+                      <td class="name">{{ n.hostname }}</td>
+                      <td><span class="badge" :class="n.role === 'manager' ? 'k-isolated' : ''">{{ n.role }}</span></td>
+                      <td :class="n.status === 'ready' ? 's-ok' : 's-failed'">{{ n.status || '—' }}</td>
+                      <td :class="n.availability === 'active' ? '' : 'lv-warn'">{{ n.availability || '—' }}</td>
+                      <td class="mono dim">{{ n.managerStatus || '—' }}</td>
+                      <td class="mono dim">{{ n.engineVersion || '—' }}</td>
+                    </tr>
+                    <tr v-if="!swarm.nodes.length"><td colspan="7" class="muted">docker listed no nodes</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="hint">● marks the node this API runs on. Polled every 10s while you are here.</p>
+            </template>
+          </template>
+        </div>
+
+        <div class="panel" v-if="swarm && swarm.reachable && swarm.active">
+          <h2>Add a worker</h2>
+          <p class="dim">Open these between the new machine and the manager first:</p>
+          <ul class="list" style="margin-bottom:12px">
+            <li v-for="p in swarm.ports" :key="p.port">
+              <span class="mono" style="width:120px">{{ p.port }}</span><span class="dim stretch">{{ p.why }}</span>
+            </li>
+          </ul>
+          <div class="row">
+            <label for="join-format">format</label>
+            <select id="join-format" v-model="joinFormat">
+              <option value="token">token</option>
+              <option value="command">command</option>
+              <option value="script">script</option>
+              <option value="cloud-config">cloud-config</option>
+            </select>
+            <template v-if="joinFormat === 'cloud-config'">
+              <label for="join-distro">distro</label>
+              <select id="join-distro" v-model="joinDistro">
+                <option v-for="d in DISTROS" :key="d" :value="d">{{ d }}</option>
+              </select>
+            </template>
+            <button class="primary" :disabled="joinLoading" @click="revealJoin">
+              {{ joinLoading ? 'fetching…' : 'Reveal' }}
+            </button>
+          </div>
+          <!--
+            Fetched on click only, never polled, never stored: a worker that joins runs whatever the
+            manager schedules, so the token is a root-equivalent secret.
+          -->
+          <p class="hint">
+            The join token is a <b>secret</b>: anyone holding it can attach a machine that runs
+            whatever the manager schedules. It is fetched only when you press Reveal, and kept only
+            on this screen.
+          </p>
+          <div v-if="joinError" class="banner failed" style="margin-top:12px">{{ joinError }}</div>
+          <div v-if="join" class="banner warn" style="margin-top:12px">
+            <b>This is a secret.</b> Run it on the new machine, then close this page.
+            <pre class="text-out" style="margin:8px 0 0">{{ join }}</pre>
+            <div class="row" style="margin-top:8px">
+              <button class="small" @click="copy(join)">{{ copied === join ? 'copied' : 'Copy' }}</button>
+              <button class="small" @click="join = ''">Hide</button>
+              <span v-if="copyError" class="err">{{ copyError }}</span>
+            </div>
+          </div>
+        </div>
       </template>
 
       <!-- ============================== submit ============================== -->
@@ -1154,7 +1351,9 @@ const { createApp } = Vue;
 
 /** Hook names, in the order `up` / `verify` actually use them. Also the column order in Axes. */
 const HOOKS = ['up', 'assert_live', 'down', 'assert_gone'];
-const TABS = ['overview', 'config', 'axes', 'requires', 'logs', 'actions'];
+const TABS = ['overview', 'config', 'axes', 'requires', 'logs', 'actions', 'share'];
+/** What `GET /api/swarm/join?distro=` accepts (src/cloudinit.ts). */
+const DISTROS = ['ubuntu', 'debian', 'fedora', 'suse', 'arch', 'alpine'];
 const VARS_KEY = 'pstack.vars.';
 const enc = encodeURIComponent;
 
@@ -1217,6 +1416,7 @@ function parseRoute() {
   }
   if (seg[0] === 'jobs') return seg[1] ? { ...base, view: 'job', jobId: seg[1] } : { ...base, view: 'jobs' };
   if (seg[0] === 'submit') return { ...base, view: 'submit', id: seg[1] || '' };
+  if (seg[0] === 'swarm') return { ...base, view: 'swarm' };
   return base;
 }
 
@@ -1232,7 +1432,7 @@ function query(pairs, extra) {
 createApp({
   data() {
     return {
-      HOOKS, TABS,
+      HOOKS, TABS, DISTROS,
       route: parseRoute(),
 
       token: localStorage.getItem('pstack.token') || '',
@@ -1251,6 +1451,13 @@ createApp({
       logs: null, logsError: '', logsLoading: false,
       acting: false, actionError: '', conflict: null,
       downVerify: true, forceTyped: '', forgetArmed: false,
+      // The minted link lives here and nowhere else — never in localStorage (it carries the token).
+      share: { details: true, logs: true, ttl: '7d' }, shareResult: null, shareError: '', sharing: false,
+
+      // ---- swarm ----
+      swarm: null, swarmError: '', swarmAt: 0,
+      joinFormat: 'command', joinDistro: 'ubuntu', join: '', joinError: '', joinLoading: false,
+      copied: '', copyError: '',
 
       // ---- job ----
       job: null, jobError: '', lines: [], es: null, following: false,
@@ -1348,6 +1555,8 @@ createApp({
       if (this.route.view === 'overview') { this.loadDeployments(); this.loadJobs(); }
       else if (this.route.view === 'list') this.loadDeployments();
       else if (this.route.view === 'jobs') this.loadJobs();
+      // Every other tick: the swarm panel polls at 10s, and the join token is never part of it.
+      else if (this.route.view === 'swarm' && Date.now() - this.swarmAt >= 9500) this.loadSwarm();
     }, 5000);
   },
 
@@ -1370,6 +1579,11 @@ createApp({
       if (to.view === 'jobs') this.loadJobs();
       if (to.view === 'job') { if (!from || from.jobId !== to.jobId) this.loadJob(to.jobId); }
       if (to.view === 'submit') this.prepareSubmit(to.id);
+      // Both secrets are shown once: leaving the screen that revealed them is what clears them.
+      this.join = '';
+      this.joinError = '';
+      if (to.view === 'swarm') this.loadSwarm();
+      if (to.view !== 'detail') { this.shareResult = null; this.shareError = ''; }
       if (to.view === 'detail') {
         // Switching tabs must not re-fetch or wipe the panel. Only a different deployment does.
         if (!sameDeployment) {
@@ -1380,6 +1594,8 @@ createApp({
           this.actionError = '';
           this.logs = null;
           this.logsError = '';
+          this.shareResult = null;
+          this.shareError = '';
           this.detail = null;
           this.loadDeployments();
           this.loadDetail();
@@ -1496,6 +1712,8 @@ createApp({
         busy: d.busy ?? null,
         running: d.running ?? null,
         stack: d.stack || '',
+        asleep: d.asleep || null,
+        orchestrator: d.orchestrator || null,
       }));
     },
 
@@ -1527,6 +1745,16 @@ createApp({
         updatedAt: b.updatedAt,
         stack: typeof b.stack === 'string' ? b.stack : '',
         busy: b.busy ?? null,
+        orchestrator: b.orchestrator || null,
+        sleep: b.sleep ? { idle: b.sleep.idle || null, after: b.sleep.after || null } : null,
+        asleep: b.asleep
+          ? {
+              since: b.asleep.since,
+              reason: b.asleep.reason || '',
+              hosts: Array.isArray(b.asleep.hosts) ? b.asleep.hosts : [],
+              rules: Array.isArray(b.asleep.rules) ? b.asleep.rules : [],
+            }
+          : null,
         compose: b.compose
           ? {
               file: b.compose.file || '?',
@@ -1628,6 +1856,72 @@ createApp({
       if (r.ok) { this.forgetArmed = false; this.loadDeployments(); this.go('/deployments'); return; }
       if (r.status === 409) return this.onConflict(r);
       this.actionError = this.problem(r, 'DELETE deployment');
+    },
+
+    // ---- share -------------------------------------------------------------------------
+    /** Keeps `url`, `views`, `expiresAt` — the `token` field is dropped on arrival. */
+    async mintShare() {
+      const views = ['details', 'logs'].filter((v) => this.share[v]);
+      if (!views.length) return;
+      this.sharing = true;
+      this.shareError = '';
+      this.shareResult = null;
+      const r = await this.api('POST', `/api/deployments/${enc(this.route.id)}/share`, { views, ttl: this.share.ttl });
+      this.sharing = false;
+      if (r.status !== 201 || !r.body.url) { this.shareError = this.problem(r, 'POST share'); return; }
+      this.shareResult = { url: r.body.url, views: r.body.views || views, expiresAt: r.body.expiresAt };
+    },
+
+    // ---- swarm -------------------------------------------------------------------------
+    async loadSwarm() {
+      this.swarmAt = Date.now();
+      const r = await this.get('/api/swarm');
+      if (!r.ok) { this.swarmError = this.problem(r, 'GET /api/swarm'); return; }
+      this.swarmError = '';
+      const b = r.body || {};
+      this.swarm = {
+        // Absent reads as "did not answer", never as active: the safe side of invariant 11.
+        reachable: b.reachable === true,
+        active: b.active === true,
+        nodeId: b.nodeId || '',
+        managerAddr: b.managerAddr || '',
+        nodes: Array.isArray(b.nodes) ? b.nodes : [],
+        ports: Array.isArray(b.ports) ? b.ports : [],
+        error: b.error || '',
+        note: b.note || '',
+      };
+    },
+
+    /** text/plain, on click only. The `api` helper keeps the raw body, so nothing else is needed. */
+    async revealJoin() {
+      this.join = '';
+      this.joinError = '';
+      this.joinLoading = true;
+      const distro = this.joinFormat === 'cloud-config' ? `&distro=${enc(this.joinDistro)}` : '';
+      const r = await this.get(`/api/swarm/join?format=${enc(this.joinFormat)}${distro}`);
+      this.joinLoading = false;
+      if (r.ok) { this.join = r.raw || ''; return; }
+      if (r.status === 403) {
+        this.joinError = '403 — the join token is admin-only. Sign in as an admin, or use the root bearer token.';
+        return;
+      }
+      if (r.status === 409) {
+        this.joinError = '409 — this daemon is not a swarm manager, so there is nothing to join. Nothing was revealed.';
+        return;
+      }
+      this.joinError = this.problem(r, 'GET /api/swarm/join');
+    },
+
+    async copy(text) {
+      this.copied = '';
+      this.copyError = '';
+      try {
+        await navigator.clipboard.writeText(text);
+        this.copied = text;
+      } catch {
+        this.copyError = 'clipboard unavailable here (not a secure origin?) — select the text and copy it by hand.';
+      }
+      setTimeout(() => { this.copied = ''; }, 2000);
     },
 
     /**

@@ -28,8 +28,10 @@ export type Runner = {
    */
   readonly signal?: AbortSignal;
   /**
-   * The directory commands run in — the deployment directory for a registry-driven run, the spec's
-   * own directory for a CLI one.
+   * The directory commands run in — the deployment directory for a registry-driven run. The CLI
+   * sets none: its commands run from the shell's directory, exactly as typing `docker compose -f …`
+   * there would, so a relative `compose.file` and a relative hook path mean what they mean in a
+   * terminal.
    *
    * Exposed (not just used internally) because compose needs it: pstack writes a derived compose file
    * next to the submitted one and passes that to `-f`, and the alternative to reading it from here was

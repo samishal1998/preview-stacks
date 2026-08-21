@@ -70,6 +70,15 @@ export const EVENTS = [
   'stack.ready',
   'stack.failed',
   'stack.timedout',
+  /**
+   * The scheduler (0.26.0). `stack.slept`: the compose project was taken down while its axes stayed —
+   * by the idle/after policy in the spec, or by hand. `stack.woken`: something brought it back; `by` is
+   * `request:<hostname>` when the catch-all router saw traffic for it, or the actor who asked.
+   */
+  'stack.slept',
+  'stack.woken',
+  /** A read-only link to one deployment was minted. Carries WHAT was granted, never the token. */
+  'share.created',
 ] as const;
 
 export type EventName = (typeof EVENTS)[number];

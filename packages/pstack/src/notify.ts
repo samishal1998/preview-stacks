@@ -355,13 +355,24 @@ export function summarize(e: PstackEvent): string {
         : '';
       return `${stack} did not become ready in time${took}.${which}`;
     }
+    case 'stack.slept':
+      return `${stack} went to sleep${typeof d.reason === 'string' ? ` (${d.reason})` : ''}. Its data and axes stay; a request to its hostname wakes it.`;
+    case 'stack.woken':
+      return `${stack} is waking up${typeof d.by === 'string' ? ` — ${d.by}` : ''}.`;
+    case 'share.created':
+      return `A read-only link to ${stack} was created${typeof d.by === 'string' ? ` by ${d.by}` : ''} (${Array.isArray(d.views) ? d.views.join(', ') : 'details'}).`;
     default:
       return `${e.event} on ${stack || 'this host'}.`;
   }
 }
 
 function actionWord(action: unknown): string {
-  return action === 'up' ? 'Deploy' : action === 'down' ? 'Teardown' : action === 'verify' ? 'Verify' : String(action);
+  return action === 'up' ? 'Deploy'
+    : action === 'down' ? 'Teardown'
+    : action === 'verify' ? 'Verify'
+    : action === 'sleep' ? 'Sleep'
+    : action === 'wake' ? 'Wake'
+    : String(action);
 }
 
 /**

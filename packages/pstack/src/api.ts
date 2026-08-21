@@ -23,6 +23,15 @@
  *   POST   /api/deployments/:id/up        → 202 { job }
  *   POST   /api/deployments/:id/down      → 202 { job }   body: { verify?, force? }
  *   POST   /api/deployments/:id/verify    → 202 { job }
+ *   POST   /api/deployments/:id/sleep     → 202 { job }   compose project down, volumes + axes stay
+ *   POST   /api/deployments/:id/wake      → 202 { job }   the same as `up`, recorded as a wake
+ *   POST   /api/deployments/:id/share     { views?, ttl? } → 201 { url, token, expiresAt }  a read-only link
+ *   GET    /api/swarm                     nodes of the swarm this daemon manages (never the join token)
+ *   GET    /api/swarm/join?format=token|command|script|cloud-config[&distro=]   text/plain — a SECRET
+ *   GET    /deployments/:id/public-logs-view?token=…   the page a share link opens (no auth: the page
+ *                                          itself is public, every API call it makes carries the token)
+ *   ANY    <preview hostname>/*           a request for a SLEEPING stack's hostname (arrives via the
+ *                                          catch-all router) wakes it and answers 503 + the spinning-up page
  *   GET    /api/specs                     named specs (store once, reference from many deployments)
  *   GET    /api/specs/:name               meta always; `source` only with a token (hooks carry secrets)
  *   GET    /api/deployments/:id/source    the stored spec + compose, token required (same reason)
@@ -93,15 +102,17 @@ import pkg from '../package.json';
 // path relative to the source would point at something that does not ship. It is one small file —
 // inlining it also removes a whole class of "works from the repo, 404s once installed" bug.
 import UI_HTML_ASSET from '../ui/index.html' with { type: 'text' };
+import SHARE_HTML_ASSET from '../ui/share.html' with { type: 'text' };
 
 // `@types/bun` types every `.html` import as HTMLBundle (for Bun.serve's route bundling), even with
 // `type: 'text'`, but the text loader really does hand back a string — verified by bundling and
 // running with the source file deleted. Cast once, here, rather than at the use site.
 const UI_HTML = UI_HTML_ASSET as unknown as string;
+const SHARE_HTML = SHARE_HTML_ASSET as unknown as string;
 import { composeLogs, composeLogsCommand, shq } from './compose.ts';
 import { createRunner } from './exec.ts';
-import { JobRegistry } from './jobs.ts';
-import { Registry, RegistryError } from './registry.ts';
+import { JobRegistry, type Job, type JobAction } from './jobs.ts';
+import { Registry, RegistryError, type Deployment } from './registry.ts';
 import { SpecStore, SpecStoreError } from './specs.ts';
 import { RoutingError, RoutingStore } from './routing.ts';
 import { allTraefikRouters, deploymentRuntime, detectChallenge } from './inspect.ts';
@@ -114,7 +125,12 @@ import { EVENTS, WILDCARD, events, type EventName } from './events.ts';
 import { CONTROL_PROJECT } from './init.ts';
 import { displayDeclared, redactText } from './redact.ts';
 import { parseSpec, SpecError, type Stack } from './spec.ts';
-import { down, up, verify } from './stack.ts';
+import { down, sleep as sleepStack, up, verify } from './stack.ts';
+import { parseDuration } from './spec.ts';
+import { Scheduler, SleepIndex, TrafficMeter, formatDuration, splitHosts, wakePage } from './scheduler.ts';
+import { STACK_LABEL, SWARM_PORTS, joinCommand, joinScript, swarmInfo, workerJoinToken } from './swarm.ts';
+import { SHARE_VIEWS, looksLikeShareToken, signShare, verifyShare, type ShareView } from './share.ts';
+import { DISTROS, renderWorkerCloudInit, type Distro } from './cloudinit.ts';
 import { publicConfig, redactForNotifier, typeOf } from './notify.ts';
 import { HostVars, HostVarsError } from './hostvars.ts';
 import { ReadinessWatcher } from './readiness.ts';
@@ -157,6 +173,18 @@ export type ServerOptions = {
    * the defaults (2s / 180s) are what a host runs.
    */
   readiness?: { pollMs?: number; timeoutMs?: number };
+  /**
+   * The preview domain (`PSTACK_DOMAIN`, written into the control stack by init). Used to build an
+   * absolute share-link URL on `control.<domain>`; without it the request's own origin is used.
+   */
+  domain?: string;
+  /**
+   * Traefik's Prometheus endpoint (`PSTACK_TRAEFIK_METRICS`, default `http://traefik:8082/metrics` inside
+   * the control stack). What `sleep.idle` reads. Unset means idle can never trigger.
+   */
+  metricsUrl?: string;
+  /** Scheduler tuning — a minute on a host, milliseconds in a test. `fetchImpl` feeds metrics text in. */
+  scheduler?: { tickMs?: number; fetchImpl?: (url: string) => Promise<string | null> };
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -188,8 +216,13 @@ export function crToNl(message: string | Buffer): string | Uint8Array {
   return out.subarray(0, n);
 }
 
-/** Request variables: `?PR=7&REGION=eu` → `{ PR: '7', REGION: 'eu' }`, layered over process.env. */
-const varsFrom = (url: URL): Record<string, string> => Object.fromEntries(url.searchParams);
+/**
+ * Request variables: `?PR=7&REGION=eu` → `{ PR: '7', REGION: 'eu' }`, layered over process.env.
+ * `token` is never a variable: it is how a share link authenticates (share.ts), and a JWT landing in
+ * a hook's environment as `$token` would be a credential nobody asked for.
+ */
+const varsFrom = (url: URL): Record<string, string> =>
+  Object.fromEntries([...url.searchParams].filter(([k]) => k !== 'token'));
 
 /**
  * Coerce a PUT body's `env` into string variables. Returns null when the shape is wrong, so the
@@ -313,12 +346,18 @@ export function createServer(opts: ServerOptions) {
   const composeProjects = async (): Promise<Set<string> | null> => {
     const r = await host.run('docker compose ls --all --format json');
     if (!r.ok) return null;
+    let names: Set<string>;
     try {
       const rows = JSON.parse(r.stdout || '[]') as Array<{ Name?: string }>;
-      return new Set(rows.map((p) => p.Name ?? '').filter(Boolean));
+      names = new Set(rows.map((p) => p.Name ?? '').filter(Boolean));
     } catch {
       return null;
     }
+    // Swarm stacks too. A daemon that is not a manager answers with an error, which here means "no
+    // swarm stacks" — the compose answer above is still good.
+    const s = await host.run(`docker stack ls --format '{{.Name}}'`);
+    if (s.ok) for (const n of s.stdout.split('\n')) if (n.trim()) names.add(n.trim());
+    return names;
   };
 
   /**
@@ -328,10 +367,26 @@ export function createServer(opts: ServerOptions) {
    * container (exactly the orphan case), and null means "docker could not answer" — never "empty".
    */
   const containersFor = async (stack: string): Promise<string[] | null> => {
-    const r = await host.run(`docker ps -aq --filter ${shq(`label=com.docker.compose.project=${stack}`)}`);
-    if (!r.ok) return null;
-    return r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    // Both label sets, whichever orchestrator the stack was deployed with — a deployment switched from
+    // compose to swarm still has its old containers, and they are exactly what this guard exists for.
+    const out: string[] = [];
+    for (const label of [`com.docker.compose.project=${stack}`, `${STACK_LABEL}=${stack}`]) {
+      const r = await host.run(`docker ps -aq --filter ${shq(`label=${label}`)}`);
+      if (!r.ok) return null;
+      out.push(...r.stdout.split('\n').map((l) => l.trim()).filter(Boolean));
+    }
+    return [...new Set(out)];
   };
+
+  // ── sleep / wake ──────────────────────────────────────────────────────────────────────────────
+  // The index answers "is this hostname a sleeping stack's" for every request; the meter and the
+  // scheduler decide when a stack goes to sleep. All per-server, all stopped with it.
+  const sleepIndex = new SleepIndex();
+  const reindex = async () => sleepIndex.rebuild(await registry.list());
+  void reindex();
+  const reindexTimer = setInterval(() => void reindex(), 30_000);
+  (reindexTimer as { unref?: () => void }).unref?.();
+  const meter = new TrafficMeter(opts.metricsUrl, { fetchImpl: opts.scheduler?.fetchImpl, log: (l) => console.error(l) });
 
   /**
    * Who this request is. Three ways in, checked cheapest-first:
@@ -357,6 +412,10 @@ export function createServer(opts: ServerOptions) {
         const user = auth.tokenUser(bearer);
         if (user) return { kind: 'user', user };
       }
+      if (looksLikeShareToken(bearer)) {
+        const claims = verifyShare(opts.token, bearer);
+        if (claims) return { kind: 'share', deployment: claims.dep, views: claims.views };
+      }
       /*
        * A bearer that does not authenticate FALLS THROUGH to the cookie below — this used to
        * `return null`, and that turned a stray header into a permanent lockout.
@@ -377,7 +436,43 @@ export function createServer(opts: ServerOptions) {
       const user = auth.sessionUser(candidate);
       if (user) return { kind: 'user', user };
     }
+    /*
+     * A share link's token, from the query string — the only way an EventSource can carry one. Last,
+     * and only ever a JWT: the raw PSTACK_TOKEN in a URL would be root in every access log, so it is
+     * not looked for here, whatever the parameter says.
+     */
+    const q = new URL(req.url).searchParams.get('token');
+    if (q && looksLikeShareToken(q)) {
+      const claims = verifyShare(opts.token, q);
+      if (claims) return { kind: 'share', deployment: claims.dep, views: claims.views };
+    }
     return null;
+  };
+
+  /**
+   * What a share principal may reach: GET only, its own deployment only, and only the routes its
+   * views name. Enforced before any route so a new route is closed to it by default.
+   */
+  const shareAllows = (who: Principal, method: string, path: string): boolean => {
+    if (who.kind !== 'share') return true;
+    if (method !== 'GET') return false;
+    if (path === '/api/auth/me') return true;
+    const m = /^\/api\/deployments\/([^/]+)(\/.*)?$/.exec(path);
+    if (!m) return false;
+    let id: string;
+    try {
+      id = decodeURIComponent(m[1]!);
+    } catch {
+      return false;
+    }
+    if (id !== who.deployment) return false;
+    const rest = m[2] ?? '';
+    const details = who.views.includes('details');
+    const logs = who.views.includes('logs');
+    if (rest === '' ) return details;
+    if (rest === '/runtime' || rest === '/readiness') return details;
+    if (rest === '/logs' || rest === '/logs/stream') return logs;
+    return false;
   };
 
   /**
@@ -410,6 +505,161 @@ export function createServer(opts: ServerOptions) {
     const secure = req.headers.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
     return `pstack_session=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
   };
+
+  /** Forget the sleep record, reading the current one rather than the copy a request resolved earlier. */
+  const clearSleep = async (id: string): Promise<void> => {
+    const now = await registry.get(id).catch(() => null);
+    if (!now?.sleep) return;
+    await registry.setSleep(id, null).catch(() => {});
+    await reindex();
+  };
+
+  /** After a failed wake, how long a request to the hostname waits before trying again. */
+  const WAKE_RETRY_MS = 60_000;
+
+  /**
+   * Start a lifecycle job. ONE place, because three callers start them — the POST route, a request to
+   * a sleeping hostname (wake), and the scheduler (sleep) — and the per-stack lock, the readiness
+   * hand-off, the sleep record and the events must agree whoever asked.
+   */
+  const startLifecycle = (
+    id: string,
+    dep: Deployment,
+    spec: Stack,
+    action: JobAction,
+    o: { verify?: boolean; force?: boolean; by: string; reason: string },
+  ): Job | null => {
+    const hostSecretValues = hostVars.secretValues();
+    const job = jobs.start(
+      spec.stack,
+      action,
+      async (rawSink, signal) => {
+        const sink = scrubbedSink(rawSink);
+        const runner = runnerFor(spec, dep.dir, signal);
+        const orchestrator = spec.compose?.orchestrator;
+        if (action === 'up' || action === 'wake') {
+          if (action === 'wake') events.emit('stack.woken', { stack: spec.stack, deployment: id, by: o.by });
+          const outcome = await up(spec, runner, sink);
+          // Readiness picks up exactly where the job stops. `compose up -d` returns once the
+          // containers are CREATED, so the job's success says nothing about whether the app
+          // booted — the watch is that second half, and it starts here so a deploy made from
+          // CI is watched without the client having to ask. Only after a success: watching a
+          // stack whose provisioning failed would report a truthful "not ready" about
+          // something nobody deployed.
+          // NOT the job's runner: that one dies with the job's signal, and a watch is supposed
+          // to outlive the deploy that started it.
+          if (outcome.ok) {
+            readiness.start(spec.stack, runnerFor(spec, dep.dir), { restart: true, orchestrator });
+            // Awake now, whoever deployed it. The record's hostnames are recaptured at the next sleep.
+            await clearSleep(id);
+          }
+          return outcome;
+        }
+        if (action === 'verify') return verify(spec, runner, sink);
+        if (action === 'sleep') {
+          // The hostnames BEFORE teardown: once the containers are gone nothing on the host remembers
+          // which Host() rules were this stack's, and the catch-all cannot wake what it cannot name.
+          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown', orchestrator });
+          const captured = splitHosts(rt.routes.flatMap((r) => r.hosts));
+          const previous = dep.sleep;
+          readiness.cancel(spec.stack);
+          const outcome = await sleepStack(spec, runner, sink);
+          if (outcome.ok) {
+            const record = {
+              since: Date.now(),
+              reason: o.reason,
+              hosts: [...new Set([...(captured.hosts.length ? captured.hosts : previous?.hosts ?? [])])],
+              rules: [...new Set([...(captured.rules.length ? captured.rules : previous?.rules ?? [])])],
+            };
+            await registry.setSleep(id, record);
+            await reindex();
+            sink.emit('info', record.hosts.length || record.rules.length
+              ? `asleep — a request to ${[...record.hosts, ...record.rules.map((r) => `/${r}/`)].join(', ')} wakes it`
+              : 'asleep — no hostnames were found on its containers, so only POST …/wake brings it back');
+            events.emit('stack.slept', { stack: spec.stack, deployment: id, reason: o.reason, hosts: record.hosts });
+          }
+          return outcome;
+        }
+        // Teardown makes every pending readiness question moot, and a watch left running would
+        // resolve `failed` on the containers it is in the middle of removing.
+        readiness.cancel(spec.stack);
+        const outcome = await down(spec, runner, { verify: o.verify ?? true, force: o.force ?? false }, sink);
+        // Torn down is not asleep: nothing should wake it — whatever the teardown's own outcome, the
+        // containers it reached are gone and a wake would be a deploy nobody asked for.
+        await clearSleep(id);
+        return outcome;
+      },
+      // The outcome path: a FAILING hook's stderr lands in step messages, not the sink.
+      (text) => (hostSecretValues.length ? redactText(text, hostSecretValues) : text),
+    );
+    return job;
+  };
+
+  /**
+   * A request for a sleeping stack's hostname. Starts the wake (once) and answers the page that
+   * polls until Traefik routes the hostname to the app again. 503 so a script sees "not yet", with
+   * `Retry-After` and the `x-pstack-wake` marker the page keys on.
+   */
+  const wakeFor = async (hostname: string): Promise<Response | null> => {
+    // The control plane's own hostnames are never a preview's to wake, whatever a spec's labels
+    // claimed — a sleeping stack that listed `control.<domain>` would otherwise capture the UI.
+    if (opts.domain && (hostname === `control.${opts.domain}` || hostname === `api.${opts.domain}`)) return null;
+    const id = sleepIndex.find(hostname);
+    if (!id) return null;
+    const dep = await registry.get(id);
+    if (!dep?.sleep) {
+      void reindex(); // the index was stale — it is rebuilt on every change, but a hand edit is not a change it sees
+      return null;
+    }
+    const page = (state: 'waking' | 'busy' | 'failed', stack: string, error?: string) =>
+      new Response(wakePage({ host: hostname, stack, state, error }), {
+        status: 503,
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'retry-after': '5',
+          'x-pstack-wake': '1',
+        },
+      });
+    let spec: Stack;
+    try {
+      spec = await resolveDep(id, {});
+    } catch (err) {
+      return page('failed', id, `the deployment cannot be resolved: ${(err as Error).message}`);
+    }
+    if (jobs.isBusy(spec.stack)) return page('busy', spec.stack);
+    // The last wake failed? Say so instead of spinning forever — and do not try again for a
+    // minute. A wake runs the axis hooks; a crawler hitting a hostname whose image no longer pulls
+    // must not turn into a hook loop. The visitor's reload after that is the retry.
+    const last = jobs.list().find((j) => j.stack === spec.stack && (j.action === 'wake' || j.action === 'up'));
+    const failedWhy = (j: Job) => {
+      const failing = j.outcome?.steps.find((st) => !st.ok);
+      return failing ? `${failing.phase} ${failing.axis}: ${failing.message ?? `exit ${failing.code}`}` : j.error;
+    };
+    if (last && last.state === 'failed' && Date.now() - (last.endedAt ?? last.startedAt) < WAKE_RETRY_MS) {
+      return page('failed', spec.stack, failedWhy(last));
+    }
+    const job = startLifecycle(id, dep, spec, 'wake', { by: `request:${hostname}`, reason: `request to ${hostname}` });
+    if (!job) return page('busy', spec.stack);
+    if (last && last.state === 'failed') return page('failed', spec.stack, failedWhy(last));
+    return page('waking', spec.stack);
+  };
+
+  const scheduler = new Scheduler({
+    list: () => registry.list(),
+    resolve: (id) => resolveDep(id, {}),
+    runtime: (spec) => deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown', orchestrator: spec.compose?.orchestrator }),
+    isBusy: (stack) => jobs.isBusy(stack),
+    sleep: (id, spec, reason) => {
+      void registry.get(id).then((dep) => {
+        if (dep) startLifecycle(id, dep, spec, 'sleep', { by: 'scheduler', reason });
+      });
+    },
+    meter,
+    log: (l) => console.error(l),
+    tickMs: opts.scheduler?.tickMs,
+  });
+  scheduler.start();
 
   // Typed so `ws.data` IS a TerminalData rather than a cast at three call sites.
   const server = Bun.serve<TerminalData>({
@@ -497,12 +747,29 @@ export function createServer(opts: ServerOptions) {
       const url = new URL(req.url);
       const path = url.pathname;
 
+      // ---- wake-on-call ---------------------------------------------------------------
+      // FIRST, before anything else: a request that reached this process through the catch-all
+      // router carries a PREVIEW hostname, and if that hostname belongs to a sleeping stack the
+      // whole request — whatever its path, `/api/…` included — is the visitor's, not the control
+      // plane's. Cheap when nothing sleeps: one Map lookup.
+      if (sleepIndex.size > 0) {
+        const hostHdr = (req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? '')
+          .split(',')[0]!.trim().replace(/:\d+$/, '').toLowerCase();
+        if (hostHdr) {
+          const woke = await wakeFor(hostHdr);
+          if (woke) return woke;
+        }
+      }
+
       // ---- the UI ---------------------------------------------------------------------
       // A single embedded document, so there is no filesystem lookup and therefore no path
       // traversal to contain. Every non-/api path serves it: the UI is a one-page app, and a
       // deep link like /deployments/foo should render rather than 404.
       if (!path.startsWith('/api/')) {
-        return new Response(UI_HTML, {
+        // The page a share link opens. Public by construction — it is the API calls it makes that
+        // carry the token — and its own document, because the viewer has no session for the UI.
+        const page = /^\/deployments\/[^/]+\/public-logs-view\/?$/.test(path) ? SHARE_HTML : UI_HTML;
+        return new Response(page, {
           headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
         });
       }
@@ -577,11 +844,23 @@ export function createServer(opts: ServerOptions) {
       const who = principal(req);
       if (!who) return json({ error: 'unauthorized' }, { status: 401 });
 
-      const vars = varsFrom(url);
+      // A share link reaches exactly the reads its views name, on its deployment, and nothing else —
+      // decided here, before any route, so every route is closed to it unless listed in shareAllows.
+      if (!shareAllows(who, req.method, path)) {
+        return json({ error: 'this link is read-only and scoped to one deployment' }, { status: 403 });
+      }
+
+      // A share link gets the STORED variables only. `?PR=8` from a link holder would otherwise
+      // resolve the spec to another stack — and hand over that stack's logs.
+      const vars = who.kind === 'share' ? {} : varsFrom(url);
 
       try {
       // ---- the signed-in principal, for the UI shell ---------------------------------
       if (path === '/api/auth/me' && req.method === 'GET') {
+        if (who.kind === 'share') {
+          const claims = verifyShare(opts.token ?? '', url.searchParams.get('token') ?? (/^Bearer (.+)$/.exec(req.headers.get('authorization') ?? '')?.[1] ?? ''));
+          return json({ root: false, share: { deployment: who.deployment, views: who.views, expiresAt: claims ? claims.exp * 1000 : null } });
+        }
         return json(who.kind === 'root' ? { root: true } : { root: false, user: who.user });
       }
 
@@ -656,6 +935,10 @@ export function createServer(opts: ServerOptions) {
             }
             deployments.push({
               ...meta,
+              // The record itself, not a boolean folded into `running` (invariant 11): a sleeping
+              // stack is not running AND is not torn down, and a list must be able to say which.
+              asleep: meta.sleep ?? null,
+              orchestrator: spec?.compose?.orchestrator ?? null,
               stack: spec?.stack ?? null,
               // Both of these are `null`, never `false`, when they could not be determined: an
               // unresolved spec has no stack name to look up, and a docker that did not answer is
@@ -670,10 +953,10 @@ export function createServer(opts: ServerOptions) {
         }
 
         // ---- one deployment ---------------------------------------------------------
-        const m = /^\/api\/deployments\/([^/]+)(?:\/(up|down|verify))?$/.exec(path);
+        const m = /^\/api\/deployments\/([^/]+)(?:\/(up|down|verify|sleep|wake))?$/.exec(path);
         if (m) {
           const id = decodeURIComponent(m[1]!);
-          const action = m[2] as 'up' | 'down' | 'verify' | undefined;
+          const action = m[2] as JobAction | undefined;
 
           // PUT is the one route that does not require the deployment to exist yet.
           if (!action && req.method === 'PUT') {
@@ -847,6 +1130,16 @@ export function createServer(opts: ServerOptions) {
                 updatedAt: dep.updatedAt,
                 stack: spec.stack,
                 busy: jobs.isBusy(spec.stack),
+                // `compose` or `swarm`; null without a compose section.
+                orchestrator: spec.compose?.orchestrator ?? null,
+                // The policy (intent, from the spec) and the record (asleep now, what wakes it).
+                sleep: spec.sleep
+                  ? {
+                      idle: spec.sleep.idleMs !== undefined ? formatDuration(spec.sleep.idleMs) : null,
+                      after: spec.sleep.afterMs !== undefined ? formatDuration(spec.sleep.afterMs) : null,
+                    }
+                  : null,
+                asleep: dep.sleep ?? null,
                 compose: spec.compose
                   ? {
                       file: spec.compose.file,
@@ -961,36 +1254,24 @@ export function createServer(opts: ServerOptions) {
               { status: 409 },
             );
           }
+          // Same shape for sleep, and no `force`: every preview that depends on a singleton would go
+          // with it, and the request that woke it would be one of theirs failing a health check.
+          if (action === 'sleep' && spec.kind === 'shared') {
+            return json(
+              { error: `refusing to put "${spec.stack}" to sleep: kind is \`shared\`.`, stack: spec.stack, kind: spec.kind },
+              { status: 409 },
+            );
+          }
+          if (action === 'sleep' && !spec.compose) {
+            return json({ error: 'this spec has no compose section — there is nothing to put to sleep' }, { status: 400 });
+          }
 
-          const hostSecretValues = hostVars.secretValues();
-          const job = jobs.start(
-            spec.stack,
-            action,
-            async (rawSink, signal) => {
-              const sink = scrubbedSink(rawSink);
-              const runner = runnerFor(spec, dep.dir, signal);
-              if (action === 'up') {
-                const outcome = await up(spec, runner, sink);
-                // Readiness picks up exactly where the job stops. `compose up -d` returns once the
-                // containers are CREATED, so the job's success says nothing about whether the app
-                // booted — the watch is that second half, and it starts here so a deploy made from
-                // CI is watched without the client having to ask. Only after a success: watching a
-                // stack whose provisioning failed would report a truthful "not ready" about
-                // something nobody deployed.
-                // NOT the job's runner: that one dies with the job's signal, and a watch is supposed
-                // to outlive the deploy that started it.
-                if (outcome.ok) readiness.start(spec.stack, runnerFor(spec, dep.dir), { restart: true });
-                return outcome;
-              }
-              if (action === 'verify') return verify(spec, runner, sink);
-              // Teardown makes every pending readiness question moot, and a watch left running would
-              // resolve `failed` on the containers it is in the middle of removing.
-              readiness.cancel(spec.stack);
-              return down(spec, runner, { verify: body.verify ?? true, force: body.force ?? false }, sink);
-            },
-            // The outcome path: a FAILING hook's stderr lands in step messages, not the sink.
-            (text) => (hostSecretValues.length ? redactText(text, hostSecretValues) : text),
-          );
+          const job = startLifecycle(id, dep, spec, action, {
+            verify: body.verify,
+            force: body.force,
+            by: actorOf(who),
+            reason: `operator: ${actorOf(who)}`,
+          });
           if (!job) {
             // One job per stack: a `down` racing an `up` over the same database branch is
             // corruption, not contention, so the conflict is surfaced instead of queued.
@@ -1000,6 +1281,100 @@ export function createServer(opts: ServerOptions) {
             );
           }
           return json({ job: { id: job.id, stack: job.stack, action: job.action, state: job.state } }, { status: 202 });
+        }
+
+        // ---- a read-only link to one deployment ----------------------------------------
+        // Minted by anyone who can already see the deployment; what it grants is narrower than the
+        // minter has, never wider. The token is returned ONCE and stored nowhere (share.ts).
+        const shm = /^\/api\/deployments\/([^/]+)\/share$/.exec(path);
+        if (shm) {
+          if (req.method !== 'POST') return json({ error: 'use POST' }, { status: 405 });
+          const id = decodeURIComponent(shm[1]!);
+          const dep = await registry.get(id);
+          if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
+          if (!opts.token) {
+            return json(
+              { error: 'share links are signed with PSTACK_TOKEN, and this server has none (loopback dev mode)' },
+              { status: 400 },
+            );
+          }
+          const body = (await req.json().catch(() => ({}))) as { views?: unknown; ttl?: unknown };
+          const views: ShareView[] = body.views === undefined ? [...SHARE_VIEWS] : [];
+          if (body.views !== undefined) {
+            if (!Array.isArray(body.views) || body.views.length === 0) {
+              return json({ error: `views must be a non-empty list of: ${SHARE_VIEWS.join(', ')}` }, { status: 400 });
+            }
+            for (const v of body.views) {
+              if (!(SHARE_VIEWS as readonly string[]).includes(v as string)) {
+                return json({ error: `unknown view "${String(v)}" — views are: ${SHARE_VIEWS.join(', ')}` }, { status: 400 });
+              }
+              views.push(v as ShareView);
+            }
+          }
+          // 7 days by default, 30 at most: there is no per-link revocation (share.ts), so the TTL is
+          // the only thing bounding a leaked link.
+          const MAX_TTL = 30 * 86_400_000;
+          let ttlMs = 7 * 86_400_000;
+          if (body.ttl !== undefined) {
+            const parsed = typeof body.ttl === 'string' ? parseDuration(body.ttl) : null;
+            if (parsed === null) return json({ error: 'ttl must be a duration like 2h, 7d (max 30d)' }, { status: 400 });
+            if (parsed > MAX_TTL) return json({ error: 'ttl must be 30d or less' }, { status: 400 });
+            ttlMs = parsed;
+          }
+          const { token, claims } = signShare(opts.token, { deployment: id, views, ttlMs });
+          // On the control host when it is known, else wherever this request came from. The path is
+          // the SPA's and the API's own public page alike, so either UI mode renders it.
+          const proto = req.headers.get('x-forwarded-proto') ?? url.protocol.replace(':', '');
+          const origin = opts.domain
+            ? `https://control.${opts.domain}`
+            : `${proto}://${req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host}`;
+          const link = `${origin}/deployments/${encodeURIComponent(id)}/public-logs-view?token=${token}`;
+          // What was granted and by whom — never the token (the envelope goes to webhook URLs).
+          events.emit('share.created', { deployment: id, stack: null, views, expiresAt: claims.exp * 1000, by: actorOf(who) });
+          return json({ url: link, token, views, expiresAt: claims.exp * 1000 }, { status: 201 });
+        }
+
+        // ---- the swarm ------------------------------------------------------------------
+        // Nodes, read from docker every time. The join token is on its own route because it is a
+        // secret: a worker that joins runs whatever the manager schedules, so the polled panel must
+        // never carry it and a notifier must never see it.
+        if (path === '/api/swarm' && req.method === 'GET') {
+          const info = await swarmInfo(host);
+          return json({
+            ...info,
+            ports: SWARM_PORTS,
+            note: info.active
+              ? 'Add a worker: GET /api/swarm/join?format=command|script|cloud-config, run it on the new machine.'
+              : 'This daemon is not a swarm manager. Previews run with docker compose on this host; `pstack init --orchestrator swarm` (on the host) enables swarm mode.',
+          });
+        }
+        if (path === '/api/swarm/join' && req.method === 'GET') {
+          if (who.kind !== 'root' && !(who.kind === 'user' && who.user.role === 'admin')) {
+            return json({ error: 'the join token requires an admin' }, { status: 403 });
+          }
+          const format = url.searchParams.get('format') ?? 'command';
+          if (!['token', 'command', 'script', 'cloud-config'].includes(format)) {
+            return json({ error: 'format must be one of: token, command, script, cloud-config' }, { status: 400 });
+          }
+          const info = await swarmInfo(host);
+          if (!info.reachable) return json({ error: 'docker did not answer' }, { status: 503 });
+          if (!info.active || !info.managerAddr) {
+            return json({ error: 'this daemon is not a swarm manager — nothing to join' }, { status: 409 });
+          }
+          const token = await workerJoinToken(host);
+          if (!token) return json({ error: 'docker would not hand out a worker join token' }, { status: 503 });
+          const distroRaw = url.searchParams.get('distro') ?? 'ubuntu';
+          if (!(DISTROS as readonly string[]).includes(distroRaw)) {
+            return json({ error: `distro must be one of: ${DISTROS.join(', ')}` }, { status: 400 });
+          }
+          const text =
+            format === 'token' ? `${token}\n`
+            : format === 'command' ? `${joinCommand(token, info.managerAddr)}\n`
+            : format === 'script' ? joinScript(token, info.managerAddr)
+            : renderWorkerCloudInit({ token, managerAddr: info.managerAddr, distro: distroRaw as Distro });
+          return new Response(text, {
+            headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+          });
         }
 
         // ---- host variables & secrets ----------------------------------------------------
@@ -1206,6 +1581,10 @@ export function createServer(opts: ServerOptions) {
                 { status: 400 },
               );
             }
+          }
+          if (spec.compose?.orchestrator === 'swarm' && url.searchParams.get('until') !== null) {
+            // Refused rather than dropped: a narrowed read silently widened is a wrong answer.
+            return json({ error: '`until` is not supported for a swarm stack (docker service logs has no --until)' }, { status: 400 });
           }
           const r = await composeLogs(spec, runnerFor(spec, dep.dir), tail, svcRaw ?? undefined, {
             // Opt-in, because it doubles the width of every line and the pretty view lifts it into
@@ -1419,7 +1798,7 @@ export function createServer(opts: ServerOptions) {
           if (!dep) return json({ error: `no such deployment: ${id}` }, { status: 404 });
 
           const spec = await resolveDep(id, vars);
-          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown' });
+          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown', orchestrator: spec.compose?.orchestrator });
           // "Docker did not answer" is not "you do not own that container" — refusing with a 404
           // there would send someone hunting for a container that is sitting right in front of them.
           if (!rt.reachable) {
@@ -1436,6 +1815,15 @@ export function createServer(opts: ServerOptions) {
                 containers: rt.containers.map((x) => x.name),
               },
               { status: 404 },
+            );
+          }
+
+          if (c.remote) {
+            // `docker stop` is node-local; the task is on another node. Honest refusal beats a
+            // "no such container" from a daemon that has never heard of it.
+            return json(
+              { error: `container "${c.name}" runs on node ${c.node ?? '?'}, which this control plane cannot reach directly. Redeploy the stack, or act on the worker itself.`, node: c.node },
+              { status: 409 },
             );
           }
 
@@ -1480,7 +1868,7 @@ export function createServer(opts: ServerOptions) {
            * alarm delivered to every notifier. So stopping cancels it, the same way `down` does.
            */
           if (action === 'stop') readiness.cancel(spec.stack);
-          else readiness.start(spec.stack, runnerFor(spec, dep.dir), { restart: true });
+          else readiness.start(spec.stack, runnerFor(spec, dep.dir), { restart: true, orchestrator: spec.compose?.orchestrator });
 
           return json({
             container: c.name,
@@ -1518,7 +1906,7 @@ export function createServer(opts: ServerOptions) {
 
           const spec = await resolveDep(id, vars);
           // `challenge: 'unknown'` skips a docker call this route has no use for.
-          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown' });
+          const rt = await deploymentRuntime({ stack: spec.stack, runner: host, challenge: 'unknown', orchestrator: spec.compose?.orchestrator });
           const c = rt.containers.find((x) => x.id === wanted || x.name === wanted);
           if (!c) {
             return json(
@@ -1531,6 +1919,12 @@ export function createServer(opts: ServerOptions) {
           }
           if (!c.state.startsWith('running')) {
             return json({ error: `container "${c.name}" is ${c.state}, not running` }, { status: 409 });
+          }
+          if (c.remote) {
+            return json(
+              { error: `container "${c.name}" runs on node ${c.node ?? '?'}; a terminal can only reach tasks on this node`, node: c.node },
+              { status: 409 },
+            );
           }
 
           const data: TerminalData = {
@@ -1575,11 +1969,14 @@ export function createServer(opts: ServerOptions) {
           const all = await allTraefikRouters(host);
           return json({
             id,
+            orchestrator: spec.compose?.orchestrator ?? null,
+            asleep: dep.sleep ?? null,
             ...(await deploymentRuntime({
               stack: spec.stack,
               runner: host,
               challenge: await detectChallenge(host),
               allRouters: all.byName,
+              orchestrator: spec.compose?.orchestrator,
             })),
           });
         }
@@ -1622,6 +2019,7 @@ export function createServer(opts: ServerOptions) {
               timeoutMs,
               restart: true,
               emit: false,
+              orchestrator: spec.compose?.orchestrator,
             });
           }
           const snap = waitMs > 0 ? await readiness.wait(spec.stack, waitMs) : readiness.get(spec.stack);
@@ -2077,6 +2475,8 @@ export function createServer(opts: ServerOptions) {
     // Same reasoning one level down: a readiness watch is a poll loop, and a stopped server's loop
     // would go on shelling out to docker — and go on emitting events into a bus it no longer serves.
     readiness.stopAll();
+    scheduler.stop();
+    clearInterval(reindexTimer);
     return stopServing(closeActiveConnections);
   };
   return server;

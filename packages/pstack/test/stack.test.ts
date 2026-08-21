@@ -403,6 +403,7 @@ describe('init — ACME challenge rendering', () => {
       domain: 'preview.example.com',
       acmeEmail: 'ops@example.com',
       challenge: 'http01',
+      orchestrator: 'compose',
       dryRun: false,
       runner: okRunner(),
       ...(extra as { challenge?: 'http01' | 'dns01' }),
@@ -688,7 +689,7 @@ describe('the advanced UI is opt-in', () => {
     const dir = `${process.env.TMPDIR ?? '/tmp'}/pstack-ui-${process.pid}-${ui}`;
     await init({
       dataDir: dir, domain: 'preview.example.com', acmeEmail: 'o@e.com',
-      challenge: 'http01', ui, dryRun: false, runner: okRunner(),
+      challenge: 'http01', ui, orchestrator: 'compose', dryRun: false, runner: okRunner(),
     });
     return Bun.file(`${dir}/control/docker-compose.yml`).text();
   };
@@ -805,10 +806,16 @@ describe('cloud-init generation', () => {
     expect(renderCloudInit(base)).toContain('{{.State.Health.Status}}');
   });
 
-  test('the fallback regexp escapes every dot in the domain', () => {
-    // Unescaped, `.` matches any character, so the router would also claim
-    // backend-pr-1Xpreview.example.com — a hostname belonging to someone else.
-    expect(renderCloudInit(base)).toContain('preview\\\\.example\\\\.com');
+  test('writes no fallback router file — init renders the catch-all since 0.26.0', () => {
+    // The cloud-config used to drop `fallback.yml` into Traefik's watched directory. That router is
+    // now rendered by `init` on every host (it is what wakes a sleeping preview), so a second copy
+    // here would be two priority-1 routers for the same hostnames.
+    const yaml = renderCloudInit(base);
+    expect(yaml).not.toMatch(/^write_files:/m);
+    expect(yaml).not.toContain('fallback.yml');
+    // The flag reaches the init line only when asked for; the CLI passes its default explicitly.
+    expect(yaml).not.toMatch(/^\s+--orchestrator/m);
+    expect(renderCloudInit({ ...base, orchestrator: 'swarm' })).toMatch(/^\s+--orchestrator swarm$/m);
   });
 
   /**
@@ -929,6 +936,7 @@ describe('init refuses a missing advanced-UI image', () => {
         acmeEmail: 'o@e.com',
         challenge: 'http01',
         ui: 'advanced',
+        orchestrator: 'compose',
         dryRun: false,
         runner,
       }),
@@ -950,6 +958,7 @@ describe('init refuses a missing advanced-UI image', () => {
       acmeEmail: 'o@e.com',
       challenge: 'http01',
       ui: 'basic',
+      orchestrator: 'compose',
       dryRun: false,
       runner,
     });
@@ -5189,6 +5198,7 @@ describe('pstack upgrade', () => {
       challenge,
       dnsProvider: challenge === 'dns01' ? 'cloudflare' : undefined,
       ui,
+      orchestrator: 'compose',
       dryRun: false,
       // Every docker call succeeds AND reports `healthy`, so init writes its files and its final
       // health wait settles immediately — without a daemon.
@@ -5337,7 +5347,7 @@ describe('pstack upgrade', () => {
       expect(steps.map((s) => s.cmd)).toEqual([
         'pstack build-image',
         'pstack build-image --ui',
-        "pstack init --domain 'p.example.com' --acme-email 'o@example.com' --challenge dns01 --dns-provider 'cloudflare' --ui advanced",
+        "pstack init --domain 'p.example.com' --acme-email 'o@example.com' --challenge dns01 --dns-provider 'cloudflare' --ui advanced --orchestrator compose",
       ]);
     } finally {
       c.cleanup();
@@ -5481,6 +5491,7 @@ describe('pstack ui — switching which UI is served', () => {
       acmeEmail: 'ops@example.com',
       challenge: 'http01',
       ui,
+      orchestrator: 'compose',
       dryRun: false,
       runner: fakeRunner(() => false, 'healthy'),
     });
@@ -5500,7 +5511,7 @@ describe('pstack ui — switching which UI is served', () => {
       expect(r.changed).toBe(true);
       expect(r.steps.map((s) => s.cmd)).toEqual([
         'pstack build-image --ui',
-        "pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01 --ui advanced",
+        "pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01 --ui advanced --orchestrator compose",
       ]);
       // The token again — the one thing you cannot get wrong without breaking every CI job.
       const init = r.steps.find((s) => s.cmd.startsWith('pstack init'))!;
@@ -5524,7 +5535,7 @@ describe('pstack ui — switching which UI is served', () => {
         log: () => {},
       });
       expect(r.steps.map((s) => s.cmd)).toEqual([
-        "pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01",
+        "pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01 --orchestrator compose",
       ]);
     } finally {
       c.cleanup();

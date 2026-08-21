@@ -30,6 +30,7 @@
 import { events } from './events.ts';
 import { deploymentRuntime, type ContainerInfo } from './inspect.ts';
 import type { Runner } from './exec.ts';
+import type { Orchestrator } from './spec.ts';
 
 export type ContainerReadiness = {
   name: string;
@@ -78,6 +79,8 @@ type Watch = {
    * did; the caller still gets every state in the snapshot it asked for.
    */
   emit: boolean;
+  /** Which labels name this stack's containers (inspect.ts). */
+  orchestrator: Orchestrator;
   /** Last health string seen per container — the diff that drives `healthcheck.*`. */
   health: Map<string, string | null>;
   /** Containers that have already announced a per-container verdict; each announces once. */
@@ -170,7 +173,7 @@ export class ReadinessWatcher {
   start(
     stack: string,
     runner: Runner,
-    opts: { timeoutMs?: number; restart?: boolean; emit?: boolean } = {},
+    opts: { timeoutMs?: number; restart?: boolean; emit?: boolean; orchestrator?: Orchestrator } = {},
   ): StackReadiness {
     const existing = this.#byStack.get(stack);
     if (existing && existing.snap.state === 'watching' && !opts.restart) return existing.snap;
@@ -189,6 +192,7 @@ export class ReadinessWatcher {
         timeoutMs,
       },
       cancelled: false,
+      orchestrator: opts.orchestrator ?? 'compose',
       emit: opts.emit ?? true,
       health: new Map(),
       announced: new Set(),
@@ -251,7 +255,7 @@ export class ReadinessWatcher {
   }
 
   async #tick(w: Watch, runner: Runner): Promise<void> {
-    const rt = await deploymentRuntime({ stack: w.snap.stack, runner, challenge: 'unknown' });
+    const rt = await deploymentRuntime({ stack: w.snap.stack, runner, challenge: 'unknown', orchestrator: w.orchestrator });
     if (w.cancelled) return;
 
     // Docker did not answer. Report it and keep watching: a momentary daemon hiccup is not a verdict,
