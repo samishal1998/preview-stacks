@@ -41,6 +41,9 @@ bun run release:publish   # requires an npm OTP
 
 ## Docs
 
+**[docs/README.md](docs/README.md) is the index** — what each document answers, and which to read
+first. The short version:
+
 - [Usage](docs/usage.md) — task-oriented guide
 - [Bootstrap](docs/bootstrap.md) — build a host from nothing (Hetzner + cloud-init)
 - [Control plane](docs/control-plane.md) — architecture, registry contract, trust boundary
@@ -48,4 +51,5 @@ bun run release:publish   # requires an npm OTP
 - [API client](packages/client/README.md) — `@samyx/preview-stacks-client`: typed calls, `waitForJob` / `waitForReady`, and webhook verification for your receiver
 - [UI rules](docs/ui-rules.md) — the conventions the advanced UI is held to: casing, alignment, spacing, roundness, width
 - [Secret exposure](docs/secret-exposure.md) — resolved in 0.10.0 (every route authenticated); kept as the design record
-- [AGENTS.md](AGENTS.md) — working on this codebase
+- [AGENTS.md](AGENTS.md) — **start here if you are an AI agent or new to the code**: invariants,
+  repo map, testing expectations, scope discipline
