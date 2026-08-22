@@ -1,0 +1,16 @@
+{
+  "path": "/api/health",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "ok": true,
+    "authEnforced": true,
+    "hasUsers": true,
+    "sso": {
+      "enabled": true,
+      "label": "Fixture IdP"
+    },
+    "dataDir": "<DATA>",
+    "version": "<VERSION>"
+  }
+}

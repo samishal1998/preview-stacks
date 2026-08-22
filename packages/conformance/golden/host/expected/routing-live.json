@@ -1,0 +1,9 @@
+{
+  "path": "/api/routing/live",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "reachable": true,
+    "routes": []
+  }
+}

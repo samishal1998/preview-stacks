@@ -1,0 +1,11 @@
+{
+  "name": "unknown-flag",
+  "argv": [
+    "--bogus"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: unknown flag --bogus\n"
+}

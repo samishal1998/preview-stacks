@@ -1,0 +1,12 @@
+version: 1
+stack: sleepy
+compose:
+  file: docker-compose.yml
+  profiles: []
+sleep:
+  after: 3d
+axes:
+  - name: db
+    up: "true"
+    down: "true"
+    assert_gone: "true"

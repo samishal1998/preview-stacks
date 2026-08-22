@@ -1,0 +1,19 @@
+{
+  "name": "init-bad-ui",
+  "argv": [
+    "init",
+    "--domain",
+    "p.example.com",
+    "--acme-email",
+    "o@example.com",
+    "--ui",
+    "fancy"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: --ui must be basic or advanced, got \"fancy\"\n"
+}

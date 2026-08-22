@@ -1,0 +1,18 @@
+{
+  "name": "down-dry-verbose",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "down",
+    "-n",
+    "-v"
+  ],
+  "env": {
+    "PR": "1",
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: pr-1  (dry-run)\n→ compose down (all profiles)\n  [dry-run] $ docker compose -p 'pr-1' -f 'docker-compose.preview.yml' --profile 'backend' --profile 'frontend' down -v --remove-orphans\n→ down: images\n  [dry-run] $ IMAGES=$(docker ps -a --filter \"label=com.docker.compose.project=$STACK\" \\\n           --format '{{.Image}}' | sort -u)\nfor img in $IMAGES; do docker rmi \"$img\" 2>/dev/null || true; done\n\n→ down: queue-namespace\n  [dry-run] $ docker exec shared-temporal-1 temporal operator namespace delete \\\n  --namespace \"$STACK\" --yes 2>/dev/null || true\n\n→ down: database\n  [dry-run] $ ./hooks/db-branch.sh delete \"$STACK\"\n→ verify (asserting resources are gone)\n  [dry-run] $ ./hooks/db-branch.sh ping || exit 1        # can't reach the API ⇒ cannot prove gone\n[ \"$(./hooks/db-branch.sh count \"$STACK\")\" = \"0\" ]\n\n  [dry-run] $ docker info >/dev/null 2>&1 || exit 1                                  # no daemon ⇒ can't tell\ndocker exec shared-temporal-1 temporal operator namespace list >/dev/null 2>&1 || exit 1\n! docker exec shared-temporal-1 temporal operator namespace describe \\\n    --namespace \"$STACK\" >/dev/null 2>&1\n\n  [dry-run] $ docker info >/dev/null 2>&1 || exit 1                                  # no daemon ⇒ can't tell\n! docker images --format '{{.Repository}}:{{.Tag}}' | grep -q \":ci\\$\"\n\n  [dry-run] $ # Prove the CHECK works before trusting its negative: the shared host must still answer, or a\n# DNS/network outage would read as \"every preview is cleaned up\".\ncurl -sf --max-time 5 \"https://preview.example.com/\" >/dev/null || exit 1\n! curl -sf --max-time 5 \"https://backend-pr-1.preview.example.com/health\" >/dev/null\n\n  ✓ compose      (compose)\n  ✓ down         images\n  ✓ down         queue-namespace\n  ✓ down         database\n  ✓ assert_gone  database\n  ✓ assert_gone  queue-namespace\n  ✓ assert_gone  images\n  ✓ assert_gone  ingress\n",
+  "stderr": ""
+}

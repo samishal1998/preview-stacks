@@ -1,0 +1,18 @@
+{
+  "name": "up-dry-quiet",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "up",
+    "-n",
+    "-q"
+  ],
+  "env": {
+    "PR": "1",
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "→ up: database\n→ up: queue-namespace\n→ compose up (backend, frontend)\n  ✓ up           database\n  ✓ assert_live  database\n  ✓ up           queue-namespace\n  ✓ assert_live  queue-namespace\n  ✓ compose      (compose)\n",
+  "stderr": ""
+}

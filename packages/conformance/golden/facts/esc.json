@@ -1,0 +1,52 @@
+{
+  "esc": [
+    {
+      "input": "<a href=\"x\">&'</a>",
+      "output": "&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;"
+    },
+    {
+      "input": "plain",
+      "output": "plain"
+    },
+    {
+      "input": "&amp;",
+      "output": "&amp;amp;"
+    }
+  ],
+  "escapeHostRegexp": [
+    {
+      "input": "app-pr-7.example.com",
+      "output": "app-pr-7\\.example\\.com"
+    },
+    {
+      "input": "a.b*c+d?e^f$g{h}i(j)k|l[m]n\\o",
+      "output": "a\\.b\\*c\\+d\\?e\\^f\\$g\\{h\\}i\\(j\\)k\\|l\\[m\\]n\\\\o"
+    },
+    {
+      "input": "x-y_z",
+      "output": "x-y_z"
+    }
+  ],
+  "shq": [
+    {
+      "input": "a'b",
+      "output": "'a'\\''b'"
+    },
+    {
+      "input": "a b$c",
+      "output": "'a b$c'"
+    },
+    {
+      "input": "",
+      "output": "''"
+    },
+    {
+      "input": "plain",
+      "output": "'plain'"
+    },
+    {
+      "input": "`x`",
+      "output": "'`x`'"
+    }
+  ]
+}

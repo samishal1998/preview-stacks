@@ -1,0 +1,38 @@
+{
+  "path": "/api/swarm",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "reachable": true,
+    "active": true,
+    "nodeId": "n1",
+    "managerAddr": "10.0.0.1:2377",
+    "nodes": [
+      {
+        "id": "n1",
+        "hostname": "fixture-mgr",
+        "role": "manager",
+        "status": "ready",
+        "availability": "active",
+        "managerStatus": "leader",
+        "engineVersion": "28.0.1",
+        "self": true
+      }
+    ],
+    "ports": [
+      {
+        "port": "2377/tcp",
+        "why": "cluster management (worker → manager)"
+      },
+      {
+        "port": "7946/tcp+udp",
+        "why": "node discovery (every node ↔ every node)"
+      },
+      {
+        "port": "4789/udp",
+        "why": "overlay network traffic — VXLAN (every node ↔ every node)"
+      }
+    ],
+    "note": "Add a worker: GET /api/swarm/join?format=command|script|cloud-config, run it on the new machine."
+  }
+}

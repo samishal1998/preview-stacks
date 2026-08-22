@@ -1,0 +1,27 @@
+{
+  "path": "/api/terminal-sessions",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "sessions": [
+      {
+        "id": 2,
+        "actor": "root (PSTACK_TOKEN)",
+        "deployment": "pr-1",
+        "container": "pr-1-app-1",
+        "shell": "bash",
+        "startedAt": 1787425021690,
+        "endedAt": null
+      },
+      {
+        "id": 1,
+        "actor": "admin",
+        "deployment": "pr-1",
+        "container": "pr-1-app-1",
+        "shell": "sh",
+        "startedAt": 1787424981690,
+        "endedAt": 1787425011690
+      }
+    ]
+  }
+}

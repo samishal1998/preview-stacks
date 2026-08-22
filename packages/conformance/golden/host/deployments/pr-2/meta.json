@@ -1,0 +1,13 @@
+{
+  "id": "pr-2",
+  "kind": "isolated",
+  "createdAt": 1787425040645,
+  "updatedAt": 1787425040645,
+  "specName": "web",
+  "vars": {
+    "PR": "2"
+  },
+  "x-future": {
+    "k": 1
+  }
+}

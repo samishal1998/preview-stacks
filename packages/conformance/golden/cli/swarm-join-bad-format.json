@@ -1,0 +1,14 @@
+{
+  "name": "swarm-join-bad-format",
+  "argv": [
+    "swarm",
+    "join",
+    "--format",
+    "pdf"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: format must be one of: token, command, script, cloud-config\n"
+}

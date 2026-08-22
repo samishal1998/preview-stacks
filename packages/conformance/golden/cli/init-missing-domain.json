@@ -1,0 +1,15 @@
+{
+  "name": "init-missing-domain",
+  "argv": [
+    "init",
+    "--acme-email",
+    "ops@example.com"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: init needs --domain (or PSTACK_DOMAIN), e.g. preview.example.com\n"
+}

@@ -1,0 +1,17 @@
+{
+  "name": "upgrade-plan-dns01-advanced-swarm",
+  "argv": [
+    "upgrade",
+    "-n",
+    "--to",
+    "0.28.1"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "pstack <VERSION> → 0.28.1   (preview.example.com, dns01, advanced UI, swarm)\n  → install @samyx/preview-stacks@0.28.1\n  [dry-run] install @samyx/preview-stacks@0.28.1\n  → rebuild and re-init as the new version\n  [dry-run] rebuild and re-init as the new version\n  then, as the newly installed version:\n    pstack build-image\n    pstack build-image --ui\n    pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge dns01 --dns-provider 'cloudflare' --ui advanced --orchestrator swarm (with the existing PSTACK_TOKEN and PSTACK_DNS_TOKEN)\n\n  Dry run — nothing was installed, built or recreated.\n",
+  "stderr": "",
+  "goDivergent": "bun|BUN_|@samyx\\/preview-stacks|unzip"
+}

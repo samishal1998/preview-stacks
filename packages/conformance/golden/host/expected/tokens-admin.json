@@ -1,0 +1,15 @@
+{
+  "path": "/api/tokens",
+  "as": "admin",
+  "status": 200,
+  "body": {
+    "tokens": [
+      {
+        "id": 1,
+        "name": "ci-deploy",
+        "createdAt": 1787425040632,
+        "lastUsedAt": "<TS>"
+      }
+    ]
+  }
+}

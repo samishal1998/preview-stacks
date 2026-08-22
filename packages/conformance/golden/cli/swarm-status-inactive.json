@@ -1,0 +1,12 @@
+{
+  "name": "swarm-status-inactive",
+  "argv": [
+    "swarm",
+    "status"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 1,
+  "stdout": "this host is not a swarm manager.\n\n  Previews here run with `docker compose` on this box. To scale out, re-run init in swarm\n  mode — every preview must be torn down first, because the two shared networks have to be\n  recreated as overlays:\n\n      pstack init --domain <domain> --acme-email <you@example.com> --orchestrator swarm\n",
+  "stderr": ""
+}

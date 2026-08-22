@@ -1,0 +1,15 @@
+{
+  "id": "sleepy",
+  "kind": "isolated",
+  "createdAt": 1787425040647,
+  "updatedAt": 1787425040647,
+  "vars": {},
+  "sleep": {
+    "since": 1787425041682,
+    "reason": "operator: root (PSTACK_TOKEN)",
+    "hosts": [
+      "app-sleepy.preview.example.com"
+    ],
+    "rules": []
+  }
+}

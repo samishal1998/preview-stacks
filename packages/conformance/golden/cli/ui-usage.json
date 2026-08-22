@@ -1,0 +1,13 @@
+{
+  "name": "ui-usage",
+  "argv": [
+    "ui"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: usage: pstack ui <basic|advanced>   (basic = embedded in the API, advanced = the SPA container)\n"
+}

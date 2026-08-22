@@ -1,0 +1,15 @@
+{
+  "path": "/api/auth/me",
+  "as": "bob",
+  "status": 200,
+  "body": {
+    "root": false,
+    "user": {
+      "id": 2,
+      "username": "bob",
+      "role": "admin",
+      "email": "bob@example.com",
+      "createdAt": 1787425040372
+    }
+  }
+}

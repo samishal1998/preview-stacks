@@ -1,0 +1,14 @@
+{
+  "path": "/api/control",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "project": "pstack-control",
+    "reachable": true,
+    "parseError": false,
+    "services": [],
+    "managedBy": "pstack init, from the host",
+    "actionable": false,
+    "note": "The control stack is not managed through this API: the process serving this request runs inside it. Upgrade it with pstack init on the host."
+  }
+}

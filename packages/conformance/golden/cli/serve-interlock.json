@@ -1,0 +1,14 @@
+{
+  "name": "serve-interlock",
+  "argv": [
+    "serve"
+  ],
+  "env": {
+    "PSTACK_HOST": "0.0.0.0",
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: refusing to bind 0.0.0.0 without PSTACK_TOKEN set — this API can destroy\n        infrastructure. Set PSTACK_TOKEN=<secret> to listen off-loopback.\n"
+}

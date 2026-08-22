@@ -1,0 +1,45 @@
+{
+  "path": "/api/deployments/sleepy",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "sleepy",
+    "kind": "isolated",
+    "createdAt": 1787425040647,
+    "updatedAt": 1787425040647,
+    "stack": "sleepy",
+    "busy": false,
+    "orchestrator": "swarm",
+    "sleep": {
+      "idle": null,
+      "after": "3d"
+    },
+    "asleep": {
+      "since": 1787425041682,
+      "reason": "operator: root (PSTACK_TOKEN)",
+      "hosts": [
+        "app-sleepy.preview.example.com"
+      ],
+      "rules": []
+    },
+    "compose": {
+      "file": "docker-compose.yml",
+      "profiles": [],
+      "overlays": [],
+      "subdomains": []
+    },
+    "requires": [],
+    "axes": [
+      {
+        "name": "db",
+        "hooks": [
+          "up",
+          "down",
+          "assert_gone"
+        ],
+        "verifiable": true
+      }
+    ],
+    "env": []
+  }
+}

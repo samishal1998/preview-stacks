@@ -1,0 +1,35 @@
+{
+  "path": "/api/deployments/pr-1",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "pr-1",
+    "kind": "isolated",
+    "createdAt": 1787425040643,
+    "updatedAt": 1787425040643,
+    "stack": "pr-1",
+    "busy": false,
+    "orchestrator": "swarm",
+    "sleep": null,
+    "asleep": null,
+    "compose": {
+      "file": "docker-compose.yml",
+      "profiles": [],
+      "overlays": [],
+      "subdomains": []
+    },
+    "requires": [],
+    "axes": [
+      {
+        "name": "db",
+        "hooks": [
+          "up",
+          "down",
+          "assert_gone"
+        ],
+        "verifiable": true
+      }
+    ],
+    "env": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "path": "/api/registries",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "dir": "<DATA>/control/docker",
+    "writable": true,
+    "entries": [
+      {
+        "registry": "ghcr.io",
+        "username": "ci",
+        "viaHelper": false
+      }
+    ],
+    "helpers": []
+  }
+}

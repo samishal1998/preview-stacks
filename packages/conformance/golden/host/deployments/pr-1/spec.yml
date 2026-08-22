@@ -1,0 +1,10 @@
+version: 1
+stack: pr-1
+compose:
+  file: docker-compose.yml
+  profiles: []
+axes:
+  - name: db
+    up: "true"
+    down: "true"
+    assert_gone: "true"

@@ -1,0 +1,16 @@
+{
+  "path": "/api/routing",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "dir": "<DATA>/control/traefik-dynamic",
+    "writable": true,
+    "files": [
+      {
+        "name": "extra.yml",
+        "size": 54,
+        "updatedAt": "<VOLATILE>"
+      }
+    ]
+  }
+}

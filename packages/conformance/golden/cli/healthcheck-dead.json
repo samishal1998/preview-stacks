@@ -1,0 +1,13 @@
+{
+  "name": "healthcheck-dead",
+  "argv": [
+    "healthcheck"
+  ],
+  "env": {
+    "PSTACK_PORT": "1"
+  },
+  "cwd": "packages/pstack",
+  "code": 1,
+  "stdout": "",
+  "stderr": ""
+}

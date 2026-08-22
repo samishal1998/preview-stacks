@@ -1,0 +1,12 @@
+{
+  "name": "swarm-join-not-manager",
+  "argv": [
+    "swarm",
+    "join"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 1,
+  "stdout": "",
+  "stderr": "pstack: this daemon is not a swarm manager — nothing to join\n"
+}

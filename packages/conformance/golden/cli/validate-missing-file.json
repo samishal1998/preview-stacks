@@ -1,0 +1,13 @@
+{
+  "name": "validate-missing-file",
+  "argv": [
+    "-f",
+    "examples/nope.yml",
+    "validate"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: spec not found: examples/nope.yml\n"
+}

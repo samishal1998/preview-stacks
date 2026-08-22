@@ -1,0 +1,19 @@
+{
+  "name": "down-dry-no-verify",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "down",
+    "-n",
+    "-v",
+    "--no-verify"
+  ],
+  "env": {
+    "PR": "1",
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: pr-1  (dry-run)\n→ compose down (all profiles)\n  [dry-run] $ docker compose -p 'pr-1' -f 'docker-compose.preview.yml' --profile 'backend' --profile 'frontend' down -v --remove-orphans\n→ down: images\n  [dry-run] $ IMAGES=$(docker ps -a --filter \"label=com.docker.compose.project=$STACK\" \\\n           --format '{{.Image}}' | sort -u)\nfor img in $IMAGES; do docker rmi \"$img\" 2>/dev/null || true; done\n\n→ down: queue-namespace\n  [dry-run] $ docker exec shared-temporal-1 temporal operator namespace delete \\\n  --namespace \"$STACK\" --yes 2>/dev/null || true\n\n→ down: database\n  [dry-run] $ ./hooks/db-branch.sh delete \"$STACK\"\n  ✓ compose      (compose)\n  ✓ down         images\n  ✓ down         queue-namespace\n  ✓ down         database\n",
+  "stderr": ""
+}

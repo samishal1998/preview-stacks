@@ -1,0 +1,19 @@
+{
+  "path": "/api/specs",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "specs": [
+      {
+        "name": "web",
+        "kind": "isolated",
+        "description": "the web preview, revised",
+        "createdAt": 1787425040641,
+        "updatedAt": 1787425040747,
+        "requiredVars": [
+          "PR"
+        ]
+      }
+    ]
+  }
+}

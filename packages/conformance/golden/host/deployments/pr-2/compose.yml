@@ -1,0 +1,7 @@
+services:
+  app:
+    image: nginx:alpine
+    labels:
+      - pstack.routing.port=80
+    restart: always
+    mem_limit: 128m

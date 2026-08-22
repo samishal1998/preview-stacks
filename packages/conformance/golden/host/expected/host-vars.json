@@ -1,0 +1,21 @@
+{
+  "path": "/api/host-vars",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "entries": [
+      {
+        "name": "DB_PASS",
+        "value": null,
+        "secret": true,
+        "updatedAt": 1787425040633
+      },
+      {
+        "name": "REGION",
+        "value": "eu-central",
+        "secret": false,
+        "updatedAt": 1787425040632
+      }
+    ]
+  }
+}
