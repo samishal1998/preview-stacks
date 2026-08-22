@@ -110,6 +110,21 @@ const script = await pstack.swarm.join({ format: 'script' });   // a SECRET: tre
 // formats: 'token' | 'command' | 'script' | 'cloud-config' (+ distro for cloud-config)
 ```
 
+### Single sign-on
+
+The sign-in itself is two browser redirects (`/api/auth/sso/start` → the provider →
+`/api/auth/sso/callback`); what an SDK can do is configure it.
+
+```ts
+const { callbackUrl, presets } = await pstack.sso.config();   // register callbackUrl with your provider
+await pstack.sso.save({ mode: 'oidc', issuer: 'https://accounts.google.com',
+                        clientId: '…', clientSecret: '…', label: 'Google' });
+// The issuer is fetched while saving, so a typo throws here rather than failing someone's login.
+```
+
+`config()` returns the client secret as a mask — there is no route that returns the real one, and
+submitting the mask back keeps what is stored.
+
 ### Verify a webhook
 
 The half that lives in your receiver. It prevents the two mistakes that make a correct signature look

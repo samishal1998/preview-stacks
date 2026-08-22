@@ -893,6 +893,86 @@ someone lists it. Request variables are ignored for them (a `?PR=8` would otherw
 stack's logs), `mayOpenTerminal` answers by kind, and `actorOf` names the link so the audit rows
 stay honest.
 
+## 5f. Single sign-on (0.27.0)
+
+The operator registers **one** OAuth/OIDC application in their own org and pastes the client id and
+secret in. Everyone who can authenticate against that directory can sign in; the account appears on
+first login. We are the relying party and own nothing about their directory.
+
+### It ends in an ordinary session, and that is the whole integration
+
+`ssoSignIn` mints exactly the row `login()` mints. Nothing downstream — the gate, `shareAllows`, the
+terminal, personal tokens, the audit log — has an "is this an SSO user" branch, because there is no
+such thing at that layer. `PSTACK_TOKEN`, manually created accounts and personal tokens keep working
+unchanged: SSO is strictly additive.
+
+The account row is ordinary too. An SSO user's password is 32 random bytes nobody holds, hashed like
+any other — **not** a null. A nullable password would be a state some future code path could read as
+"no password required"; a hash of an unknown secret cannot be.
+
+### Identity is `(providerKey, subject)`. The email only ever adopts
+
+Addresses move between people; a provider subject does not. So the link table is keyed on the pair,
+and the email is consulted in exactly one place: taking over an account that **already existed
+locally**, gated on the provider having said the address is verified and on there being exactly one
+match. That branch is the only path in the feature that can hand someone an existing account's
+privileges, which is why `emailVerified: null` — the provider never said, GitHub's normal answer —
+is not good enough, and why two rows sharing an address is an ambiguity rather than a coin flip.
+
+`providerKey` stays in the table even though only one provider can be configured at a time (multiple
+simultaneous providers are out of scope): swapping providers must not silently re-link one org's
+subjects onto another org's accounts.
+
+### The callback is under `/api/`, and that is not cosmetic
+
+`/api/auth/sso/callback` — because in advanced-UI mode `control.<domain>` is **nginx serving the
+SPA**, and `location /api/` is the only prefix it proxies to this process (§4a's sibling problem).
+A callback on `/auth/sso/callback` would be answered with `index.html`: the login would hang, the
+provider would report success, and nothing would appear in any log. One helper builds the URL for
+the authorize leg, the token exchange **and** the value the config screen tells the operator to
+register, so the three cannot drift — a `redirect_uri` mismatch is the most common failure in this
+protocol and the provider's error rarely names it.
+
+The base URL comes from `PSTACK_DOMAIN`, not from the request's headers, for the same reason share
+links do: a forwarded header is caller-controlled, and a `redirect_uri` that differs between the two
+legs simply fails.
+
+### What is refused
+
+- **A nonce.** PKCE plus single-use state covers the replay this is exposed to, and a nonce that is
+  sent but never checked reads as a defence in review while being none. If an ID token ever arrives
+  anywhere but straight from the token endpoint, add it *and* verify it in one change.
+- **A `none`/HMAC ID token.** `alg` is an allow-list (RS256, ES256) read before any key is imported —
+  `alg: none` and `HS256`-signed-with-the-public-key are the two classic JWT forgeries.
+- **Skipping signature verification.** OIDC Core permits it when the token comes straight from the
+  token endpoint over TLS. It is done anyway: JWKS via WebCrypto is ~60 lines and no dependency, and
+  it is the difference between trusting the channel and verifying the claim. `iss` must equal what
+  the *discovery document* declares, `aud` must contain the client id (string or array), `exp` gets
+  60s of skew, and an unknown `kid` refetches the JWKS once — no sooner than a 30s cooldown, so a
+  junk `kid` cannot turn every request into a fetch against the provider.
+- **A JSONPath evaluator.** Claim mapping is flat key lookups, plus one dotted path because two
+  providers nest the avatar and nothing else.
+- **A provider registry with lifecycle hooks.** A preset is a row in `PRESETS`. Adding GitHub
+  Enterprise, Gitea or Zitadel is one entry, no code.
+- **Refresh tokens, SCIM, group/role sync, multiple providers, SAML, back-channel logout.** Named
+  out of scope and left there.
+
+### The transient store
+
+The PKCE verifier is the only thing that needs storing, for the length of one round trip. It sits
+behind a four-method interface (`set`/`get`/`delete`/`take`) with a SQLite implementation, because
+SQLite is what this service already wires up — Redis or Postgres slot in behind it if this ever goes
+multi-instance, which is a config change rather than a rewrite. `take` reads and deletes in **one**
+statement: single-use state is what stops a replayed callback, and a get-then-delete pair has a
+window where two requests find the same row. Expired rows are swept on write, not by a timer — that
+table only grows when someone starts a login.
+
+### The secret
+
+Stored, not hashed, for the notifier-secret reason (§4d): the token exchange must *present* it. It
+has no read path — the config endpoint answers with a mask, submitting the mask back keeps what is
+stored, and the protection is the 0700 directory and the 0600 file, as with every other secret here.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves

@@ -308,6 +308,7 @@ racing an `up` over the same database branch is corruption, not contention.
 | `POST /api/deployments/:id/{sleep,wake}` | compose project down with volumes and axes kept → `202 {job}`; wake is `up`. A request to a sleeping stack's hostname wakes it too |
 | `POST /api/deployments/:id/share` | a read-only link (details, logs) to this one deployment — a JWT, no account needed |
 | `GET /api/swarm` · `GET /api/swarm/join?format=…` | the swarm's nodes · what a new worker runs (token, command, script, cloud-config) |
+| `GET /api/auth/sso/{start,callback}` · `GET`/`PUT`/`DELETE` `/api/sso/config` | sign in with your own identity provider · configure it (the client secret has no read path) |
 | `GET /api/jobs/:id` · `GET /api/jobs/:id/stream` | job transcript · live SSE log |
 
 `:id` is a **registry id**, not a compose project name — the server owns the stored spec and
@@ -328,6 +329,12 @@ Since 0.26.0 a new host runs previews as **Docker Swarm** stacks (one manager; w
 the Swarm page — you keep writing plain compose, the file is converted on every deploy), a spec can
 carry a `sleep:` policy so an idle preview **goes to sleep and wakes on the next request**, and a
 deployment can be **shared** by link. [docs/usage.md §7b](docs/usage.md#7b-scale-out-sleep-and-share-0260).
+
+Since 0.27.0 people can **sign in with your own identity provider** — you register one OAuth/OIDC
+application in your org (Google Workspace, Okta, GitHub, GitLab, …), paste the client id and secret
+in, and accounts appear on first login instead of being created by hand. Local accounts, the machine
+token and personal API tokens are untouched.
+[docs/usage.md §7c](docs/usage.md#7c-sign-in-with-your-identity-provider-0270).
 
 See [docs/control-plane.md](docs/control-plane.md) for the architecture,
 [docs/usage.md](docs/usage.md) for worked examples, and [docs/bootstrap.md](docs/bootstrap.md) to

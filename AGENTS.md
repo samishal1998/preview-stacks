@@ -91,7 +91,8 @@ docs/                See docs/README.md.
 | File | Responsibility |
 |---|---|
 | `store.ts` | SQLite (`<dataDir>/db/pstack.db`) + migrations. Append to `MIGRATIONS`; never edit a shipped one. |
-| `auth.ts` | Accounts, sessions, personal tokens. Argon2id via `Bun.password`; sessions and tokens stored as SHA-256. |
+| `auth.ts` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `ssoSignIn`. Argon2id via `Bun.password`; sessions and tokens stored as SHA-256. |
+| `sso.ts` | The OIDC/OAuth2 protocol, and only that: presets, discovery, PKCE, the token exchange, ID-token verification (RS256/ES256 via WebCrypto), claim mapping, the `TransientStore`. Touches no accounts. |
 | `hostvars.ts` | Host-level `${vars.*}` / `${secrets.*}`. |
 | `registries.ts` | Private-registry credentials for image pulls. |
 | `events.ts` | The domain event bus. `EVENTS` is a **public contract** — add, never rename. |
@@ -199,6 +200,13 @@ idempotent by contract and re-capture their outputs, so nothing is persisted bet
 **18. Template substitution uses function replacements.** `String.replace(marker, string)` reads
 `$$` in the replacement as one `$`, and the wake router's rule ends in `$$` precisely so compose
 hands Traefik a literal `$`. `init.ts` passes `() => text`; keep it that way for every marker.
+
+**19. An SSO identity is `(providerKey, subject)`, and an email only ever ADOPTS.** `auth.ts`
+`ssoSignIn` looks up the link first; the email branch exists solely to take over a *pre-existing
+local* account and is gated on `emailVerified === true` and on exactly one match. Emails move
+between people and subjects do not, so keying on the address — or relaxing the verified check, or
+adopting the first of several matches — is how one person signs in as another. `emailAllowed` fails
+CLOSED for the same reason: a non-empty allow-list plus no address is a refusal.
 
 ### Gotcha: dry-run proves ordering, never absence
 
