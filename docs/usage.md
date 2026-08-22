@@ -1741,6 +1741,105 @@ row describing a credential), so the TTL is what bounds a leaked one. Rotating `
 does not rotate it, so links survive upgrades. The event `share.created { deployment, views,
 expiresAt, by }` says a link was minted — never the token.
 
+## 7c. Sign in with your identity provider (0.27.0)
+
+Accounts are created by hand, one at a time, by someone holding `PSTACK_TOKEN`. That does not scale
+past a couple of people. Point this host at the identity provider your organisation already runs and
+anyone who can authenticate against it can sign in — **no per-user setup here at all**.
+
+You are configuring your *own* OAuth/OIDC application. Nothing is registered with anyone, no
+directory is copied, and nothing is synchronised.
+
+### Set it up
+
+1. **Copy the callback URL** from **Sign-on** in the UI (or `GET /api/sso/config`). It is always:
+
+   ```
+   https://control.<your-domain>/api/auth/sso/callback
+   ```
+
+   One fixed path for every provider. It must match what you register on their side **exactly** — a
+   mismatch is the most common failure in this protocol, and the error the provider returns rarely
+   says so.
+
+2. **Create the application** in your provider, with that callback URL.
+
+3. **Paste the client id and secret** into the Sign-on page, or:
+
+   ```bash
+   # OpenID Connect — everything else is discovered from the issuer
+   curl -s -X PUT https://api.preview.example.com/api/sso/config \
+     -H "Authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' \
+     -d '{ "mode": "oidc", "issuer": "https://accounts.google.com",
+           "clientId": "…", "clientSecret": "…", "label": "Google" }'
+
+   # OAuth 2.0 — a preset fills in the endpoints, the scopes and the claim mapping
+   curl -s -X PUT https://api.preview.example.com/api/sso/config \
+     -H "Authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' \
+     -d '{ "mode": "oauth2", "provider": "github", "clientId": "…", "clientSecret": "…" }'
+   ```
+
+   The issuer is **fetched while you save**, so a typo is refused there rather than discovered at
+   somebody's first login attempt.
+
+A **Sign in with …** button then appears on the login page of both UIs.
+
+### The two modes
+
+| | **OIDC** (prefer this) | **OAuth 2.0** |
+|---|---|---|
+| You provide | `issuer` (or `discoveryUrl`), `clientId`, `clientSecret` | `provider` preset, `clientId`, `clientSecret` |
+| Endpoints | discovered from `/.well-known/openid-configuration` | from the preset, or typed for `custom` |
+| Identity from | the **ID token's** claims, signature-verified against the provider's JWKS | the user-info endpoint, mapped by `claimMap` |
+| Use it for | Google Workspace, Okta, Entra, Auth0, Keycloak, Authentik, … | GitHub, GitLab, Bitbucket, anything without user-facing OIDC |
+
+Presets ship for **GitHub, GitLab, Bitbucket** and `custom`. A preset is only a set of defaults —
+every field stays editable, so a self-hosted GitLab is the `gitlab` preset with three URLs replaced,
+not a `custom` provider typed out by hand.
+
+> **GitHub does publish an OIDC discovery document, and it is a trap.** It signs GitHub *Actions*
+> job tokens for cloud workload identity — it is not a user login endpoint. GitHub user login is
+> OAuth 2.0, here and everywhere.
+
+### Who gets an account
+
+By default, **anyone who successfully authenticates**. Your provider already owns that decision —
+Workspace restricts to internal users, a GitHub OAuth app can be org-approved — and duplicating it
+here would only be a second list to keep in step.
+
+Two optional knobs:
+
+| Field | Effect |
+|---|---|
+| `allowedEmailDomains: []` | Non-empty ⇒ a login whose email is outside the list is refused. **Fails closed**: a provider that returns *no* address (a private GitHub profile) is refused too, not waved through |
+| `defaultRole` | Role for auto-provisioned accounts. Only `admin` exists today, so this is a placeholder for when roles land |
+
+An account is keyed on **`(provider, subject)`**, never the email — someone changing their address
+keeps their account, their history and their personal tokens. An address is used for exactly one
+thing: adopting a local account that already exists with the same address, and only when the
+provider says the address is verified. Give a local account an address when you create it
+(`POST /api/users { username, password, email }`) if you want that to happen.
+
+### What a login actually does
+
+`GET /api/auth/sso/start` mints a `state` and a PKCE verifier, parks them for five minutes, and
+redirects to the provider. `GET /api/auth/sso/callback` spends that state **once**, exchanges the
+code (with the verifier and the client secret), verifies the ID token or fetches the user, and sets
+the same session cookie a password login sets. Failures land back on `/login?sso_error=…` with the
+provider's own words.
+
+`?next=/deployments/pr-7` on `/start` is carried through and returned to — same-origin paths only.
+
+### Removing it
+
+```bash
+curl -X DELETE https://api.preview.example.com/api/sso/config -H "Authorization: Bearer $PSTACK_TOKEN"
+```
+
+The provider is forgotten and the button disappears. **Nobody is deleted** — those accounts keep
+their personal tokens, and pointing the same provider back at this host re-links them by subject.
+Set a password on one (`PUT /api/users/:id/password`) if someone needs to get in meanwhile.
+
 ## 8. Wire it into CI
 
 Two jobs: bring the preview up on demand, tear it down when the PR closes. Keep previews **opt-in by
@@ -2074,14 +2173,14 @@ different problems with different owners.
 
 ### HTTP API
 
-`:id` is a **registry id** (e.g. `pr-123`), never the resolved stack name. Auth applies to
-**POST/PUT/DELETE** only; every `GET` is open, which is also what lets the log stream use
-`EventSource` (it cannot send headers). `GET /api/jobs/:id` returns a whole hook transcript, so the
-ingress in front of this is the only gate on reads.
+`:id` is a **registry id** (e.g. `pr-123`), never the resolved stack name. **Every route requires a
+principal** — reads included, since 0.10.0 — except `/api/health`, the login/bootstrap routes and the
+two SSO legs, which are how you become one. A session cookie is what lets the log stream use
+`EventSource`, which cannot send headers.
 
 | Method | Route | Body / query | Returns |
 |---|---|---|---|
-| GET | `/api/health` | — | `{ ok, authEnforced, dataDir, version }` |
+| GET | `/api/health` | — | `{ ok, authEnforced, hasUsers, sso, dataDir, version }` — `sso` is `{ enabled, label }` or `null`, read by the login page before authenticating |
 | GET | `/api/deployments` | spec variables as `?K=V`, **optional** | `{ deployments: [{ …meta, stack, busy, running, unresolved? }] }`. A row whose variables were not supplied degrades to `stack: null` + `unresolved: <reason>` rather than failing the listing; `busy`/`running` are `null` when undeterminable |
 | GET | `/api/deployments/:id` | spec variables as `?K=V`, **required** | `{ id, kind, createdAt, updatedAt, stack, busy, compose, requires, axes[{name,hooks}] }` — hook **names**, never bodies |
 | PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }` · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
@@ -2091,7 +2190,13 @@ ingress in front of this is the only gate on reads.
 | POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
 | POST | `/api/deployments/:id/sleep` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy or `kind: shared` · 400 without a compose section. Compose project down, volumes and axes kept |
 | POST | `/api/deployments/:id/wake` | spec variables as `?K=V` | **202** `{ job }` — `up`, recorded as a wake |
+| POST | `/api/users` | `{ username, password, email? }` | **201** `{ user }`. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
 | POST | `/api/deployments/:id/share` | `{ views?: ["details","logs"], ttl?: "7d" }` | **201** `{ url, token, views, expiresAt }` — a read-only link; 400 with no `PSTACK_TOKEN` to sign with, or a ttl over `30d` |
+| GET | `/api/auth/sso/start` | `?next=<same-origin path>` | **302** to the provider, with PKCE. **404** when no provider is configured. No auth — this *is* how you sign in |
+| GET | `/api/auth/sso/callback` | `?code=&state=` (the provider's redirect) | **302** with a session cookie, or **302** to `/login?sso_error=…`. No auth |
+| GET | `/api/sso/config` | — | `{ configured, callbackUrl, presets[], config, clientSecret: "••••••••", updatedAt }` — the secret has **no read path** |
+| PUT | `/api/sso/config` | the config + `clientSecret` | `{ ok, config, callbackUrl }` · 400 on a bad field or an unreachable issuer. Submitting the mask keeps the stored secret |
+| DELETE | `/api/sso/config` | — | forget the provider; the accounts it created stay · 404 if none |
 | GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
 | GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **admin only**; 409 when this daemon is not a manager |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
