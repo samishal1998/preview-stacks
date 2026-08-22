@@ -48,13 +48,15 @@ for (const sc of SCENARIOS) {
   writeFileSync(join(OUT, `${sc.name}.a.json`), JSON.stringify(a, null, 2));
   writeFileSync(join(OUT, `${sc.name}.b.json`), JSON.stringify(b, null, 2));
 
-  const d = compare(a, b);
-  const known = d ? KNOWN_DEVIATIONS.find((k) => k.scenario === sc.name && k.step === d.index) : undefined;
-  if (!d) {
+  const skip = self ? new Set<number>() : new Set(KNOWN_DEVIATIONS.filter((k) => k.scenario === sc.name).map((k) => k.step));
+  const d = compare(a, b, skip);
+  for (const i of d?.skipped ?? []) {
+    seenDeviations.add(`${sc.name}:${i}`);
+    const known = KNOWN_DEVIATIONS.find((k) => k.scenario === sc.name && k.step === i)!;
+    console.log(`  ~ ${sc.name}  step ${i} differs as documented: ${known.why}`);
+  }
+  if (!d || d.index < 0) {
     console.log(`  ✓ ${sc.name}  (${a.length} steps)`);
-  } else if (known && !self) {
-    seenDeviations.add(`${sc.name}:${d.index}`);
-    console.log(`  ~ ${sc.name}  step ${d.index} differs as documented: ${known.why}`);
   } else {
     failures++;
     console.log(`  ✗ ${sc.name}  first difference at step ${d.index} (${d.a?.method ?? d.b?.method} ${d.a?.path ?? d.b?.path})`);
