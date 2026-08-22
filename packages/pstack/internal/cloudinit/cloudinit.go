@@ -46,12 +46,6 @@ func init() {
 	}
 }
 
-// BunVersion is stamped into the rendered file as the Bun pin (`bash -s "bun-v<BunVersion>"`).
-// The TS read `Bun.version` — the runtime it ran under. A Go binary has no Bun, so this is the
-// literal the goldens were generated with; the conformance mask turns either into
-// `bun-v<BUN_VERSION>`. Goes away with the packaging redesign (the cloud-init no longer installs Bun).
-var BunVersion = "1.3.12"
-
 // Distros are the targets the generator can render for.
 //
 // What actually differs is smaller than it looks: how Docker is installed and how its service is
@@ -151,7 +145,7 @@ var distroProfiles = map[string]distroProfile{
 		pkgSetup:      "  - apk add --no-cache docker docker-cli-compose docker-cli-buildx",
 		// OpenRC, not systemd.
 		dockerEnable: strings.Join([]string{"  - rc-update add docker boot", "  - service docker start"}, "\n"),
-		note: "Alpine: OpenRC (not systemd), musl (the Bun installer detects and installs its musl build), " +
+		note: "Alpine: OpenRC (not systemd), musl (the static pstack binary runs unchanged), " +
 			"and cloud-init support varies by image — verify yours ships it. bash and sudo are added to " +
 			"the package list because this file depends on both.",
 	},
@@ -279,9 +273,8 @@ func RenderCloudInit(a Answers) (string, error) {
 		initExtra = "\n    " + strings.Join(initFlags, "\n    ")
 	}
 	// The advanced UI needs its own image built before `init --ui advanced` can find it. Only the
-	// build — the UI package is a build-time input fetched INSIDE the image, so installing it on
-	// the host as well was gratuitous, and on a host where `bun install -g` fails it turned an
-	// optional UI into a boot failure.
+	// build — the UI package is a build-time input fetched INSIDE the image, so nothing is
+	// installed on the host for it.
 	uiImageStep := ""
 	if a.UI == "advanced" {
 		uiImageStep = "\n  # The advanced UI is opt-in and needs its own image.\n" +
@@ -324,7 +317,6 @@ func RenderCloudInit(a Answers) (string, error) {
 		// CLI (same pattern as the generated Dockerfiles in image), so the file reproduces the
 		// toolchain that rendered it rather than whatever is latest on the day someone reuses it.
 		{"PSTACK_VERSION", version.Get()},
-		{"BUN_VERSION", BunVersion},
 	}
 
 	out := pstack.CloudInitTemplate

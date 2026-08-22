@@ -30,8 +30,10 @@ describe.skipIf(NO_CLI)('CLI goldens', () => {
 
   // Cases run IN TABLE ORDER in one data dir — an upgrade plan reads what the init before it wrote.
   for (const c of CASES) {
-    test(c.name, async () => {
-      const golden = JSON.parse(readFileSync(join(GOLDEN, 'cli', `${c.name}.json`), 'utf8')) as CliGolden;
+    test.skipIf(IMPL === 'go' && !!c.bunOnly)(c.name, async () => {
+      // A case whose Go transcript is its own document reads `<name>.go.json` in go mode (gen/goldens-go.ts).
+      const file = IMPL === 'go' && c.goGolden ? `${c.name}.go.json` : `${c.name}.json`;
+      const golden = JSON.parse(readFileSync(join(GOLDEN, 'cli', file), 'utf8')) as CliGolden;
       if (c.freshData) {
         rmSync(DATA_DIR, { recursive: true, force: true });
         mkdirSync(DATA_DIR, { recursive: true });
@@ -39,7 +41,8 @@ describe.skipIf(NO_CLI)('CLI goldens', () => {
       const shim = c.shim !== undefined ? dockerShim(c.shim) : null;
       try {
         const r = await runCli(c.argv, { env: c.env, pathPrefix: shim?.dir });
-        const divergent = IMPL === 'go' && golden.goDivergent ? new RegExp(golden.goDivergent) : undefined;
+        // The table's CURRENT expression, not the one stamped into the file when it was generated.
+        const divergent = IMPL === 'go' && c.goDivergent ? c.goDivergent : undefined;
         expect(r.code).toBe(golden.code);
         expect(withoutDivergent(mask(r.stdout, version), divergent)).toBe(withoutDivergent(golden.stdout, divergent));
         expect(withoutDivergent(mask(r.stderr, version), divergent)).toBe(withoutDivergent(golden.stderr, divergent));

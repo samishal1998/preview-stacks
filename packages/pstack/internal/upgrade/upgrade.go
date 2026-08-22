@@ -30,9 +30,9 @@
 // host with no control plane and no remote way to repair it. This is CLI-only for the same reason
 // `init` is — see the header of initctl.
 //
-// PORT NOTE: phase `install` still emits the `bun install -g` command the TypeScript emits today;
-// the Go-binary install path arrives with the packaging redesign (the conformance goldens drop the
-// bun lines in go mode). Phase `resume` is unchanged and is what the Go hop lands on.
+// DISTRIBUTION. pstack is one static binary from GitHub Releases; phase `install` runs that
+// release's own install.sh (checksum-verified) into the directory the running binary lives in,
+// then re-execs `pstack upgrade --resume` — which is also what a 0.28.0 host's one-time hop runs.
 package upgrade
 
 import (
@@ -192,25 +192,35 @@ func ReadControlState(dataDir string) (*ControlState, error) {
 	return s, nil
 }
 
-// InstallPrefixFor is where a global `bun install -g` must put the binary for THIS install to be
-// the one replaced.
-//
-// The cloud-config installs with `BUN_INSTALL=/usr/local`, so the binary is `/usr/local/bin/pstack`.
-// A plain `bun install -g` on that host writes to `~/.bun` instead and leaves `/usr/local/bin/pstack`
-// at the old version — an upgrade that reports success and changes nothing an operator would notice
-// until the next deploy behaves like the old code. So the prefix is derived from where the running
-// binary actually is, not from the environment's default. "" in, "" out (the TS's null).
-func InstallPrefixFor(binPath string) string {
+// InstallDirFor is the directory the installer must write to for THIS install to be the one
+// replaced: where the running binary actually is, not the installer's default. A cloud-config host
+// has it at /usr/local/bin/pstack, which is also the installer's default; a user-prefix install
+// (~/.local/bin) would otherwise end up with two binaries and the old one first on PATH — an
+// upgrade that reports success and changes nothing. "" in, "" out (not on PATH).
+func InstallDirFor(binPath string) string {
 	if binPath == "" {
 		return ""
 	}
-	bin := path.Dir(binPath)
-	// `<prefix>/bin/pstack` → `<prefix>`. Anything else (a linked checkout, a shim somewhere odd) is
-	// reported as unknown rather than guessed at.
-	if strings.HasSuffix(bin, "/bin") {
-		return path.Dir(bin)
+	return path.Dir(binPath)
+}
+
+// ReleaseBase is where the binaries and the installer live.
+const ReleaseBase = "https://github.com/samishal1998/preview-stacks/releases"
+
+// InstallCommand is the installer one-liner for a target: the install.sh of THAT release, pinned,
+// into the directory the running binary lives in. `latest` resolves on the release page.
+func InstallCommand(target, dir string) string {
+	v := strings.TrimPrefix(strings.TrimSpace(target), "v")
+	script := ReleaseBase + "/latest/download/install.sh"
+	env := ""
+	if v != "latest" {
+		script = ReleaseBase + "/download/v" + v + "/install.sh"
+		env = "PSTACK_VERSION=" + swarm.Shq(v) + " "
 	}
-	return ""
+	if dir != "" {
+		env += "PSTACK_INSTALL_DIR=" + swarm.Shq(dir) + " "
+	}
+	return "curl -fsSL " + script + " | " + env + "sh"
 }
 
 // Step is one command of a plan. Env is nil when the step adds nothing to the environment.
@@ -264,16 +274,11 @@ type PlanArgs struct {
 // testable on a machine with neither docker nor a control stack.
 func PlanUpgrade(a PlanArgs) []Step {
 	if a.Phase == Install {
-		prefix := InstallPrefixFor(a.BinPath)
 		install := Step{
-			Label: "install @samyx/preview-stacks@" + a.Target,
-			// `bun` rather than an absolute path: it is next to `pstack` on every host this ships to,
-			// and hardcoding /usr/local/bin/bun would break a user-prefix install.
-			Cmd: "bun install -g @samyx/preview-stacks@" + swarm.Shq(a.Target),
-		}
-		// Same prefix the running binary lives under, or bun's default when it cannot be derived.
-		if prefix != "" {
-			install.Env = map[string]string{"BUN_INSTALL": prefix}
+			Label: "install pstack " + a.Target,
+			// The release's own installer: checksum-verified, into the directory the running
+			// binary lives in (or the installer's default when that could not be derived).
+			Cmd: InstallCommand(a.Target, InstallDirFor(a.BinPath)),
 		}
 		return []Step{
 			install,
@@ -426,9 +431,6 @@ func Upgrade(opts Options) (*Result, error) {
 	if target == "" {
 		target = "latest"
 	}
-	if phase == Install && IsGoRelease(target) {
-		return nil, &Error{GoHopMessage(target)}
-	}
 	detected, err := ReadControlState(opts.DataDir)
 	if err != nil {
 		return nil, err
@@ -456,8 +458,8 @@ func Upgrade(opts Options) (*Result, error) {
 		}
 		say(line + ")")
 		if binPath == "" {
-			say("  note: `pstack` is not on PATH, so the global install prefix could not be derived.")
-			say("        bun will use its own default, which may not be where this binary lives.")
+			say("  note: `pstack` is not on PATH, so the install directory could not be derived.")
+			say("        The installer will use its default (/usr/local/bin), which may not be where this binary lives.")
 		}
 	} else {
 		say("pstack " + version.Get() + " — rebuilding and recreating the control stack")
@@ -510,45 +512,6 @@ func Upgrade(opts Options) (*Result, error) {
 	}
 
 	return &Result{From: version.Get(), To: target, Steps: steps}, nil
-}
-
-// GoHopVersion: from 0.29.0 pstack is a Go binary released on GitHub, not an npm package:
-// `bun install -g` of that version would fail (npm never gets it) or, worse, "succeed" at the
-// deprecated last TS release and report an upgrade that changed nothing. So a target at or past
-// the hop is refused with the one command that performs it. `latest` is not checked — on npm it
-// resolves to this package's final release, which is a no-op, not a trap.
-const GoHopVersion = "0.29.0"
-
-// IsGoRelease reports whether target is at or past the hop.
-func IsGoRelease(target string) bool {
-	m := semverRe.FindStringSubmatch(strings.TrimSpace(target))
-	if m == nil {
-		return false
-	}
-	maj, _ := strconv.Atoi(m[1])
-	mnr, _ := strconv.Atoi(m[2])
-	pat, _ := strconv.Atoi(m[3])
-	h := strings.Split(GoHopVersion, ".")
-	hMaj, _ := strconv.Atoi(h[0])
-	hMin, _ := strconv.Atoi(h[1])
-	hPat, _ := strconv.Atoi(h[2])
-	if maj != hMaj {
-		return maj > hMaj
-	}
-	if mnr != hMin {
-		return mnr > hMin
-	}
-	return pat >= hPat
-}
-
-// GoHopMessage is the refusal, carrying the command that performs the hop.
-func GoHopMessage(target string) string {
-	v := strings.TrimPrefix(strings.TrimSpace(target), "v")
-	return "pstack " + v + " is a Go binary released on GitHub, not an npm package — this command cannot install it.\n" +
-		"Run the one-time hop instead (it reads this host's control/.env, so nothing rotates):\n\n" +
-		"  curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v" + v + "/install.sh | sh && pstack upgrade --resume\n\n" +
-		"Rollback, if needed: docker tag pstack:local-previous pstack:local && docker compose -p pstack-control " +
-		"-f <PSTACK_DATA>/control/docker-compose.yml up -d"
 }
 
 func sayer(log func(string)) func(string) {

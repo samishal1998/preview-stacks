@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -224,32 +223,36 @@ func TestUpgrade(t *testing.T) {
 		}
 	})
 
-	t.Run("the install phase targets the prefix this binary actually lives in", func(t *testing.T) {
-		// The cloud-config installs with BUN_INSTALL=/usr/local. A plain `bun install -g` on that host
-		// writes to ~/.bun and leaves /usr/local/bin/pstack at the old version — an upgrade that reports
-		// success and changes nothing.
-		// negative control: return path.Dir(binPath) from InstallPrefixFor — /usr/local/bin, not /usr/local.
+	t.Run("the install phase installs into the directory this binary actually lives in", func(t *testing.T) {
+		// A user-prefix install (~/.local/bin) upgraded into the installer's default (/usr/local/bin)
+		// would leave two binaries with the old one first on PATH — an upgrade that reports success
+		// and changes nothing.
+		// negative control: return "" from InstallDirFor — PSTACK_INSTALL_DIR disappears from the command.
 		for in, want := range map[string]string{
-			"/usr/local/bin/pstack":        "/usr/local",
-			"/home/deploy/.bun/bin/pstack": "/home/deploy/.bun",
-			// Not `<prefix>/bin/…` — a linked checkout. Reported as unknown rather than guessed at.
-			"/opt/weird/pstack": "",
-			"":                  "",
+			"/usr/local/bin/pstack":          "/usr/local/bin",
+			"/home/deploy/.local/bin/pstack": "/home/deploy/.local/bin",
+			"":                               "",
 		} {
-			if got := InstallPrefixFor(in); got != want {
-				t.Errorf("InstallPrefixFor(%q) = %q, want %q", in, got, want)
+			if got := InstallDirFor(in); got != want {
+				t.Errorf("InstallDirFor(%q) = %q, want %q", in, got, want)
 			}
+		}
+		if got := InstallCommand("0.29.1", "/usr/local/bin"); got != "curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v0.29.1/install.sh | PSTACK_VERSION='0.29.1' PSTACK_INSTALL_DIR='/usr/local/bin' sh" {
+			t.Errorf("pinned: %s", got)
+		}
+		if got := InstallCommand("latest", ""); got != "curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh" {
+			t.Errorf("latest: %s", got)
 		}
 
 		dataDir, _ := control(t, "", "")
-		steps := PlanUpgrade(PlanArgs{Phase: Install, Target: "0.25.1", State: mustRead(t, dataDir), BinPath: "/usr/local/bin/pstack"})
-		if steps[0].Cmd != "bun install -g @samyx/preview-stacks@'0.25.1'" || steps[0].Env["BUN_INSTALL"] != "/usr/local" {
+		steps := PlanUpgrade(PlanArgs{Phase: Install, Target: "0.29.1", State: mustRead(t, dataDir), BinPath: "/usr/local/bin/pstack"})
+		if steps[0].Cmd != InstallCommand("0.29.1", "/usr/local/bin") || steps[0].Env != nil {
 			t.Errorf("install step: %+v", steps[0])
 		}
 		/*
-		 * The handoff, and it is load-bearing: `build-image` pins the image to the RUNNING CLI's
-		 * version, so a single process would install 0.25.1 and then faithfully build a 0.25.0 image.
-		 * The second phase has to be a new process running the new code.
+		 * The handoff, and it is load-bearing: `build-image` copies the RUNNING binary into the image,
+		 * so a single process would install 0.29.1 and then faithfully build a 0.29.0 image. The second
+		 * phase has to be a new process running the new code.
 		 */
 		if steps[1].Cmd != "pstack upgrade --resume" {
 			t.Errorf("handoff: %+v", steps[1])
@@ -302,39 +305,16 @@ func TestUpgrade(t *testing.T) {
 		}
 	})
 
-	t.Run("a Go-release target is refused with the one-time hop, not handed to bun install", func(t *testing.T) {
-		// From 0.29.0 pstack is a Go binary on GitHub. `bun install -g @samyx/preview-stacks@0.29.0`
-		// would fail — or "succeed" at the deprecated last TS release and report an upgrade that changed
-		// nothing. The refusal carries the command that actually performs the hop.
-		// negative control: make IsGoRelease() return false — the rejection below does not happen.
-		for target, want := range map[string]bool{
-			"0.29.0": true, "v0.29.0": true, "0.30.1": true, "1.0.0": true,
-			"0.28.9": false, "0.27.0": false, "latest": false, "next": false,
-		} {
-			if IsGoRelease(target) != want {
-				t.Errorf("IsGoRelease(%q) != %v", target, want)
-			}
-		}
-
+	t.Run("a Go-release target is simply installed — this binary IS the Go release", func(t *testing.T) {
+		// The 0.28.0 bridge refused a >= 0.29.0 target with the one-time hop; the hop lands on
+		// `--resume` of this binary, and from here every target is the installer's to fetch.
+		// negative control: put the hop refusal back — the plan below has no install step.
 		dataDir, _ := control(t, "", "")
-		var said []string
-		_, err := Upgrade(Options{DataDir: dataDir, Target: "0.29.0", Runner: quiet(), Log: func(l string) { said = append(said, l) }})
-		if err == nil || !regexp.MustCompile(`releases/download/v0\.29\.0/install\.sh \| sh && pstack upgrade --resume`).MatchString(err.Error()) {
-			t.Fatalf("got %v", err)
+		r, err := Upgrade(Options{DataDir: dataDir, Target: "0.30.0", Runner: quiet(), Log: func(string) {}})
+		if err != nil || !strings.Contains(cmds(r.Steps)[0], "releases/download/v0.30.0/install.sh") {
+			t.Fatalf("got %v %v", r, err)
 		}
-		if _, ok := err.(*Error); !ok {
-			t.Errorf("not an *upgrade.Error: %T", err)
-		}
-		if len(said) != 0 { // refused before anything was planned or printed
-			t.Errorf("said %v", said)
-		}
-		// The CLI prints exactly the message the golden carries.
-		wantMsg := goldenStderr(t, "upgrade-to-go-release")
-		if "pstack: "+err.Error()+"\n" != wantMsg {
-			t.Errorf("message differs\n--- got\n%s\n--- want\n%s", err.Error(), wantMsg)
-		}
-		// `--resume` is phase 2 of a hop that already installed the Go binary — never refused by version.
-		r, err := Upgrade(Options{DataDir: dataDir, Phase: Resume, Target: "0.29.0", Runner: quiet(), Log: func(string) {}})
+		r, err = Upgrade(Options{DataDir: dataDir, Phase: Resume, Target: "0.30.0", Runner: quiet(), Log: func(string) {}})
 		if err != nil || cmds(r.Steps)[0] != "pstack build-image" {
 			t.Errorf("resume: %v %v", r, err)
 		}
@@ -518,6 +498,8 @@ func TestUpgradeGoldens(t *testing.T) {
 					want, _ := goldenCLI(t, "upgrade-plan-"+name)
 					want = strings.TrimSuffix(want, "\n  Dry run — nothing was installed, built or recreated.\n")
 					got := strings.ReplaceAll(out.String(), version.Get(), "<VERSION>")
+					// The install line is the one that diverges by design (npm there, the installer here).
+					got, want = testfacts.WithoutDivergent(got), testfacts.WithoutDivergent(want)
 					if got != want {
 						t.Errorf("transcript differs\n--- got\n%s\n--- want\n%s", got, want)
 					}

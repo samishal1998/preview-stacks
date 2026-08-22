@@ -14,19 +14,15 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/version"
 )
 
-// fakeDist is a stand-in for an installed `dist/`. The real one only exists after a build, and a
-// test that depends on a build step it does not run is order-dependent — which is how the TS suite
-// passed locally (stale dist present) and failed on a clean CI checkout.
-func fakeDist(t *testing.T) string {
+// fakeBinary is a stand-in for the running Linux binary: Build copies whatever file it is handed,
+// so the test never depends on the host's own architecture.
+func fakeBinary(t *testing.T) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "dist")
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	p := filepath.Join(t.TempDir(), "pstack")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho stub\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "cli.js"), []byte("#!/usr/bin/env bun\nconsole.log(\"stub\");\n"), 0o666); err != nil {
-		t.Fatal(err)
-	}
-	return dir
+	return p
 }
 
 var buildRe = regexp.MustCompile(`docker build --pull -t "[^"]+" "([^"]+)"`)
@@ -40,15 +36,27 @@ func findCmd(log []string, prefix string) (int, string) {
 	return -1, ""
 }
 
-// The bug this closes: the published package ships only `dist/`, so a globally-installed pstack
-// had no Dockerfile to build the control image from and no registry to pull it from, while
-// `init` refuses to run without it. The way out is that `dist/` IS the whole application.
+// The bug this closes: an installed pstack had no Dockerfile to build the control image from and
+// no registry to pull it from, while `init` refuses to run without it. The way out is that the
+// running binary IS the whole application: the context is a copy of it plus the Dockerfile.
 func TestBuildImage(t *testing.T) {
+	t.Run("refuses on a non-Linux build and names the two alternatives", func(t *testing.T) {
+		// negative control: drop the GOOS check — a darwin binary is copied into a Linux image.
+		r := exec.NewFake(nil, "")
+		err := Build(BuildOptions{Tag: "pstack:test", Runner: r, GOOS: "darwin", Out: &bytes.Buffer{}})
+		if err == nil || !strings.Contains(err.Error(), "docker build -t pstack:local .") || !strings.Contains(err.Error(), "PSTACK_BINARY=<path>") {
+			t.Fatalf("got %v", err)
+		}
+		if len(r.Commands()) != 0 {
+			t.Errorf("ran %v", r.Commands())
+		}
+	})
+
 	t.Run("builds the configured tag and cleans up its context", func(t *testing.T) {
 		// negative control: drop `defer os.RemoveAll(ctx)` in Build — the Dockerfile survives and the exists check fails.
 		r := exec.NewFake(nil, "")
 		var out bytes.Buffer
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DistDir: fakeDist(t), Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &out}); err != nil {
 			t.Fatal(err)
 		}
 		_, cmd := findCmd(r.Commands(), "docker build")
@@ -109,7 +117,7 @@ func TestBuildImage(t *testing.T) {
 			return exec.Result{OK: true}, true
 		}
 		var out bytes.Buffer
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &out}); err != nil {
 			t.Fatal(err)
 		}
 		if written != ControlDockerfile("") {
@@ -132,7 +140,7 @@ func TestBuildImage(t *testing.T) {
 		r.Answer = func(string) (exec.Result, bool) {
 			return exec.Result{OK: false, Code: 1, Stderr: "no space left on device"}, true
 		}
-		err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DistDir: fakeDist(t), Out: &bytes.Buffer{}})
+		err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &bytes.Buffer{}})
 		if err == nil || !strings.Contains(err.Error(), "no space left on device") {
 			t.Fatalf("expected docker output in the error, got %v", err)
 		}
@@ -142,7 +150,7 @@ func TestBuildImage(t *testing.T) {
 		// negative control: drop the `if opts.DryRun` early return — the runner log is no longer empty.
 		r := exec.NewFake(nil, "")
 		var out bytes.Buffer
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DryRun: true, DistDir: fakeDist(t), Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DryRun: true, Binary: fakeBinary(t), Out: &out}); err != nil {
 			t.Fatal(err)
 		}
 		if len(r.Commands()) != 0 {
@@ -161,7 +169,7 @@ func TestBuildImage(t *testing.T) {
 		// first, or it would keep the new image and the point is lost.
 		// negative control: swap the two runner calls in Build — the order assertion fails.
 		r := exec.NewFake(nil, "")
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DistDir: fakeDist(t), Out: &bytes.Buffer{}}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &bytes.Buffer{}}); err != nil {
 			t.Fatal(err)
 		}
 		log := r.Commands()
@@ -240,27 +248,20 @@ func TestBuildImageUI(t *testing.T) {
 }
 
 func TestGeneratedDockerfiles(t *testing.T) {
-	t.Run("both install the published package rather than copying local files", func(t *testing.T) {
-		// The bug this fixes: the UI image needed the UI package installed ON THE HOST, so a host where
-		// `bun install -g` fails turned an optional UI into a boot failure. It is a BUILD input; the
-		// Dockerfile fetches it.
-		// negative control: drop the version pin from `bun add` — the `@9.9.9` check fails.
-		for _, df := range []string{ControlDockerfile("9.9.9"), UIDockerfile("9.9.9")} {
-			if !strings.Contains(df, "@9.9.9") { // pinned to the CLI that rendered it
-				t.Error("not pinned")
-			}
-			if strings.Contains(df, "COPY dist") { // nothing from the host
-				t.Error("copies local files")
+	t.Run("the control image copies the binary; the UI image fetches its package", func(t *testing.T) {
+		// negative control: drop the version pin from the UI `bun add` — the `@9.9.9` check fails.
+		if !strings.Contains(UIDockerfile("9.9.9"), "@samyx/preview-stacks-ui@9.9.9") {
+			t.Error("UI image not pinned")
+		}
+		df := ControlDockerfile("9.9.9")
+		for _, want := range []string{"COPY pstack /usr/local/bin/pstack", `CMD ["pstack", "serve"]`, `CMD ["pstack", "healthcheck"]`,
+			"releases/download/v9.9.9/pstack_linux_", "FROM debian:bookworm-slim", "/usr/local/bin/pstack --version"} {
+			if !strings.Contains(df, want) {
+				t.Errorf("control image lacks %q", want)
 			}
 		}
-	})
-
-	t.Run("the control image runs the package entry, not a global bin", func(t *testing.T) {
-		// `bun install -g` needs a writable global dir that not every host provides; when it is missing
-		// the failure is an opaque "No global directory found".
-		// negative control: change the CMD to `["pstack", "serve"]` — the substring check fails.
-		if !strings.Contains(ControlDockerfile(""), "node_modules/@samyx/preview-stacks/dist/cli.js") {
-			t.Error("entry is not the package file")
+		if strings.Contains(df, "bun") || strings.Contains(df, "npm") {
+			t.Error("control image still carries a JavaScript runtime")
 		}
 	})
 
@@ -273,9 +274,11 @@ func TestGeneratedDockerfiles(t *testing.T) {
 	})
 
 	// The conformance transcripts: `pstack dockerfile [--ui]` prints the Dockerfile plus one newline.
+	// The control Dockerfile is the Go build's own document (`dockerfile.go.json`, generated from this
+	// binary); the UI one is unchanged from the reference.
 	t.Run("matches the dockerfile goldens byte-for-byte", func(t *testing.T) {
 		// negative control: change any byte of ControlDockerfile — the compare fails.
-		for name, df := range map[string]string{"dockerfile": ControlDockerfile(""), "dockerfile-ui": UIDockerfile("")} {
+		for name, df := range map[string]string{"dockerfile.go": ControlDockerfile(""), "dockerfile-ui": UIDockerfile("")} {
 			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".json"))
 			if err != nil {
 				t.Fatal(err)
@@ -285,8 +288,9 @@ func TestGeneratedDockerfiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := strings.ReplaceAll(df, version.Get(), "<VERSION>") + "\n"
-			if got != g.Stdout {
-				t.Errorf("%s: rendered Dockerfile differs from the golden\n--- got\n%s\n--- want\n%s", name, got, g.Stdout)
+			want := g.Stdout
+			if got != want {
+				t.Errorf("%s: rendered Dockerfile differs from the golden\n--- got\n%s\n--- want\n%s", name, got, want)
 			}
 		}
 	})

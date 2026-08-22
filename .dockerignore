@@ -1,0 +1,12 @@
+# The root Dockerfile needs go.mod, go.sum and packages/pstack (sources, ui/, templates/,
+# package.json for the version). Everything else is noise that would invalidate the build cache.
+*
+!go.mod
+!go.sum
+!packages/pstack
+packages/pstack/node_modules
+packages/pstack/dist
+packages/pstack/bin
+packages/pstack/test
+packages/pstack/src
+packages/pstack/scripts

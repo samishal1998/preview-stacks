@@ -13,5 +13,5 @@
   "code": 3,
   "stdout": "",
   "stderr": "pstack: no control stack found at <DATA>/control (<DATA>/control/.env is missing). This host has never run `pstack init`, or its data directory is elsewhere — set PSTACK_DATA to point at it.\n",
-  "goDivergent": "bun|BUN_|@samyx\\/preview-stacks|unzip"
+  "goDivergent": "bun|BUN_|@samyx\\/preview-stacks|unzip|install pstack |releases\\/download|releases\\/latest|debian:bookworm|useradd|apt-get|COPY pstack|\\/usr\\/local\\/bin\\/pstack --version|\"pstack\", \""
 }

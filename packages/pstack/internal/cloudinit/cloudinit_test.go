@@ -262,21 +262,16 @@ func TestCloudInitPinnedVersionsAndDistros(t *testing.T) {
 	 * that day — a control plane the rest of the file was never written for. (A mere restart never
 	 * re-runs runcmd; re-provisioning does.) So the generator stamps the toolchain it ran under.
 	 */
-	t.Run("pstack and bun are pinned to the generator's own versions", func(t *testing.T) {
+	t.Run("pstack is pinned to the generator's own version, and nothing else is installed", func(t *testing.T) {
 		// negative control: substitute PSTACK_VERSION with "latest" — the first check fails.
 		out := render(t, pinned)
-		if !strings.Contains(out, "bun install -g @samyx/preview-stacks@"+version.Get()) {
+		v := version.Get()
+		if !strings.Contains(out, "releases/download/v"+v+"/install.sh | PSTACK_VERSION="+v+" sh") {
 			t.Error("pstack not pinned")
 		}
-		if !strings.Contains(out, `bash -s "bun-v`+BunVersion+`"`) {
-			t.Error("bun not pinned")
-		}
-		// Bare, unpinned forms must be gone entirely.
-		if regexp.MustCompile(`install -g @samyx/preview-stacks($|[^@])`).MatchString(out) {
-			t.Error("unpinned install")
-		}
-		if regexp.MustCompile(`bun\.sh/install \| bash'`).MatchString(out) {
-			t.Error("unpinned bun installer")
+		// The installer of that release, never `latest`, and no JavaScript runtime anywhere.
+		if strings.Contains(out, "releases/latest") || strings.Contains(out, "bun ") || strings.Contains(out, "unzip") {
+			t.Error("unpinned installer, or a runtime the Go build does not need")
 		}
 	})
 
@@ -443,7 +438,9 @@ func TestWorkerCloudInit(t *testing.T) {
 }
 
 // The conformance transcripts: `pstack cloud-init … -y` prints the rendered file plus one newline,
-// masked for the version and the Bun pin. This is the whole-file compare the TS suite never had.
+// masked for the version. The Go build's runcmd is its own document (the installer replaces the Bun
+// block), so the compare is against `<name>.go.json` — generated from this binary by
+// `bun gen/goldens-go.ts`, and the spec for this command once the TS reference is gone.
 func TestCloudInitGoldens(t *testing.T) {
 	golden := Answers{
 		Domain:            "preview.example.com",
@@ -465,11 +462,10 @@ func TestCloudInitGoldens(t *testing.T) {
 	adv.Challenge, adv.DNSProvider, adv.UI, adv.ConfigRepo = "dns01", "cloudflare", "advanced", "https://github.com/example/previews.git"
 	cases["cloud-init-dns01-advanced-swarm"] = adv
 
-	bunRe := regexp.MustCompile(`bun-v\d+\.\d+\.\d+`)
 	for name, a := range cases {
 		t.Run(name, func(t *testing.T) {
 			// negative control: change the wrap width in wrapRe to 80 — the suse/arch/alpine notes re-wrap and fail.
-			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".json"))
+			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".go.json"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -478,7 +474,6 @@ func TestCloudInitGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := render(t, a) + "\n"
-			got = bunRe.ReplaceAllString(got, "bun-v<BUN_VERSION>")
 			got = strings.ReplaceAll(got, version.Get(), "<VERSION>")
 			if got != g.Stdout {
 				t.Errorf("differs from the golden\n--- got\n%s\n--- want\n%s", got, g.Stdout)

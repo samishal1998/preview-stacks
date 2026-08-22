@@ -11,6 +11,7 @@
     "ratchet": "bun scripts/ratchet.ts",
     "status": "bun scripts/status.ts",
     "gen": "bun gen/facts.ts && bun gen/goldens.ts && bun gen/host-fixture.ts",
+    "gen:go": "bun gen/goldens-go.ts",
     "gen:fresh": "bun gen/goldens.ts && bun gen/facts.ts && git diff --exit-code -- golden/cli golden/render golden/facts ':!golden/facts/argon2.json'",
     "diff": "bun diff/run.ts",
     "typecheck": "tsc --noEmit",

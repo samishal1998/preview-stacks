@@ -12,7 +12,7 @@ if (process.env.PSTACK_IMPL && process.env.PSTACK_IMPL !== 'bun') {
 }
 process.env.PSTACK_IMPL = 'bun';
 
-const { existsSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
+const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = await import('node:fs');
 const { dirname, join } = await import('node:path');
 const { runCli } = await import('../harness/cli.ts');
 const { dockerShim } = await import('../harness/docker-shim.ts');
@@ -22,9 +22,12 @@ const { CLI_CWD } = await import('../harness/impl.ts');
 
 const version = (await runCli(['--version'])).stdout.trim();
 console.log(`reference: pstack ${version}`);
-rmSync(join(GOLDEN, 'cli'), { recursive: true, force: true });
-rmSync(join(GOLDEN, 'render', 'control'), { recursive: true, force: true });
+// The reference's files only: `<name>.go.json` (gen/goldens-go.ts) are the Go build's and stay.
 mkdirSync(join(GOLDEN, 'cli'), { recursive: true });
+for (const f of readdirSync(join(GOLDEN, 'cli'))) {
+  if (f.endsWith('.json') && !f.endsWith('.go.json')) rmSync(join(GOLDEN, 'cli', f));
+}
+rmSync(join(GOLDEN, 'render', 'control'), { recursive: true, force: true });
 
 for (const c of CASES) {
   if (c.freshData) {

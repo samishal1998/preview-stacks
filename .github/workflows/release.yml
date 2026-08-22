@@ -1,0 +1,106 @@
+# Release: a `v*` tag → the Go binaries on GitHub Releases (GoReleaser), then the two npm packages
+# (the UI and the client SDK) via publish-kit. The tag is the one version everything is asserted
+# against: packages/pstack/package.json, apps/ui, packages/client and the binary's own --version.
+#
+# `verify` rehearses what the release will claim: the Go suite under -race, the UI/client checks,
+# the lockstep assertion, and an image smoke test that builds the root Dockerfile and waits for the
+# container's HEALTHCHECK to say `healthy` — the exact verdict `pstack init` blocks on.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+
+      - name: Lockstep — the tag is the version everywhere
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for f in packages/pstack/package.json apps/ui/package.json packages/client/package.json; do
+            v="$(jq -r .version "$f")"
+            [ "$v" = "$tag" ] || { echo "$f is $v, tag is $tag"; exit 1; }
+          done
+
+      - name: Go — vet, race
+        run: |
+          go vet ./...
+          go test -race -timeout 120s ./...
+
+      - name: UI and client — test, typecheck, build
+        run: bunx turbo run test typecheck build --filter=@samyx/preview-stacks-ui --filter=@samyx/preview-stacks-client
+
+      - name: Conformance — the binary passes the black-box suite
+        run: |
+          go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
+          cd packages/conformance && bun run ratchet
+
+      - name: Image smoke — builds and becomes healthy
+        run: |
+          docker build -t pstack:ci .
+          docker run -d --name pstack-ci -e PSTACK_TOKEN=ci -e PSTACK_HOST=0.0.0.0 pstack:ci
+          for i in $(seq 1 30); do
+            s="$(docker inspect -f '{{.State.Health.Status}}' pstack-ci)"
+            [ "$s" = healthy ] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' pstack-ci | grep -qx healthy || { docker logs pstack-ci; exit 1; }
+          docker exec pstack-ci pstack --version | grep -qx "${GITHUB_REF_NAME#v}"
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The published installer, against the published release: what an operator will run.
+      - name: Installer smoke
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$v/install.sh" | PSTACK_INSTALL_DIR="$RUNNER_TEMP/bin" sh
+          "$RUNNER_TEMP/bin/pstack" --version | grep -qx "$v"
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Publish the UI and the client SDK
+        run: bunx publish-kit publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
