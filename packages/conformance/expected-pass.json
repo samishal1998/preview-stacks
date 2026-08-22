@@ -1,1 +1,18 @@
-{ "go": {} }
+{
+  "go": {
+    "test/api-auth.test.ts": 11,
+    "test/api-host-vars.test.ts": 2,
+    "test/api-jobs-and-containers.test.ts": 7,
+    "test/api-routing-and-registries.test.ts": 8,
+    "test/api-share-sleep-swarm.test.ts": 6,
+    "test/api-source-and-logs.test.ts": 11,
+    "test/api-sso.test.ts": 10,
+    "test/api-terminal-and-readiness.test.ts": 10,
+    "test/api-webhooks-delivery.test.ts": 19,
+    "test/api-webhooks-registration.test.ts": 6,
+    "test/cli-goldens.test.ts": 10,
+    "test/cli-surface.test.ts": 4,
+    "test/harness.test.ts": 3,
+    "test/host-fixture.test.ts": 33
+  }
+}

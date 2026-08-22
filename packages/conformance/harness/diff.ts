@@ -52,7 +52,19 @@ export type Step = { n: number; method: string; path: string; status: number; he
  * and index; `why` is for the reader. Listed deviations must still DIFFER, or the run fails — a
  * stale entry is a divergence nobody is watching any more.
  */
-export const KNOWN_DEVIATIONS: Array<{ scenario: string; step: number; why: string }> = [];
+export const KNOWN_DEVIATIONS: Array<{ scenario: string; step: number; why: string }> = [
+  {
+    scenario: 'registries-and-routing',
+    step: 8,
+    why: 'a YAML parse error carries the parser\'s own wording: Bun\'s "YAML Parse error: …" vs goccy/go-yaml\'s "[line:col] …" — only the "not valid YAML: " prefix is contract',
+  },
+  {
+    scenario: 'notifiers',
+    step: 10,
+    why: 'a connection failure is the runtime\'s sentence: Bun says "Unable to connect. Is the computer able to access the url?", Go says "dial tcp …: connection refused" (the URL inside it is redacted either way)',
+  },
+  { scenario: 'notifiers', step: 11, why: 'the same runtime sentence, stored on the delivery row' },
+];
 
 export class Session {
   readonly steps: Step[] = [];
@@ -137,15 +149,26 @@ export class Session {
 
 export type Scenario = { name: string; shim?: string; run: (s: Session) => Promise<void> };
 
-export function compare(a: Step[], b: Step[]): { index: number; a?: Step; b?: Step } | null {
+/**
+ * The first differing step, or null. `skip` names the steps a documented deviation covers: those are
+ * reported separately (so the run can assert the deviation is still real) and the comparison goes
+ * on past them — a deviation must not hide every step after it.
+ */
+export function compare(a: Step[], b: Step[], skip: Set<number> = new Set()): { index: number; a?: Step; b?: Step; skipped: number[] } | null {
   const n = Math.max(a.length, b.length);
+  const skipped: number[] = [];
   for (let i = 0; i < n; i++) {
     const x = a[i];
     const y = b[i];
-    if (!x || !y) return { index: i, a: x, b: y };
-    if (x.method !== y.method || x.path !== y.path || x.status !== y.status || x.body !== y.body || JSON.stringify(x.headers) !== JSON.stringify(y.headers)) {
-      return { index: i, a: x, b: y };
+    if (!x || !y) return { index: i, a: x, b: y, skipped };
+    const same = x.method === y.method && x.path === y.path && x.status === y.status && x.body === y.body && JSON.stringify(x.headers) === JSON.stringify(y.headers);
+    if (same) continue;
+    // A known deviation still has to be the SAME request with the same status — only the body may differ.
+    if (skip.has(i) && x.method === y.method && x.path === y.path && x.status === y.status) {
+      skipped.push(i);
+      continue;
     }
+    return { index: i, a: x, b: y, skipped };
   }
-  return null;
+  return skipped.length ? { index: -1, skipped } : null;
 }
