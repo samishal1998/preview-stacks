@@ -72,10 +72,10 @@ USER bun
 
 EXPOSE 7878
 
-# Liveness straight from the API's own route. Written in Bun rather than curl/wget so it depends on
-# nothing the base image might drop, and it reads PSTACK_PORT so a non-default port still works.
-# `init` waits for this to report `healthy` before claiming the control stack is up.
+# Liveness straight from the API's own route, via the CLI's own `healthcheck` command — so it depends
+# on nothing the base image might drop and reads PSTACK_PORT like the server does. `init` waits for
+# this to report `healthy` before claiming the control stack is up.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD ["bun", "--eval", "const r = await fetch('http://127.0.0.1:' + (process.env.PSTACK_PORT ?? 7878) + '/api/health'); process.exit(r.ok ? 0 : 1)"]
+  CMD ["bun", "dist/cli.js", "healthcheck"]
 
 CMD ["bun", "dist/cli.js", "serve"]

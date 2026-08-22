@@ -33,6 +33,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { DNS_TOKEN_VAR } from './init.ts';
 import { dirname, join } from 'node:path';
 import { shq } from './compose.ts';
 import type { Runner } from './exec.ts';
@@ -62,6 +63,14 @@ export type ControlState = {
    * (`--orchestrator`) because it recreates the networks, which needs every preview down.
    */
   orchestrator: 'swarm' | 'compose';
+  /**
+   * The DNS-01 credential from `control/dns.env`, or '' when the host has none (http01, a tokenless
+   * provider, or the file is missing). Read back for the same reason the token is: `init` rewrites
+   * dns.env from PSTACK_DNS_TOKEN on every run, so an upgrade that does not carry it zeroes the
+   * only copy — Traefik is recreated with no credential, the existing wildcard keeps serving, and
+   * the renewal silently fails weeks later.
+   */
+  dnsToken: string;
 };
 
 /**
@@ -113,11 +122,28 @@ export async function readControlState(dataDir: string): Promise<ControlState> {
     );
   }
 
+  // Same KEY=VALUE grammar as .env; a missing file is simply "no credential", never a refusal — an
+  // http01 host has one with no token line at all.
+  const dnsProvider = env.get('DNS_PROVIDER') ?? '';
+  const dnsVar = dnsProvider in DNS_TOKEN_VAR ? DNS_TOKEN_VAR[dnsProvider] : 'CHANGEME_VARIABLE_NAME';
+  let dnsToken = '';
+  if (dnsVar) {
+    try {
+      for (const line of (await readFile(join(controlDir, 'dns.env'), 'utf8')).split('\n')) {
+        const m = /^([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line.trim());
+        if (m && m[1] === dnsVar) dnsToken = m[2]!;
+      }
+    } catch {
+      /* no dns.env — nothing to carry */
+    }
+  }
+
   return {
     token: need('PSTACK_TOKEN'),
     domain: need('DOMAIN'),
     acmeEmail: need('ACME_EMAIL'),
-    dnsProvider: env.get('DNS_PROVIDER') ?? '',
+    dnsProvider,
+    dnsToken,
     challenge: /dnschallenge/i.test(compose) ? 'dns01' : 'http01',
     /*
      * The service init injects is `advanced-ui`. It used to look for `pstack-ui:` — which appears in
@@ -214,9 +240,18 @@ export function planUpgrade(args: {
       cmd: `pstack init ${initFlags(state)}`,
       // THE line this command exists for. Without it `init` generates a new token and every CI job
       // holding the old one starts getting 401s.
-      env: { PSTACK_TOKEN: state.token },
+      env: initEnv(state),
     },
   ];
+}
+
+/**
+ * What `init` must be handed so that NOTHING rotates: the machine token always, and the DNS-01
+ * credential when the host has one. `init` writes dns.env from PSTACK_DNS_TOKEN unconditionally, so
+ * omitting it here is how an upgrade used to blank a host's Cloudflare token.
+ */
+function initEnv(state: ControlState): Record<string, string> {
+  return { PSTACK_TOKEN: state.token, ...(state.dnsToken ? { PSTACK_DNS_TOKEN: state.dnsToken } : {}) };
 }
 
 /**
@@ -236,7 +271,7 @@ export function planUiSwitch(state: ControlState): UpgradeStep[] {
       label: `re-run init with the ${state.ui} UI`,
       cmd: `pstack init ${initFlags(state)}`,
       // Same reason as an upgrade: without it `init` mints a new token and every CI job breaks.
-      env: { PSTACK_TOKEN: state.token },
+      env: initEnv(state),
     },
   ];
 }
@@ -311,6 +346,7 @@ export async function upgrade(opts: {
   const say = opts.log ?? ((l: string) => console.log(l));
   const phase = opts.phase ?? 'install';
   const target = opts.target ?? 'latest';
+  if (phase === 'install' && isGoRelease(target)) throw new UpgradeError(goHopMessage(target));
   const detected = await readControlState(opts.dataDir);
   const state: ControlState = {
     ...detected,
@@ -361,12 +397,43 @@ export async function upgrade(opts: {
   if (opts.runner.dryRun && phase === 'install') {
     say('  then, as the newly installed version:');
     for (const step of planUpgrade({ phase: 'resume', target, state, binPath })) {
-      const env = step.env?.PSTACK_TOKEN ? ' (with the existing PSTACK_TOKEN)' : '';
+      const carried = ['PSTACK_TOKEN', 'PSTACK_DNS_TOKEN'].filter((k) => step.env?.[k]);
+      const env = carried.length ? ` (with the existing ${carried.join(' and ')})` : '';
       say(`    ${step.cmd}${env}`);
     }
   }
 
   return { from: pkg.version, to: target, steps };
+}
+
+/**
+ * From 0.29.0 pstack is a Go binary released on GitHub, not an npm package: `bun install -g` of
+ * that version would fail (npm never gets it) or, worse, "succeed" at the deprecated last TS
+ * release and report an upgrade that changed nothing. So a target at or past the hop is refused
+ * here with the one command that performs it. `latest` is not checked — on npm it resolves to
+ * this package's final release, which is a no-op, not a trap.
+ */
+export const GO_HOP_VERSION = '0.29.0';
+
+export function isGoRelease(target: string): boolean {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(target.trim());
+  if (!m) return false;
+  const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const [hMaj, hMin, hPat] = GO_HOP_VERSION.split('.').map(Number) as [number, number, number];
+  if (maj !== hMaj) return maj > hMaj;
+  if (min !== hMin) return min > hMin;
+  return pat >= hPat;
+}
+
+export function goHopMessage(target: string): string {
+  const v = target.trim().replace(/^v/, '');
+  return (
+    `pstack ${v} is a Go binary released on GitHub, not an npm package — this command cannot install it.\n` +
+    `Run the one-time hop instead (it reads this host's control/.env, so nothing rotates):\n\n` +
+    `  curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v${v}/install.sh | sh && pstack upgrade --resume\n\n` +
+    `Rollback, if needed: docker tag pstack:local-previous pstack:local && docker compose -p pstack-control ` +
+    `-f <PSTACK_DATA>/control/docker-compose.yml up -d`
+  );
 }
 
 function indent(s: string): string {

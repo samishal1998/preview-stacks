@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pkg from '../package.json';
 import type { Runner } from './exec.ts';
+import { shq } from './compose.ts';
 
 export const DEFAULT_IMAGE_TAG = 'pstack:local';
 /** Matches PSTACK_UI_IMAGE's default in `init`, so `build-image --ui` then `init --ui advanced`
@@ -78,7 +79,7 @@ USER bun
 EXPOSE 7878
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \\
-  CMD ["bun", "--eval", "const r = await fetch('http://127.0.0.1:' + (process.env.PSTACK_PORT ?? 7878) + '/api/health'); process.exit(r.ok ? 0 : 1)"]
+  CMD ["bun", "node_modules/@samyx/preview-stacks/dist/cli.js", "healthcheck"]
 
 CMD ["bun", "node_modules/@samyx/preview-stacks/dist/cli.js", "serve"]
 `;
@@ -142,11 +143,11 @@ USER bun
 
 EXPOSE 7878
 
-# Liveness from the API's own route, written in Bun so it depends on nothing the base image might
-# drop, and reading PSTACK_PORT so a non-default port still works. \`init\` waits for this to report
-# healthy before claiming the control stack is up.
+# Liveness from the API's own route via the CLI's \`healthcheck\` command, so it depends on nothing
+# the base image might drop and reads PSTACK_PORT like the server does. \`init\` waits for this to
+# report healthy before claiming the control stack is up.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \\
-  CMD ["bun", "--eval", "const r = await fetch('http://127.0.0.1:' + (process.env.PSTACK_PORT ?? 7878) + '/api/health'); process.exit(r.ok ? 0 : 1)"]
+  CMD ["bun", "dist/cli.js", "healthcheck"]
 
 CMD ["bun", "dist/cli.js", "serve"]
 `;
@@ -205,9 +206,22 @@ export async function buildImage(opts: BuildImageOptions): Promise<void> {
 
   if (dryRun) {
     if (dist) console.log(`  [dry-run] assemble build context from ${dist}`);
+    console.log(`  [dry-run] docker image tag ${tag} ${tag}-previous`);
     console.log(`  [dry-run] docker build -t ${tag} <context>`);
     return;
   }
+
+  /*
+   * THE ROLLBACK PATH. `docker build -t pstack:local` moves the tag; the image that was running a
+   * second ago becomes an anonymous `<none>` layer with no handle. If the new build comes up
+   * unhealthy after `init` recreates the stack, the control plane is gone and nothing names the
+   * image that worked. Keeping it under `<tag>-previous` makes recovery one line:
+   *   docker tag pstack:local-previous pstack:local && docker compose -p pstack-control … up -d
+   * Best-effort: on a host with no image yet there is nothing to keep.
+   */
+  await runner.run(`docker image tag ${shq(tag)} ${shq(`${tag}-previous`)} 2>/dev/null || true`, {
+    label: `keep the previous ${tag}`,
+  });
 
   // The Dockerfile is WRITTEN, never interpolated into a command. It is a multi-KB document full of
   // backticks and `$`, and passing it through a shell — even quoted — lets the shell read it: the

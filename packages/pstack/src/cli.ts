@@ -12,6 +12,7 @@
  *   pstack build-image  build the control image from this installed package (--ui for the SPA)
  *   pstack init      stand up the CONTROL stack on this host (traefik + pstack api/ui)
  *   pstack serve     HTTP API + web UI over the deployment registry
+ *   pstack healthcheck   the container HEALTHCHECK: one GET against /api/health
  *
  * `init` runs from the HOST and is the only thing that manages the control stack; `serve`
  * manages every OTHER deployment. See docs/control-plane.md for why that split exists.
@@ -227,6 +228,9 @@ function usage(): void {
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
       '            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)',
       '            PSTACK_ORCHESTRATOR (compose) · PSTACK_DOMAIN · PSTACK_TRAEFIK_METRICS (for sleep.idle)',
+      '            PSTACK_READINESS_POLL_MS · PSTACK_READINESS_TIMEOUT_MS · PSTACK_SSO_STATE_TTL_S · PSTACK_SSO_DISCOVERY_TTL_S',
+      '',
+      'healthcheck: GET /api/health on PSTACK_PORT, exit 0 or 1 — the container HEALTHCHECK.',
       '',
       'Exit: 0 ok · 1 failed · 2 leaked · 3 bad spec/usage',
     ].join('\n'),
@@ -265,6 +269,7 @@ const COMMANDS = new Set([
   'upgrade',
   'ui',
   'swarm',
+  'healthcheck',
 ]);
 
 if (!COMMANDS.has(args.cmd)) {
@@ -600,8 +605,25 @@ switch (args.cmd) {
     process.exit(EXIT.ok);
   }
 
+  case 'healthcheck': {
+    /*
+     * The container's HEALTHCHECK. One GET against this process's own /api/health, exit 0 or 1 —
+     * it used to be a `bun --eval` one-liner pasted into three Dockerfiles, which means three copies
+     * of the same logic and a runtime the image might not even have. A command the binary carries
+     * depends on nothing but itself, and `init` blocks on this verdict (Traefik also drops every
+     * router on an unhealthy control container, the wake catch-all included), so it must be boring.
+     */
+    const port = Number(process.env.PSTACK_PORT ?? 7878);
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(4000) });
+      process.exit(r.ok ? EXIT.ok : EXIT.failed);
+    } catch {
+      process.exit(EXIT.failed);
+    }
+  }
+
   case 'serve': {
-    const { createServer } = await import('./api.ts');
+    const { createServer, tuningFromEnv } = await import('./api.ts');
     const { dataDir } = await import('./registry.ts');
     const token = process.env.PSTACK_TOKEN;
     const port = Number(process.env.PSTACK_PORT ?? 7878);
@@ -651,6 +673,8 @@ switch (args.cmd) {
       registryDir,
       domain: process.env.PSTACK_DOMAIN || undefined,
       metricsUrl: process.env.PSTACK_TRAEFIK_METRICS || undefined,
+      // Readiness and SSO timings, for a harness that drives this process black-box.
+      ...tuningFromEnv(process.env),
     });
 
     // First-admin bootstrap from the environment. Honoured only while no users exist (the Auth

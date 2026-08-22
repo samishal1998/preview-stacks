@@ -302,7 +302,17 @@ type Cached<T> = { value: T; at: number };
 const discoveryCache = new Map<string, Cached<Endpoints>>();
 const jwksCache = new Map<string, Cached<Jwk[]>>();
 /** An hour. Long enough that discovery is not a per-login fetch, short enough that a moved endpoint heals without a restart. */
-const CACHE_MS = 60 * 60 * 1000;
+const DEFAULT_CACHE_MS = 60 * 60 * 1000;
+let cacheMs = DEFAULT_CACHE_MS;
+
+/**
+ * How long a discovery document and a JWKS are trusted before being refetched. `PSTACK_SSO_DISCOVERY_TTL_S`
+ * on `serve`; a test sets it to seconds so a provider that moves mid-run is observable. Process-wide,
+ * like the caches it governs.
+ */
+export function setDiscoveryTtl(ms: number | undefined): void {
+  cacheMs = ms !== undefined && Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_CACHE_MS;
+}
 
 /** Test seam and the "re-validate on save" path — `setSsoConfig` drops the entry so the next login re-reads. */
 export function forgetDiscovery(url?: string): void {
@@ -321,7 +331,7 @@ const wellKnown = (raw: string): string =>
 export async function discover(discoveryUrl: string, fetchImpl: Fetch = fetch, force = false): Promise<Endpoints> {
   const key = discoveryUrl;
   const hit = discoveryCache.get(key);
-  if (!force && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  if (!force && hit && Date.now() - hit.at < cacheMs) return hit.value;
 
   const url = wellKnown(discoveryUrl);
   let res: Response;
@@ -653,7 +663,7 @@ export const JWKS_COOLDOWN_MS = 30_000;
 async function jwks(uri: string, fetchImpl: Fetch, force: boolean, cooldownMs: number): Promise<Jwk[]> {
   const hit = jwksCache.get(uri);
   const age = hit ? Date.now() - hit.at : Infinity;
-  if (hit && age < CACHE_MS && (!force || age < cooldownMs)) return hit.value;
+  if (hit && age < cacheMs && (!force || age < cooldownMs)) return hit.value;
   const res = await fetchImpl(uri, { headers: { accept: 'application/json' } });
   if (!res.ok) throw new SsoError(`the JWKS endpoint ${uri} answered ${res.status}`);
   const doc = (await res.json().catch(() => null)) as { keys?: Jwk[] } | null;

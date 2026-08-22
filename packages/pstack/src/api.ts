@@ -149,6 +149,7 @@ import {
   primaryEmail,
   randomB64Url,
   safeNext,
+  setDiscoveryTtl,
   verifyIdToken,
 } from './sso.ts';
 
@@ -208,11 +209,33 @@ export type ServerOptions = {
   scheduler?: { tickMs?: number; fetchImpl?: (url: string) => Promise<string | null> };
   /**
    * How long a half-finished SSO sign-in is remembered (default 300s — a consent screen, not a
-   * nap). Injectable for the same reason the readiness timings are: an expiry a test can actually
-   * reach is the only way the expired-state path is ever really exercised.
+   * nap), and how long a provider's discovery document and JWKS are trusted (default 1h).
+   * Injectable for the same reason the readiness timings are: an expiry a test can actually reach
+   * is the only way the expired-state path is ever really exercised.
    */
-  sso?: { stateTtlS?: number };
+  sso?: { stateTtlS?: number; discoveryTtlS?: number };
 };
+
+/**
+ * The tuning a `serve` process reads from its environment — the same four knobs a test passes as
+ * options, so a black-box harness driving the real CLI can reach the expiry paths too. `??`
+ * semantics throughout: unset means the default, and a value that is not a positive number is
+ * ignored rather than turning a timeout into NaN.
+ */
+export function tuningFromEnv(env: Record<string, string | undefined>): Pick<ServerOptions, 'readiness' | 'sso'> {
+  const num = (k: string): number | undefined => {
+    const v = env[k];
+    if (v === undefined || v === '') return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  const readiness = { pollMs: num('PSTACK_READINESS_POLL_MS'), timeoutMs: num('PSTACK_READINESS_TIMEOUT_MS') };
+  const sso = { stateTtlS: num('PSTACK_SSO_STATE_TTL_S'), discoveryTtlS: num('PSTACK_SSO_DISCOVERY_TTL_S') };
+  return {
+    ...(readiness.pollMs !== undefined || readiness.timeoutMs !== undefined ? { readiness } : {}),
+    ...(sso.stateTtlS !== undefined || sso.discoveryTtlS !== undefined ? { sso } : {}),
+  };
+}
 
 const json = (body: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(body, null, 2), {
@@ -560,6 +583,7 @@ export function createServer(opts: ServerOptions) {
   const SECRET_MASK = '••••••••';
   /** How long a half-finished sign-in is remembered. Five minutes is a consent screen, not a nap. */
   const SSO_STATE_TTL_S = opts.sso?.stateTtlS ?? 5 * 60;
+  setDiscoveryTtl(opts.sso?.discoveryTtlS !== undefined ? opts.sso.discoveryTtlS * 1000 : undefined);
 
   /** Forget the sleep record, reading the current one rather than the copy a request resolved earlier. */
   const clearSleep = async (id: string): Promise<void> => {
