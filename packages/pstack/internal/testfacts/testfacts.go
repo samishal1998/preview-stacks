@@ -7,9 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -42,21 +40,3 @@ func Load(t *testing.T, name string, v any) {
 
 // Golden is the absolute path of packages/conformance/golden.
 func Golden(t *testing.T) string { return filepath.Dir(Dir(t)) }
-
-// GoDivergent names the golden lines that differ BY DESIGN between the TypeScript reference and
-// this build: the Bun install block and the npm-based install step on the reference side, the
-// installer-based lines on this side. The conformance suite applies the same expression
-// (gen/goldens.table.ts BUN_LINES) to both sides in go mode; keep the two in step.
-var GoDivergent = regexp.MustCompile(`bun|BUN_|@samyx/preview-stacks|unzip|install pstack |releases/download|releases/latest|debian:bookworm|useradd|apt-get|COPY pstack|/usr/local/bin/pstack --version|"pstack", "`)
-
-// WithoutDivergent drops the GoDivergent lines from text.
-func WithoutDivergent(text string) string {
-	lines := strings.Split(text, "\n")
-	kept := lines[:0]
-	for _, l := range lines {
-		if !GoDivergent.MatchString(l) {
-			kept = append(kept, l)
-		}
-	}
-	return strings.Join(kept, "\n")
-}

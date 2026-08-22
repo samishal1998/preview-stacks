@@ -28,19 +28,26 @@ real domain), and the abridged JSON in section 6.
 
 ## 1. Install & first run
 
-`pstack` ships as a **global package**. Requires [Bun](https://bun.sh) **≥ 1.3** (declared as
-`engines.bun`) — the spec parser is `Bun.YAML`, the server is `Bun.serve`, hooks run through
-`Bun.spawn`, and there are no runtime dependencies at all. `docker` with the Compose v2 plugin must
-be on the PATH of whatever box runs `up` / `down` / `init`, but not to `validate` or dry-run a spec.
+`pstack` ships as **one static binary** (Go, `CGO_ENABLED=0`) for Linux and macOS, amd64 and
+arm64, on [GitHub Releases](https://github.com/samishal1998/preview-stacks/releases). Nothing else
+is installed: no runtime, no package manager, no dependencies. `docker` with the Compose v2 plugin
+must be on the PATH of whatever box runs `up` / `down` / `init`, but not to `validate` or dry-run
+a spec.
 
 ```bash
-bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh
 pstack --help
 ```
 
+The installer downloads `pstack_<os>_<arch>`, verifies it against the release's `checksums.txt`,
+and moves it atomically into `/usr/local/bin` (override with `PSTACK_INSTALL_DIR`; pin with
+`PSTACK_VERSION=0.29.0`). It never edits your PATH and never uses sudo — run it as a user that
+can write the target directory. Alternatives: download the binary from the release page by hand,
+or `go install github.com/samishal1998/preview-stacks/packages/pstack/cmd/pstack@latest`.
+
 ```console
 $ which pstack
-/Users/<you>/.bun/bin/pstack
+/usr/local/bin/pstack
 
 $ pstack --help
 pstack — declarative lifecycle for ephemeral preview stacks
@@ -69,47 +76,32 @@ Exit: 0 ok · 1 failed · 2 leaked · 3 bad spec/usage
 
 ### What actually gets installed
 
-| | |
-|---|---|
-| Contents | `dist/cli.js` (~74 KB, the `bin`) · `dist/index.js` (the library entry) · both `.map` files · `package.json` · `README.md` · `LICENSE` · `CHANGELOG.md` |
-| Tarball | **8 files, 0.36 MB unpacked** (~118 KB packed) |
-| Not shipped | `src/`, `docs/`, `examples/`, `skills/`, `templates/`, `ui/`, tests |
+One file, ~17 MB, statically linked. The web UI, the share page, the control-stack compose
+template and the cloud-init template are **embedded** (`//go:embed`), so nothing is read from a
+path relative to a source tree at runtime — the whole class of bug where a tool works from a
+checkout and 404s once installed cannot occur. The version is read from the embedded
+`package.json`, which is the lockstep version of record for the three packages in this repo.
 
-Both entrypoints are **bundles**, built by `bun scripts/build.ts` with `--target=bun`, minified, with
-linked sourcemaps so a stack trace from your box still names real functions. Two consequences worth
-knowing:
-
-- **Nothing is read from a path relative to the source at runtime.** The web UI and the control-stack
-  compose template are `with { type: 'text' }` imports, inlined into the bundle. That removes the
-  whole class of bug where a tool works from a checkout and 404s once installed — verified by
-  extracting the tarball and running it with the repo unreachable.
-- **It is a bundle, not a `--compile`d executable, on purpose.** A standalone binary bakes in the Bun
-  runtime (~60 MB) *per platform*, which for npm means either a five-platform
-  `optionalDependencies` matrix or a postinstall download. A 74 KB bundle needs neither, and Bun is
-  already a hard requirement — there is no Node fallback being preserved, because `Bun.serve`,
-  `Bun.YAML`, `Bun.spawn` and `Bun.file` have no Node equivalent.
+Until 0.28.0 pstack was a Bun/TypeScript package on npm; `@samyx/preview-stacks` is deprecated
+there and stops at that release. The one-time move for an existing host is in
+[§9 Upgrading](#9-upgrading). The two npm packages that remain are the advanced UI
+(`@samyx/preview-stacks-ui`, fetched *inside* the image build) and the client SDK
+(`@samyx/preview-stacks-client`).
 
 ### Working from a checkout (contributors)
 
-Everywhere in this guide, `bun src/cli.ts <command>` is equivalent to `pstack <command>` — that is
-the **contributor** path, not the user path. Use it when you are changing pstack itself:
-
 ```console
 $ git clone <this-repo> && cd preview-stacks
-$ bun install
-$ bun src/cli.ts --help          # run from source, no build step
-$ bun scripts/build.ts           # build dist/ and smoke-test the real artifact
-$ bun test
- ...
- 0 fail
-Ran N tests across 1 file.
-
-$ bunx tsc --noEmit              # strict, noUncheckedIndexedAccess; silent on success
+$ go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
+$ packages/pstack/bin/pstack --help
+$ go test -race -timeout 120s ./...          # the Go suite, every package
+$ bun install && bun run check               # everything: Go, the conformance suite, the UI, the client
 ```
 
-The suite includes end-to-end leak detection against the real filesystem, so a green run means the
-`down`/`verify` asymmetry itself is working, not just that the parser compiles. `scripts/build.ts`
-finishes by running `--help` out of the built bundle: a bundle that cannot start is not a build.
+`go run ./packages/pstack/cmd/pstack <command>` is equivalent to `pstack <command>` — the
+**contributor** path, not the user path. The conformance suite (`packages/conformance`) is the
+black-box specification: it spawns the built binary and compares every CLI transcript and API
+response against checked-in goldens, and it is what a change to the contract is reviewed against.
 
 ---
 
@@ -1150,18 +1142,45 @@ $ pstack upgrade --to 0.25.1     # or an exact one
 $ pstack upgrade -n              # print the plan, change nothing
 ```
 
-**The first hop has to be by hand**, because a host cannot run a command it does not have yet. On a
-box older than 0.25.1, `pstack upgrade` is simply not installed — and before 0.25.2 the error for that
-was the confusing `spec not found: preview.yml` (spec-loading was gated by an allowlist, so any
-unknown command fell into it; it now says `unknown command` and names the installed version). Install
-once, then use the command from then on:
+`pstack upgrade` runs that release's installer (checksum-verified, into the directory the running
+binary lives in), then re-executes itself as the new version for the rebuild and the re-init.
+
+#### ⚠️ The one-time move from the Bun runtime (≤ 0.28.0 → 0.29.0)
+
+Until 0.28.0 pstack was an npm package running on Bun; from 0.29.0 it is one static Go binary on
+GitHub Releases, and `bun install -g` cannot install it. On a host provisioned before 0.29.0:
 
 ```console
-$ pstack --version                       # what this host actually has (0.25.2+)
-0.25.0
-$ BUN_INSTALL=/usr/local bun install -g @samyx/preview-stacks@latest
-$ pstack upgrade --resume                # phase 2 only: rebuild + re-init, token intact
+$ pstack upgrade                         # first, to 0.28.0 if not there yet (the bridge release)
+$ curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v0.29.0/install.sh | sh \
+    && pstack upgrade --resume           # installs the binary, then phase 2: rebuild + re-init, token intact
 ```
+
+0.28.0's `pstack upgrade --to 0.29.0` prints exactly that line and exits 3, so there is no way to
+miss it. Everything on disk is read unchanged — the registry, the SQLite database (every password
+hash keeps verifying), `control/.env` and `control/dns.env` — and nothing rotates. Things that DO
+change, and are worth a glance before you run it:
+
+- The control container no longer carries `bun`, `bunx` or a JavaScript runtime. **Axis hooks run
+  inside that container**, so a hook that called `bun`/`npx`/`node` must bring its own: grep your
+  specs (`grep -E '\b(bun|bunx|node|npm|npx)\b' deployments/*/spec.yml`) before the hop. `bash`,
+  `curl`, `docker` and `docker compose` are there as before.
+- `build-image` copies the running binary into the image, so it runs on the Linux host only (on
+  a macOS checkout use the repo's `Dockerfile`, or `PSTACK_BINARY=<linux binary>`). The previous
+  image is kept as `pstack:local-previous` first, every time.
+- Rendered cloud-configs from ≤ 0.28.0 install the old runtime; re-render with `pstack cloud-init`
+  before provisioning a new host.
+
+Rollback, should the new image come up unhealthy:
+
+```console
+$ docker tag pstack:local-previous pstack:local
+$ docker compose -p pstack-control -f /var/lib/pstack/control/docker-compose.yml up -d
+```
+
+**The first hop has to be by hand on very old hosts**, because a host cannot run a command it does
+not have yet: on a box older than 0.25.1, `pstack upgrade` is simply not installed. Install the
+binary with the line above, then use the command from then on.
 
 #### If an upgrade dropped your advanced UI
 
@@ -1206,7 +1225,7 @@ mid-deploy.
 
 ### Why `init` is CLI-only, and always will be
 
-`init` — and the `self-upgrade` that will follow it — are CLI-only and will never be HTTP routes,
+`init` — and `upgrade` — are CLI-only and will never be HTTP routes,
 because the API cannot recreate the stack that contains it: the process running the upgrade is inside
 the container being replaced, so it is killed mid-operation, the request never returns, the job
 transcript dies with the process (job history is in-memory), and a bad image leaves you with no
@@ -1485,29 +1504,8 @@ Five things that will bite you if you skip them:
 - **`:id` is a registry id, not a compose project name.** The server owns the stored spec and
   resolves `stack:` itself, so a client can never ask it to act on an arbitrary compose project.
 
-The lifecycle itself is importable — `dist/index.js` is the package's `exports` entry, so embedding it
-in your own tooling is a normal import:
-
-```ts
-import { loadSpec, createRunner, down } from '@samyx/preview-stacks';
-
-const spec = await loadSpec('preview.yml', { ...process.env, PR: '123' });
-const result = await down(spec, createRunner({ dryRun: false }));
-if (!result.ok) throw new Error('something leaked');
-```
-
-The registry is **not** part of that surface — `src/index.ts` deliberately does not re-export it, so
-`Registry` / `dataDir` are reachable only from a checkout (`./src/registry.ts`). Drive stored
-deployments over the API instead:
-
-```ts
-const reg = new Registry(dataDir());                                       // checkout only
-await reg.put('pr-123', specYaml, { composeYaml, env: { PR: '123' } });    // validates first
-const stack = await reg.resolve('pr-123', { PR: '123' });
-```
-
-`put` parses before it commits and deletes the directory if the spec is rejected, so a bad
-submission never leaves a half-created deployment behind. Ids must match
+There is no importable library: the binary is the product, and the programmatic surface is the
+HTTP API — `@samyx/preview-stacks-client` from TypeScript, or any HTTP client. Ids must match
 `/^[a-z0-9][a-z0-9._-]{0,63}$/` — they become directory names and reach shell hooks, so no
 traversal, no spaces, no metacharacters.
 
@@ -1865,9 +1863,11 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4          # your repo: preview.yml, hooks, compose file
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.3.12 }
-      - run: bun add -g @samyx/preview-stacks
+      - name: Install pstack
+        run: |
+          mkdir -p "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh \
+            | PSTACK_INSTALL_DIR="$HOME/.local/bin" sh
 
       - name: Bring the preview up
         env:
@@ -1884,9 +1884,11 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.3.12 }
-      - run: bun add -g @samyx/preview-stacks
+      - name: Install pstack
+        run: |
+          mkdir -p "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh \
+            | PSTACK_INSTALL_DIR="$HOME/.local/bin" sh
 
       - name: Tear the preview down
         env:
@@ -1936,9 +1938,9 @@ Notes on the rest of it:
 - **`-v` in CI**, always. The log is the only forensics you get after the runner is gone.
 - **Validate the spec on every PR** — a cheap job on its own, needing neither Docker nor runner
   privileges: `PR=0 pstack validate` (add `GIT_SHA=0000000` or whatever else it interpolates).
-- **`bun add -g` is the whole install**, so this workflow runs on a hosted runner too if your hooks
-  and Docker do. Pin the pstack version (`@samyx/preview-stacks@<x.y.z>`) if you want teardown to
-  behave identically to the deploy that created the stack.
+- **The installer is the whole install** — one static binary, no runtime — so this workflow runs on
+  a hosted runner too if your hooks and Docker do. Pin the version (`PSTACK_VERSION=<x.y.z>` in
+  front of `sh`) if you want teardown to behave identically to the deploy that created the stack.
 
 ---
 
@@ -2087,8 +2089,9 @@ hand-rolled script can.
 
 ## 10. Reference
 
-Derived from `src/cli.ts`, `src/init.ts`, `src/api.ts`, `src/spec.ts`, `src/compose.ts`,
-`src/registry.ts` and `templates/control/docker-compose.yml`.
+Derived from `internal/cli`, `internal/initctl`, `internal/api`, `internal/spec`,
+`internal/compose`, `internal/registry` and `templates/control/docker-compose.yml` (all under
+`packages/pstack`).
 
 ### Commands
 
@@ -2171,6 +2174,8 @@ different problems with different owners.
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
 | `PSTACK_SSO_STATE_TTL_S` · `PSTACK_SSO_DISCOVERY_TTL_S` | `serve` | `300` · `3600` | how long a half-finished SSO sign-in is remembered, and how long a provider's discovery document and JWKS are trusted. Same audience. |
 | `PSTACK_PORT` | `healthcheck` | `7878` | the port `pstack healthcheck` probes — the container HEALTHCHECK, exit 0 or 1 on `GET /api/health`. |
+| `PSTACK_BINARY` | `build-image` | *the running binary* | a Linux `pstack` binary to copy into the control image instead of the one running — for a macOS checkout or a cross-build. |
+| `PSTACK_VERSION` · `PSTACK_INSTALL_DIR` | `install.sh` | *the script's release* · `/usr/local/bin` | pin the version the installer fetches; where it puts the binary. `pstack upgrade` sets both. |
 
 `serve` needs **no** spec and no stack variable to start.
 

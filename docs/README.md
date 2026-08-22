@@ -13,6 +13,7 @@ your question rather than reading in order — these are references, not a manua
 | **Change the code** (you are an agent, or new to the repo) | [`../AGENTS.md`](../AGENTS.md) |
 | Call the API **from a script** | [`../packages/client/README.md`](../packages/client/README.md) |
 | Receive **events** in your own service | [`webhook-events.md`](webhook-events.md) |
+| Know how the **Go binary** (0.29.0) was proven a drop-in for the TypeScript one, and what still differs | [`port-status.md`](port-status.md) |
 
 ## The documents
 
@@ -77,7 +78,7 @@ Two important surfaces are documented in the code rather than here, deliberately
 duplicates a route table drifts from it:
 
 - **The API's route list** lives in the header comment of
-  [`packages/pstack/src/api.ts`](../packages/pstack/src/api.ts). It is the API's own documentation
-  and is updated in the same edit as a route.
+  [`packages/pstack/internal/api/server.go`](../packages/pstack/internal/api/server.go). It is the
+  API's own documentation and is updated in the same edit as a route.
 - **Why any given file is the way it is** lives in that file's header comment. They are long on
   purpose and explain *why*, not *what*. Read the header before editing the file.

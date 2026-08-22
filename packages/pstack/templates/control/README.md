@@ -42,7 +42,7 @@ move to a new image.
 performing the operation, mid-operation. The HTTP request never returns, the job transcript dies
 with the process (job history is in-memory by design), and if the new image is broken the host is
 left with no control plane and no remote way to repair it: the only thing that could have fixed it
-is what just died. A self-upgrade is not a feature with a caveat, it is a way to brick a host from
+is what just died. An API-driven self-upgrade is not a feature with a caveat, it is a way to brick a host from
 a browser tab.
 
 So the host keeps that power. `pstack init` and `pstack upgrade` run over SSH, from systemd,

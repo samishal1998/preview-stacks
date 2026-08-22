@@ -3,13 +3,12 @@
 # Deliberately small — this repo ships a guide about CI patterns, so its own CI should be a
 # legible example rather than a showcase. One job, no matrix.
 #
-# Two kinds of test run here. `turbo run test` is each package's own suite. packages/conformance is
-# the BLACK-BOX specification: it spawns the real `pstack` and grades whichever implementation
-# PSTACK_IMPL names, so the same tests grade the TypeScript reference today and the Go port as it
-# lands (docs/port-status.md). Its three extra gates are what make those tests trustworthy: vacuity
-# (every test must fail against a server that answers 200 {} to everything), golden freshness (the
-# checked-in transcripts still match the reference), and the self-diff (the differential masks are
-# tight enough that bun-vs-bun is identical).
+# Two kinds of test run here. `turbo run test` is each package's own suite (Go under -race for
+# pstack, bun for the UI and the client). packages/conformance is the BLACK-BOX specification: it
+# spawns the real `pstack` binary and grades it against checked-in transcripts. Its extra gates are
+# what make those tests trustworthy: vacuity (every test must fail against a server that answers
+# 200 {} to everything), the ratchet (pass counts only go up), and the self-diff (the differential
+# masks are tight enough that the same binary twice is identical).
 name: CI
 
 on:
@@ -62,14 +61,11 @@ jobs:
         run: go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
 
       # The spec's own linting must hold for the shipped example, or the guide teaches a spec that
-      # its own tool would warn about. A byte-diff against the checked-in transcript, in BOTH runtimes.
+      # its own tool would warn about. A byte-diff against the checked-in transcript.
       - name: Validate the example spec
-        run: |
-          cd packages/conformance
-          PSTACK_IMPL=bun bun test test/cli-goldens.test.ts -t validate-example
-          PSTACK_IMPL=go bun test test/cli-goldens.test.ts -t validate-example
+        run: cd packages/conformance && bun test test/cli-goldens.test.ts -t validate-example
 
-      # Go-mode pass counts only go up (expected-pass.json), per file.
+      # Pass counts only go up (expected-pass.json), per file.
       - name: Conformance — ratchet
         run: cd packages/conformance && bun run ratchet
 
@@ -77,37 +73,20 @@ jobs:
       - name: Conformance — vacuity
         run: cd packages/conformance && bun run vacuity
 
-      # The goldens are generated from the reference; a change to the reference must regenerate them.
-      # (The host fixture and the argon2 facts carry random salts and live timestamps, so they are
-      # regenerated deliberately, never compared.)
-      - name: Conformance — golden freshness
-        run: |
-          cd packages/conformance
-          bun gen/goldens.ts && bun gen/facts.ts
-          git diff --exit-code -- golden/cli golden/render golden/facts ':!golden/facts/argon2.json'
-
-      # The differential masks are the only place "allowed to differ" lives; bun-vs-bun must be empty.
+      # The differential masks are the only place "allowed to differ" lives; the same binary twice
+      # must be empty.
       - name: Conformance — self-diff
         run: cd packages/conformance && bun run diff -- --self
-
-      # The reference and the port answer identically, modulo KNOWN_DEVIATIONS (each of which must
-      # still be observed, or the run fails).
-      - name: Conformance — bun vs go
-        run: cd packages/conformance && bun run diff
 
       - name: Installer is POSIX
         run: shellcheck install.sh
 
-      # The published artifact is a BUNDLE, so build it here: a broken bundle (a bad text import, a
-      # dropped asset) is invisible to `bun test`, which runs the sources.
+      # The UI and the client publish BUNDLES, so build them here: a broken bundle (a dropped asset)
+      # is invisible to `bun test`, which runs the sources. The Go binary was built above.
       - name: Build
         run: bunx turbo run build
 
-      # Catch a broken `files`/`exports`/`bin` map before a release does — the failure mode is a
-      # published package whose documented entry points throw "Cannot find module".
-      #
-      # NOT `publish-kit publish --dry-run`: `bun publish` demands registry auth even in dry-run
-      # mode, and handing CI a publish token merely to rehearse a publish is a supply-chain risk
-      # for no benefit. `bun pm pack` needs no credentials and asserts the same invariant.
-      - name: Package entry points are shipped
-        run: cd packages/pstack && bun scripts/check-package.ts
+      # The control image from a checkout builds and reports its version — the contributor's path,
+      # and the same runtime layer `pstack build-image` generates on a host.
+      - name: Image builds
+        run: docker build -t pstack:ci . && docker run --rm pstack:ci pstack --version

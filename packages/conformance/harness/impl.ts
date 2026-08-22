@@ -1,10 +1,12 @@
 /**
  * Which implementation this run grades, and how to invoke it.
  *
- *   PSTACK_IMPL=bun   the TypeScript reference: `bun packages/pstack/src/cli.ts …`
- *   PSTACK_IMPL=go    the Go binary at $PSTACK_BIN (default packages/pstack/bin/pstack)
+ *   PSTACK_IMPL=go    the Go binary at $PSTACK_BIN (default packages/pstack/bin/pstack) — the default
  *   PSTACK_IMPL=null  a server answering `200 {}` to everything — the vacuity control. A test that
  *                     passes against it asserts nothing, which `scripts/vacuity.ts` reports.
+ *
+ * (`bun` graded the TypeScript reference while the port was in flight; the reference is gone and
+ * these transcripts are the specification now — docs/port-status.md.)
  *
  * Nothing here imports the implementation. The CLI is an argv, the server is a process, and the
  * harness only ever sees a port.
@@ -12,11 +14,11 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export type Impl = 'bun' | 'go' | 'null';
+export type Impl = 'go' | 'null';
 
-const raw = process.env.PSTACK_IMPL ?? 'bun';
-if (raw !== 'bun' && raw !== 'go' && raw !== 'null') {
-  throw new Error(`PSTACK_IMPL must be bun, go or null — got "${raw}"`);
+const raw = process.env.PSTACK_IMPL ?? 'go';
+if (raw !== 'go' && raw !== 'null') {
+  throw new Error(`PSTACK_IMPL must be go or null — got "${raw}"`);
 }
 export const IMPL: Impl = raw;
 
@@ -38,9 +40,6 @@ export const GO_BIN = process.env.PSTACK_BIN ?? join(REPO, 'packages', 'pstack',
 /** The argv that runs `pstack <args>` for the selected implementation. */
 export function cliArgv(args: string[]): string[] {
   switch (IMPL) {
-    case 'bun':
-      // The absolute bun, so a case that empties PATH (init without docker) still runs the reference.
-      return [process.execPath, join(CLI_CWD, 'src', 'cli.ts'), ...args];
     case 'go':
       if (!existsSync(GO_BIN)) {
         throw new Error(`PSTACK_IMPL=go but no binary at ${GO_BIN} — build it (bun run build in packages/pstack) or set PSTACK_BIN`);

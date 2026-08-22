@@ -1,23 +1,27 @@
 # preview-stacks
 
 A monorepo. The product is **[`packages/pstack`](packages/pstack)** — a control plane for ephemeral
-per-PR preview stacks, published as [`@samyx/preview-stacks`](https://www.npmjs.com/package/@samyx/preview-stacks).
-Its README is the design document; start there.
+per-PR preview stacks, released as one static Go binary on
+[GitHub Releases](https://github.com/samishal1998/preview-stacks/releases). Its README is the
+design document; start there.
 
 ```
-packages/pstack     the CLI, HTTP API, and the basic embedded UI   (published to npm)
-apps/ui             the optional advanced web UI                   (opt-in, its own container)
-docs/               guides that span both — bootstrap, usage, control-plane architecture
-skills/pstack/      a skill teaching an agent to use pstack
+packages/pstack        the CLI, HTTP API, and the basic embedded UI   (Go; GitHub Releases)
+packages/conformance   the black-box specification: goldens + tests that grade the binary
+packages/client        the TypeScript API client                       (npm: @samyx/preview-stacks-client)
+apps/ui                the optional advanced web UI                   (npm: @samyx/preview-stacks-ui; its own container)
+docs/                  guides that span all of it — bootstrap, usage, control-plane architecture
+skills/pstack/         a skill teaching an agent to use pstack
 ```
 
 ## Working in it
 
-Turborepo drives every task, so a command at the root fans out across packages and caches results.
+Turborepo drives every task, so a command at the root fans out across packages and caches results
+— `go build`/`go test -race`/`go vet` for pstack, bun for the rest.
 
 ```bash
 bun install
-bun run build        # turbo run build
+bun run build        # turbo run build   (packages/pstack/bin/pstack, the UI and client bundles)
 bun run test         # turbo run test
 bun run typecheck
 bun run check        # build + test + typecheck, per package
@@ -26,18 +30,25 @@ bun run check        # build + test + typecheck, per package
 Run a single package's task directly when iterating:
 
 ```bash
-cd packages/pstack && bun test
+go test -race ./packages/pstack/internal/spec/     # one Go package
+cd packages/conformance && bun test                 # the black-box suite against bin/pstack
 ```
 
 ## Releasing
 
-`publish.config.ts` at the root selects `@samyx/preview-stacks` **by name** — a root-level package
-cannot be selected by path glob, since its relative directory is the empty string.
+A `v*` tag releases everything at that lockstep version: `.github/workflows/release.yml` asserts
+the tag equals the three `package.json` versions, runs GoReleaser (`.goreleaser.yaml` — the binaries,
+`checksums.txt`, `install.sh`), smoke-tests the published installer, then publishes the two npm
+packages with publish-kit (`publish.config.ts` selects them by name).
 
 ```bash
-bun run release:dry       # transform + pack, publish nothing
-bun run release:publish   # requires an npm OTP
+bunx publish-kit bump minor     # the two npm packages; set packages/pstack/package.json (the version of
+                                # record, what the binary reports) to the same number in the same edit
+git tag v0.29.0 && git push --tags
 ```
+
+The release workflow refuses a tag whose number differs from any of the three `package.json`s,
+so a missed bump fails before anything is published.
 
 ## Docs
 

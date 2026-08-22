@@ -3,7 +3,10 @@
 Instructions for an AI agent changing **this codebase**. Using `pstack` is a different job; this is
 about editing it.
 
-**Current version: 0.28.0.** Three published packages, one workspace.
+**Current version: 0.29.0.** One workspace: the Go binary (`packages/pstack`, released on GitHub),
+its black-box specification (`packages/conformance`), and two npm packages (the client SDK, the
+advanced UI). The control plane was a Bun/TypeScript package until 0.28.0; 0.29.0 is the Go port,
+byte-compatible with it (`docs/port-status.md`).
 
 ## Read this first
 
@@ -41,68 +44,84 @@ harder to state, it is a net loss even if it adds a feature.
 ## Repo map
 
 ```
-packages/pstack/     @samyx/preview-stacks — the CLI, API and library. The product.
-packages/client/     @samyx/preview-stacks-client — zero-dependency API client + verifyWebhook.
-apps/ui/             @samyx/preview-stacks-ui — the advanced UI (Vue 3 SPA).
-docs/                See docs/README.md.
+packages/pstack/       the CLI, API and embedded basic UI — one static Go binary. The product.
+                       cmd/pstack (main), internal/<pkg> (everything), assets.go (the five embeds),
+                       ui/, templates/, examples/, package.json (the lockstep version of record).
+packages/conformance/  the black-box specification (bun:test): goldens + tests that spawn bin/pstack.
+packages/client/       @samyx/preview-stacks-client — zero-dependency API client + verifyWebhook.
+apps/ui/               @samyx/preview-stacks-ui — the advanced UI (Vue 3 SPA).
+docs/                  See docs/README.md.
 ```
 
-### `packages/pstack/src` — by responsibility
+The root `go.mod` (`module github.com/samishal1998/preview-stacks`, go 1.23) holds four
+dependencies, each justified: `modernc.org/sqlite` (pure Go, so `CGO_ENABLED=0` is a static
+binary), `github.com/goccy/go-yaml` (a PARSER only — `internal/yamlx` resolves scalars itself),
+`github.com/coder/websocket`, `golang.org/x/crypto` (argon2). `net/http` only; the CLI parser is
+hand-rolled. Do not add a module for what a few lines do.
+
+### `packages/pstack/internal` — by responsibility
+
+One package per responsibility, named as the reference's files were (the port kept the map):
 
 **The core lifecycle** (read these first; the product is here):
 
 | File | Responsibility |
 |---|---|
-| `spec.ts` | Parse + validate `preview.yml` → resolved `Stack`. Owns interpolation, the stack-name charset rule, axis dedupe, `warnings`. |
-| `stack.ts` | `up` / `down` / `verify` / `status` / `report`. Owns the failure semantics — **the whole product is in this file**. |
-| `compose.ts` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm.ts`. Owns the all-profiles-on-down rule, `composeSleep` (down **without** `-v`) and `shq`. |
-| `swarm.ts` | Docker Swarm: `swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, and `joinMaterial`/`swarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. Its header states the ceilings (worker volumes, node-local exec). |
-| `exec.ts` | The only place a process is spawned. Dry-run, output capture, `captureOutputs`, cancellation via `AbortSignal`. |
-| `log.ts` | The `Sink` seam: `consoleSink` (CLI), `bufferSink` (API jobs), `nullSink` (tests). |
+| `spec` | Parse + validate `preview.yml` → resolved `Stack`. Owns interpolation, the stack-name charset rule, axis dedupe, `Warnings` (on the result — there is no module global). `subdomains.go` is the wildcard routing. |
+| `stack` | `Up` / `Down` / `Verify` / `Status` / `Report`. Owns the failure semantics — **the whole product is in this package**. `Outcome.Leaked()` is THE leak scan, the one copy. |
+| `compose` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm`. Owns the all-profiles-on-down rule, `ComposeSleep` (down **without** `-v`) and `Shq`. |
+| `swarm` | Docker Swarm: `Swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, and `JoinMaterial`/`SwarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. The leaf of the compose/autolabel/swarm triangle. |
+| `exec` | The only place a hook is spawned (`bash -c`, env as a REPLACEMENT, SIGTERM on cancel). Dry-run, output capture, `CaptureOutputs`, the `Runner` seam and its `Fake`. |
+| `log` | The `Sink` seam: `Writer` (CLI), `Buffer` (API jobs), `Null` (tests). |
 
 **The control plane:**
 
 | File | Responsibility |
 |---|---|
-| `api.ts` | HTTP API + UI host. **Its header comment is the API's route list** — update it in the same edit as a route. Owns auth, the `:id` → spec-variable binding, SSE streams, the WebSocket upgrade. |
-| `cli.ts` | Arg parsing, command dispatch, **exit codes**, the `serve` loopback interlock, `healthcheck` (the container HEALTHCHECK — one GET, exit 0/1). Logic belongs in the module, not here. |
-| `jobs.ts` | In-memory job registry: one in-flight job per stack, bounded to 50 transcripts, SSE fan-out, cancellation. |
-| `registry.ts` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
-| `specs.ts` | Named specs: store once, reference from many deployments. |
-| `scheduler.ts` | Sleep/wake: the `SleepIndex` (hostname → sleeping deployment, for the catch-all router), the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
-| `share.ts` | Share links: an HS256 JWT signed with `PSTACK_TOKEN`. Sign, verify, and nothing stored. |
-| `init.ts` | `pstack init` — stands up the control stack. CLI-only, permanently; its header explains why. |
-| `upgrade.ts` | `pstack upgrade` and `pstack ui <mode>`. Reads back what `init` decided so nothing rotates. |
-| `image.ts` | `pstack build-image` — builds the control image, pinned to the running CLI's version. |
-| `cloudinit.ts` | `pstack cloud-init` — renders the boot user-data, multi-distro. |
+| `api` | HTTP API + UI host. **`server.go`'s header comment is the API's route list** — update it in the same edit as a route. `routes*.go` is the ordered if-chain, `principal.go` the gate, `sse.go`/`ws.go` the streams. Owns the `:id` → spec-variable binding. |
+| `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), **exit codes**, the `serve` loopback interlock, `healthcheck` (the container HEALTHCHECK — one GET, exit 0/1). `main.go` is one call. Logic belongs in the package, not here. |
+| `jobs` | In-memory job registry: one in-flight job per stack (a real mutex held across the check-then-act), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation. |
+| `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
+| `specs` | Named specs: store once, reference from many deployments. |
+| `scheduler` | Sleep/wake: the `SleepIndex` (hostname → sleeping deployment, for the catch-all router), the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
+| `share` | Share links: an HS256 JWT signed with `PSTACK_TOKEN`. Sign, verify, and nothing stored. |
+| `initctl` | `pstack init` — stands up the control stack. CLI-only, permanently; its header explains why. |
+| `upgrade` | `pstack upgrade` and `pstack ui <mode>`. Reads back what `init` decided so nothing rotates. |
+| `image` | `pstack build-image` — builds the control image, pinned to the running CLI's version. |
+| `cloudinit` | `pstack cloud-init` — renders the boot user-data, multi-distro. |
 
 **Observation and safety:**
 
 | File | Responsibility |
 |---|---|
-| `inspect.ts` | What is actually running + what Traefik was told. Answers "why does the hostname 404". Never returns a raw `docker inspect` (it contains the container's whole environment). |
-| `readiness.ts` | Post-deploy watch: containers → ready / failed / timedout. Observational only; it starts and repairs nothing. |
-| `redact.ts` | Redaction for anything a human is shown. |
-| `terminal.ts` | The container shell. **The most dangerous route in the codebase** — read its header before touching it. |
-| `subdomains.ts`, `autolabel.ts`, `routing.ts` | Traefik wiring: wildcard routing, generated labels, dynamic-config files. |
+| `inspect` | What is actually running + what Traefik was told. Answers "why does the hostname 404". Never returns a raw `docker inspect` (it contains the container's whole environment). |
+| `readiness` | Post-deploy watch: containers → ready / failed / timedout. Observational only; it starts and repairs nothing. |
+| `redact` | Redaction for anything a human is shown. |
+| `terminal` | The container shell. **The most dangerous route in the codebase** — read its header before touching it. |
+| `spec/subdomains.go`, `autolabel`, `routing` | Traefik wiring: wildcard routing, generated labels, dynamic-config files. |
 
 **Persistence and delivery:**
 
 | File | Responsibility |
 |---|---|
-| `store.ts` | SQLite (`<dataDir>/db/pstack.db`) + migrations. Append to `MIGRATIONS`; never edit a shipped one. |
-| `auth.ts` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `ssoSignIn`. Argon2id via `Bun.password`; sessions and tokens stored as SHA-256. |
-| `sso.ts` | The OIDC/OAuth2 protocol, and only that: presets, discovery, PKCE, the token exchange, ID-token verification (RS256/ES256 via WebCrypto), claim mapping, the `TransientStore`. Touches no accounts. |
-| `hostvars.ts` | Host-level `${vars.*}` / `${secrets.*}`. |
-| `registries.ts` | Private-registry credentials for image pulls. |
-| `events.ts` | The domain event bus. `EVENTS` is a **public contract** — add, never rename. |
-| `webhooks.ts` | Notifier registrations + the delivery log. |
-| `notify.ts` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
+| `store` | SQLite (`<dataDir>/db/pstack.db`) + migrations. Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
+| `auth` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `SsoSignIn`. Argon2id with a PHC codec that PARSES m/t/p (`phc.go`); sessions and tokens stored as SHA-256. |
+| `sso` | The OIDC/OAuth2 protocol, and only that: presets, discovery (cached per `Client`), PKCE, the token exchange, ID-token verification (RS256/ES256, stdlib), claim mapping, the `TransientStore`. Touches no accounts. |
+| `hostvars` | Host-level `${vars.*}` / `${secrets.*}`. |
+| `registries` | Private-registry credentials for image pulls. |
+| `events` | The domain event bus. `Names` is a **public contract** — add, never rename. Listeners run inline, in registration order; `Data` is marshalled once. |
+| `webhooks` | Notifier registrations + the delivery log. |
+| `notify` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
 
-`test/stack.test.ts` is the server suite (265 tests); `test/features.test.ts` covers swarm, sleep/wake
-and share links (25, with fake `docker` shims that use `printf`, not `echo` — `sh`'s `echo` mangles
-the backslashes in a `HostRegexp`). `packages/client/test/client.test.ts` drives the client against a
-real in-process server — that is the anti-drift check for the SDK.
+Foundations under `internal/` with no product logic: `omap` (the ordered map every document is),
+`yamlx` (the YAML-1.2-core parser), `jsonx` (`JSON.stringify` semantics), `js` (`.length`,
+`Number()`, `encodeURIComponent`, `URLSearchParams`…), `version`, `testfacts`. Every one is tested
+against `packages/conformance/golden/facts` — what the reference runtime measurably did.
+
+Every package has a `_test.go` beside it (the former in-process suite, ~330 tests). The black-box
+suite is `packages/conformance` (214 tests: every route group, 80 CLI transcripts, a complete host
+fixture). `packages/client/test/client.test.ts` drives the client against the spawned binary — that
+is the anti-drift check for the SDK.
 
 ## Invariants — do not break these
 
@@ -114,9 +133,9 @@ fatal. *Why:* aborting teardown halfway leaves **more** garbage than continuing,
 silently half-worked is the exact failure this tool exists to catch. Never make `down` throw; never
 make `verify` lenient.
 
-**2. Axes go forward on `up`, reverse on `down`.** `for (const axis of [...spec.axes].reverse())` in
-`stack.ts`. Declaration order is dependency order. **The spread is load-bearing**: an in-place
-`.reverse()` mutates the spec, and `api.ts` reuses one spec object across a request.
+**2. Axes go forward on `up`, reverse on `down`.** `Down` walks a reversed COPY of `st.Axes` in
+`internal/stack`. Declaration order is dependency order. **The copy is load-bearing**: reversing in
+place would mutate the spec, and `internal/api` reuses one resolved spec across a request.
 
 **3. `up` fails fast.** A half-provisioned stack must not proceed to deploy — an app started against
 a missing database reports a confusing connection error instead of the real one.
@@ -129,8 +148,8 @@ current one would still pass.
 
 **5. `down -v` never removes images.** Images are an axis, not compose's job.
 
-**6. Interpolation happens exactly ONCE, at parse time.** `interpolate()` is called only from
-`spec.ts` (verified: no other call sites). A resolved value containing `${...}` must never be
+**6. Interpolation happens exactly ONCE, at parse time.** `Interpolate()` is called only from
+`internal/spec` (verified: no other call sites). A resolved value containing `${...}` must never be
 re-expanded. A hook's `$STACK` is expanded **by bash at run time** from the injected env — a
 different mechanism. Do not "unify" the two; you'd double-expand.
 
@@ -147,11 +166,12 @@ that is deliberate.
 | 2 | **torn down, but something survived** | whoever owns the leaked resource |
 | 3 | bad spec / usage | the spec author |
 
-Leak detection is a **step scan**, not `outcome.ok`, and it appears in `cli.ts`, `jobs.ts` (twice)
-and `stack.ts`: `steps.some(s => s.phase === 'assert_gone' && !s.ok)`. Add a leak-bearing phase and
-you edit all of them.
+Leak detection is a **step scan**, not `Outcome.OK`: `Outcome.Leaked()` in `internal/stack` — a
+step with `Phase == PhaseAssertGone && !OK` — and it is the ONE copy (the reference had four; one
+function agrees with itself). `cli`, `jobs` and the wake page all call it. Add a leak-bearing
+phase and you edit it.
 
-**9. The API's loopback interlock has two halves** (`cli.ts`, `serve`). Without `PSTACK_TOKEN`: the
+**9. The API's loopback interlock has two halves** (`internal/cli`, `Serve`). Without `PSTACK_TOKEN`: the
 host is forced to `127.0.0.1`, **and** an explicit non-loopback `PSTACK_HOST` is a hard exit 3 rather
 than a silent downgrade. An API that can delete databases must not be exposable by forgetting a flag.
 
@@ -176,7 +196,7 @@ host with no control plane and no remote way to repair it. Never add a route tha
 **13. The container name in a request is never trusted.** `docker exec`/`stop` accept any container
 on the daemon — including Traefik (every preview on the host) and `pstack-control` itself (whose
 filesystem is the database). Every route taking a container name matches it against the containers
-that deployment owns and 404s otherwise. See `terminal.ts` and the container-action route.
+that deployment owns and 404s otherwise. See `internal/terminal` and the container-action route.
 
 **14. Event names and payload fields are add-only.** They live in stored notifier registrations;
 renaming one silently stops deliveries for everyone subscribed. Same for the delivery envelope's four
@@ -187,7 +207,7 @@ passwords go in and never come back out. `Webhooks.get()`/`list()` mask; `rawCon
 is for the delivery path only. Conflating them is how a masked value gets POSTed to a masked URL —
 which happened.
 
-**16. A share principal is closed by default.** `shareAllows` in `api.ts` runs right after the auth
+**16. A share principal is closed by default.** `shareAllows` in `internal/api` runs right after the auth
 gate and **before any route**: a `{ kind: 'share' }` principal reaches exactly the GETs its views
 name, on its own deployment, with the stored variables only. A new route is unreachable to it until
 someone lists it there. The raw `PSTACK_TOKEN` is never read from a query string — only a JWT is.
@@ -197,12 +217,14 @@ someone lists it there. The raw `PSTACK_TOKEN` is never read from a query string
 leak tests assert on cannot be weakened by a default. A wake runs `up()` exactly — axis hooks are
 idempotent by contract and re-capture their outputs, so nothing is persisted between the two.
 
-**18. Template substitution uses function replacements.** `String.replace(marker, string)` reads
-`$$` in the replacement as one `$`, and the wake router's rule ends in `$$` precisely so compose
-hands Traefik a literal `$`. `init.ts` passes `() => text`; keep it that way for every marker.
+**18. Template substitution is literal.** The wake router's rule ends in `$$` precisely so compose
+hands Traefik a literal `$`. `internal/initctl` substitutes each marker with
+`strings.Replace(s, marker, block, 1)` and cloud-init with `strings.ReplaceAll` over an ordered
+list — never `regexp.ReplaceAllString` or `text/template`, to both of which `$` means something.
+(The reference had the inverse hazard: JS `String.replace` reads `$$` as one `$`.)
 
-**19. An SSO identity is `(providerKey, subject)`, and an email only ever ADOPTS.** `auth.ts`
-`ssoSignIn` looks up the link first; the email branch exists solely to take over a *pre-existing
+**19. An SSO identity is `(providerKey, subject)`, and an email only ever ADOPTS.** `internal/auth`
+`SsoSignIn` looks up the link first; the email branch exists solely to take over a *pre-existing
 local* account and is gated on `emailVerified === true` and on exactly one match. Emails move
 between people and subjects do not, so keying on the address — or relaxing the verified check, or
 adopting the first of several matches — is how one person signs in as another. `emailAllowed` fails
@@ -216,46 +238,47 @@ correct — nothing ran — but never read a green dry-run as "clean".
 ## Commands
 
 ```bash
-bun install                    # required in a fresh clone
+bun install                    # required in a fresh clone (the UI, the client, the conformance suite)
 
-bun run check                  # THE GATE: build + test + typecheck, every package
-bun test                       # all suites
-bun run typecheck              # strict + noUncheckedIndexedAccess + noUnusedLocals/Parameters
-
-cd packages/pstack && bun test # one package, faster loop
-bun test test/stack.test.ts -t "readiness"   # one describe block
+bun run check                  # THE GATE: build + test + typecheck, every package (Go and bun)
+go test -race -timeout 120s ./...            # the Go suite — -race is not optional, it is in the script
+go vet ./...
+go test -race ./packages/pstack/internal/jobs/ -run TestCancel   # one package / one test, faster loop
+go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
+cd packages/conformance && bun test          # the black-box suite against bin/pstack
+cd packages/conformance && bun test test/api-sso.test.ts        # one route group
 
 # Manual CLI runs. There is no root preview.yml, so pass -f; the example needs PR and GIT_SHA
 # (an undefined variable is fatal — invariant 7).
-PR=123 GIT_SHA=abc bun packages/pstack/src/cli.ts -f packages/pstack/examples/preview.yml validate
-PR=123 GIT_SHA=abc bun packages/pstack/src/cli.ts -f packages/pstack/examples/preview.yml up -n -v
-bun packages/pstack/src/cli.ts --help
-bun packages/pstack/src/cli.ts --version
+PR=123 GIT_SHA=abc go run ./packages/pstack/cmd/pstack -f packages/pstack/examples/preview.yml validate
+PR=123 GIT_SHA=abc go run ./packages/pstack/cmd/pstack -f packages/pstack/examples/preview.yml up -n -v
+go run ./packages/pstack/cmd/pstack --help
 
 # A live server + UI, for driving the web interface.
-PSTACK_TOKEN=dev PSTACK_DATA=/tmp/pstack-dev bun packages/pstack/src/cli.ts serve  # :7878
-cd apps/ui && bun run dev                                                          # :5273, proxies /api
+PSTACK_TOKEN=dev PSTACK_DATA=/tmp/pstack-dev go run ./packages/pstack/cmd/pstack serve   # :7878
+cd apps/ui && bun run dev                                                               # :5273, proxies /api
 ```
 
-There is **no linter**. `bun run check` is the gate. No runtime dependencies in `packages/pstack` or
-`packages/client` — keep it that way.
+There is **no linter** beyond `go vet` and `gofmt`. `bun run check` is the gate. No runtime
+dependencies in `packages/client`, and only the four listed modules in `go.mod` — keep it that way.
 
 ## Testing expectations
 
 **Any change to lifecycle ordering, failure semantics, exit codes, or a security boundary needs a
 test.** Patterns to copy, in order of how much they prove:
 
-1. **Boot a real server** (`createServer({ dataDir, port: 0, … })`) and assert on whole response
-   bodies. Most of `test/stack.test.ts` does this. Port 0 means tests run in parallel safely; always
-   `server.stop(true)` in a `finally`.
+1. **Boot the real server** (`bootServer()` in `packages/conformance/harness`) and assert on whole
+   response bodies. Every HTTP-level test belongs there. A free port per server means tests run in
+   parallel safely; always `stop()` in a `finally`.
 2. **The real-filesystem leak test** — `touch` a file, declare an axis whose `down` lies (`"true"`)
-   and whose `assert_gone` is `! test -e <file>`, assert `verify` fails, `rm` it, assert it passes.
-   A fake runner cannot prove the gate catches a survivor.
-3. **A fake `docker` on `PATH`** — a shell script writing scripted JSON, for anything reading
-   container state. Several tests make it *mutable* between polls to exercise transitions.
-4. **`fakeRunner(failPredicate?, stdout?)`** — records commands into `.log`. For ordering and flow.
+   and whose `assert_gone` is `! test -e <file>`, assert `verify` fails, `rm` it, assert it passes
+   (`internal/stack`). A fake runner cannot prove the gate catches a survivor.
+3. **A fake `docker` on `PATH`** — a shell script writing scripted JSON (`printf`, never `echo`),
+   for anything reading container state. Several tests make it *mutable* between polls.
+4. **`exec.NewFake(fail, stdout)`** — records commands (`Commands()`). For ordering and flow.
 
-Assert on `Outcome.steps` (phase / ok / message), not on printed output — `report()` is presentation.
+Assert on `Outcome.Steps` (phase / ok / message), not on printed output — `Report()` is presentation.
+Every Go test function carries a `// negative control: <the mutation that fails it>` line (rule 17).
 
 ### The rule that matters most
 
@@ -272,40 +295,34 @@ If a test cannot fail, it is documentation with a misleading name.
 ### The conformance suite — the black-box specification
 
 `packages/conformance` is the HTTP/CLI contract as tests that **spawn the real `pstack`** and never
-import `src/`. It exists because the core is being ported to Go (0.29.0): the same tests grade the
-TypeScript reference today and the Go binary as it lands. Three rules, each enforced by a script:
+import the implementation. It graded the Go port against the TypeScript reference until the two were
+byte-identical; the reference is gone and the goldens are the specification. Three rules, each
+enforced by a script:
 
-- **`PSTACK_IMPL=bun|go|null`** selects what is spawned (`harness/impl.ts`). `bun` runs
-  `src/cli.ts`; `go` runs `$PSTACK_BIN` (default `packages/pstack/bin/pstack`); `null` is a server
-  answering `200 {}` to everything.
+- **`PSTACK_IMPL=go|null`** selects what is spawned (`harness/impl.ts`; `go` is the default). `go`
+  runs `$PSTACK_BIN` (default `packages/pstack/bin/pstack`); `null` is a server answering `200 {}`
+  to everything.
 - **Every test must fail against `null`** — `bun run vacuity` lists any that do not. A test that
   passes against a server that asserts nothing is the class of bug above, mechanised.
-- **Goldens are generated from the reference and checked in** (`bun run gen`): `golden/cli` exact
-  CLI transcripts, `golden/render` the control compose for all eight init cells, `golden/facts`
-  measured Bun semantics (the YAML dialect, `Number()`, argon2 parameters), `golden/host` a complete
-  data directory the port must open unchanged. CI regenerates the deterministic ones and diffs.
-- **Differential mode** (`bun run diff`) replays eleven scenarios on impl A then B over one data
-  path and compares traces after masking; the docker argv the API issued is a step too. The masks
-  and `KNOWN_DEVIATIONS` live only in `harness/diff.ts`, and `--self` (bun vs bun) must be empty.
-- **Go-mode progress is a ratchet** (`bun run ratchet`, `expected-pass.json`): counts only go up.
-  `bun run status` renders the port matrix from `port-map.json`.
+- **Goldens are checked in and ARE the contract** (`golden/cli` exact CLI transcripts, `golden/render`
+  the control compose for all eight init cells, `golden/facts` the JavaScript semantics the port
+  reproduces, `golden/host` a complete data directory every binary must open unchanged). A change
+  to a golden is a deliberate contract change: regenerate with `bun run gen`, commit the diff with
+  the code, and say so in the CHANGELOG.
+- **Differential mode** (`bun run diff --a <binary>`) replays nine scenarios on binary A then B over
+  one data path and compares traces after masking; the docker argv the API issued is a step too.
+  `--self` (the same binary twice) must be empty — it is the mask list's own control, and CI runs it.
+- **Pass counts are a ratchet** (`bun run ratchet`, `expected-pass.json`): they only go up.
+  `bun run status` renders the file → package matrix from `port-map.json`.
 
-The HTTP tests that moved there still have their originals in `test/stack.test.ts` and friends;
-those are deleted with the rest of `src/` at cutover, not before — the reference keeps its own suite
-until it stops being the reference. A new HTTP-level test belongs in `packages/conformance`.
+A new HTTP-level test belongs in `packages/conformance`; a unit test beside the package.
 
-## The Go port — rules every ported package follows
+## The Go rules — every package follows these
 
-`packages/pstack/{cmd/pstack,internal/<pkg>,assets.go}` is the Go implementation, one package per
-TypeScript file (`spec.ts → internal/spec`, `init.ts → internal/initctl`; `errors.ts` folds into
-per-package error types; `index.ts` has no counterpart — the binary is the product). Root `go.mod`.
-Foundations: `internal/omap` (the ordered map every document is), `internal/yamlx` (Bun.YAML.parse,
-YAML 1.2 core, resolver of its own), `internal/jsonx` (JSON.stringify: no HTML escaping, no trailing
-newline, ordered), `internal/js` (`.length`, `Number()`, `encodeURIComponent`, URLSearchParams,
-lenient base64url, `esc()`), `internal/version`. Each is graded against `golden/facts`.
-
-The port is a re-implementation against a fixed contract — the conformance suite, the goldens and
-the exact docker argv. These rules are what keep thirty packages byte-compatible:
+The binary is a re-implementation of a fixed contract — the conformance suite, the goldens and
+the exact docker argv — and the contract has JavaScript semantics baked in (JSON key order,
+`.length` in UTF-16, `Number()`, last-wins query parsing). These rules are what keep thirty
+packages byte-compatible with it, and they stay after the port because the contract stays:
 
 1. **JSON is structs (field order) or `*omap.Map`/`jsonx.Object` — never `map[string]any`**, and
    every response, stored payload and signed body goes through `jsonx`. Stored payloads and event
@@ -356,53 +373,55 @@ the exact docker argv. These rules are what keep thirty packages byte-compatible
 
 The four-hook tuple is hardcoded in several places. All of them:
 
-1. `spec.ts` — the `Axis` type, a `field('<hook>')` call, the empty-axis guard.
-2. `stack.ts` — `StepResult['phase']`, and the call site **with explicit failure semantics**
+1. `internal/spec` — the `Axis` struct, its field read, `Hooks()`, the empty-axis guard.
+2. `internal/stack` — the `Phase` constant, and the call site **with explicit failure semantics**
    (fatal or recorded? invariant 1).
-3. `cli.ts` — the hook list in `validate`.
-4. `api.ts` — the same literal in the spec-summary mapping.
-5. If it can indicate a leak: the step scan in `cli.ts`, `jobs.ts` **and** `stack.ts` (invariant 8).
+3. `internal/cli` and `internal/api` both print `Axis.Hooks()` — nothing to add there.
+4. If it can indicate a leak: `Outcome.Leaked()` in `internal/stack` — the ONE scan (invariant 8).
 6. Docs: `docs/usage.md`, `examples/preview.yml`.
 7. A test.
 
 ### A new CLI command
 
-`cli.ts`: add the `case`, add it to the `COMMANDS` set (an unknown command must fail as *unknown*,
-not by hunting for a spec file — that bug shipped), add a line to `usage()`, add flags to `parseArgs`
-**and** `usage()`, and exit with a code from the table. Keep the logic in a module; `cli.ts` is argv,
-dispatch and exit codes only. Then `docs/usage.md`.
+`internal/cli`: add the `case` in `run.go`, add it to `Commands` (an unknown command must fail as
+*unknown*, not by hunting for a spec file — that bug shipped), add a line to `Usage()`, add flags
+to `ParseArgs` **and** `Usage()`, and return an `Exit` with a code from the table. Keep the logic in
+a package; `cli` is argv, dispatch and exit codes only. The usage text is a golden
+(`golden/cli/help.json`) — regenerate it deliberately. Then `docs/usage.md`.
 
 ### A new API route
 
-`api.ts`: add the route, **update the route list in the file header**, and put it inside the shared
-`try` so its errors map to 400/409 rather than a 500 HTML page. Long operations return `202 { job }`,
+`internal/api`: add the route to the if-chain in `routes.go` (in order — a greedy pattern later in
+the chain is reachable only if nothing above it matched), **update the route list in `server.go`'s
+header**, and return domain errors so `fail()` maps them to 400/409 rather than a 500. Long operations return `202 { job }`,
 never a held-open socket; one in-flight job per stack, 409 on conflict. Reads that start something
 (a readiness watch) must not emit events — a page view must not manufacture a notification. Then the
 UI if it consumes it, and `packages/client` if a script would want it.
 
 ### A new event
 
-`events.ts` (`EVENTS`), a chat line in `notify.ts`'s `summarize`, the emit site, the catalogue in
-`docs/webhook-events.md`, and a test. Add-only — invariant 14.
+`internal/events` (`Names`), a chat line in `internal/notify`'s `Summarize`, the emit site, the
+catalogue in `docs/webhook-events.md`, and a test. Add-only — invariant 14.
 
 ### A new lifecycle action
 
-`sleep`/`wake` are the template. `JobAction` in `jobs.ts`; the branch in `startLifecycle` (`api.ts`)
-— the ONE place jobs start, shared by the POST route, the wake dispatch and the scheduler; the
-lifecycle regex on the `:id` route; `actionWord` in `notify.ts`; `LifecycleAction` + `ACTION_LABELS`
-in both UIs; the client SDK's method and `JobAction`; `docs/webhook-events.md` (`job.started`'s
-`action`). If it can leave a leak behind, the step scan in three files (invariant 8).
+`sleep`/`wake` are the template. `jobs.Action`; the branch in `startLifecycle` (`internal/api`,
+`server.go`) — the ONE place jobs start, shared by the POST route, the wake dispatch and the
+scheduler; the lifecycle regex on the `:id` route; `actionWord` in `internal/notify`;
+`LifecycleAction` + `ACTION_LABELS` in both UIs; the client SDK's method and `JobAction`;
+`docs/webhook-events.md` (`job.started`'s `action`). If it can leave a leak behind, `Outcome.Leaked()`
+(invariant 8).
 
 ### A new notifier type
 
-One entry in `TYPES` (`notify.ts`): `{ kind, label, signs, fields, validate, send }`. No schema
+One entry in `Types` (`internal/notify`): `{Kind, Label, Signs, Fields, Validate, Send}`. No schema
 migration, no route change, no UI change — the UI renders `fields` from `/api/notifiers/meta`. Slack
 and Discord cost one factory and two registrations; if a new type needs more than that, the seam is
 being worked against.
 
 ### A database change
 
-Append to `MIGRATIONS` in `store.ts`. **Never edit a shipped migration** — it will not re-run
+Append to `Migrations` in `internal/store` (`migrations.go`). **Never edit a shipped migration** — it will not re-run
 anywhere it already ran. The array index is the version.
 
 ### UI work
@@ -418,7 +437,7 @@ this UI's history were invisible in code review and obvious in a screenshot (a s
 
 - **Multi-tenancy.** Needs a per-tenant isolation boundary — separate VMs/microVMs or Kubernetes
   namespaces — plus a credential boundary. That is a different product. Do not add tenant IDs or RBAC
-  to `api.ts` as a substitute.
+  to `internal/api` as a substitute.
 - **Untrusted specs.** Same boundary problem, plus hooks are shell strings by design.
 - **Inbound git-webhook deploys, a service catalog.** Use a PaaS.
 - **Persistence / reconciliation of what exists.** Invariant 10.
@@ -428,17 +447,22 @@ Before adding anything, check whether an existing axis hook already expresses it
 
 ## Releasing
 
-Lockstep across all three packages, from the repo root:
+Lockstep across all three `package.json`s, from the repo root; `packages/pstack/package.json` is
+the version of record and what the binary reports (`internal/version`). A `v*` tag runs
+`.github/workflows/release.yml`: it asserts the tag equals every package version, runs the Go
+suite, the conformance ratchet and an image smoke test, then GoReleaser (the binaries,
+`checksums.txt`, the version-stamped `install.sh`), then publish-kit for the UI and the client.
 
 ```bash
-bunx publish-kit bump patch|minor    # bumps every package
+bunx publish-kit bump patch|minor    # the two npm packages (publish-kit skips the private one)
+# set packages/pstack/package.json "version" to the same number — the release workflow asserts it
 bun run check                        # must be green
 git commit && git tag vX.Y.Z && git push origin main --tags
 ```
 
-**Publishing to npm is the maintainer's, not yours.** Never run `release:publish`. Version numbers
-appear in code (`upgrade.ts` messages, docs referencing "since 0.X.0") — grep for the old version
-after a bump.
+**Tagging and publishing are the maintainer's, not yours.** Never push a tag or run
+`release:publish`. Version numbers appear in docs ("since 0.X.0") — grep for the old version after
+a bump.
 
 ## Working style in this repo
 

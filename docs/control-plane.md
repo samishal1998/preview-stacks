@@ -18,19 +18,19 @@ marks anything not yet reachable. The short version:
 
 | Piece | Where | State |
 |---|---|---|
-| `kind: shared \| isolated` | `src/spec.ts` | **built** — parsed, defaulted to `isolated`, `shared`+axes is a hard error |
-| The `shared` guard on `down` | `src/stack.ts` | **built** — refuses without `force` |
-| `--force` | `src/cli.ts` | **built** |
-| `requires:` preflight | `src/spec.ts`, `src/stack.ts` | **built** — asserted before anything is created |
-| The deployment registry | `src/registry.ts` | **built** |
-| `/api/deployments/*` routes | `src/api.ts` | **built** — the API is registry-backed; the old single-spec `/api/spec` and `/api/stacks` routes are gone |
-| `pstack init` | `src/init.ts` + `templates/control/` | **implemented and dispatched** — `pstack init --domain … --acme-email …`; DNS-01 adds `--challenge dns01 --dns-provider …` |
-| HTTP-01 / DNS-01 challenge modes | `src/init.ts`, `templates/control/` | **built** — HTTP-01 is the default; `init` renders the two `#__MARKER__` blocks per mode (§TLS) |
-| The published bundle | `scripts/build.ts`, `package.json` | **built** — `dist/cli.js` + `dist/index.js`, `bin` → `dist/cli.js` (§Distribution) |
-| `pstack upgrade` | — | CLI-only, two phases: install the new version, then re-exec `--resume` which rebuilds the image and re-runs `init` with the stored token and DNS credential |
+| `kind: shared \| isolated` | `internal/spec` | **built** — parsed, defaulted to `isolated`, `shared`+axes is a hard error |
+| The `shared` guard on `down` | `internal/stack` | **built** — refuses without `force` |
+| `--force` | `internal/cli` | **built** |
+| `requires:` preflight | `internal/spec`, `internal/stack` | **built** — asserted before anything is created |
+| The deployment registry | `internal/registry` | **built** |
+| `/api/deployments/*` routes | `internal/api` | **built** — the API is registry-backed; the old single-spec `/api/spec` and `/api/stacks` routes are gone |
+| `pstack init` | `internal/initctl` + `templates/control/` | **implemented and dispatched** — `pstack init --domain … --acme-email …`; DNS-01 adds `--challenge dns01 --dns-provider …` |
+| HTTP-01 / DNS-01 challenge modes | `internal/initctl`, `templates/control/` | **built** — HTTP-01 is the default; `init` renders the two `#__MARKER__` blocks per mode (§TLS) |
+| The binary | `cmd/pstack`, `.goreleaser.yaml` | **built** — one static executable per platform on GitHub Releases (§Distribution) |
+| `pstack upgrade` | `internal/upgrade` | CLI-only, two phases: the installer, then re-exec `--resume` which rebuilds the image and re-runs `init` with the stored token and DNS credential |
 
-`src/api.ts`'s file header is the authoritative route list. Where this document and that header
-disagree, the header is right.
+`internal/api/server.go`'s file header is the authoritative route list. Where this document and
+that header disagree, the header is right.
 
 ---
 
@@ -123,7 +123,7 @@ an **environment variable holding the rule**, which your own label interpolates:
 ```
 
 Why an env var and not a generated overlay, a file-provider drop-in, or a sidecar: the reasoning is
-in `src/subdomains.ts`. Short version — this seam needs no new mount, no re-`init`, and nothing
+in `internal/spec (subdomains.go)`. Short version — this seam needs no new mount, no re-`init`, and nothing
 pstack writes can break another deployment's routing.
 
 **A hardcoded host always wins.** Traefik's default router priority is the rule's *length*, so an
@@ -162,7 +162,7 @@ pstack init --domain preview.example.com --acme-email <you>@example.com \
 
 `--dns-provider` is required **only** for `dns01`; `init` rejects the combination without it.
 `init` renders the two `#__MARKER__` blocks in `templates/control/docker-compose.yml` per mode
-(`acmeChallengeArgs` / `acmeRouterLabels` in `src/init.ts`) and leaves the rest byte-for-byte —
+(`AcmeChallengeArgs` / `AcmeRouterLabels` in `internal/initctl`) and leaves the rest byte-for-byte —
 Compose cannot conditionally include CLI arguments, which is why these two blocks are generated and
 nothing else is.
 
@@ -287,7 +287,7 @@ Consider the API accepting `POST /api/deployments/pstack/up` on its own stack. S
 3. Docker stops the old container. **The process performing the upgrade is killed mid-operation**,
    at whatever step it had reached.
 4. The job that was tracking the operation dies with it. Job state is in-memory and unpersisted by
-   design (see `src/jobs.ts`) — so there is no record of how far it got, no transcript, and the
+   design (see `internal/jobs`) — so there is no record of how far it got, no transcript, and the
    stack lock it held is gone with the process that held it.
 5. The HTTP connection streaming the log drops. The operator sees a truncated SSE stream and cannot
    tell "finished successfully" from "died halfway".
@@ -336,7 +336,7 @@ Two rules follow — and note the first is **operator discipline, not an enforce
 | What it is | Traefik + the `pstack` API/UI container | a host singleton every tenant borrows: a database, a queue cluster, a registry mirror | one tenant — normally one PR |
 | Hostnames | `control.<domain>`, `api.<domain>` | `<service-name>.<domain>` | `<surface>-pr-<n>.<domain>` |
 | Declared as | not a spec the API holds — it is not in the registry at all | `kind: shared` | `kind: isolated` (the default) |
-| Created by | `pstack init`, on the host (`src/init.ts`, dispatched from `src/cli.ts`) | the API, or the CLI | the API, or the CLI, usually from CI |
+| Created by | `pstack init`, on the host (`internal/initctl`, dispatched from `internal/cli`) | the API, or the CLI | the API, or the CLI, usually from CI |
 | Lifecycle | once per host; upgraded rarely, deliberately | once per host; lives indefinitely | constantly created and destroyed |
 | Axes allowed? | n/a | **no** — a hard `SpecError`. Axes isolate one tenant from another and prove a tenant's resources are gone; a singleton has neither concern | **yes** — that is the point |
 | `down` guarded? | **not offered at all** | **yes** — refused unless explicitly forced (`--force`, or `{"force":true}` in the request body) | no — routine |
@@ -362,8 +362,8 @@ refusing to tear down shared deployment "shared-db"
     intended.                                                                    # exit 1
 ```
 
-The guard lives in `down()` in `src/stack.ts`, so a direct library caller cannot bypass it either.
-`src/api.ts` *also* checks it before starting a job — deliberate duplication, so the HTTP caller
+The guard lives in `down()` in `internal/stack`, so a direct library caller cannot bypass it either.
+`internal/api` *also* checks it before starting a job — deliberate duplication, so the HTTP caller
 gets a `409` with the reason instead of a job id that is going to fail — and then passes `force`
 straight through rather than consuming it.
 
@@ -389,7 +389,7 @@ Write the `hint` as *how to fix it*, not *what broke*. The assert already says w
 
 ## 4. The registry
 
-> **Built and wired.** `src/registry.ts` backs the `/api/deployments/*` routes (§6).
+> **Built and wired.** `internal/registry` backs the `/api/deployments/*` routes (§6).
 
 The CLI acts on one spec file you point it at. The control plane holds many, addressed by id:
 
@@ -436,7 +436,7 @@ project exists to prevent. Hence the rule the wiring must preserve:
 
 ### What is not in the registry
 
-Job records. They stay in memory, capped at 50, lost on restart (`src/jobs.ts`), because a job is
+Job records. They stay in memory, capped at 50, lost on restart (`internal/jobs`), because a job is
 the transcript of an *attempt*, not a fact about the host. Restarting the API loses history, not
 correctness — and it clears the per-stack busy locks, which is the desired behaviour after a crash.
 
@@ -535,7 +535,7 @@ says so rather than failing one write at a time.
 
 Traefik's documented behaviour: **an unparseable file is a parse error for the whole directory**, and
 the rest of the directory can be discarded with it. So the symptom of a careless edit is not the file
-you were editing — it is *other* routes disappearing. Three defences, all in `src/routing.ts`:
+you were editing — it is *other* routes disappearing. Three defences, all in `internal/routing`:
 
 | Defence | Why |
 |---|---|
@@ -581,7 +581,7 @@ added now applies to the next pull. Nothing to recreate, no cache to bust.
 
 **Write-only.** A `config.json` entry is `base64("user:password")` — reversible, not encrypted. So
 there is no read path for it anywhere in the API: `GET /api/registries` returns hostnames and
-usernames only, and nothing in `src/registries.ts` can return a password. The file is written `0600`,
+usernames only, and nothing in `internal/registries` can return a password. The file is written `0600`,
 atomically (compose may read it at any moment, and a truncated config parses as *no* credentials).
 
 Two traps it handles explicitly:
@@ -605,7 +605,7 @@ to be looking at the page. Notifiers push it somewhere.
 ### The seam, and what "composable" actually buys
 
 A registration is `{ type, name, events[], config{} }`. `type` selects a **notifier type** — a
-`{ kind, label, fields, validate, send }` in `src/notify.ts` — and that type OWNS the shape of
+`{ kind, label, fields, validate, send }` in `internal/notify` — and that type OWNS the shape of
 `config`. Adding Slack or Discord later is one entry in that map:
 
 - **no migration** — `config` is opaque JSON in the `notifiers` table;
@@ -674,7 +674,7 @@ escapes it for the legitimate case of a collector on the same box.
 **Accepting a spec over HTTP is accepting arbitrary shell, by design.**
 
 A spec carries axis hooks and `requires` asserts. Every one of them is a shell string run through
-`bash -c` with the resolved environment injected (`src/exec.ts`). That is deliberate: this tool
+`bash -c` with the resolved environment injected (`internal/exec`). That is deliberate: this tool
 orchestrates other people's CLIs — `docker`, `gcloud`, `curl`, `psql` — and a structured arg-array
 API would only move quoting into YAML. A spec sits at the same trust level as a CI workflow file.
 
@@ -698,8 +698,8 @@ Three guards follow, two of which are enforced in code:
 
 | Guard | Where | Effect |
 |---|---|---|
-| Bearer token on every mutating route | `src/api.ts` | `POST`/`DELETE` without `Authorization: Bearer <PSTACK_TOKEN>` → `401` |
-| Loopback interlock | `src/cli.ts`, `serve` | with no `PSTACK_TOKEN` the host is forced to `127.0.0.1`, **and** an explicit non-loopback `PSTACK_HOST` is a hard exit `3` rather than a silent downgrade |
+| Bearer token on every mutating route | `internal/api` | `POST`/`DELETE` without `Authorization: Bearer <PSTACK_TOKEN>` → `401` |
+| Loopback interlock | `internal/cli`, `serve` | with no `PSTACK_TOKEN` the host is forced to `127.0.0.1`, **and** an explicit non-loopback `PSTACK_HOST` is a hard exit `3` rather than a silent downgrade |
 | Ingress auth | yours | **`GET`s are unauthenticated even when a token is set.** `GET /api/jobs` — no id needed — returns every retained job transcript, including `outcome.outputs`, which holds **captured credentials by design**, and the first line of a failed hook's stderr; `GET /api/deployments` enumerates every deployment on the box. Writes are double-gated; reads are gated only by whatever sits in front. |
 
 ### The read side (resolved in 0.10.0)
@@ -1036,12 +1036,14 @@ makes that guard load-bearing for data, not just for orphan visibility.
 
 ### The library path
 
-```ts
-import { Registry, dataDir } from './src/registry.ts';   // not re-exported from src/index.ts
+There is no published library: every package is `internal/`, and the supported programmatic
+surface is the HTTP API — through `@samyx/preview-stacks-client` from TypeScript, or any HTTP
+client. Inside this repository, `internal/registry` is the storage contract:
 
-const reg = new Registry(dataDir());                     // $PSTACK_DATA, default /var/lib/pstack
-await reg.put('pr-123', specYaml, { composeYaml, env: { PR: '123' } });
-const stack = await reg.resolve('pr-123', { PR: '123' });
+```go
+reg := registry.New(registry.DataDir())                 // $PSTACK_DATA, default /var/lib/pstack
+dep, err := reg.Put("pr-123", specYaml, registry.PutOptions{ComposeYaml: &composeYaml, Env: map[string]string{"PR": "123"}})
+st, err := reg.Resolve("pr-123", map[string]string{"PR": "123"}, nil)
 ```
 
 ---
@@ -1050,7 +1052,7 @@ const stack = await reg.resolve('pr-123', { PR: '123' });
 
 ### `pstack init`
 
-> **Implemented and reachable as `pstack init`** (`src/cli.ts` → `src/init.ts`). A host can still
+> **Implemented and reachable as `pstack init`** (`internal/cli` → `internal/initctl`). A host can still
 > bring the control stack up by hand with `docker compose … up -d` — see
 > [`bootstrap.md` §4](bootstrap.md#4-the-cloud-init-file) — but `init` is the supported path,
 > because a hand-maintained compose file drifts from what the release expects.
@@ -1102,22 +1104,26 @@ still works when the API is down.
 
 ```
 1.  drain            GET /api/jobs — wait for terminal states
-2.  install          bun add -g @samyx/preview-stacks  +  pull the new control image on the host
-3.  pstack init …    re-render + `compose up -d` the control stack
-4.  verify           curl -sf https://api.<domain>/api/health
+2.  install          the release's install.sh (checksum-verified), into where this binary lives
+3.  build-image      the control image, from the binary just installed (the old one kept as pstack:local-previous)
+4.  pstack init …    re-render + `compose up -d` the control stack, same token, same DNS credential
+5.  verify           curl -sf https://api.<domain>/api/health
 ```
 
-Step 2 has **two** artifacts, and they upgrade independently: the globally-installed `pstack` CLI
-(the bundle — §Distribution) and `PSTACK_IMAGE`, the image the control container runs. `init` is a
-CLI command that starts a container from that image, so a new CLI against an old image, or the
-reverse, is a supported-but-untested combination — move both.
+`pstack upgrade` is steps 2–4, in **two phases** that are two processes: phase 1 runs the installer
+and then re-executes `pstack upgrade --resume`, because `build-image` copies the *running* binary
+into the image — a single process would install the new version and then faithfully build an image
+of the old one. Step 2 and 3 are **two** artifacts that upgrade together: the `pstack` binary and
+`PSTACK_IMAGE`, the image the control container runs. A new CLI against an old image, or the
+reverse, is a supported-but-untested combination — `upgrade` moves both.
 
-Step 3 recreates the `pstack` container. Any in-flight job dies with it — jobs are in-memory —
+Step 4 recreates the `pstack` container. Any in-flight job dies with it — jobs are in-memory —
 hence step 1. There is no queue to preserve, and adding one would be a state store (see the
 no-state-store rule in the README).
 
-`pstack self-upgrade` *(not built)* is that sequence with the fetch folded in. It lives on the host
-for the reason in §2 and will never be exposed over HTTP.
+It lives on the host for the reason in §2 and will never be exposed over HTTP. A host still on the
+Bun runtime (≤ 0.28.0) takes the one-time hop in usage.md §9 — the same `--resume` phase, entered
+by running the installer by hand once.
 
 ### Recovery when the control plane will not come up
 
@@ -1137,59 +1143,50 @@ was chosen to give you.
 
 ---
 
-## Distribution: what ships, and why a bundle
+## Distribution: one static binary
 
-`pstack` is a **globally installed CLI** — it runs on the host, over SSH or from systemd, precisely
-where the API cannot reach (§2). So the artifact has to be installable without the repository:
+`pstack` is a **host-installed CLI** — it runs on the host, over SSH or from systemd, precisely
+where the API cannot reach (§2). So the artifact has to be installable without the repository, and
+without a runtime the host may not have:
 
 ```bash
-bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh
 pstack --help
 ```
 
-`bun scripts/build.ts` produces the two outputs, both `--target=bun`, minified, with linked
-sourcemaps so a stack trace from an operator's box still names real functions:
+A release (GoReleaser, `.goreleaser.yaml`) is `pstack_{linux,darwin}_{amd64,arm64}` — raw static
+executables, `CGO_ENABLED=0`, ~17 MB — plus `checksums.txt` and the installer. The installer
+verifies the checksum before the binary is moved into place, atomically. `go install …/cmd/pstack`
+works too.
 
-| Output | Role | `package.json` |
-|---|---|---|
-| `dist/cli.js` (~74 KB) | the CLI + API + UI, one file | `bin.pstack` |
-| `dist/index.js` | the library entry, for embedding the lifecycle in your own tooling | `exports["."]` |
+### Why Go, and why static
 
-The published tarball is **8 files, ~0.36 MB unpacked** (`files: [dist, README.md, LICENSE,
-CHANGELOG.md]`): the two bundles, their two sourcemaps, and four metadata files. It contains **no
-source, no docs, no examples, no skills** — verified by extracting the tarball and running it with
-the repository unreachable. Working from a checkout (`bun src/cli.ts …`) is the **contributor** path,
-not the user path.
+The control plane is a long-lived process on a small host that shells out to docker. Until 0.28.0
+it was a Bun/TypeScript bundle: small, but it put a JavaScript runtime on every host and inside
+every control image, and its concurrency was the event loop's. The Go binary (0.29.0, ported
+against the black-box conformance suite until byte-identical — docs/port-status.md) has no runtime
+beside it, a smaller control image, goroutines where the reference had implicit single-threading
+(with real mutexes where the product's guarantees live: the per-stack job lock, the delivery
+queues), and `-race` in its test run. `CGO_ENABLED=0` is what makes "static" true: the SQLite
+driver is pure Go, so the binary runs on any libc — or none (Alpine).
 
-### Why a bundle, and not the source tree
+### The control image is built from the binary, on the host
 
-Shipping `src/` would make every invocation pay TypeScript parsing, download docs/examples/skills
-nobody asked for, and turn the internals into the public surface — a module layout you can no longer
-change without a major version.
-
-### Why a bundle, and not `--compile`
-
-A standalone executable bakes the Bun runtime (~60 MB) into the artifact, **per platform**. For an
-npm package that means one of two bad shapes: a five-platform `optionalDependencies` matrix, or a
-postinstall hook that downloads a binary (which breaks in exactly the locked-down CI environments
-this tool is meant to run in).
-
-A bundle is ~74 KB, and it costs nothing extra, because **Bun is already required**. The package
-declares `engines.bun: ">=1.3.0"` and `bin` is a `#!/usr/bin/env bun` script — the shebang the
-bundler does not emit and `build.ts` adds. There is no Node fallback being given up: the runtime APIs
-this uses — `Bun.serve`, `Bun.YAML`, `Bun.spawn`, `Bun.file` — have no Node equivalent, so
-`engines.bun` is load-bearing rather than advisory.
+`pstack build-image` writes a Dockerfile into a temp context beside a copy of the **running**
+binary (`os.Executable`), on `debian:bookworm-slim` with `bash`, `ca-certificates`, `curl` and the
+docker CLI + compose plugin lifted from `docker:28-cli`. `pstack dockerfile` prints that Dockerfile.
+The image that was running is retagged `pstack:local-previous` first, every time — the one-line
+rollback. It copies the running binary, so it runs on the Linux host; a macOS checkout uses the
+repo's multi-stage `Dockerfile` or `PSTACK_BINARY=<linux binary>`. Nothing is published to a
+registry: `init` wants an image that exists locally, and the host can make one from what it has.
 
 ### Assets are embedded, not read from disk
 
-The web UI and `templates/control/docker-compose.yml` are imported with `with { type: 'text' }`, so
-the bundler **inlines them**. Nothing resolves a path relative to the source at runtime.
-
-That is the whole point. `new URL('../templates/control/docker-compose.yml', import.meta.url)` works
-perfectly from a checkout and does not exist in the published package — the failure mode where a tool
-passes every local test and then `init` dies on a missing template on the one host that matters.
-`build.ts` guards it the only way that proves anything: it runs `--help` against the **emitted
-bundle**, not the sources, and fails the build if that exits non-zero.
+The web UI, the share page, `templates/control/docker-compose.yml` and the cloud-init template are
+`//go:embed`ded (`packages/pstack/assets.go`, five explicit paths — never a glob, so the READMEs
+beside them do not ship). Nothing resolves a path relative to a source tree at runtime; the
+failure mode where a tool passes every local test and then `init` dies on a missing template on
+the one host that matters cannot occur.
 
 The consequence to remember: **editing `templates/control/docker-compose.yml` requires a rebuild.**
 The file on disk is the build input, not what a running `pstack` reads.
@@ -1201,5 +1198,5 @@ The file on disk is the build input, not what a running `pstack` reads.
 - [`../README.md`](../README.md) — the design rationale: axes, the `down`/`verify` asymmetry, scope
 - [`usage.md`](usage.md) — the task guide, including the CLI workflows CI should use
 - [`bootstrap.md`](bootstrap.md) — building a host from scratch
-- [`../src/registry.ts`](../src/registry.ts) — the storage contract, heavily commented
-- [`../src/spec.ts`](../src/spec.ts) — `kind`, `requires`, interpolation
+- [`../packages/pstack/internal/registry/registry.go`](../packages/pstack/internal/registry/registry.go) — the storage contract, heavily commented
+- [`../packages/pstack/internal/spec/spec.go`](../packages/pstack/internal/spec/spec.go) — `kind`, `requires`, interpolation

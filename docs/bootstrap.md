@@ -108,9 +108,7 @@ name that is not "the UI host". (The older `pstack.<domain>` is gone.)
 | ~~A DNS provider API token~~ | **not needed.** Only the opt-in `--challenge dns01` path wants one (§3) |
 | A git remote holding your `preview.yml` + `hooks/` | only if you drive the CLI **on the host**; specs submitted over HTTP travel as strings |
 
-Bun is a runtime requirement (`engines.bun >= 1.3.0`) — cloud-init installs it in §4. There is no
-Node fallback: pstack uses `Bun.serve`, `Bun.YAML`, `Bun.spawn` and `Bun.file`, which have no Node
-equivalent.
+pstack itself is one static binary (§4 installs it); it needs no runtime of any kind on the host.
 
 ### Sizing: previews are RAM-hungry and Docker gives you no protection by default
 
@@ -308,50 +306,44 @@ those labels when you switch modes.
 
 ## 4. The cloud-init file
 
-**Prefer generating this file**: `pstack cloud-init` fills every placeholder, **pins bun and pstack to
-the versions that rendered it** (a saved file reused months later otherwise installs whatever is
+**Prefer generating this file**: `pstack cloud-init` fills every placeholder, **pins pstack to the
+version that rendered it** (a saved file reused months later otherwise installs whatever is
 latest that day), and targets other distros with
 `--distro ubuntu|debian|fedora|suse|arch|alpine` — apt vs dnf vs zypper vs pacman vs apk, and OpenRC
 instead of systemd on Alpine, are handled per distro. The hand-written file below is the annotated
 reference for what the generator emits (Ubuntu form).
 
 Save as `cloud-init.yaml`. Replace every `example.com`, `<you>` and `CHANGEME` placeholder — and pin
-the two installs marked below to the versions you mean to run.
+the pstack install marked below to the version you mean to run.
 
-The file does four things, in this order: install **Docker**, install **Bun + pstack (a global
-package)**, get a **control image** onto the box, then hand over to **`pstack init`**. The split
+The file does four things, in this order: install **Docker**, install **pstack (one static
+binary)**, get a **control image** onto the box, then hand over to **`pstack init`**. The split
 matters — `init` owns the control stack's compose file, `.env` and `dns.env`; everything else on the
 box is a *host input* it mounts rather than owns, so re-rendering the stack never touches your
 inputs and rotating a secret never means re-rendering the stack.
 
-### `pstack` installs globally
+### `pstack` is one binary
 
-There is no `git clone` of pstack and no `bun install`. What ships on npm is a **bundle**:
-`dist/cli.js` (~74 KB) and `dist/index.js`, both `--target=bun`, minified, with sourcemaps. The
-published tarball is **8 files / 0.36 MB** and contains **no source, no docs, no examples, no
-skills** — the UI and the control-stack compose template are `with { type: 'text' }` imports inlined
-into the bundle, so nothing is read from a path relative to the source at runtime.
+There is no `git clone` of pstack and nothing to install beside it. A release is a static Go
+binary per platform (`pstack_linux_amd64`, `pstack_linux_arm64`, and the two macOS ones) on
+GitHub Releases, with a `checksums.txt` and an `install.sh` that verifies against it:
 
 ```bash
-bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh
 pstack --help
 ```
 
-Working from a checkout (`bun src/cli.ts …`) is now the **contributor** path, not the user path.
+The installer puts the binary at `/usr/local/bin/pstack` — on `PATH` for every user, including a
+systemd unit or a `runcmd` step with no `HOME` — and the cloud-init runs `pstack --version` right
+after, so a broken download fails loudly at boot instead of quietly later. `PSTACK_VERSION=x.y.z`
+pins; `PSTACK_INSTALL_DIR` relocates. The web UI, the share page, the control-stack compose
+template and the cloud-init template are embedded in the binary, so nothing is read from a path
+relative to a source tree at runtime.
 
-> **Why a bundle and not `bun build --compile`?** A standalone executable bakes in the Bun runtime
-> (~60 MB) *per platform*, which for npm means either a 5-platform `optionalDependencies` matrix or a
-> postinstall download. A bundle is ~74 KB and Bun is already required (`engines.bun`), and there is
-> no Node fallback to preserve because `Bun.serve` / `Bun.YAML` / `Bun.spawn` / `Bun.file` have no
-> Node equivalent.
+Working from a checkout (`go run ./packages/pstack/cmd/pstack …`) is the **contributor** path, not
+the user path.
 
-**Mind the global bin directory.** `bun add -g` links its shims into `$BUN_INSTALL/bin`; the
-cloud-init below installs Bun with `BUN_INSTALL=/usr/local`, so the shim lands at
-`/usr/local/bin/pstack` — on `PATH` for every user, including a systemd unit or a `runcmd` step with
-no `HOME`. It prints `bun pm bin -g` and then runs `/usr/local/bin/pstack --help`, so a wrong bin
-directory fails loudly at boot instead of quietly later.
-
-### The control image: the one thing a global install does not give you
+### The control image: the one thing the install does not give you
 
 `pstack init` **requires the control image to already exist locally**. Its precondition is
 `docker image inspect <image>`, which **does not pull** — so on a fresh box the default
@@ -360,16 +352,19 @@ anything. This is a real gap in the credential-free happy path; pick one of two 
 
 | Option | What you do | Cost |
 |---|---|---|
-| **`pstack build-image`** *(what the cloud-init below does)* | run it once after installing the CLI, then `init` with **no** `PSTACK_IMAGE` — it tags `pstack:local`, which is already the default | ~1–2 min of build time and some RAM per upgrade. **No checkout, no registry**: the published bundle is the whole application, so the build context is assembled from the installed package |
+| **`pstack build-image`** *(what the cloud-init below does)* | run it once after installing the CLI, then `init` with **no** `PSTACK_IMAGE` — it tags `pstack:local`, which is already the default | ~1 min of build time per upgrade. **No checkout, no registry**: the binary is the whole application, so the build context is a copy of it plus a generated Dockerfile |
 | **Pull from a registry** | `docker pull <registry>/pstack:<tag>`, then run `init` with `PSTACK_IMAGE=<registry>/pstack:<tag>` | you must publish the image somewhere the box can pull. **No source on the host**, and boots are seconds instead of minutes |
 
 **Building on the host is the default here** because it needs nothing but the CLI you just
-installed: `pstack build-image` generates its own Dockerfile over the package's `dist/`, so the image
-always matches the CLI on that box. Upgrading is `bun install -g @samyx/preview-stacks` followed by
-`pstack build-image` — no clone, and no image to publish.
+installed: `pstack build-image` generates its own Dockerfile and copies the running binary into
+the context, so the image always matches the CLI on that box — and the image that was running is
+kept as `pstack:local-previous`, the one-line rollback. Upgrading is `pstack upgrade` — the
+installer, then `build-image`, then `init` with the same token — no clone, and no image to publish.
+(It copies the *running* binary, so it runs on the Linux host; on a macOS checkout, use the repo's
+`Dockerfile` or point `PSTACK_BINARY` at a Linux build.)
 
-(A source checkout still works and is what CI uses — the repo's own `Dockerfile` builds the bundle in
-a multi-stage build. You just no longer need one on a host.)
+(A source checkout still works and is what CI uses — the repo's own `Dockerfile` builds the binary
+in a multi-stage build. You just no longer need one on a host.)
 
 Switch to a registry pull when build time per boot starts to hurt, or when you want boxes that carry
 no source at all.
@@ -414,7 +409,6 @@ packages:
   - ca-certificates
   - curl
   - git
-  - unzip          # the Bun installer needs it
   - jq
   - openssl       # for a basic-auth hash, if you add one (§5)
 
@@ -449,49 +443,29 @@ runcmd:
       docker-buildx-plugin docker-compose-plugin
   - systemctl enable --now docker
 
-  # 2. Bun, installed system-wide.
-  #    runcmd runs as root, so a default install lands in /root/.bun where the `preview` user
-  #    cannot execute it. BUN_INSTALL=/usr/local puts the binary at /usr/local/bin/bun.
-  #    PIN THIS (the generator does): `| bash -s "bun-vX.Y.Z"` — unpinned, a re-provision months
-  #    later gets a different runtime under the same config file.
-  - BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.12"'
-  - /usr/local/bin/bun --version
+  # 2. pstack — ONE STATIC BINARY from GitHub Releases, pinned.
+  #    The installer verifies the download against the release's checksums.txt and puts the binary
+  #    at /usr/local/bin/pstack: on PATH for every user, including this runcmd with no HOME.
+  #    PIN THIS (the generator does): PSTACK_VERSION=<x.y.z> and the matching release path —
+  #    unpinned, a re-provision months later installs a control plane the rest of this file was
+  #    never written for. The --version line is the check, HERE in cloud-init-output.log.
+  - bash -c 'curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v0.29.0/install.sh | PSTACK_VERSION=0.29.0 sh'
+  - /usr/local/bin/pstack --version
 
-  # 3. pstack, as a GLOBAL PACKAGE — a ~74 KB bundle, no checkout, no `bun install`.
-  #    BUN_INSTALL again, so the shim lands at /usr/local/bin/pstack instead of /root/.bun/bin.
-  #    The last two lines are the check: print where the shim went, then run it by absolute path so
-  #    a wrong bin directory fails HERE, in cloud-init-output.log, and not later under a different
-  #    HOME. (Installing a local tarball — `npm i -g ./samyx-preview-stacks-<v>.tgz` — is the same
-  #    8-file artifact if you are on a pre-release build.)
-  # `bun add -g @samyx/preview-stacks` is the path once the package is published. Until then —
-  # and whenever you want the image built on the box rather than pulled — install from the
-  # checkout, which is also what supplies the Dockerfile in step 4.
-  - git clone --depth 1 https://github.com/<you>/preview-stacks.git /opt/preview/pstack
-  - cd /opt/preview/pstack && bun install --frozen-lockfile && bun scripts/build.ts
-  # Expose it on PATH with a symlink, NOT `bun link`: `bun link` registers the package so another
-  # project can depend on it, but it does not install the `bin` shim, so `pstack` stays unknown to
-  # the shell. The bundle carries `#!/usr/bin/env bun` and the exec bit (scripts/build.ts sets
-  # both), so a symlink is all that is needed — and it keeps pointing at the checkout, so a later
-  # `git pull && bun scripts/build.ts` upgrades the CLI with no reinstall.
-  - ln -sf /opt/preview/pstack/dist/cli.js /usr/local/bin/pstack
-  - BUN_INSTALL=/usr/local /usr/local/bin/bun pm bin -g
-  - /usr/local/bin/pstack --help
-
-  # 4. The control image. `init`'s precondition is `docker image inspect`, which does NOT pull, so
-  #    it must be here BEFORE init runs (§4). Registry option shown; the alternative is to clone
-  #    `pstack build-image` — see the table above.
-  #    BUILD ON THE BOX from the checkout above. The tag `pstack:local` is PSTACK_IMAGE's default,
+  # 3. The control image. `init`'s precondition is `docker image inspect`, which does NOT pull, so
+  #    it must be here BEFORE init runs (§4).
+  #    BUILT ON THE BOX from the installed binary. The tag `pstack:local` is PSTACK_IMAGE's default,
   #    so `init` needs no PSTACK_IMAGE at all — nothing to publish, no registry login, and the
-  #    image always matches the source on this host. Costs ~1–2 min of build time per boot; switch
+  #    image always matches the binary on this host. Costs ~1 min of build time per boot; switch
   #    to a registry pull when that matters (§4).
   - /usr/local/bin/pstack build-image
 
-  # 5. Optional: your preview config, for driving the CLI from the host or from a cron sweep.
+  # 4. Optional: your preview config, for driving the CLI from the host or from a cron sweep.
   #    Not needed for the API path — a submitted spec travels over HTTP as a string.
   - git clone --depth 1 https://github.com/<you>/<your-project>.git /opt/preview/config
   - chown -R preview:preview /opt/preview
 
-  # 6. Stand up the control stack — FROM THE HOST, via `pstack init`.
+  # 5. Stand up the control stack — FROM THE HOST, via `pstack init`.
   #
   #    This is deliberately the host's job and never the API's: the API cannot recreate the stack
   #    that contains it without killing the process doing the work, and a bad image would leave
@@ -514,7 +488,7 @@ runcmd:
     --domain preview.example.com
     --acme-email ops@example.com
 
-  # 7. Verify before you walk away — HOST-LOCAL only. There is no published host port (the pstack
+  # 6. Verify before you walk away — HOST-LOCAL only. There is no published host port (the pstack
   #    container is reached through Traefik), and DNS/TLS may not be ready this early, so check the
   #    container's own healthcheck — the same probe `init` waits on. Public checks are §6.
   - docker compose -p pstack-control ps
@@ -676,9 +650,9 @@ Run these in order; each one isolates a different failure.
 # ── cloud-init actually finished ──────────────────────────────────────────────────────
 cloud-init status --long
 
-# ── pstack is on PATH, from the global bundle ─────────────────────────────────────────
-pstack --help | head -3
-bun pm bin -g          # where `bun add -g` put the shim; expect /usr/local/bin
+# ── pstack is on PATH ─────────────────────────────────────────────────────────────────
+pstack --version
+command -v pstack      # expect /usr/local/bin/pstack
 
 # ── both external networks exist (created by `init`) ──────────────────────────────────
 docker network ls --filter name=preview-
@@ -769,8 +743,8 @@ From the host, never over HTTP — the API cannot recreate the stack containing 
 curl -s https://api.preview.example.com/api/jobs | jq '[.jobs[] | select(.state == "running")]'
 
 # 2. new pstack CLI + control image. Neither needs a checkout (§4).
-bun install -g @samyx/preview-stacks     # the CLI
-pstack build-image                       # the control image, from the package you just installed
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh   # the CLI
+pstack build-image                       # the control image, from the binary you just installed
 
 # 3. re-run init — idempotent, and the ONLY supported way to change any of this.
 #    Re-pass the FULL configuration, including the challenge mode (see the warning below).
@@ -851,7 +825,7 @@ hcloud server create --name preview-worker-1 --type cx32 --image ubuntu-24.04 \
 pstack swarm
 ```
 
-The worker runs Docker and nothing else: no Bun, no pstack, no control stack. Everything is managed
+The worker runs Docker and nothing else: no pstack, no control stack. Everything is managed
 from the manager. Before booting it, open — between the worker and **every** other node, not to the
 internet —
 
@@ -1099,8 +1073,8 @@ sudo cloud-init schema --system --annotate     # YAML that cloud-init rejected
 | Symptom | Cause |
 |---|---|
 | `usermod: group 'docker' does not exist` | you dropped the top-level `groups:` block — the `users` stage runs before `runcmd` installs Docker |
-| `bun: command not found` | Bun installed to `/root/.bun`; use `BUN_INSTALL=/usr/local` and absolute paths |
-| `pstack: command not found`, or it works for root and not for `preview` | `bun add -g` linked the shim into `$BUN_INSTALL/bin` of whatever `BUN_INSTALL`/`HOME` was in effect. Check `bun pm bin -g`; the cloud-init sets `BUN_INSTALL=/usr/local` on the `add -g` line for exactly this reason |
+| `pstack: command not found`, or it works for root and not for `preview` | the installer put it somewhere not on that user's PATH (`PSTACK_INSTALL_DIR`). The cloud-init leaves the default, `/usr/local/bin`, for exactly this reason; `command -v pstack` says where it is |
+| `pstack: checksum mismatch` | a truncated or tampered download — the installer refuses it. Re-run; if it persists, fetch `checksums.txt` from the release page and compare by hand |
 | Steps after a failing line never ran | a non-zero `runcmd` step aborts the rest of cloud-init. That is what `\|\| true` is for on idempotent steps |
 | Whole file ignored | missing `#cloud-config` first line, or a tab character anywhere in the YAML |
 

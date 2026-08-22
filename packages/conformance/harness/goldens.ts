@@ -16,13 +16,11 @@ export type CliGolden = {
   code: number;
   stdout: string;
   stderr: string;
-  /** Source of the regexp whose lines diverge by design between TS and Go. */
-  goDivergent?: string;
 };
 
 /**
- * Replace what legitimately varies: the data dir, the implementation's version, Bun's version
- * (stamped into cloud-init), a generated token, and the tmp root. Everything else is the contract.
+ * Replace what legitimately varies: the data dir, the implementation's version, a generated token,
+ * and the tmp root. Everything else is the contract.
  */
 export function mask(text: string, version: string): string {
   const tmp = process.env.TMPDIR ?? '/tmp';
@@ -31,16 +29,6 @@ export function mask(text: string, version: string): string {
     .split(`/private${DATA_DIR}`).join('<DATA>')
     .split(TOKEN).join('<TOKEN>')
     .replace(/PSTACK_TOKEN=[0-9a-f]{48}/g, 'PSTACK_TOKEN=<GENERATED_TOKEN>')
-    .replace(/bun-v\d+\.\d+\.\d+/g, 'bun-v<BUN_VERSION>')
     .split(version).join('<VERSION>')
     .split(tmp.replace(/\/$/, '')).join('<TMP>');
-}
-
-/** Drop the lines that diverge by design, on both sides, before comparing in go mode. */
-export function withoutDivergent(text: string, re: RegExp | undefined): string {
-  if (!re) return text;
-  return text
-    .split('\n')
-    .filter((l) => !re.test(l))
-    .join('\n');
 }

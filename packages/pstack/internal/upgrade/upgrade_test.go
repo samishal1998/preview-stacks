@@ -463,7 +463,7 @@ func goldenStderr(t *testing.T, name string) string {
 	return e
 }
 
-// The conformance transcripts for `upgrade -n --to 0.28.1` and `ui <other> -n` over each init cell:
+// The conformance transcripts for `upgrade -n --to 0.29.1` and `ui <other> -n` over each init cell:
 // the runner's `[dry-run]` lines and Upgrade's own, interleaved on one writer. The CLI appends a
 // trailing "Dry run — …" paragraph after Upgrade returns; that is cli's, not ours.
 func TestUpgradeGoldens(t *testing.T) {
@@ -492,14 +492,12 @@ func TestUpgradeGoldens(t *testing.T) {
 					// negative control: print the resume plan before the install steps — the line order differs.
 					var out bytes.Buffer
 					runner := exec.New(exec.Options{DryRun: true, Out: &out})
-					if _, err := Upgrade(Options{DataDir: dataDir, Target: "0.28.1", Runner: runner, Log: func(l string) { out.WriteString(l + "\n") }}); err != nil {
+					if _, err := Upgrade(Options{DataDir: dataDir, Target: "0.29.1", Runner: runner, Log: func(l string) { out.WriteString(l + "\n") }}); err != nil {
 						t.Fatal(err)
 					}
 					want, _ := goldenCLI(t, "upgrade-plan-"+name)
 					want = strings.TrimSuffix(want, "\n  Dry run — nothing was installed, built or recreated.\n")
 					got := strings.ReplaceAll(out.String(), version.Get(), "<VERSION>")
-					// The install line is the one that diverges by design (npm there, the installer here).
-					got, want = testfacts.WithoutDivergent(got), testfacts.WithoutDivergent(want)
 					if got != want {
 						t.Errorf("transcript differs\n--- got\n%s\n--- want\n%s", got, want)
 					}

@@ -59,7 +59,7 @@ axes:
 Two distinct carriers, both inside `Job.outcome`:
 
 **1. `outcome.outputs` — the designed credential channel.** `up` captures every `KEY=VALUE` line a
-provision hook prints (`captureOutputs`, `src/exec.ts`) and merges it into the environment of later
+provision hook prints (`CaptureOutputs`, `internal/exec`) and merges it into the environment of later
 axes. That is the *documented* way to pass a freshly-created resource's address to the axis that
 needs it, and the unit test for it asserts precisely `DATABASE_URL=postgres://x`. So this field holds
 connection strings **by design**, and `Job.outcome` is returned whole:
@@ -87,7 +87,7 @@ steps[1].message → "connecting with api_key=EXAMPLE-PLACEHOLDER-NOT-A-KEY"
   suspected and it is not the problem; the JSON job reads are.
 - **Deployment reads carry hook *names* only** (`hooks: ['up','down','assert_gone']`), never bodies,
   and their `env` goes through `displayDeclared`, which masks by name.
-- **Container logs go through `redactText`** (`src/redact.ts`) — it masks this process's own token,
+- **Container logs go through `RedactText`** (`internal/redact`) — it masks this process's own token,
   rewrites `scheme://user:password@host`, and blanks `NAME=value` where `NAME` reads as a secret. That
   is heuristic, not a guarantee (an app printing `Bearer eyJ…` sails through), but the route is
   defended rather than naked, and it is a *lower* priority than the job reads.
