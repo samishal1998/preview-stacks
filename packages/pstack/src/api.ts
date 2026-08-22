@@ -5,6 +5,9 @@
  *   POST   /api/auth/login                { username, password } → session cookie  (no auth)
  *   POST   /api/auth/logout               clears the session                       (no auth)
  *   POST   /api/auth/bootstrap            first admin, PSTACK_TOKEN bearer, only while none exist
+ *   GET    /api/auth/sso/start            → 302 to the provider (no auth — this is how you sign in)
+ *   GET    /api/auth/sso/callback         → session cookie + 302 back into the UI  (no auth)
+ *   GET|PUT|DELETE /api/sso/config        the operator's identity provider (the secret is never read back)
  *   GET    /api/auth/me                   who am I
  *   GET|POST /api/users, DELETE /api/users/:id
  *   PUT    /api/users/:id/password       { password } — also revokes that user's sessions+tokens
@@ -130,6 +133,24 @@ import { parseDuration } from './spec.ts';
 import { Scheduler, SleepIndex, TrafficMeter, formatDuration, splitHosts, wakePage } from './scheduler.ts';
 import { STACK_LABEL, SWARM_PORTS, joinMaterial, swarmInfo } from './swarm.ts';
 import { SHARE_VIEWS, looksLikeShareToken, signShare, verifyShare, type ShareView } from './share.ts';
+import {
+  PRESETS,
+  SsoError,
+  authorizeUrl,
+  describeError,
+  discover,
+  endpointsFor,
+  exchangeCode,
+  fetchJson,
+  forgetDiscovery,
+  mapClaims,
+  parseSsoConfig,
+  pkce,
+  primaryEmail,
+  randomB64Url,
+  safeNext,
+  verifyIdToken,
+} from './sso.ts';
 
 import { publicConfig, redactForNotifier, typeOf } from './notify.ts';
 import { HostVars, HostVarsError } from './hostvars.ts';
@@ -185,6 +206,12 @@ export type ServerOptions = {
   metricsUrl?: string;
   /** Scheduler tuning — a minute on a host, milliseconds in a test. `fetchImpl` feeds metrics text in. */
   scheduler?: { tickMs?: number; fetchImpl?: (url: string) => Promise<string | null> };
+  /**
+   * How long a half-finished SSO sign-in is remembered (default 300s — a consent screen, not a
+   * nap). Injectable for the same reason the readiness timings are: an expiry a test can actually
+   * reach is the only way the expired-state path is ever really exercised.
+   */
+  sso?: { stateTtlS?: number };
 };
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -506,6 +533,34 @@ export function createServer(opts: ServerOptions) {
     return `pstack_session=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
   };
 
+  /**
+   * This service's own base URL.
+   *
+   * From CONFIG (`PSTACK_DOMAIN`) whenever there is one, and only then from the request's headers.
+   * That matters most for SSO: `redirect_uri` must be byte-identical between the authorize leg, the
+   * token exchange and what the operator registered with the provider, and a value derived from a
+   * forwarded header is a value the caller can change. The header fallback is for a loopback dev
+   * run, which has no domain to read.
+   */
+  const baseUrl = (req: Request, url: URL): string => {
+    if (opts.domain) return `https://control.${opts.domain}`;
+    const proto = req.headers.get('x-forwarded-proto') ?? url.protocol.replace(':', '');
+    return `${proto}://${req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host}`;
+  };
+
+  /**
+   * The ONE callback URL, for every provider. It sits under `/api/` deliberately: in advanced-UI
+   * mode `control.<domain>` is nginx serving the SPA, and `/api/` is the only prefix it proxies to
+   * this process — a callback anywhere else would be answered with `index.html`, and the login
+   * would hang with nothing in any log to say why.
+   */
+  const ssoCallbackUrl = (req: Request, url: URL): string => `${baseUrl(req, url)}/api/auth/sso/callback`;
+
+  /** What the config read endpoint returns in place of the client secret. */
+  const SECRET_MASK = '••••••••';
+  /** How long a half-finished sign-in is remembered. Five minutes is a consent screen, not a nap. */
+  const SSO_STATE_TTL_S = opts.sso?.stateTtlS ?? 5 * 60;
+
   /** Forget the sleep record, reading the current one rather than the copy a request resolved earlier. */
   const clearSleep = async (id: string): Promise<void> => {
     const now = await registry.get(id).catch(() => null);
@@ -781,6 +836,12 @@ export function createServer(opts: ServerOptions) {
           // Whether accounts exist — the login page needs this BEFORE authenticating, to say
           // "sign in" versus "no accounts yet, bootstrap one" instead of a dead login form.
           hasUsers: auth.userCount() > 0,
+          // What the login page needs BEFORE authenticating: whether to draw the button, and what
+          // to write on it. Never anything else about the provider.
+          sso: (() => {
+            const stored = auth.ssoConfig();
+            return stored?.config.enabled ? { enabled: true, label: stored.config.label } : null;
+          })(),
           dataDir: opts.dataDir,
           version: pkg.version,
         });
@@ -830,8 +891,156 @@ export function createServer(opts: ServerOptions) {
           if (!user) return json({ error: 'accounts already exist — bootstrap is only for the first one' }, { status: 409 });
           return json({ user }, { status: 201 });
         }
+
+        // ---- single sign-on: the round trip ---------------------------------------
+        // Both legs are pre-gate for the same reason login is: this IS how someone signs in.
+
+        /**
+         * Both legs are reached by NAVIGATION, never by fetch — nothing calls them from script, and
+         * there is no SDK method for them. So every failure has to end somewhere a person can read:
+         * the login page, carrying the reason. A JSON body here would be a raw `{"error":…}` painted
+         * in the address bar of someone who clicked "Sign in with Corp".
+         */
+        const ssoFailed = (message: string): Response =>
+          new Response(null, {
+            status: 302,
+            headers: { location: `/login?sso_error=${encodeURIComponent(message)}`, 'cache-control': 'no-store' },
+          });
+
+        if (path === '/api/auth/sso/start' && req.method === 'GET') {
+          const stored = auth.ssoConfig();
+          if (!stored || !stored.config.enabled) return ssoFailed('single sign-on is not configured on this host');
+          try {
+            // Discovery can be down or moved (a tenant migration) — the realistic failure here, and
+            // the one that must not be a JSON blob.
+            const endpoints = await endpointsFor(stored.config);
+            const { verifier, challenge } = pkce();
+            const state = randomB64Url(32);
+            // The verifier is the half the provider never sees; parking it server-side under the
+            // state is what makes an intercepted `code` useless to anyone but this process.
+            await auth.transient.set(
+              `sso:${state}`,
+              JSON.stringify({ verifier, next: safeNext(url.searchParams.get('next')) }),
+              SSO_STATE_TTL_S,
+            );
+            const to = authorizeUrl(stored.config, endpoints, {
+              redirectUri: ssoCallbackUrl(req, url),
+              state,
+              challenge,
+            });
+            return new Response(null, { status: 302, headers: { location: to, 'cache-control': 'no-store' } });
+          } catch (err) {
+            if (err instanceof SsoError) return ssoFailed(err.message);
+            throw err;
+          }
+        }
+
+        if (path === '/api/auth/sso/callback' && req.method === 'GET') {
+          // Whoever is here is a BROWSER coming back from a consent screen — see `ssoFailed`.
+          const back = ssoFailed;
+
+          const stored = auth.ssoConfig();
+          if (!stored || !stored.config.enabled) return back('single sign-on is not configured');
+
+          // The provider refused (consent denied, app suspended, wrong redirect_uri). Its own words.
+          const refused = describeError(Object.fromEntries(url.searchParams));
+          if (refused) return back(refused);
+
+          const state = url.searchParams.get('state') ?? '';
+          const code = url.searchParams.get('code') ?? '';
+          if (!state || !code) return back('the provider did not return an authorization code');
+
+          // READ AND DELETE IN ONE STATEMENT. Single-use state is what stops a replayed callback,
+          // and a get-then-delete pair has a window where two requests both find the same row.
+          const parked = await auth.transient.take(`sso:${state}`);
+          if (!parked) return back('this sign-in has expired or was already used — try again');
+          const { verifier, next } = JSON.parse(parked) as { verifier: string; next: string };
+
+          try {
+            const endpoints = await endpointsFor(stored.config);
+            const token = await exchangeCode(
+              stored.config,
+              endpoints,
+              { code, redirectUri: ssoCallbackUrl(req, url), verifier, clientSecret: stored.clientSecret },
+            );
+
+            let identity;
+            let providerKey: string;
+            if (stored.config.mode === 'oidc') {
+              if (!token.id_token) {
+                throw new SsoError('the provider returned no id token — is "openid" in the scopes?');
+              }
+              const claims = await verifyIdToken(token.id_token, {
+                issuer: endpoints.issuer,
+                clientId: stored.config.clientId,
+                jwksUri: endpoints.jwksUri,
+              });
+              identity = mapClaims(claims, stored.config.claimMap);
+              // Userinfo is the FALLBACK, not the default: a provider that puts everything in the
+              // id token should not cost a second round trip on every login. The id token's claims
+              // still win the merge — it is the signed half.
+              if (!identity.email && endpoints.userInfoUrl && token.access_token) {
+                const extra = await fetchJson(endpoints.userInfoUrl, token.access_token).catch(() => null);
+                if (extra && typeof extra === 'object') {
+                  identity = mapClaims({ ...(extra as Record<string, unknown>), ...claims }, stored.config.claimMap);
+                }
+              }
+              // The issuer, not the hostname someone typed: two configs pointing at one issuer are
+              // the same directory and must resolve to the same links.
+              providerKey = endpoints.issuer;
+            } else {
+              providerKey = stored.config.provider || 'custom';
+              if (endpoints.userInfoUrl) {
+                if (!token.access_token) throw new SsoError('the provider returned no access token');
+                identity = mapClaims(await fetchJson(endpoints.userInfoUrl, token.access_token), stored.config.claimMap);
+              } else {
+                // No userinfo endpoint configured: the subject comes from the token response and
+                // that is the whole identity — no name, no email, no avatar.
+                identity = mapClaims(token, stored.config.claimMap);
+              }
+            }
+
+            // A provider that keeps the address off the profile serves it from a second endpoint
+            // (GitHub's private-email default). Only asked for when it is actually missing.
+            if (!identity.email && endpoints.emailsUrl && token.access_token) {
+              const found = primaryEmail(await fetchJson(endpoints.emailsUrl, token.access_token).catch(() => null));
+              if (found) {
+                identity.email = found.email;
+                identity.emailVerified = found.verified;
+              }
+            }
+
+            const { session, user, how } = await auth.ssoSignIn(providerKey, identity, {
+              defaultRole: stored.config.defaultRole,
+              allowedEmailDomains: stored.config.allowedEmailDomains,
+            });
+            // Adoption is the one outcome worth a line in the log: an SSO identity took over an
+            // account that already existed locally, and nobody clicked anything to approve it.
+            if (how !== 'linked') {
+              console.error(
+                `[sso] ${how === 'adopted' ? 'linked to existing account' : 'created account'} ` +
+                  `"${user.username}" for ${providerKey} subject ${identity.subject}`,
+              );
+            }
+            return new Response(null, {
+              status: 302,
+              headers: {
+                location: safeNext(next),
+                'cache-control': 'no-store',
+                'set-cookie': sessionCookie(req, session, 30 * 24 * 60 * 60),
+              },
+            });
+          } catch (err) {
+            if (err instanceof SsoError || err instanceof AuthError) return back(err.message);
+            throw err;
+          }
+        }
       } catch (err) {
         if (err instanceof AuthError) return json({ error: err.message }, { status: 400 });
+        // Pre-gate routes are outside the big handler below, so this is the only place an SSO
+        // failure on `/start` can be turned into a message instead of a 500. 502, not 400: what
+        // failed is the provider, not the request.
+        if (err instanceof SsoError) return json({ error: err.message }, { status: 502 });
         throw err;
       }
 
@@ -880,12 +1089,16 @@ export function createServer(opts: ServerOptions) {
       }
       if (path === '/api/users' && req.method === 'POST') {
         const body = (await req.json().catch(() => null)) as
-          | { username?: unknown; password?: unknown }
+          | { username?: unknown; password?: unknown; email?: unknown }
           | null;
         if (!body || typeof body.username !== 'string' || typeof body.password !== 'string') {
-          return json({ error: 'body must be { username, password }' }, { status: 400 });
+          return json({ error: 'body must be { username, password, email? }' }, { status: 400 });
         }
-        return json({ user: await auth.createUser(body.username, body.password) }, { status: 201 });
+        // The optional email is what makes an SSO login able to ADOPT this account later instead of
+        // creating a second one for the same person (auth.ts `ssoSignIn`). Without it that branch
+        // is unreachable — no other route puts an address on a local account.
+        const email = typeof body.email === 'string' && body.email.trim() ? body.email.trim().toLowerCase() : null;
+        return json({ user: await auth.createUser(body.username, body.password, { email }) }, { status: 201 });
       }
       const um = /^\/api\/users\/(\d+)$/.exec(path);
       if (um && req.method === 'DELETE') {
@@ -1324,14 +1537,59 @@ export function createServer(opts: ServerOptions) {
           const { token, claims } = signShare(opts.token, { deployment: id, views, ttlMs });
           // On the control host when it is known, else wherever this request came from. The path is
           // the SPA's and the API's own public page alike, so either UI mode renders it.
-          const proto = req.headers.get('x-forwarded-proto') ?? url.protocol.replace(':', '');
-          const origin = opts.domain
-            ? `https://control.${opts.domain}`
-            : `${proto}://${req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host}`;
-          const link = `${origin}/deployments/${encodeURIComponent(id)}/public-logs-view?token=${token}`;
+          const link = `${baseUrl(req, url)}/deployments/${encodeURIComponent(id)}/public-logs-view?token=${token}`;
           // What was granted and by whom — never the token (the envelope goes to webhook URLs).
           events.emit('share.created', { deployment: id, stack: null, views, expiresAt: claims.exp * 1000, by: actorOf(who) });
           return json({ url: link, token, views, expiresAt: claims.exp * 1000 }, { status: 201 });
+        }
+
+        // ---- single sign-on: the configuration ------------------------------------------
+        // One provider, one row. The client secret goes IN and never comes back out — the read
+        // returns a mask, and submitting the mask (or nothing) keeps what is stored.
+        if (path === '/api/sso/config') {
+          const stored = auth.ssoConfig();
+          if (req.method === 'GET') {
+            return json({
+              configured: !!stored,
+              // Exactly what the operator must register on their side, built by the same helper the
+              // flow uses — the two cannot drift.
+              callbackUrl: ssoCallbackUrl(req, url),
+              presets: PRESETS.map((p) => ({
+                key: p.key,
+                label: p.label,
+                authorizeUrl: p.authorizeUrl,
+                tokenUrl: p.tokenUrl,
+                userInfoUrl: p.userInfoUrl,
+                scopes: p.scopes,
+                claimMap: p.claimMap,
+              })),
+              config: stored?.config ?? null,
+              clientSecret: stored ? SECRET_MASK : '',
+              updatedAt: stored?.updatedAt ?? null,
+            });
+          }
+          if (req.method === 'PUT') {
+            const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+            if (!body) return json({ error: 'body must be an object' }, { status: 400 });
+            const config = parseSsoConfig(body);
+            const typed = typeof body.clientSecret === 'string' ? body.clientSecret.trim() : '';
+            const secret = typed === SECRET_MASK ? '' : typed;
+            // Validate the provider NOW rather than letting a typo'd issuer surface as somebody's
+            // failed first login. Discovery is refetched (force) and re-cached in the same call.
+            if (config.mode === 'oidc') await discover(config.discoveryUrl, fetch, true);
+            auth.setSsoConfig(config, secret);
+            // Drop the cache so a changed issuer takes effect on the next login, not in an hour.
+            forgetDiscovery();
+            return json({ ok: true, config, callbackUrl: ssoCallbackUrl(req, url) });
+          }
+          if (req.method === 'DELETE') {
+            // The links survive on purpose: those accounts keep their tokens and their history, and
+            // pointing the same provider back at them re-links by subject.
+            forgetDiscovery();
+            return auth.clearSsoConfig()
+              ? json({ ok: true })
+              : json({ error: 'single sign-on was not configured' }, { status: 404 });
+          }
         }
 
         // ---- the swarm ------------------------------------------------------------------
@@ -2442,6 +2700,9 @@ export function createServer(opts: ServerOptions) {
         if (err instanceof RoutingError) return json({ error: err.message }, { status: 400 });
         // A malformed registry host, a missing username, or a directory that is not mounted.
         if (err instanceof RegistryAuthError) return json({ error: err.message }, { status: 400 });
+        // A pasted issuer, a wrong claim name, an unreachable provider: all things the operator
+        // typed, all with a message that names the field.
+        if (err instanceof SsoError) return json({ error: err.message }, { status: 400 });
         if (err instanceof HostVarsError) return json({ error: err.message }, { status: 400 });
         if (err instanceof AuthError) return json({ error: err.message }, { status: 400 });
         // Also the caller's problem: a spec that will not parse, or a name that cannot be a

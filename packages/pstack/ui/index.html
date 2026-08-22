@@ -218,12 +218,23 @@
       after signing in, the token field can stay empty.
     -->
     <template v-if="health.authEnforced === true && !token && !me">
+      <!--
+        The operator's own identity provider, when one is configured. A full NAVIGATION, not a
+        fetch: the point is to leave this origin for their consent screen, and to come back to
+        /api/auth/sso/callback with a session cookie already set.
+      -->
+      <button v-if="health.sso && health.sso.enabled" @click="signInWithProvider">
+        sign in with {{ health.sso.label }}
+      </button>
       <input type="text" v-model.trim="loginUser" placeholder="username"
              autocomplete="username" style="width:110px">
       <input type="password" v-model="loginPass" placeholder="password"
              autocomplete="current-password" style="width:110px" @keyup.enter="signIn">
       <button @click="signIn" :disabled="!loginUser || !loginPass">sign in</button>
       <span v-if="loginError" class="badge warn">{{ loginError }}</span>
+      <!-- The provider refused, or the exchange failed. Its own words, carried in the query string
+           because the callback answers with a redirect and there is no body to read. -->
+      <span v-if="ssoError" class="badge warn">{{ ssoError }}</span>
     </template>
     <span v-else-if="me && me.user" class="muted nowrap">{{ me.user.username }}
       <button class="ghost" @click="signOut">sign out</button></span>
@@ -1439,6 +1450,8 @@ createApp({
       // The signed-in principal from /api/auth/me, or null. Drives the sign-in row.
       me: null,
       loginUser: '', loginPass: '', loginError: '',
+      // Set by the SSO callback when the round trip failed. Read once, at load.
+      ssoError: new URLSearchParams(location.search).get('sso_error') || '',
       health: {}, healthError: '',
 
       control: {}, controlLoaded: false, controlError: '',
@@ -1635,6 +1648,14 @@ createApp({
 
     get(path) { return this.api('GET', path); },
 
+    /**
+     * Leave for the provider's consent screen. `location.assign`, not fetch: the flow is a pair of
+     * redirects and the session cookie is set on the way back, so nothing here has a response to
+     * read. `next` is a same-origin path — the server refuses anything else.
+     */
+    signInWithProvider() {
+      location.assign('/api/auth/sso/start?next=' + encodeURIComponent(location.pathname === '/login' ? '/' : location.pathname + location.hash));
+    },
     async signIn() {
       this.loginError = '';
       const r = await this.api('POST', '/api/auth/login', { username: this.loginUser, password: this.loginPass });
