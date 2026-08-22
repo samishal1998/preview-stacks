@@ -25,11 +25,13 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "bun scripts/build.ts",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "build": "bun scripts/build.ts && go build -o bin/pstack ./cmd/pstack",
+    "build:go": "go build -o bin/pstack ./cmd/pstack",
+    "test": "bun test && go test -race -timeout 120s ./...",
+    "test:go": "go test -race -timeout 120s ./...",
+    "typecheck": "tsc --noEmit && go vet ./...",
     "check:package": "bun scripts/check-package.ts",
-    "check": "bun test && tsc --noEmit && bun scripts/build.ts && bun scripts/check-package.ts",
+    "check": "bun test && tsc --noEmit && bun scripts/build.ts && bun scripts/check-package.ts && go vet ./... && go test -race -timeout 120s ./... && go build -o bin/pstack ./cmd/pstack",
     "prepublishOnly": "bun scripts/build.ts"
   },
   "keywords": [

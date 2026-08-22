@@ -294,6 +294,62 @@ The HTTP tests that moved there still have their originals in `test/stack.test.t
 those are deleted with the rest of `src/` at cutover, not before — the reference keeps its own suite
 until it stops being the reference. A new HTTP-level test belongs in `packages/conformance`.
 
+## The Go port — rules every ported package follows
+
+`packages/pstack/{cmd/pstack,internal/<pkg>,assets.go}` is the Go implementation, one package per
+TypeScript file (`spec.ts → internal/spec`, `init.ts → internal/initctl`; `errors.ts` folds into
+per-package error types; `index.ts` has no counterpart — the binary is the product). Root `go.mod`.
+Foundations: `internal/omap` (the ordered map every document is), `internal/yamlx` (Bun.YAML.parse,
+YAML 1.2 core, resolver of its own), `internal/jsonx` (JSON.stringify: no HTML escaping, no trailing
+newline, ordered), `internal/js` (`.length`, `Number()`, `encodeURIComponent`, URLSearchParams,
+lenient base64url, `esc()`), `internal/version`. Each is graded against `golden/facts`.
+
+The port is a re-implementation against a fixed contract — the conformance suite, the goldens and
+the exact docker argv. These rules are what keep thirty packages byte-compatible:
+
+1. **JSON is structs (field order) or `*omap.Map`/`jsonx.Object` — never `map[string]any`**, and
+   every response, stored payload and signed body goes through `jsonx`. Stored payloads and event
+   `data` are `json.RawMessage`.
+2. **omitempty audit.** Tri-states and null-not-absent fields (`busy`, `running`, `reachable`,
+   `verified`, `stack`, `orchestrator`, `asleep`, `service`, `health`, `exitCode`, `node`, …) are
+   pointers **without** omitempty. Genuinely-absent fields (`unresolved`, `stackSharedWith`,
+   `endedAt`, `outcome`, `error`, `cancelledBy`, `reason`, `hostPort`, …) are pointers **with**
+   omitempty. Never omitempty on a plain bool or int — Go would delete `ok:false`.
+3. **Every `[]T` and map in a response, event payload or stored meta is non-nil at construction.**
+   `null` where the UI expects `[]` is a blank page. `AssertNoNilCollections` in every response test.
+4. Route on `r.URL.EscapedPath()` and decode per segment; query via `js.ParseQuery` (last value
+   wins; numerics via `js.ParseNumber`, kept as float64 — `?tail=1.5` is accepted and echoed).
+5. Wherever JS iterated an object/Map/Set into output (notes, label lists, the missing-variable
+   message, `requiredVars`), use a slice or `omap` — never range a Go map into output.
+6. `sort.SliceStable`; string sorts are byte order (a documented divergence from `localeCompare`).
+7. `.length` that is served or gated → `js.Len`; 300-char truncation → `js.Truncate`;
+   `String(number)` → `js.NumberString`; `Number()` → `js.ParseNumber`.
+8. Templates: init markers `strings.Replace(s, marker, block, 1)`; cloud-init `strings.ReplaceAll`
+   over an ordered list; never `regexp.ReplaceAllString` or `text/template` for either (invariant 18
+   inverts in Go: `$` is nothing to `strings.Replace` and everything to `regexp`).
+9. `escapeHostRegexp` is `regexp.QuoteMeta` (verified: the same fourteen bytes as the JS class);
+   JS flags become `(?i)`/`(?m)` prefixes; a compile error is swallowed where the TS had try/catch.
+10. Files: `0o666`/`0o777` and let umask apply; an explicit `Chmod` only where the TS site chmods;
+    temp-then-rename where the TS does. `meta.json` keeps unknown fields (`Extra map[string]json.RawMessage`).
+11. Env: `??` sites use `os.LookupEnv` presence (empty is a value); `||` sites treat empty as unset;
+    a child process ALWAYS gets an explicit `cmd.Env` (nil inherits — the opposite of Bun).
+12. HTTP clients: notify uses `CheckRedirect = http.ErrUseLastResponse` + a 5 s per-attempt
+    context (a 3xx is a failure, never a hop — that is the SSRF control); sso follows; no client
+    without a timeout.
+13. Hosts: parse with `net/netip`, never compare bracketed strings; WHATWG normalisation
+    (lowercase, empty path → `/`) is explicit where the TS relied on `new URL()`.
+14. Concurrency: every shared struct names its owner or its mutex in a comment; **no method calls a
+    sink, a subscriber or a bus listener while holding a mutex**; goroutines only where listed (the
+    job runner, a delivery send, stream pumps, the watchers), each with `recover`. `events.Emit`
+    dispatches synchronously, in registration order — never `go fn(e)`.
+15. Streams: pumps read to EOF → `wg.Wait()` → `cmd.Wait()` → the terminal frame. Never `Wait`
+    while a pump is still reading. `exec.Command("bash", "-c", cmd)` with `cmd.Cancel` sending
+    SIGTERM (a hook may trap it); no `Setpgid`.
+16. SQLite: one pooled connection. Inside `Store.Tx` use only the `*sql.Tx`; read `Rows` fully and
+    close them before the next statement; a nested `db.*` call is a permanent self-deadlock.
+17. **Every `Test…`/`t.Run` carries a `// negative control:` line naming the mutation that fails
+    it**, and it was run. `go test -race -timeout 120s` is the test command, not an option.
+
 ## How to add things
 
 ### A new hook type
