@@ -160,12 +160,61 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE deliveries ADD COLUMN payload TEXT;
   `,
+  // 6 — SSO: the operator's identity provider, the accounts it maps to, and the PKCE round trip.
+  `
+  -- Nullable, and NULL for every account that predates SSO. That is not a gap to backfill: the
+  -- email-matching branch in Auth.ssoSignIn is deliberately unable to fire for those rows, so an
+  -- account created before this change can only ever be linked by an operator on purpose.
+  ALTER TABLE users ADD COLUMN email TEXT;
+  CREATE INDEX users_by_email ON users (email);
+
+  -- ONE provider. \`CHECK (id = 1)\` is the schema saying so: multiple simultaneous providers are
+  -- explicitly out of scope, and a single row means there is no "which one is active" question to
+  -- get wrong.
+  CREATE TABLE sso_config (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    -- JSON, the SsoConfig shape in sso.ts, WITHOUT the secret.
+    config        TEXT NOT NULL,
+    --
+    -- STORED, NOT HASHED — the notifier-secret precedent (see notifiers.secret above). The token
+    -- exchange must PRESENT this string to the provider, so a one-way form makes the feature
+    -- impossible. "Write-only" means what it means there: no route returns it, the read endpoint
+    -- answers with a mask, and a submit that leaves it empty keeps what is stored rather than
+    -- clearing it. The protection is the 0700 directory and the 0600 file.
+    client_secret TEXT NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+
+  -- IDENTITY IS (provider_key, subject) AND NEVER EMAIL. People change email addresses; a provider
+  -- subject is stable for the life of the account, which is the entire reason this table is keyed
+  -- the way it is. provider_key is kept even though only one provider can be configured, so that
+  -- swapping providers later cannot silently re-link one org's subjects onto another's accounts.
+  CREATE TABLE sso_links (
+    provider_key  TEXT NOT NULL,
+    subject       TEXT NOT NULL,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at    INTEGER NOT NULL,
+    last_login_at INTEGER,
+    PRIMARY KEY (provider_key, subject)
+  );
+  CREATE INDEX sso_links_by_user ON sso_links (user_id);
+
+  -- The PKCE verifier, for the length of one round trip and no longer. The only table here whose
+  -- rows are garbage five minutes after they are written; SqliteTransientStore sweeps on write.
+  CREATE TABLE sso_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export type UserRow = {
   id: number;
   username: string;
   role: string;
+  /** From an SSO provider's claims; null for every locally-created account. */
+  email: string | null;
   createdAt: number;
 };
 

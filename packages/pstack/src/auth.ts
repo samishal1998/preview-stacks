@@ -8,7 +8,9 @@
  *   1. `PSTACK_TOKEN` — the root/machine credential. It PREDATES accounts, `init` generates it, and
  *      CI pipelines hold it; retiring it would be a forced migration for every caller. It stays.
  *   2. A personal API token (`pstack_pat_…`) — per user, for scripts that should not hold root.
- *   3. A session — httpOnly cookie set by username+password login. Cookies are the deliberate
+ *   3. A session — httpOnly cookie set by username+password login, OR by a completed SSO round trip
+ *      (sso.ts): an SSO login mints exactly the same row, so nothing downstream of the cookie —
+ *      the gate, the terminal, personal tokens — knows the difference. Cookies are the deliberate
  *      choice, not an implementation detail: `EventSource` (the job log stream) and `WebSocket`
  *      (the coming terminal) cannot send an `Authorization` header from a browser, but the browser
  *      attaches cookies to both automatically on the same origin. Session auth is what makes those
@@ -31,6 +33,16 @@
  */
 
 import type { Store, UserRow } from './store.ts';
+import {
+  emailAllowed,
+  parseSsoConfig,
+  sanitizeUsername,
+  SqliteTransientStore,
+  SsoError,
+  type SsoConfig,
+  type SsoIdentity,
+  type TransientStore,
+} from './sso.ts';
 
 export class AuthError extends Error {}
 
@@ -61,15 +73,28 @@ function randomSecret(prefix: string): string {
   return `${prefix}${[...b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
 }
 
-const toUser = (r: {
+type UserCols = {
   id: number;
   username: string;
   role: string;
+  email: string | null;
   created_at: number;
-}): UserRow => ({ id: r.id, username: r.username, role: r.role, createdAt: r.created_at });
+};
+
+const toUser = (r: UserCols): UserRow => ({
+  id: r.id,
+  username: r.username,
+  role: r.role,
+  email: r.email ?? null,
+  createdAt: r.created_at,
+});
+
+/** Every column `toUser` needs, spelled once — five queries used to drift apart on this. */
+const USER_COLS = 'id, username, role, email, created_at';
 
 export class Auth {
   #store: Store;
+  #transient: TransientStore | undefined;
 
   constructor(store: Store) {
     this.#store = store;
@@ -81,7 +106,11 @@ export class Auth {
     return (this.#store.db.query('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n;
   }
 
-  async createUser(username: string, password: string): Promise<UserRow> {
+  async createUser(
+    username: string,
+    password: string,
+    opts?: { role?: string; email?: string | null },
+  ): Promise<UserRow> {
     if (!USERNAME.test(username)) {
       throw new AuthError(
         `username must match ${USERNAME} — lowercase, 2–32 chars, letters/digits/._-`,
@@ -94,14 +123,9 @@ export class Auth {
     try {
       const row = this.#store.db
         .query(
-          'INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?) RETURNING id, username, role, created_at',
+          `INSERT INTO users (username, password_hash, role, email, created_at) VALUES (?, ?, COALESCE(?, 'admin'), ?, ?) RETURNING ${USER_COLS}`,
         )
-        .get(username, hash, Date.now()) as {
-        id: number;
-        username: string;
-        role: string;
-        created_at: number;
-      };
+        .get(username, hash, opts?.role ?? null, opts?.email ?? null, Date.now()) as UserCols;
       return toUser(row);
     } catch (err) {
       if (String(err).includes('UNIQUE')) throw new AuthError(`user "${username}" already exists`);
@@ -112,8 +136,8 @@ export class Auth {
   listUsers(): UserRow[] {
     return (
       this.#store.db
-        .query('SELECT id, username, role, created_at FROM users ORDER BY username')
-        .all() as Array<{ id: number; username: string; role: string; created_at: number }>
+        .query(`SELECT ${USER_COLS} FROM users ORDER BY username`)
+        .all() as UserCols[]
     ).map(toUser);
   }
 
@@ -169,32 +193,33 @@ export class Auth {
   /** Verify credentials and mint a session. The returned value is the COOKIE value; only its hash is stored. */
   async login(username: string, password: string): Promise<{ session: string; user: UserRow }> {
     const row = this.#store.db
-      .query('SELECT id, username, role, created_at, password_hash FROM users WHERE username = ?')
-      .get(username) as
-      | { id: number; username: string; role: string; created_at: number; password_hash: string }
-      | null;
+      .query(`SELECT ${USER_COLS}, password_hash FROM users WHERE username = ?`)
+      .get(username) as (UserCols & { password_hash: string }) | null;
     // One error for both wrong-user and wrong-password: naming which half failed turns the login
     // form into a username oracle.
     if (!row || !(await Bun.password.verify(password, row.password_hash))) {
       throw new AuthError('invalid username or password');
     }
+    return { session: this.#mintSession(row.id), user: toUser(row) };
+  }
+
+  /** The one place a session row is created — password login and SSO both come through here. */
+  #mintSession(userId: number): string {
     const session = randomSecret('pstack_ses_');
     this.#store.db
       .query('INSERT INTO sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-      .run(sha256(session), row.id, Date.now(), Date.now() + SESSION_TTL_MS);
-    return { session, user: toUser(row) };
+      .run(sha256(session), userId, Date.now(), Date.now() + SESSION_TTL_MS);
+    return session;
   }
 
   sessionUser(session: string): UserRow | null {
     const row = this.#store.db
       .query(
-        `SELECT u.id, u.username, u.role, u.created_at FROM sessions s
+        `SELECT u.id, u.username, u.role, u.email, u.created_at FROM sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.id_hash = ? AND s.expires_at > ?`,
       )
-      .get(sha256(session), Date.now()) as
-      | { id: number; username: string; role: string; created_at: number }
-      | null;
+      .get(sha256(session), Date.now()) as UserCols | null;
     return row ? toUser(row) : null;
   }
 
@@ -224,12 +249,10 @@ export class Auth {
   tokenUser(token: string): UserRow | null {
     const row = this.#store.db
       .query(
-        `SELECT u.id, u.username, u.role, u.created_at, t.id AS token_id FROM tokens t
+        `SELECT u.id, u.username, u.role, u.email, u.created_at, t.id AS token_id FROM tokens t
          JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?`,
       )
-      .get(sha256(token)) as
-      | { id: number; username: string; role: string; created_at: number; token_id: number }
-      | null;
+      .get(sha256(token)) as (UserCols & { token_id: number }) | null;
     if (!row) return null;
     // Best-effort bookkeeping — an operator deciding which stale token to revoke needs this.
     this.#store.db
@@ -254,5 +277,172 @@ export class Auth {
       this.#store.db.query('DELETE FROM tokens WHERE id = ? AND user_id = ?').run(id, userId)
         .changes > 0
     );
+  }
+
+  // ── SSO: the operator's identity provider ─────────────────────────────────────────────────────
+  //
+  // The protocol lives in sso.ts. What lives HERE is the part that touches accounts: the stored
+  // configuration, the (provider, subject) → user links, and turning a verified identity into the
+  // same session a password login produces.
+
+  /**
+   * Where the PKCE verifier waits out the round trip. SQLite, because that is what this service
+   * already wires up; the interface is what makes Redis or Postgres a config change later.
+   */
+  get transient(): TransientStore {
+    this.#transient ??= new SqliteTransientStore(this.#store.db);
+    return this.#transient;
+  }
+
+  ssoConfig(): { config: SsoConfig; clientSecret: string; updatedAt: number } | null {
+    const row = this.#store.db
+      .query('SELECT config, client_secret, updated_at FROM sso_config WHERE id = 1')
+      .get() as { config: string; client_secret: string; updated_at: number } | null;
+    if (!row) return null;
+    try {
+      // Re-validated on read, not trusted: a row written by an older version (or edited by hand
+      // over SSH, which this project expects) must not put a half-shape into the flow.
+      return { config: parseSsoConfig(JSON.parse(row.config)), clientSecret: row.client_secret, updatedAt: row.updated_at };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Save. An EMPTY `clientSecret` keeps the stored one — the read endpoint returns a mask, so a
+   * form that round-trips the mask must not overwrite the real secret with it. There is no stored
+   * secret to keep on the first save, so an empty one is refused there.
+   */
+  setSsoConfig(config: SsoConfig, clientSecret: string): void {
+    const existing = this.#store.db
+      .query('SELECT client_secret FROM sso_config WHERE id = 1')
+      .get() as { client_secret: string } | null;
+    const secret = clientSecret || existing?.client_secret || '';
+    if (!secret) throw new AuthError('clientSecret is required');
+    this.#store.db
+      .query(
+        'INSERT INTO sso_config (id, config, client_secret, updated_at) VALUES (1, ?, ?, ?) ' +
+          'ON CONFLICT(id) DO UPDATE SET config = excluded.config, client_secret = excluded.client_secret, updated_at = excluded.updated_at',
+      )
+      .run(JSON.stringify(config), secret, Date.now());
+  }
+
+  /** Forget the provider. The links stay: those accounts keep their password and their tokens. */
+  clearSsoConfig(): boolean {
+    return this.#store.db.query('DELETE FROM sso_config WHERE id = 1').run().changes > 0;
+  }
+
+  ssoLinks(userId: number): Array<{ providerKey: string; subject: string; createdAt: number; lastLoginAt: number | null }> {
+    return (
+      this.#store.db
+        .query('SELECT provider_key, subject, created_at, last_login_at FROM sso_links WHERE user_id = ?')
+        .all(userId) as Array<{ provider_key: string; subject: string; created_at: number; last_login_at: number | null }>
+    ).map((r) => ({ providerKey: r.provider_key, subject: r.subject, createdAt: r.created_at, lastLoginAt: r.last_login_at }));
+  }
+
+  /**
+   * Turn a verified provider identity into a session.
+   *
+   * THE ORDER IS THE SECURITY. `(providerKey, subject)` first, because it is the only stable
+   * identity; email second and ONLY to adopt a pre-existing local account, gated on the provider
+   * having said the address is verified; a new account last. An unverified email must never reach
+   * an existing account — that is the one path in this feature that could hand over someone else's
+   * privileges, and it is why `emailVerified: null` (the provider never said) is not good enough.
+   *
+   * `how` tells the caller which of the three happened, so the adoption case can be logged.
+   */
+  async ssoSignIn(
+    providerKey: string,
+    identity: SsoIdentity,
+    opts: { defaultRole?: string; allowedEmailDomains?: string[] } = {},
+  ): Promise<{ session: string; user: UserRow; how: 'linked' | 'adopted' | 'created' }> {
+    // Fail CLOSED: a non-empty allow-list with no email to check is a refusal, not a pass. GitHub
+    // returns a null email for a private profile, so this is a real case and not a theoretical one.
+    if (!emailAllowed(identity.email, opts.allowedEmailDomains ?? [])) {
+      throw new SsoError(
+        identity.email
+          ? `${identity.email} is not in an allowed email domain`
+          : 'this provider returned no email address, and sign-in is restricted to specific email domains',
+      );
+    }
+
+    const link = this.#store.db
+      .query('SELECT user_id FROM sso_links WHERE provider_key = ? AND subject = ?')
+      .get(providerKey, identity.subject) as { user_id: number } | null;
+    if (link) {
+      const row = this.#store.db.query(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(link.user_id) as UserCols | null;
+      if (row) {
+        this.#touchLink(providerKey, identity.subject);
+        // The provider owns the address; keep the local copy current so the allow-list and the UI
+        // do not go stale after someone changes it upstream.
+        if (identity.email && identity.email !== row.email) {
+          this.#store.db.query('UPDATE users SET email = ? WHERE id = ?').run(identity.email, row.id);
+          row.email = identity.email;
+        }
+        return { session: this.#mintSession(row.id), user: toUser(row), how: 'linked' };
+      }
+      // The account was deleted out from under the link (CASCADE should have taken it, so this is
+      // a repaired database). Drop the orphan and provision afresh.
+      this.#store.db.query('DELETE FROM sso_links WHERE provider_key = ? AND subject = ?').run(providerKey, identity.subject);
+    }
+
+    if (identity.email && identity.emailVerified === true) {
+      const matches = this.#store.db
+        .query(`SELECT ${USER_COLS} FROM users WHERE email = ?`)
+        .all(identity.email) as UserCols[];
+      // Exactly one, and it must not already belong to another provider subject. Two rows sharing
+      // an address is an ambiguity, and guessing which one to adopt is guessing whose account to
+      // hand over.
+      const only = matches.length === 1 ? matches[0]! : null;
+      if (only && this.ssoLinks(only.id).length === 0) {
+        this.#link(providerKey, identity.subject, only.id);
+        return { session: this.#mintSession(only.id), user: toUser(only), how: 'adopted' };
+      }
+    }
+
+    const user = await this.#provision(identity, opts.defaultRole);
+    this.#link(providerKey, identity.subject, user.id);
+    return { session: this.#mintSession(user.id), user, how: 'created' };
+  }
+
+  /**
+   * Create the local account behind an SSO identity.
+   *
+   * The password is 32 random bytes nobody will ever hold, hashed like any other: the row stays
+   * ordinary, `login()` needs no "is this an SSO user" branch, and there is no null-password state
+   * for some future code path to treat as "no password required". An operator who wants this
+   * account to also have a password sets one the usual way.
+   *
+   * The username is COSMETIC — identity is `(providerKey, subject)`. A collision therefore takes a
+   * suffix rather than linking to whoever already holds the name.
+   */
+  async #provision(identity: SsoIdentity, defaultRole?: string): Promise<UserRow> {
+    const base = sanitizeUsername(identity.username || identity.email.split('@')[0] || '', identity.subject);
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const suffix = attempt === 0 ? '' : `-${attempt + 1}`;
+      const username = `${base.slice(0, 32 - suffix.length)}${suffix}`;
+      try {
+        return await this.createUser(username, randomSecret(''), {
+          role: defaultRole || 'admin',
+          email: identity.email || null,
+        });
+      } catch (err) {
+        if (err instanceof AuthError && err.message.includes('already exists')) continue;
+        throw err;
+      }
+    }
+    throw new AuthError(`could not find a free username for "${base}" — 50 variants were taken`);
+  }
+
+  #link(providerKey: string, subject: string, userId: number): void {
+    this.#store.db
+      .query('INSERT INTO sso_links (provider_key, subject, user_id, created_at, last_login_at) VALUES (?, ?, ?, ?, ?)')
+      .run(providerKey, subject, userId, Date.now(), Date.now());
+  }
+
+  #touchLink(providerKey: string, subject: string): void {
+    this.#store.db
+      .query('UPDATE sso_links SET last_login_at = ? WHERE provider_key = ? AND subject = ?')
+      .run(Date.now(), providerKey, subject);
   }
 }

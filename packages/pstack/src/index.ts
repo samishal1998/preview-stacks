@@ -66,6 +66,23 @@ export { Auth, AuthError } from './auth.ts';
 export type { Principal } from './auth.ts';
 
 export {
+  MemoryTransientStore,
+  OIDC_CLAIMS,
+  PRESETS,
+  SqliteTransientStore,
+  SsoError,
+  codeChallenge,
+  emailAllowed,
+  mapClaims,
+  parseSsoConfig,
+  pkce,
+  presetFor,
+  safeNext,
+  verifyIdToken,
+} from './sso.ts';
+export type { ClaimMap, Preset, SsoConfig, SsoIdentity, SsoMode, TransientStore } from './sso.ts';
+
+export {
   RegistryAuthStore,
   RegistryAuthError,
   normalizeRegistry,
