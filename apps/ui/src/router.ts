@@ -52,6 +52,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/jobs', name: 'jobs', component: () => import('./views/JobsView.vue') },
   { path: '/jobs/:jobId', name: 'job', component: () => import('./views/JobDetailView.vue'), props: true },
   { path: '/users', name: 'users', component: () => import('./views/UsersView.vue') },
+  { path: '/sso', name: 'sso', component: () => import('./views/SsoView.vue') },
   { path: '/variables', name: 'variables', component: () => import('./views/VariablesView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
   // A path that matches nothing renders a message, never a blank screen.

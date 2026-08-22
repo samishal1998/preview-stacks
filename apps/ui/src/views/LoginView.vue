@@ -10,9 +10,10 @@
  * A bearer token in Settings also authenticates (CI-style access); the link stays visible for
  * operators who have the machine token and no account yet.
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { authState, checkAuth, login } from '../composables/useAuth';
+import { api } from '../api/client';
 import ActionButton from '../components/ActionButton.vue';
 import InfoHint from '../components/InfoHint.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
@@ -24,6 +25,26 @@ const username = ref('');
 const password = ref('');
 const pending = ref(false);
 const error = ref('');
+
+/** Where the guard wanted to go. Also what the SSO round trip carries and comes back to. */
+const next = computed(() =>
+  typeof route.query.next === 'string' && route.query.next.startsWith('/') ? route.query.next : '/',
+);
+
+/**
+ * The provider failed or refused. It arrives in the query string because the callback is a REDIRECT
+ * — there is no fetch to read a body from — and it is the provider's own words, so it renders as
+ * text and never as markup.
+ */
+const ssoError = computed(() => (typeof route.query.sso_error === 'string' ? route.query.sso_error : ''));
+
+/**
+ * A full navigation, not a fetch: the whole point is to leave this origin for the provider's
+ * consent screen. `api.url` so a dev session pointed at a tunnelled host still reaches its API.
+ */
+function signInWithProvider(): void {
+  window.location.assign(api.url(`/api/auth/sso/start?next=${encodeURIComponent(next.value)}`));
+}
 
 async function submit(): Promise<void> {
   pending.value = true;
@@ -37,10 +58,7 @@ async function submit(): Promise<void> {
   }
   await checkAuth();
   // Back to wherever the guard bounced them from, or home.
-  const dest = typeof route.query.next === 'string' && route.query.next.startsWith('/')
-    ? route.query.next
-    : '/';
-  void router.replace(dest);
+  void router.replace(next.value);
 }
 </script>
 
@@ -78,6 +96,23 @@ async function submit(): Promise<void> {
               overwrite one later.
             </InfoHint>
           </p>
+        </div>
+      </template>
+
+      <!-- ── the provider, above the form: for most people on a host with SSO it is the only
+           control on this page they should touch. -->
+      <template v-if="authState.sso?.enabled">
+        <div v-if="ssoError" class="banner failed" style="margin-top: var(--s3)">
+          <b>Signing in with {{ authState.sso.label }} did not work.</b>
+          <p>{{ ssoError }}</p>
+        </div>
+        <ActionButton variant="primary" style="width: 100%; margin-top: var(--s4)" @click="signInWithProvider">
+          Sign in with {{ authState.sso.label }}
+        </ActionButton>
+        <div class="row" style="margin: var(--s4) 0; align-items: center; gap: var(--s3)">
+          <hr style="flex: 1; border: 0; border-top: 1px solid var(--line)" />
+          <span class="mute" style="font-size: var(--t-sm)">or with a local account</span>
+          <hr style="flex: 1; border: 0; border-top: 1px solid var(--line)" />
         </div>
       </template>
 

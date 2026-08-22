@@ -30,6 +30,7 @@ import {
   Package,
   Plus,
   Settings2,
+  ShieldCheck,
   Users,
   Variable,
   Waypoints,
@@ -147,6 +148,10 @@ void settings;
         <RouterLink to="/users" class="navlink">
           <Users :size="17" aria-hidden="true" />
           <span>Users</span>
+        </RouterLink>
+        <RouterLink to="/sso" class="navlink">
+          <ShieldCheck :size="17" aria-hidden="true" />
+          <span>Sign-on</span>
         </RouterLink>
 
         <RouterLink to="/settings" class="navlink" title="g s">
