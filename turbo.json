@@ -1,12 +1,12 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "stream",
-  "globalDependencies": ["bun.lock"],
+  "globalDependencies": ["bun.lock", "go.mod", "go.sum"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**"],
-      "inputs": ["src/**", "ui/**", "templates/**", "scripts/**", "package.json", "tsconfig.json"]
+      "inputs": ["src/**", "ui/**", "templates/**", "scripts/**", "package.json", "tsconfig.json", "**/*.go", "assets.go"]
     },
     "typecheck": {
       "dependsOn": ["^build"],
