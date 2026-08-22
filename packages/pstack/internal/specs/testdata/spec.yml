@@ -1,0 +1,9 @@
+version: 1
+kind: isolated
+stack: pr-${PR}
+env:
+  TAG: ${GIT_SHA}
+axes:
+  - name: db
+    up: "true"
+    assert_gone: "true"
