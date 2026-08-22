@@ -10,22 +10,25 @@
  * `true` — the point is the CLIENT surface, not compose.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-// The server's SOURCE, not its published entry point: this test exists to catch drift between the
-// two packages, and going through the built bundle would test whatever was last built instead.
-import { createServer } from '../../pstack/src/api.ts';
+// The REAL server, spawned as a process by the conformance harness: `PSTACK_IMPL=bun` drives
+// `bun src/cli.ts serve`, `PSTACK_IMPL=go` the built binary. Going through the published bundle
+// would test whatever was last built; going through a process tests what an operator runs.
+import { bootServer, type Booted } from '../../conformance/harness/server.ts';
+import { IMPL, REPO } from '../../conformance/harness/impl.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createClient, PstackError, verifyWebhook } from '../src/index.ts';
 
 const TOKEN = 'root-machine-token-value-0123456789';
-const dataDir = `${process.env.TMPDIR ?? '/tmp'}/pstack-client-${process.pid}-${Date.now()}`;
 
-let server: ReturnType<typeof createServer>;
+let server: Booted;
 let client: ReturnType<typeof createClient>;
 
-beforeAll(() => {
-  server = createServer({ dataDir, port: 0, host: '127.0.0.1', token: TOKEN });
-  client = createClient({ baseUrl: `http://127.0.0.1:${server.port}`, token: TOKEN });
+beforeAll(async () => {
+  server = await bootServer({ tag: 'client', token: TOKEN });
+  client = createClient({ baseUrl: server.base, token: TOKEN });
 });
-afterAll(() => server.stop(true));
+afterAll(() => server.stop());
 
 const SPEC = 'version: 1\nstack: client-probe\naxes:\n  - name: db\n    up: "true"\n    down: "true"\n';
 
@@ -35,8 +38,12 @@ describe('the client speaks the real API', () => {
     expect(h.ok).toBe(true);
     expect(h.authEnforced).toBe(true);
     expect(typeof h.version).toBe('string');
+    // The spawned implementation's own version — the lockstep the release asserts. Both runtimes
+    // read it from the same package.json, so this is `${IMPL}` speaking, not a constant.
+    const pkg = JSON.parse(readFileSync(join(REPO, 'packages/pstack/package.json'), 'utf8')) as { version: string };
+    expect(`${IMPL}:${h.version}`).toBe(`${IMPL}:${pkg.version}`);
 
-    const anon = createClient({ baseUrl: `http://127.0.0.1:${server.port}` });
+    const anon = createClient({ baseUrl: server.base });
     // Throwing is the contract: a script wants the line it wrote to work or stop.
     await expect(anon.deployments.list()).rejects.toBeInstanceOf(PstackError);
     const err = await anon.deployments.list().catch((e: PstackError) => e);
@@ -161,7 +168,7 @@ describe('0.26.0: sleep/wake, share links, the swarm', () => {
     expect(link.url).toContain('/deployments/pr-shared/public-logs-view?token=');
     expect(link.expiresAt).toBeGreaterThan(Date.now());
 
-    const viewer = createClient({ baseUrl: `http://127.0.0.1:${server.port}`, token: link.token });
+    const viewer = createClient({ baseUrl: server.base, token: link.token });
     const seen = await viewer.deployments.get('pr-shared');
     expect(seen.stack).toBe('shared');
     await expect(viewer.deployments.logs('pr-shared')).rejects.toMatchObject({ status: 403 });
