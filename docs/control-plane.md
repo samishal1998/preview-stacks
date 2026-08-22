@@ -27,7 +27,7 @@ marks anything not yet reachable. The short version:
 | `pstack init` | `src/init.ts` + `templates/control/` | **implemented and dispatched** — `pstack init --domain … --acme-email …`; DNS-01 adds `--challenge dns01 --dns-provider …` |
 | HTTP-01 / DNS-01 challenge modes | `src/init.ts`, `templates/control/` | **built** — HTTP-01 is the default; `init` renders the two `#__MARKER__` blocks per mode (§TLS) |
 | The published bundle | `scripts/build.ts`, `package.json` | **built** — `dist/cli.js` + `dist/index.js`, `bin` → `dist/cli.js` (§Distribution) |
-| `pstack self-upgrade` | — | *not built* — it is `init` re-run after a fetch (§7) |
+| `pstack upgrade` | — | CLI-only, two phases: install the new version, then re-exec `--resume` which rebuilds the image and re-runs `init` with the stored token and DNS credential |
 
 `src/api.ts`'s file header is the authoritative route list. Where this document and that header
 disagree, the header is right.
@@ -309,7 +309,7 @@ Let's Encrypt rate limits are per-week) and the registry's data directory (every
 
 ### The consequence
 
-`pstack init` and `pstack self-upgrade` run **on the host**, from the CLI, as a systemd unit or an
+`pstack init` and `pstack upgrade` run **on the host**, from the CLI, as a systemd unit or an
 operator at a shell. They are the only things that touch the control stack, and neither is reachable
 over HTTP. The host keeps one capability the API does not have, and that asymmetry is the recovery
 path.

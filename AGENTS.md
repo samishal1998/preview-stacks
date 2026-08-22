@@ -3,7 +3,7 @@
 Instructions for an AI agent changing **this codebase**. Using `pstack` is a different job; this is
 about editing it.
 
-**Current version: 0.26.0.** Three published packages, one workspace.
+**Current version: 0.28.0.** Three published packages, one workspace.
 
 ## Read this first
 
@@ -65,7 +65,7 @@ docs/                See docs/README.md.
 | File | Responsibility |
 |---|---|
 | `api.ts` | HTTP API + UI host. **Its header comment is the API's route list** — update it in the same edit as a route. Owns auth, the `:id` → spec-variable binding, SSE streams, the WebSocket upgrade. |
-| `cli.ts` | Arg parsing, command dispatch, **exit codes**, the `serve` loopback interlock. Logic belongs in the module, not here. |
+| `cli.ts` | Arg parsing, command dispatch, **exit codes**, the `serve` loopback interlock, `healthcheck` (the container HEALTHCHECK — one GET, exit 0/1). Logic belongs in the module, not here. |
 | `jobs.ts` | In-memory job registry: one in-flight job per stack, bounded to 50 transcripts, SSE fan-out, cancellation. |
 | `registry.ts` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
 | `specs.ts` | Named specs: store once, reference from many deployments. |
