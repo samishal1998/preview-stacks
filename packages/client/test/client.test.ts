@@ -185,6 +185,47 @@ describe('0.26.0: sleep/wake, share links, the swarm', () => {
   });
 });
 
+describe('0.27.0: single sign-on', () => {
+  test('the provider round-trips, and the client secret has no read path', async () => {
+    const empty = await client.sso.config();
+    expect(empty.configured).toBe(false);
+    expect(empty.clientSecret).toBe('');
+    // The one string an operator must register with their provider — served, never guessed.
+    expect(empty.callbackUrl).toBe(`http://127.0.0.1:${server.port}/api/auth/sso/callback`);
+    expect(empty.presets.map((p) => p.key)).toEqual(['github', 'gitlab', 'bitbucket']);
+    expect((await client.health()).sso).toBeNull();
+
+    const saved = await client.sso.save({
+      mode: 'oauth2',
+      provider: 'github',
+      clientId: 'cid',
+      clientSecret: 'the-real-secret',
+      allowedEmailDomains: ['Example.COM'],
+    });
+    // The preset filled the endpoints in, and the domain was normalized.
+    expect(saved.config.authorizeUrl).toBe('https://github.com/login/oauth/authorize');
+    expect(saved.config.claimMap.subject).toBe('id');
+    expect(saved.config.allowedEmailDomains).toEqual(['example.com']);
+    expect(saved.config.label).toBe('GitHub');
+
+    const read = await client.sso.config();
+    expect(read.configured).toBe(true);
+    expect(read.clientSecret).toBe('••••••••');
+    expect(JSON.stringify(read)).not.toContain('the-real-secret');
+    // The login page's half, readable before authenticating.
+    expect((await client.health()).sso).toEqual({ enabled: true, label: 'GitHub' });
+
+    // A field the server refuses says so, as a PstackError with the server's own sentence.
+    await expect(client.sso.save({ mode: 'oauth2', provider: 'custom', clientId: 'c', clientSecret: 's' })).rejects.toThrow(
+      /authorizeUrl and tokenUrl/,
+    );
+
+    expect((await client.sso.remove()).ok).toBe(true);
+    expect((await client.sso.config()).configured).toBe(false);
+    await expect(client.sso.remove()).rejects.toThrow(PstackError);
+  });
+});
+
 describe('verifyWebhook — the half that lives in the receiver', () => {
   const secret = 'shhh-a-long-signing-secret';
   const body = JSON.stringify({ id: 'evt_1', event: 'job.leaked', at: 1, data: { stack: 's' } });

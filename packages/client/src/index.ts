@@ -40,6 +40,8 @@ import type {
   ShareLink,
   ShareView,
   SpecMeta,
+  SsoConfig,
+  SsoConfigResponse,
   SwarmInfo,
 } from './types.ts';
 
@@ -222,6 +224,24 @@ export function createClient(opts: ClientOptions) {
        */
       join: (o: { format: 'token' | 'command' | 'script' | 'cloud-config'; distro?: string } = { format: 'command' }) =>
         get<string>(`/api/swarm/join${qs(undefined, { format: o.format, distro: o.distro })}`),
+    },
+
+    /**
+     * The identity provider people sign in with. The sign-in flow itself is two browser redirects
+     * (`/api/auth/sso/start` → the provider → `/api/auth/sso/callback`) and has nothing for an SDK
+     * to call — this is the configuration around it.
+     */
+    sso: {
+      /** `clientSecret` comes back as a mask. There is no route that returns the real one. */
+      config: () => get<SsoConfigResponse>('/api/sso/config'),
+      /**
+       * Save. Omit `clientSecret` (or send the mask back) to keep the stored one. For `mode: 'oidc'`
+       * the issuer is fetched here, so a bad one is a 400 now rather than a failed login later.
+       */
+      save: (config: Partial<SsoConfig> & { clientSecret?: string }) =>
+        put<{ ok: true; config: SsoConfig; callbackUrl: string }>('/api/sso/config', config),
+      /** Forget the provider. Nobody is deleted — accounts it created keep working. */
+      remove: () => del<{ ok: true }>('/api/sso/config'),
     },
 
     jobs: {
