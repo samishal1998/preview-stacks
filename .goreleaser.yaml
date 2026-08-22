@@ -1,0 +1,58 @@
+# GoReleaser v2 — `pstack` as raw static binaries on GitHub Releases, plus checksums.txt and the
+# installer. Run by .github/workflows/release.yml on a `v*` tag; the tag must equal the lockstep
+# version in packages/pstack/package.json (the workflow asserts it before this runs).
+#
+# No `dockers:` stanza: the control image is built ON THE HOST by `pstack build-image` from the
+# installed binary, so nothing is published to a registry.
+version: 2
+
+project_name: pstack
+
+before:
+  hooks:
+    # The installer with this release's version stamped in, so `| sh` without PSTACK_VERSION pins
+    # to the release the script came from.
+    - sh -c 'mkdir -p dist && sed "s/__VERSION__/{{ .Version }}/" install.sh > dist/install.sh'
+
+builds:
+  - id: pstack
+    main: ./packages/pstack/cmd/pstack
+    binary: pstack
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    # version.Get() reads the embedded package.json; -X is an ASSERTION that the tag matches it,
+    # not a second source of truth.
+    ldflags:
+      - -s -w -X github.com/samishal1998/preview-stacks/packages/pstack/internal/version.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  # Raw binaries, named pstack_<os>_<arch> — what install.sh and the control Dockerfile download.
+  - id: raw
+    formats: [binary]
+    name_template: "pstack_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: samishal1998
+    name: preview-stacks
+  extra_files:
+    - glob: dist/install.sh
+  header: |
+    One static binary. Install or upgrade:
+
+        curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v{{ .Version }}/install.sh | sh
+
+    On a host provisioned by pstack ≤ 0.28.0 (the Bun runtime), run that line once and then
+    `pstack upgrade --resume`. Rollback: `docker tag pstack:local-previous pstack:local` and bring
+    the control stack up again. See CHANGELOG.md.
+
+changelog:
+  disable: true
