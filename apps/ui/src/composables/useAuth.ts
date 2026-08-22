@@ -20,16 +20,24 @@ export const authState = reactive({
   checked: false,
   authed: false,
   root: false,
-  user: null as { id: number; username: string; role: string } | null,
+  user: null as { id: number; username: string; role: string; email?: string | null } | null,
   /** From /api/health: whether any account exists — decides "sign in" vs "bootstrap first". */
   hasUsers: null as boolean | null,
+  /**
+   * From /api/health: the configured identity provider, or null. Read BEFORE authenticating —
+   * the login page needs to know whether to draw the button, and nothing more than its label.
+   */
+  sso: null as { enabled: boolean; label: string } | null,
 });
 
 export async function checkAuth(): Promise<void> {
-  const health = await api.get<{ hasUsers?: boolean }>('/api/health');
-  if (health.ok) authState.hasUsers = health.body.hasUsers ?? null;
+  const health = await api.get<{ hasUsers?: boolean; sso?: { enabled: boolean; label: string } | null }>('/api/health');
+  if (health.ok) {
+    authState.hasUsers = health.body.hasUsers ?? null;
+    authState.sso = health.body.sso ?? null;
+  }
 
-  const me = await api.getAuthed<{ root: boolean; user?: { id: number; username: string; role: string } }>(
+  const me = await api.getAuthed<{ root: boolean; user?: { id: number; username: string; role: string; email?: string | null } }>(
     '/api/auth/me',
   );
   /*
@@ -51,7 +59,7 @@ export async function checkAuth(): Promise<void> {
 }
 
 export async function login(username: string, password: string): Promise<string | null> {
-  const r = await api.post<{ user: { id: number; username: string; role: string } }>(
+  const r = await api.post<{ user: { id: number; username: string; role: string; email?: string | null } }>(
     '/api/auth/login',
     { username, password },
   );

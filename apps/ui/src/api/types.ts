@@ -425,3 +425,46 @@ export type ConflictBody = {
 
 /** Variable pairs as the editors hold them: an ordered list, so a blank row can exist while typing. */
 export type VarPair = { k: string; v: string };
+
+// ── single sign-on ────────────────────────────────────────────────────────────────────────────────
+
+export type ClaimMap = { subject: string; username: string; email: string; name: string; avatar: string };
+
+/** What the config endpoint returns and accepts. The client secret is NEVER in here. */
+export type SsoConfig = {
+  mode: 'oidc' | 'oauth2';
+  enabled: boolean;
+  label: string;
+  clientId: string;
+  discoveryUrl: string;
+  provider: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string;
+  emailsUrl: string;
+  scopes: string;
+  claimMap: ClaimMap;
+  allowedEmailDomains: string[];
+  defaultRole: string;
+};
+
+export type SsoPreset = {
+  key: string;
+  label: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string | null;
+  scopes: string;
+  claimMap: ClaimMap;
+};
+
+export type SsoConfigResponse = {
+  configured: boolean;
+  /** The exact string to register with the provider — built server-side, never guessed here. */
+  callbackUrl: string;
+  presets: SsoPreset[];
+  config: SsoConfig | null;
+  /** A mask when something is stored, empty when nothing is. Submitting it back keeps the secret. */
+  clientSecret: string;
+  updatedAt: number | null;
+};
