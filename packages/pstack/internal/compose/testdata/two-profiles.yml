@@ -1,0 +1,5 @@
+stack: pr-${PR}
+compose:
+  file: dc.yml
+  profiles: [backend, frontend]
+axes: []

@@ -1,0 +1,6 @@
+services:
+  app:
+    image: x
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.mine.rule=Host(`mine.example.com`)

@@ -1,0 +1,9 @@
+version: 1
+stack: s
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [admin-api, admin_api]
+  subdomains: [admin-api, admin_api]
+axes: []
