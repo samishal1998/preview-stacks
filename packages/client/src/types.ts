@@ -37,6 +37,8 @@ export type Health = {
   /** False only in loopback dev mode, where the server refuses to bind off-localhost. */
   authEnforced: boolean;
   hasUsers?: boolean;
+  /** The configured identity provider, or null. Readable BEFORE authenticating — a login page needs it. */
+  sso?: { enabled: boolean; label: string } | null;
   dataDir: string;
   version: string;
 };
@@ -262,4 +264,52 @@ export type PstackEvent = {
   event: string;
   at: number;
   data: Record<string, unknown>;
+};
+
+// ── single sign-on ────────────────────────────────────────────────────────────────────────────────
+
+export type SsoClaimMap = { subject: string; username: string; email: string; name: string; avatar: string };
+
+/** The stored provider. The client secret is NEVER part of this — it has no read path. */
+export type SsoConfig = {
+  mode: 'oidc' | 'oauth2';
+  enabled: boolean;
+  /** Button text, and the `providerKey` half of an account's identity. */
+  label: string;
+  clientId: string;
+  /** Mode A: the issuer, or a full `.well-known` URL. */
+  discoveryUrl: string;
+  /** Mode B: a preset key, or `custom`. */
+  provider: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string;
+  /** Consulted only when the profile carries no address (GitHub's default). */
+  emailsUrl: string;
+  scopes: string;
+  claimMap: SsoClaimMap;
+  /** Non-empty ⇒ a login outside these domains is refused, INCLUDING one with no address at all. */
+  allowedEmailDomains: string[];
+  defaultRole: string;
+};
+
+export type SsoPreset = {
+  key: string;
+  label: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string | null;
+  scopes: string;
+  claimMap: SsoClaimMap;
+};
+
+export type SsoConfigResponse = {
+  configured: boolean;
+  /** Register THIS with the provider, byte for byte. Built server-side; never guess it. */
+  callbackUrl: string;
+  presets: SsoPreset[];
+  config: SsoConfig | null;
+  /** A mask when one is stored. Submit it back unchanged to keep the stored secret. */
+  clientSecret: string;
+  updatedAt: number | null;
 };
