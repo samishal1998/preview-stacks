@@ -13,7 +13,7 @@ import { displayDeclared, isSecretName, mask, redactText } from '../src/redact.t
 import { composeDown, composeLogs, composeUp, shq } from '../src/compose.ts';
 import { subdomainVarName, wildcardRule } from '../src/subdomains.ts';
 import { createServer, crToNl } from '../src/api.ts';
-import { installPrefixFor, planUpgrade, readControlState, switchUi, upgrade } from '../src/upgrade.ts';
+import { installPrefixFor, isGoRelease, planUiSwitch, planUpgrade, readControlState, switchUi, upgrade } from '../src/upgrade.ts';
 import { NotifierError, TYPES, redactForNotifier, summarize } from '../src/notify.ts';
 import { events } from '../src/events.ts';
 import { RoutingStore, RoutingError, validateRoutingContent } from '../src/routing.ts';
@@ -560,6 +560,8 @@ describe('build-image — the global install must not be a dead end', () => {
     const r: Runner = {
       dryRun: false,
       async run(cmd: string) {
+        // The retag that precedes every build is not the build.
+        if (cmd.startsWith('docker image tag')) return { ok: true, code: 0, stdout: '', stderr: '', skipped: false };
         const ctx = /docker build --pull -t "[^"]+" "([^"]+)"/.exec(cmd)?.[1];
         expect(ctx).toBeDefined();
         expect(cmd).not.toContain('FROM'); // the document is not on the command line
@@ -592,6 +594,21 @@ describe('build-image — the global install must not be a dead end', () => {
     const r = okRunner();
     await buildImage({ tag: 'pstack:test', runner: r, dryRun: true, distDir: await fakeDist() });
     expect(r.log).toEqual([]);
+  });
+
+  test('keeps the previous image under <tag>-previous BEFORE building — the rollback path', async () => {
+    // `docker build -t pstack:local` moves the tag and the image that was running becomes an
+    // anonymous <none> layer. If the new build comes up unhealthy after init recreates the stack,
+    // the control plane is gone and nothing names the image that worked. The retag has to come
+    // first, or it would keep the new image and the point is lost.
+    // negative control: swap the two runner calls in buildImage — the order assertion fails.
+    const r = okRunner();
+    await buildImage({ tag: 'pstack:test', runner: r, dryRun: false, distDir: await fakeDist() });
+    const tagAt = r.log.findIndex((c) => c.startsWith('docker image tag'));
+    const buildAt = r.log.findIndex((c) => c.startsWith('docker build'));
+    expect(tagAt).toBeGreaterThanOrEqual(0);
+    expect(r.log[tagAt]).toBe("docker image tag 'pstack:test' 'pstack:test-previous' 2>/dev/null || true");
+    expect(buildAt).toBeGreaterThan(tagAt);
   });
 });
 
@@ -5385,6 +5402,83 @@ describe('pstack upgrade', () => {
     }
   });
 
+  test('the DNS-01 credential is read back and carried into init — the other thing that must not rotate', async () => {
+    // `init` rewrites control/dns.env from PSTACK_DNS_TOKEN on EVERY run. An upgrade that does not
+    // hand it over blanks the only copy: Traefik is recreated with no credential, the wildcard
+    // already in the volume keeps serving, and the renewal silently fails weeks later.
+    // negative control: drop `PSTACK_DNS_TOKEN` from initEnv() in upgrade.ts — the env assertion fails.
+    const { init } = await import('../src/init.ts');
+    const dataDir = tmpd();
+    try {
+      await init({
+        dataDir,
+        domain: 'preview.example.com',
+        acmeEmail: 'ops@example.com',
+        challenge: 'dns01',
+        dnsProvider: 'cloudflare',
+        token: 'cf-token-0123456789abcdef',
+        ui: 'basic',
+        orchestrator: 'compose',
+        dryRun: false,
+        runner: fakeRunner(() => false, 'healthy'),
+      });
+      const state = await readControlState(dataDir);
+      expect(state.dnsProvider).toBe('cloudflare');
+      expect(state.dnsToken).toBe('cf-token-0123456789abcdef');
+      for (const steps of [planUpgrade({ phase: 'resume', target: 'x', state, binPath: null }), planUiSwitch({ ...state, ui: 'advanced' })]) {
+        const initStep = steps.find((x) => x.cmd.startsWith('pstack init'))!;
+        expect(initStep.env?.PSTACK_TOKEN).toBe(state.token);
+        expect(initStep.env?.PSTACK_DNS_TOKEN).toBe('cf-token-0123456789abcdef');
+      }
+      // The dry-run transcript says so, because that is what an operator checks before trusting it.
+      const said: string[] = [];
+      await upgrade({ dataDir, target: '0.28.0', runner: createRunner({ dryRun: true, level: 'quiet' }), log: (l) => said.push(l) });
+      expect(said.join('\n')).toContain('(with the existing PSTACK_TOKEN and PSTACK_DNS_TOKEN)');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+
+    // An http01 host has a dns.env with no token line at all — nothing is carried, and nothing breaks.
+    const http = control();
+    try {
+      const state = await readControlState(http.dataDir);
+      expect(state.dnsToken).toBe('');
+      const initStep = planUpgrade({ phase: 'resume', target: 'x', state, binPath: null }).find((x) => x.cmd.startsWith('pstack init'))!;
+      expect(initStep.env).toEqual({ PSTACK_TOKEN: state.token });
+    } finally {
+      http.cleanup();
+    }
+  }, 20_000);
+
+  test('a Go-release target is refused with the one-time hop, not handed to bun install', async () => {
+    // From 0.29.0 pstack is a Go binary on GitHub. `bun install -g @samyx/preview-stacks@0.29.0`
+    // would fail — or "succeed" at the deprecated last TS release and report an upgrade that changed
+    // nothing. The refusal carries the command that actually performs the hop.
+    // negative control: make isGoRelease() return false — the rejection below does not happen.
+    expect(isGoRelease('0.29.0')).toBe(true);
+    expect(isGoRelease('v0.29.0')).toBe(true);
+    expect(isGoRelease('0.30.1')).toBe(true);
+    expect(isGoRelease('1.0.0')).toBe(true);
+    expect(isGoRelease('0.28.9')).toBe(false);
+    expect(isGoRelease('0.27.0')).toBe(false);
+    expect(isGoRelease('latest')).toBe(false);
+    expect(isGoRelease('next')).toBe(false);
+
+    const c = control();
+    try {
+      const said: string[] = [];
+      await expect(
+        upgrade({ dataDir: c.dataDir, target: '0.29.0', runner: createRunner({ dryRun: true, level: 'quiet' }), log: (l) => said.push(l) }),
+      ).rejects.toThrow(/releases\/download\/v0\.29\.0\/install\.sh \| sh && pstack upgrade --resume/);
+      expect(said).toEqual([]); // refused before anything was planned or printed
+      // `--resume` is phase 2 of a hop that already installed the Go binary — never refused by version.
+      const r = await upgrade({ dataDir: c.dataDir, phase: 'resume', target: '0.29.0', runner: createRunner({ dryRun: true, level: 'quiet' }), log: () => {} });
+      expect(r.steps.map((x) => x.cmd)[0]).toBe('pstack build-image');
+    } finally {
+      c.cleanup();
+    }
+  });
+
   test('a host with no control stack is refused by name, not by a stack trace', async () => {
     const empty = tmpd();
     mkdirSync(empty, { recursive: true });
@@ -5442,6 +5536,55 @@ describe('the CLI surface: version, and unknown commands', () => {
     ]);
     return { stdout, stderr, code, all: stdout + stderr };
   };
+  const runWith = async (args: string[], env: Record<string, string>) => {
+    const proc = Bun.spawn(['bun', 'src/cli.ts', ...args], {
+      cwd: import.meta.dir.replace(/\/test$/, ''),
+      env: { ...process.env, ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
+  };
+
+  test('healthcheck answers 0 against a live server and 1 against nothing — the container HEALTHCHECK', async () => {
+    // Three Dockerfiles used to carry a `bun --eval fetch(...)` one-liner each. One command the
+    // binary owns means one implementation, no runtime assumption in the image, and a Go build
+    // can ship the same HEALTHCHECK line. `init` blocks on this verdict, so it has to be boring.
+    // negative control: make the command exit 0 unconditionally — the dead-port case fails.
+    const { createServer } = await import('../src/api.ts');
+    const server = createServer({ dataDir: `${process.env.TMPDIR ?? '/tmp'}/pstack-hc-${process.pid}`, port: 0, host: '127.0.0.1', token: 'hc-token-0123456789abcdef' });
+    try {
+      const live = await runWith(['healthcheck'], { PSTACK_PORT: String(server.port) });
+      expect(live.code).toBe(0);
+    } finally {
+      server.stop(true);
+    }
+    // A port nothing listens on: refused at once, not hung until docker's timeout.
+    const dead = await runWith(['healthcheck'], { PSTACK_PORT: '1' });
+    expect(dead.code).toBe(1);
+    // It is a real command: listed, so the unknown-command gate and --help agree about it.
+    const help = await run(['--help']);
+    expect(help.stdout).toContain('healthcheck');
+  });
+
+  test('serve reads its tuning knobs from the environment with ?? semantics', async () => {
+    // What a black-box harness needs to reach the readiness-timeout and SSO-expiry paths through
+    // the real `serve`, not through createServer options it cannot see.
+    // negative control: return {} from tuningFromEnv — every expectation below fails.
+    const { tuningFromEnv } = await import('../src/api.ts');
+    expect(tuningFromEnv({})).toEqual({});
+    expect(tuningFromEnv({ PSTACK_READINESS_POLL_MS: '50', PSTACK_READINESS_TIMEOUT_MS: '900' })).toEqual({
+      readiness: { pollMs: 50, timeoutMs: 900 },
+    });
+    expect(tuningFromEnv({ PSTACK_SSO_STATE_TTL_S: '1', PSTACK_SSO_DISCOVERY_TTL_S: '2' })).toEqual({
+      sso: { stateTtlS: 1, discoveryTtlS: 2 },
+    });
+    // Unset, empty, and nonsense all mean "the default" — never NaN in a timeout.
+    expect(tuningFromEnv({ PSTACK_READINESS_POLL_MS: '', PSTACK_SSO_STATE_TTL_S: 'soon', PSTACK_READINESS_TIMEOUT_MS: '-5' })).toEqual({});
+    // A partial pair keeps the other half undefined so the server's own default applies to it.
+    expect(tuningFromEnv({ PSTACK_READINESS_POLL_MS: '10' })).toEqual({ readiness: { pollMs: 10, timeoutMs: undefined } });
+  });
 
   test('--version prints the version alone, so a script can compare it', async () => {
     const r = await run(['--version']);

@@ -78,7 +78,7 @@ const defaultImage = () => process.env.PSTACK_IMAGE ?? 'pstack:local';
  * profile and GCP from the VM's attached service account, so there is nothing to write, nothing
  * on disk, and nothing to rotate. Prefer those where you have the choice.
  */
-const DNS_TOKEN_VAR: Record<string, string | null> = {
+export const DNS_TOKEN_VAR: Record<string, string | null> = {
   cloudflare: 'CF_DNS_API_TOKEN', // a single token with Zone:Read + DNS:Edit
   hetzner: 'HETZNER_API_TOKEN',
   route53: null, // IAM instance profile
