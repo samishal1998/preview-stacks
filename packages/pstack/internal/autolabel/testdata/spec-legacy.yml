@@ -1,0 +1,8 @@
+version: 1
+stack: s
+env:
+  DOMAIN: legacy.example.com
+compose:
+  file: dc.yml
+  profiles: [app]
+axes: []

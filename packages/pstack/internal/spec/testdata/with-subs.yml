@@ -1,0 +1,9 @@
+version: 1
+stack: pr-${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: dc.yml
+  profiles: [backend, frontend]
+  subdomains: @SUBS@
+@EXTRA@axes: []

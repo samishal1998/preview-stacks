@@ -1,0 +1,6 @@
+version: 1
+stack: s
+compose:
+  file: dc.yml
+  profiles: [app]
+axes: []

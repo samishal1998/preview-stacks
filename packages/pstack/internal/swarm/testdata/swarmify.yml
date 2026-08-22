@@ -1,0 +1,17 @@
+name: whatever
+version: '2.4'
+services:
+  app:
+    image: nginx
+    restart: always
+    mem_limit: 256m
+    cpus: 0.5
+    profiles: [app]
+    container_name: my-app
+    labels: ['traefik.enable=true', 'traefik.docker.network=preview-ingress', 'pstack.routing.port=80']
+    depends_on: { db: { condition: service_healthy } }
+    pull_policy: always
+    x-note: kept
+  migrate: { image: app, command: migrate, profiles: [app] }
+  worker: { image: app, restart: 'on-failure:3', profiles: [worker] }
+  db: { image: postgres, deploy: { replicas: 2, restart_policy: { condition: any } } }

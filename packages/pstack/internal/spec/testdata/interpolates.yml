@@ -1,0 +1,6 @@
+stack: pr-${PR}
+env:
+  HOST: app-${PR}.example.com
+axes:
+  - name: a
+    up: echo ${HOST} ${STACK}

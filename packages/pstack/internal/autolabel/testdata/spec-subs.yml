@@ -1,0 +1,9 @@
+version: 1
+stack: pr-${PR}
+env:
+  DOMAIN: preview.example.com
+compose:
+  file: docker-compose.yml
+  profiles: [app]
+  subdomains: [app]
+axes: []

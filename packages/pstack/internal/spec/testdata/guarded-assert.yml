@@ -1,0 +1,7 @@
+stack: s
+axes:
+  - name: q
+    up: "true"
+    assert_gone: |
+      docker info >/dev/null 2>&1 || exit 1
+      ! docker exec c probe

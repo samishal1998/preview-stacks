@@ -1,0 +1,6 @@
+services:
+  a:
+    image: x
+    deploy:
+      restart_policy:
+        condition: none

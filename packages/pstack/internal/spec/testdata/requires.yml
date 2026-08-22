@@ -1,0 +1,8 @@
+stack: pr-1
+requires:
+  - name: ingress network
+    assert: docker network inspect net
+    hint: run `pstack init` first
+axes:
+  - name: db
+    up: echo made-db
