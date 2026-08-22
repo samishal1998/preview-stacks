@@ -4,14 +4,13 @@
     "upgrade",
     "-n",
     "--to",
-    "0.28.1"
+    "0.29.1"
   ],
   "env": {
     "PSTACK_DATA": "/tmp/pstack-golden-data"
   },
   "cwd": "packages/pstack",
   "code": 0,
-  "stdout": "pstack <VERSION> → 0.28.1   (preview.example.com, http01, advanced UI, compose)\n  → install @samyx/preview-stacks@0.28.1\n  [dry-run] install @samyx/preview-stacks@0.28.1\n  → rebuild and re-init as the new version\n  [dry-run] rebuild and re-init as the new version\n  then, as the newly installed version:\n    pstack build-image\n    pstack build-image --ui\n    pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01 --ui advanced --orchestrator compose (with the existing PSTACK_TOKEN)\n\n  Dry run — nothing was installed, built or recreated.\n",
-  "stderr": "",
-  "goDivergent": "bun|BUN_|@samyx\\/preview-stacks|unzip|install pstack |releases\\/download|releases\\/latest|debian:bookworm|useradd|apt-get|COPY pstack|\\/usr\\/local\\/bin\\/pstack --version|\"pstack\", \""
+  "stdout": "pstack <VERSION> → 0.29.1   (preview.example.com, http01, advanced UI, compose)\n  → install pstack 0.29.1\n  [dry-run] install pstack 0.29.1\n  → rebuild and re-init as the new version\n  [dry-run] rebuild and re-init as the new version\n  then, as the newly installed version:\n    pstack build-image\n    pstack build-image --ui\n    pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01 --ui advanced --orchestrator compose (with the existing PSTACK_TOKEN)\n\n  Dry run — nothing was installed, built or recreated.\n",
+  "stderr": ""
 }

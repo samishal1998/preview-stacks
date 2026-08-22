@@ -46,7 +46,7 @@ name that is not "the UI host". Per-PR hostnames are flat and dash-separated
 **The CLI owns the control stack; the API owns everything else.** The API must never run `up` on the
 deployment containing the API — the process performing the upgrade is inside the stack being
 replaced, so it is killed mid-operation, and a bad image leaves the host with no control plane and
-no remote way to fix it. `pstack init` / `pstack self-upgrade` handle that from the host instead.
+no remote way to fix it. `pstack init` / `pstack upgrade` handle that from the host instead.
 
 Full rationale, the registry contract, and the trust boundary:
 **[docs/control-plane.md](docs/control-plane.md)**.
@@ -70,8 +70,8 @@ getting that wrong is what burns the rate limit: see
 [docs/control-plane.md](docs/control-plane.md#tls-two-challenge-modes-opposite-per-pr-rules).
 
 > Status: `kind`, `requires`, the `shared` `down` guard, the deployment registry, the
-> registry-backed API (`/api/deployments/*`), `pstack init` (both challenge modes) and the published
-> bundle are **all wired** and reachable from the CLI. Everything has been exercised against
+> registry-backed API (`/api/deployments/*`), `pstack init` (both challenge modes) and the released
+> binary are **all wired** and reachable from the CLI. Everything has been exercised against
 > `--dry-run`, the API end-to-end, and the built artifact; **nothing has been run against a real
 > Docker host yet** — `docs/control-plane.md` tracks the model.
 
@@ -174,32 +174,31 @@ Two leak classes it catches out of the box:
 
 ## Install
 
-Requires [Bun](https://bun.sh) **≥ 1.3** — no other dependencies. Bun is not a preference here:
-`Bun.YAML`, `Bun.serve`, `Bun.spawn` and `Bun.file` have no Node equivalent, so there is no Node
-fallback to fall back to. The `bin` is a `#!/usr/bin/env bun` script, which makes `engines.bun`
-load-bearing rather than advisory.
+One static binary (Go), Linux and macOS, amd64 and arm64 — no runtime, no dependencies:
 
 ```bash
-bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh
 pstack --help
 ```
 
-What ships is a **bundle, not the source tree**: `dist/cli.js` (~74 KB) and `dist/index.js`, both
-built with `--target=bun`, minified, with sourcemaps. The published tarball is **8 files, ~0.36 MB
-unpacked** — no source, no docs, no examples, no skills. The UI and the control-stack compose
-template are inlined into the bundle (`with { type: 'text' }` imports), so nothing is read from a
-path relative to the source at runtime. See
-[docs/control-plane.md](docs/control-plane.md#distribution-what-ships-and-why-a-bundle) for why a
-bundle and not `--compile`.
+The installer verifies the download against the release's `checksums.txt` and moves the binary
+into `/usr/local/bin` (`PSTACK_INSTALL_DIR` relocates, `PSTACK_VERSION` pins). The web UI, the share
+page, the control-stack compose template and the cloud-init template are embedded in the binary,
+so nothing is read from a path relative to a source tree at runtime. See
+[docs/control-plane.md](docs/control-plane.md#distribution-one-static-binary).
+
+Until 0.28.0 this was the npm package `@samyx/preview-stacks` on Bun; that package is deprecated
+and stops there. An existing host takes the one-time move in
+[docs/usage.md §9](docs/usage.md#9-day-2-operations).
 
 ### Contributing
 
 Working from a checkout is the **contributor** path, not the user path:
 
 ```bash
-git clone https://github.com/samishal1998/preview-stacks && cd preview-stacks && bun install
-bun src/cli.ts --help        # run from source
-bun run build                # → dist/, then smoke-tests `pstack --help` from the bundle
+git clone https://github.com/samishal1998/preview-stacks && cd preview-stacks
+go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
+packages/pstack/bin/pstack --help
 ```
 
 ## The web UI
@@ -344,7 +343,7 @@ build a host from scratch (Hetzner + cloud-init).
 
 **In:** the spec (`kind`, `requires`, axes), the CLI, leak verification, the HTTP API, the web UI,
 and the **deployment registry** — a control plane holding many deployments addressed by id
-(`src/registry.ts`; see [docs/control-plane.md](docs/control-plane.md)).
+(`internal/registry`; see [docs/control-plane.md](docs/control-plane.md)).
 
 **Not built, deliberately:** a persistent job store, a plugin system, a reconciliation loop. The
 registry is a *cache of intent* — truth lives in Docker and in each axis's `assert_*` probe — so
@@ -366,14 +365,13 @@ memory isolation unless you add `mem_limit` yourself; one greedy heap can OOM ev
 ## Development
 
 ```bash
-bun test           # incl. end-to-end leak detection against the real filesystem
-bunx tsc --noEmit  # strict, noUncheckedIndexedAccess
-bun run build      # bundle to dist/, then smoke-test `pstack --help` from the artifact
-bun run check      # all of the above + `check:package` (what the tarball would contain)
+go test -race -timeout 120s ./...    # every package, incl. end-to-end leak detection against the real filesystem
+go vet ./...
+bun install && bun run check         # the whole repo: Go, the conformance suite, the UI, the client
 ```
 
-`build` refuses to succeed on a bundle that cannot start: it runs `--help` against the emitted
-`dist/cli.js`, not against the sources, because "works from a checkout, 404s once installed" is the
-exact failure the bundle exists to prevent.
+The conformance suite (`../conformance`) is the black-box specification: it spawns the built
+binary and compares every CLI transcript and API response against checked-in goldens, and every
+one of its tests is proven non-vacuous against a server that asserts nothing.
 
 MIT.

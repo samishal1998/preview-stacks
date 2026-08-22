@@ -1,6 +1,6 @@
 /**
- * Differential mode: the same scenario against implementation A, then B, over the SAME data path
- * (wiped between), and the two traces compared step by step.
+ * Differential mode: the same scenario against binary A, then B, over the SAME data path (wiped
+ * between), and the two traces compared step by step.
  *
  * A trace step is `{ n, method, path, status, headers, body }` with the body masked; the docker
  * shim's recorded argv is appended as one extra pseudo-step, because the API's runners are quiet
@@ -52,19 +52,7 @@ export type Step = { n: number; method: string; path: string; status: number; he
  * and index; `why` is for the reader. Listed deviations must still DIFFER, or the run fails — a
  * stale entry is a divergence nobody is watching any more.
  */
-export const KNOWN_DEVIATIONS: Array<{ scenario: string; step: number; why: string }> = [
-  {
-    scenario: 'registries-and-routing',
-    step: 8,
-    why: 'a YAML parse error carries the parser\'s own wording: Bun\'s "YAML Parse error: …" vs goccy/go-yaml\'s "[line:col] …" — only the "not valid YAML: " prefix is contract',
-  },
-  {
-    scenario: 'notifiers',
-    step: 10,
-    why: 'a connection failure is the runtime\'s sentence: Bun says "Unable to connect. Is the computer able to access the url?", Go says "dial tcp …: connection refused" (the URL inside it is redacted either way)',
-  },
-  { scenario: 'notifiers', step: 11, why: 'the same runtime sentence, stored on the delivery row' },
-];
+export const KNOWN_DEVIATIONS: Array<{ scenario: string; step: number; why: string }> = [];
 
 export class Session {
   readonly steps: Step[] = [];

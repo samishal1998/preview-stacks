@@ -1,7 +1,8 @@
 {
   "name": "@samyx/preview-stacks",
-  "version": "0.28.0",
-  "description": "Declarative lifecycle for ephemeral per-PR preview stacks: isolation axes with provision/destroy/leak-verification, over Docker Compose.",
+  "version": "0.29.0",
+  "private": true,
+  "description": "Declarative lifecycle for ephemeral per-PR preview stacks: isolation axes with provision/destroy/leak-verification, over Docker Compose or Swarm. One static Go binary.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/samishal1998/preview-stacks.git"
@@ -10,29 +11,11 @@
   "bugs": {
     "url": "https://github.com/samishal1998/preview-stacks/issues"
   },
-  "type": "module",
-  "bin": {
-    "pstack": "./dist/cli.js"
-  },
-  "exports": {
-    ".": "./dist/index.js",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
   "scripts": {
-    "build": "bun scripts/build.ts && go build -o bin/pstack ./cmd/pstack",
-    "build:go": "go build -o bin/pstack ./cmd/pstack",
-    "test": "bun test && go test -race -timeout 120s ./...",
-    "test:go": "go test -race -timeout 120s ./...",
-    "typecheck": "tsc --noEmit && go vet ./...",
-    "check:package": "bun scripts/check-package.ts",
-    "check": "bun test && tsc --noEmit && bun scripts/build.ts && bun scripts/check-package.ts && go vet ./... && go test -race -timeout 120s ./... && go build -o bin/pstack ./cmd/pstack",
-    "prepublishOnly": "bun scripts/build.ts"
+    "build": "go build -o bin/pstack ./cmd/pstack",
+    "test": "go test -race -timeout 120s ./...",
+    "typecheck": "go vet ./...",
+    "check": "go vet ./... && go test -race -timeout 120s ./... && go build -o bin/pstack ./cmd/pstack"
   },
   "keywords": [
     "preview-environments",
@@ -43,19 +26,8 @@
     "pull-request",
     "monorepo",
     "devops",
-    "bun"
+    "go"
   ],
-  "devDependencies": {
-    "@samyx/publish-kit": "^0.0.0-pre.1",
-    "@types/bun": "latest",
-    "typescript": "^5.9.2"
-  },
-  "engines": {
-    "bun": ">=1.3.0"
-  },
   "license": "MIT",
-  "author": "sami.mishal",
-  "publishConfig": {
-    "access": "public"
-  }
+  "author": "sami.mishal"
 }

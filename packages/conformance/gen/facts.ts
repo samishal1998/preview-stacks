@@ -1,9 +1,10 @@
 /**
  * Measure the Bun/JS semantics the contract depends on and write them down as fixtures.
  *
- * The Go port reproduces these by TEST, not by reading about them: every table here is consumed by
- * a `go test` in the foundation packages (yamlx, js, jsonx, auth). Run once with Bun while the
- * reference exists; the output is checked in.
+ * The Go binary reproduces these by TEST, not by reading about them: every table here is consumed
+ * by a `go test` in the foundation packages (yamlx, js, jsonx, auth). Measured once on Bun 1.3.12
+ * and checked in; the file is kept so the measurement can be repeated, never regenerated routinely
+ * — a newer Bun measuring differently would be a change to the contract, not a correction of it.
  *
  *   bun gen/facts.ts          → golden/facts/{argon2,yaml,yaml-corpus,coerce,json-numbers,esc}.json
  */

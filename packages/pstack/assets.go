@@ -22,10 +22,7 @@ var ControlTemplate string
 
 // CloudInitTemplate is the cloud-config user-data template.
 //
-// The Go build's cloud-init: the installer-based runcmd. The reference's bun-based template stays
-// beside it until the TS source is removed, when this one takes its name.
-//
-//go:embed templates/cloud-init.go.tpl.yaml
+//go:embed templates/cloud-init.tpl.yaml
 var CloudInitTemplate string
 
 // PackageJSON is the workspace manifest — the version of record (lockstep with the TS packages).

@@ -191,6 +191,7 @@ export const SCENARIOS: Scenario[] = [
       await s.fetch('POST', '/api/notifiers', { body: { type: 'webhook', name: 'ops', config: { url: 'http://127.0.0.1:1/hook' }, events: ['*'] } });
       await s.tick();
       await s.fetch('POST', '/api/notifiers', { body: { type: 'webhook', name: 'bad', config: { url: 'http://169.254.169.254/' }, events: ['*'] } });
+      await s.tick(); // 'bad' IS stored (the harness allows private addresses); 'chat' below must not share its millisecond
       await s.fetch('POST', '/api/notifiers', { body: { type: 'webhook', name: 'typo', config: { url: 'https://example.com/h' }, events: ['stack.reddy'] } });
       await s.fetch('POST', '/api/notifiers', { body: { type: 'pigeon', name: 'x', config: {}, events: ['*'] } });
       await s.fetch('POST', '/api/notifiers', { body: { type: 'slack', name: 'chat', config: { webhookUrl: 'https://hooks.slack.com/services/T00/B00/tok' }, events: ['stack.ready'] } });

@@ -1,24 +1,55 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "stream",
-  "globalDependencies": ["bun.lock", "go.mod", "go.sum"],
+  "globalDependencies": [
+    "bun.lock",
+    "go.mod",
+    "go.sum"
+  ],
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"],
-      "inputs": ["src/**", "ui/**", "templates/**", "scripts/**", "package.json", "tsconfig.json", "**/*.go", "assets.go"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**",
+        "bin/**"
+      ],
+      "inputs": [
+        "src/**",
+        "ui/**",
+        "templates/**",
+        "package.json",
+        "tsconfig.json",
+        "**/*.go",
+        "assets.go"
+      ]
     },
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "outputs": []
     },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "outputs": [],
-      "env": ["PSTACK_DATA", "TMPDIR", "PSTACK_IMPL", "PSTACK_BIN", "PSTACK_VERBOSE"]
+      "env": [
+        "PSTACK_DATA",
+        "TMPDIR",
+        "PSTACK_IMPL",
+        "PSTACK_BIN",
+        "PSTACK_VERBOSE"
+      ]
     },
     "check": {
-      "dependsOn": ["build", "test", "typecheck"],
+      "dependsOn": [
+        "build",
+        "test",
+        "typecheck"
+      ],
       "outputs": []
     },
     "dev": {

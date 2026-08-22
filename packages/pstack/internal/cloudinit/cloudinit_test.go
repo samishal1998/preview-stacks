@@ -438,9 +438,7 @@ func TestWorkerCloudInit(t *testing.T) {
 }
 
 // The conformance transcripts: `pstack cloud-init … -y` prints the rendered file plus one newline,
-// masked for the version. The Go build's runcmd is its own document (the installer replaces the Bun
-// block), so the compare is against `<name>.go.json` — generated from this binary by
-// `bun gen/goldens-go.ts`, and the spec for this command once the TS reference is gone.
+// masked for the version. This is the whole-file compare.
 func TestCloudInitGoldens(t *testing.T) {
 	golden := Answers{
 		Domain:            "preview.example.com",
@@ -465,7 +463,7 @@ func TestCloudInitGoldens(t *testing.T) {
 	for name, a := range cases {
 		t.Run(name, func(t *testing.T) {
 			// negative control: change the wrap width in wrapRe to 80 — the suse/arch/alpine notes re-wrap and fail.
-			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".go.json"))
+			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".json"))
 			if err != nil {
 				t.Fatal(err)
 			}

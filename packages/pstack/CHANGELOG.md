@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.29.0 — 2026-08-23
+
+### ⚠️ Breaking: runtime — pstack is one static Go binary
+
+The control plane is now a Go program, released as `pstack_{linux,darwin}_{amd64,arm64}` on
+[GitHub Releases](https://github.com/samishal1998/preview-stacks/releases) with an `install.sh`
+that verifies the checksum. `@samyx/preview-stacks` on npm is deprecated and stops at 0.28.0. The
+client SDK (`@samyx/preview-stacks-client`) and the advanced UI (`@samyx/preview-stacks-ui`) are
+unchanged and still on npm.
+
+**It is a drop-in replacement.** The registry files, the SQLite database (every argon2 hash keeps
+verifying), `control/.env`, `control/dns.env` and the rendered control compose are read unchanged;
+the HTTP contract is byte-identical, so the UI and the client SDK work as they are; every CLI
+flag, usage line and exit code is the same. This was proven, not asserted: a black-box conformance
+suite (`packages/conformance` — 214 tests, 80 exact CLI transcripts, a complete host fixture) graded
+the Go binary against the TypeScript reference until the two answered identically, and a
+differential runner replayed nine API scenarios on both over one data path — including the docker
+argv each issued — until the traces matched step for step. The three remaining wording differences
+are listed in `docs/port-status.md`.
+
+**The one-time move**, on a host provisioned before 0.29.0 (first upgrade to 0.28.0 if you are
+older; its `pstack upgrade --to 0.29.0` prints exactly this line and exits 3):
+
+```
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v0.29.0/install.sh | sh && pstack upgrade --resume
+```
+
+Rollback: `docker tag pstack:local-previous pstack:local && docker compose -p pstack-control -f <PSTACK_DATA>/control/docker-compose.yml up -d`.
+
+What changes around the binary:
+
+- **The control image carries no JavaScript runtime.** It is `debian:bookworm-slim` + `bash`,
+  `ca-certificates`, `curl`, the docker CLI and compose plugin, and the binary. **Axis hooks run
+  inside that container**: a hook that called `bun`, `bunx`, `node`, `npm` or `npx` must bring its
+  own — grep your specs before the hop. The previous image (`oven/bun:1`) also lacked `curl` and
+  `ca-certificates`; those are new.
+- **`pstack build-image` copies the running binary into the image** (no npm fetch), so it runs on
+  the Linux host only. A macOS checkout uses the repo's `Dockerfile`, or `PSTACK_BINARY=<linux
+  binary> pstack build-image`. The `-previous` retag is unchanged. The advanced UI image still
+  fetches `@samyx/preview-stacks-ui` from npm inside the build.
+- **`pstack upgrade`'s first phase is the installer** (`PSTACK_VERSION` pinned, into the directory
+  the running binary lives in), then the unchanged `pstack upgrade --resume`.
+- **`pstack cloud-init` renders the installer instead of the Bun install block**; re-render saved
+  cloud-configs before provisioning a new host. The distro list and everything else is the same.
+- **`go install github.com/samishal1998/preview-stacks/packages/pstack/cmd/pstack@latest`** works.
+- There is no importable library; the programmatic surface is the HTTP API.
+
+### Fixed (strictly tighter; not observable from a correct client)
+
+- `PUT` and `DELETE` on a deployment hold the stack's job lock across their check-then-act, so a
+  lifecycle `POST` racing them gets the ordinary 409 instead of a window.
+- The job stream, opened between a job's last line and its end, now sends `done` immediately
+  instead of hanging (the reference could miss the end between `GET` and subscribe).
+
+### Known wording deviations from 0.28.0
+
+- A malformed `%` escape in a path is `400 text/plain` from the HTTP stack, where 0.28.0 answered
+  `500 {"error":"URI malformed"}`.
+- A YAML parse error on a routing file carries the Go parser's message after `not valid YAML: `.
+- A notifier delivery that cannot connect stores Go's sentence (`dial tcp …: connection refused`)
+  where Bun said `Unable to connect. Is the computer able to access the url?`.
+- String orderings of routing files and registries are byte order, not locale order.
+
 ## 0.28.0 — 2026-08-22
 
 The **last TypeScript release**. From 0.29.0 pstack is a single static Go binary released on GitHub

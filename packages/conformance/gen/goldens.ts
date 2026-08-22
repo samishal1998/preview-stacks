@@ -1,18 +1,23 @@
 /**
- * Produce golden/cli/*.json and golden/render/** from the Bun reference.
+ * Produce golden/cli/*.json and golden/render/** from the built binary.
  *
- *   bun gen/goldens.ts            (forces PSTACK_IMPL=bun; run only while packages/pstack/src exists)
+ *   bun gen/goldens.ts            (needs packages/pstack/bin/pstack; PSTACK_BIN overrides)
+ *
+ * THE GOLDENS ARE THE SPECIFICATION. They were generated once from the TypeScript reference the
+ * Go binary was ported against and have been byte-identical since (docs/port-status.md); a change
+ * to them is a deliberate contract change and is reviewed as one. Run this after such a change and
+ * commit the diff with the code.
  *
  * One case = one CLI run with a pinned environment; init cases also copy the control directory
- * they rendered. The consumer (test/cli-goldens.test.ts) replays the same table against whichever
- * implementation is selected and compares after masking.
+ * they rendered. The consumer (test/cli-goldens.test.ts) replays the same table and compares
+ * after masking.
  */
-if (process.env.PSTACK_IMPL && process.env.PSTACK_IMPL !== 'bun') {
-  throw new Error('goldens are generated from the Bun reference only — unset PSTACK_IMPL');
+if (process.env.PSTACK_IMPL && process.env.PSTACK_IMPL !== 'go') {
+  throw new Error('goldens are generated from the Go binary — unset PSTACK_IMPL');
 }
-process.env.PSTACK_IMPL = 'bun';
+process.env.PSTACK_IMPL = 'go';
 
-const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = await import('node:fs');
+const { existsSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
 const { dirname, join } = await import('node:path');
 const { runCli } = await import('../harness/cli.ts');
 const { dockerShim } = await import('../harness/docker-shim.ts');
@@ -21,13 +26,10 @@ const { GOLDEN, mask } = await import('../harness/goldens.ts');
 const { CLI_CWD } = await import('../harness/impl.ts');
 
 const version = (await runCli(['--version'])).stdout.trim();
-console.log(`reference: pstack ${version}`);
-// The reference's files only: `<name>.go.json` (gen/goldens-go.ts) are the Go build's and stay.
-mkdirSync(join(GOLDEN, 'cli'), { recursive: true });
-for (const f of readdirSync(join(GOLDEN, 'cli'))) {
-  if (f.endsWith('.json') && !f.endsWith('.go.json')) rmSync(join(GOLDEN, 'cli', f));
-}
+console.log(`pstack ${version}`);
+rmSync(join(GOLDEN, 'cli'), { recursive: true, force: true });
 rmSync(join(GOLDEN, 'render', 'control'), { recursive: true, force: true });
+mkdirSync(join(GOLDEN, 'cli'), { recursive: true });
 
 for (const c of CASES) {
   if (c.freshData) {
@@ -45,7 +47,6 @@ for (const c of CASES) {
       code: r.code,
       stdout: mask(r.stdout, version),
       stderr: mask(r.stderr, version),
-      ...(c.goDivergent ? { goDivergent: c.goDivergent.source } : {}),
     };
     writeFileSync(join(GOLDEN, 'cli', `${c.name}.json`), JSON.stringify(golden, null, 2) + '\n');
     if (c.render) {

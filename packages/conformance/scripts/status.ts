@@ -1,8 +1,6 @@
 /**
- * The port matrix: TS file → Go package → which conformance files grade it → how they stand in each
- * mode. Reads the last junit runs in .status/ (bun.xml, go.xml); run `bun run ratchet` and
- * `PSTACK_IMPL=bun bun test --reporter=junit --reporter-outfile=.status/bun.xml` first, or pass
- * --run to do both now.
+ * The matrix: the reference's file → the Go package → which conformance files grade it → how they
+ * stand. Reads the last junit run in .status/go.xml (`bun run ratchet` writes it), or pass --run.
  *
  *   bun scripts/status.ts [--run] [--write docs/port-status.md]
  */
@@ -13,12 +11,11 @@ import { PKG, parseJunit, runJunit, type Case } from './junit.ts';
 type Row = { ts: string; go: string; group: string; tests?: string[] };
 const rows = JSON.parse(readFileSync(join(PKG, 'port-map.json'), 'utf8')) as Row[];
 
-const load = async (impl: 'bun' | 'go'): Promise<Case[] | null> => {
+const load = async (impl: 'go'): Promise<Case[] | null> => {
   if (process.argv.includes('--run')) return (await runJunit(impl)).cases;
   const p = join(PKG, '.status', `${impl}.xml`);
   return existsSync(p) ? parseJunit(readFileSync(p, 'utf8')) : null;
 };
-const bun = await load('bun');
 const go = await load('go');
 const tally = (cases: Case[] | null, files: string[]) => {
   if (!cases) return '—';
@@ -26,13 +23,13 @@ const tally = (cases: Case[] | null, files: string[]) => {
   return `${mine.filter((c) => c.verdict === 'pass').length}/${mine.length}`;
 };
 
-const lines = ['| group | TS → Go | conformance files | bun | go |', '|---|---|---|---|---|'];
+const lines = ['| group | reference → Go | conformance files | go |', '|---|---|---|---|'];
 for (const r of rows) {
   const files = r.tests ?? [];
-  lines.push(`| ${r.group} | \`${r.ts}\` → \`${r.go}\` | ${files.map((f) => f.replace('test/', '')).join(', ') || '—'} | ${tally(bun, files)} | ${tally(go, files)} |`);
+  lines.push(`| ${r.group} | \`${r.ts}\` → \`${r.go}\` | ${files.map((f) => f.replace('test/', '')).join(', ') || '—'} | ${tally(go, files)} |`);
 }
 const allFiles = [...new Set(rows.flatMap((r) => r.tests ?? []))];
-lines.push(`| **all** | | | **${tally(bun, allFiles)}** | **${tally(go, allFiles)}** |`);
+lines.push(`| **all** | | | **${tally(go, allFiles)}** |`);
 const md = lines.join('\n');
 console.log(md);
 const w = process.argv.indexOf('--write');

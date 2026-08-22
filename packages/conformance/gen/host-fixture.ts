@@ -1,9 +1,13 @@
 /**
- * Build golden/host — a COMPLETE data directory as the Bun reference leaves it after real use —
- * plus the responses the reference gives over it. The Go binary must open this directory unchanged:
- * every login verifies, every session resolves, every route answers the same bytes.
+ * Build golden/host — a COMPLETE data directory as the binary leaves it after real use — plus the
+ * responses it gives over it. A later binary must open this directory unchanged: every login
+ * verifies, every session resolves, every route answers the same bytes.
  *
- *   bun gen/host-fixture.ts        (Bun reference only)
+ * The checked-in fixture was produced by the TypeScript reference (0.28.0) and is what proved the
+ * Go port opens a real host's data unchanged. Regenerate only for a deliberate on-disk format
+ * change — that is a migration, and it is reviewed as one.
+ *
+ *   bun gen/host-fixture.ts
  *
  * Everything is produced BLACK-BOX through the CLI and the API, except four rows the API has no
  * write path for, which are inserted with bun:sqlite at the end (terminal audit rows, deliveries
@@ -11,8 +15,8 @@
  * for a real-world provider key). FIXTURE.json records the plaintext credentials and ids a consumer
  * needs; expected/<route>.json records the reference responses.
  */
-if (process.env.PSTACK_IMPL && process.env.PSTACK_IMPL !== 'bun') throw new Error('the host fixture is generated from the Bun reference only');
-process.env.PSTACK_IMPL = 'bun';
+if (process.env.PSTACK_IMPL && process.env.PSTACK_IMPL !== 'go') throw new Error('the host fixture is generated from the Go binary — unset PSTACK_IMPL');
+process.env.PSTACK_IMPL = 'go';
 
 const { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
 const { join } = await import('node:path');

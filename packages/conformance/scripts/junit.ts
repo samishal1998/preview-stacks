@@ -7,7 +7,7 @@ export const PKG = join(REPO, 'packages', 'conformance');
 export type Verdict = 'pass' | 'fail' | 'skip';
 export type Case = { file: string; classname: string; name: string; verdict: Verdict };
 
-export async function runJunit(impl: 'bun' | 'go' | 'null', files: string[] = []): Promise<{ cases: Case[]; exitCode: number }> {
+export async function runJunit(impl: 'go' | 'null', files: string[] = []): Promise<{ cases: Case[]; exitCode: number }> {
   mkdirSync(join(PKG, '.status'), { recursive: true });
   const out = join(PKG, '.status', `${impl}.xml`);
   const proc = Bun.spawn(['bun', 'test', '--reporter=junit', `--reporter-outfile=${out}`, ...files], {

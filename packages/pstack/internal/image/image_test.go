@@ -274,11 +274,9 @@ func TestGeneratedDockerfiles(t *testing.T) {
 	})
 
 	// The conformance transcripts: `pstack dockerfile [--ui]` prints the Dockerfile plus one newline.
-	// The control Dockerfile is the Go build's own document (`dockerfile.go.json`, generated from this
-	// binary); the UI one is unchanged from the reference.
 	t.Run("matches the dockerfile goldens byte-for-byte", func(t *testing.T) {
 		// negative control: change any byte of ControlDockerfile — the compare fails.
-		for name, df := range map[string]string{"dockerfile.go": ControlDockerfile(""), "dockerfile-ui": UIDockerfile("")} {
+		for name, df := range map[string]string{"dockerfile": ControlDockerfile(""), "dockerfile-ui": UIDockerfile("")} {
 			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".json"))
 			if err != nil {
 				t.Fatal(err)
