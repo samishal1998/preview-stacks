@@ -1,0 +1,11 @@
+{
+  "path": "/api/deployments/pr-1/source",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "pr-1",
+    "specName": null,
+    "spec": "version: 1\nstack: pr-1\ncompose:\n  file: docker-compose.yml\n  profiles: []\naxes:\n  - name: db\n    up: \"true\"\n    down: \"true\"\n    assert_gone: \"true\"\n",
+    "compose": "services:\n  app:\n    image: nginx:alpine\n    labels:\n      - pstack.routing.port=80\n    restart: always\n    mem_limit: 128m\n"
+  }
+}

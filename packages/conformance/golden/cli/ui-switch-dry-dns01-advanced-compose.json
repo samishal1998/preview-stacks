@@ -1,0 +1,15 @@
+{
+  "name": "ui-switch-dry-dns01-advanced-compose",
+  "argv": [
+    "ui",
+    "basic",
+    "-n"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "advanced UI → basic UI   (preview.example.com)\n  → re-run init with the basic UI\n  [dry-run] re-run init with the basic UI\n",
+  "stderr": ""
+}

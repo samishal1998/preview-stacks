@@ -1,0 +1,18 @@
+{
+  "name": "up-dry-verbose",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "up",
+    "-n",
+    "-v"
+  ],
+  "env": {
+    "PR": "1",
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: pr-1  (dry-run)\n→ up: database\n  [dry-run] $ ./hooks/db-branch.sh recreate \"$STACK\" || exit 1\necho \"DATABASE_URL=$(./hooks/db-branch.sh url \"$STACK\")\"\n\n  [dry-run] $ ./hooks/db-branch.sh exists \"$STACK\"\n→ up: queue-namespace\n  [dry-run] $ docker exec shared-temporal-1 temporal operator namespace create \\\n  --namespace \"$STACK\" --retention 24h 2>/dev/null || true\n\n  [dry-run] $ docker exec shared-temporal-1 temporal operator namespace describe --namespace \"$STACK\" >/dev/null\n\n→ compose up (backend, frontend)\n  [dry-run] $ docker compose -p 'pr-1' -f 'docker-compose.preview.yml' --profile 'backend' --profile 'frontend' up -d --remove-orphans\n  ✓ up           database\n  ✓ assert_live  database\n  ✓ up           queue-namespace\n  ✓ assert_live  queue-namespace\n  ✓ compose      (compose)\n",
+  "stderr": ""
+}

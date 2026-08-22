@@ -1,0 +1,15 @@
+{
+  "name": "validate-missing-var",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "validate"
+  ],
+  "env": {
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: env.PR_NUMBER: undefined variable(s) ${PR}. Plain names are passed in the environment or under `env:`; `vars.` and `secrets.` names are defined on the host's Variables page.\n"
+}

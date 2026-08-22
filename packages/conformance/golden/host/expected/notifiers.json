@@ -1,0 +1,55 @@
+{
+  "path": "/api/notifiers",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "notifiers": [
+      {
+        "id": 2,
+        "type": "slack",
+        "name": "chat",
+        "config": {
+          "webhookUrl": "••••••••••••"
+        },
+        "events": [
+          "stack.ready",
+          "stack.failed"
+        ],
+        "enabled": true,
+        "createdAt": 1787425040739,
+        "lastStatus": "ok",
+        "lastAt": 1787425041659
+      },
+      {
+        "id": 3,
+        "type": "discord",
+        "name": "alerts",
+        "config": {
+          "webhookUrl": "••••••••••••"
+        },
+        "events": [
+          "job.failed"
+        ],
+        "enabled": false,
+        "createdAt": 1787425040739,
+        "lastStatus": null,
+        "lastAt": null
+      },
+      {
+        "id": 1,
+        "type": "webhook",
+        "name": "ops",
+        "config": {
+          "url": "http://127.0.0.1:<PORT>/hook"
+        },
+        "events": [
+          "*"
+        ],
+        "enabled": true,
+        "createdAt": 1787425040738,
+        "lastStatus": "ok",
+        "lastAt": 1787425041683
+      }
+    ]
+  }
+}

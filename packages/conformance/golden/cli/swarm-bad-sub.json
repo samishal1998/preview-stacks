@@ -1,0 +1,12 @@
+{
+  "name": "swarm-bad-sub",
+  "argv": [
+    "swarm",
+    "dance"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: usage: pstack swarm <status|join>   (join: --format token|command|script|cloud-config [--distro <name>] [-o <file>])\n"
+}

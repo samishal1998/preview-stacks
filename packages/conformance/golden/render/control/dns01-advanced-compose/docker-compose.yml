@@ -1,0 +1,252 @@
+# The pstack CONTROL stack — Traefik (ingress + one wildcard certificate) and pstack (HTTP API
+# and web UI, one container: the API already serves the UI).
+#
+# `pstack init` copies this file to ${PSTACK_DATA}/control/docker-compose.yml byte for byte,
+# writes the `.env` beside it that every ${PLACEHOLDER} below reads, and brings it up FROM THE
+# HOST:
+#
+#     docker compose -p pstack-control -f docker-compose.yml up -d
+#
+# ── THE RULE THIS FILE EXISTS TO ENFORCE ─────────────────────────────────────────────────────
+# The pstack container below manages every shared and isolated deployment on this host. It never
+# manages THIS stack. `up` on this project recreates the pstack container, killing the process
+# performing the operation mid-flight; if the new image is broken, the only thing that could have
+# repaired the host just died with it. Upgrades therefore run from the host (`pstack init` /
+# `pstack self-upgrade`) — which is also why this file lives next to the registry instead of being
+# submitted to it as a deployment.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# Pins the project name so volume names are deterministic (`pstack-control_letsencrypt`) rather
+# than derived from whatever directory the file happens to sit in.
+name: pstack-control
+
+services:
+  # ═══ Traefik ══════════════════════════════════════════════════════════════════════════════
+  # Owns :80 and :443 for the whole host. Two providers, because they answer different questions:
+  #   docker — turns per-deployment container labels into routes, with no restart and no config
+  #            file. This is what makes a new preview hostname free.
+  #   file   — holds what no container owns (middlewares, static routes you add by hand).
+  traefik:
+    # Pin ≥ v3.6.1: earlier 3.x releases cannot talk to Docker Engine 29's API, and the docker
+    # provider then comes up empty — every route 404s while Traefik itself looks perfectly healthy.
+    image: traefik:v3.6.1
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "80:80"
+      - "443:443"
+    networks: [preview-ingress]
+    # The DNS-01 credential. A separate file because Compose cannot build an environment KEY from a
+    # variable, and every lego provider names its token differently (CF_DNS_API_TOKEN,
+    # HETZNER_API_TOKEN, …). `pstack init` writes it, mode 0600.
+    env_file:
+      - ./dns.env
+    volumes:
+      # READ-ONLY, and deliberately different from pstack's mount below. Traefik only needs to
+      # enumerate containers, labels and networks. `:ro` stops accidents, not an attacker — the
+      # read-only Docker API still exposes every container's environment — so consider a socket
+      # proxy that whitelists just the endpoints Traefik uses (docs/bootstrap.md §9).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # acme.json lives here. BACK IT UP: losing it means re-issuing, and re-issuing into a
+      # rate limit at the wrong moment means no TLS at all for hours.
+      - letsencrypt:/letsencrypt
+      # The file provider's watched directory. NOTHING but dynamic config may live in it — drop an
+      # htpasswd file in here and Traefik tries to parse `admin:$apr1$…` as config, logs a parse
+      # error, and can discard the rest of the directory with it. The visible symptom is a missing
+      # certificate, which points you at ACME instead of at a misplaced file.
+      - ./traefik-dynamic:/etc/traefik/dynamic:ro
+    command:
+      # ── providers ──
+      - --providers.docker=true
+      # Opt-in routing. Without this, every service of every deployment — including internal ones —
+      # gets a public route derived from its container name.
+      - --providers.docker.exposedbydefault=false
+      # Which of a container's networks Traefik should dial. A preview service typically sits on
+      # preview-ingress, preview-shared AND its own project default; without this Traefik may pick
+      # one it cannot reach and you get a 502 that looks like an app bug.
+      - --providers.docker.network=preview-ingress
+      # `pstack init --orchestrator swarm` adds the swarm provider here: previews then deploy as
+      # swarm stacks whose routers live on SERVICE labels (deploy.labels), which only this provider
+      # reads. The docker provider stays on for THIS stack's own containers.
+      # (compose mode: no swarm provider)
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      # ── metrics, for pstack only ──
+      # Per-router request counters on an entrypoint that is NOT published: pstack reads
+      # http://traefik:8082/metrics over preview-ingress to decide when a preview is idle
+      # (`sleep.idle` in a spec — src/scheduler.ts). Nothing outside the control stack can reach it.
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --metrics.prometheus.addrouterslabels=true
+      # ── entrypoints: all plaintext redirected to TLS ──
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # ── ACME over DNS-01 ──
+      # DNS-01, not HTTP-01, for two reasons: a wildcard can ONLY be issued via DNS-01, and
+      # HTTP-01 would need a container already answering on the hostname being certified — so a
+      # PR mid-build would serve a TLS error that looks like a certificate problem but is a
+      # sequencing problem. DNS-01 needs nothing running.
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      # `pstack init` replaces this marker with the challenge args for the chosen mode. HTTP-01 is
+      # the default (no DNS credential to obtain, store or rotate); DNS-01 is `--challenge dns01`.
+      - --certificatesresolvers.le.acme.dnschallenge=true
+      - --certificatesresolvers.le.acme.dnschallenge.provider=${DNS_PROVIDER}
+      # Ask the authoritative resolvers directly so a stale local cache cannot fail the
+      # propagation check.
+      - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53
+      - --certificatesresolvers.le.acme.dnschallenge.propagation.delaybeforechecks=30s
+      # Ask a public resolver during the precheck instead of the host's, which may serve stale or
+      - --log.level=INFO
+      - --accesslog=true
+
+  # ═══ pstack: the control plane itself ═════════════════════════════════════════════════════
+  # Serves the API and the UI. Manages shared and isolated deployments — and NOT this stack; see
+  # the header.
+  pstack:
+    image: ${PSTACK_IMAGE}
+    restart: unless-stopped
+    mem_limit: 512m
+    networks: [preview-ingress, preview-shared]
+    # Overrides the image's non-root default, on purpose. The socket below is mounted read-write,
+    # which is root-equivalent on this host no matter which uid holds it — so a non-root container
+    # user buys no boundary here, while costing two real failure modes: the socket's group id
+    # differs per distro, and files written into the bind-mounted registry would be owned by a uid
+    # that does not exist on the host. If you remove this line, you must solve both.
+    user: "0:0"
+    volumes:
+      # READ-WRITE, unlike Traefik's. pstack works by shelling out to `docker compose`; it must be
+      # able to create and destroy containers, networks and volumes. This is the whole reason
+      # PSTACK_TOKEN matters: anyone who can drive this API can start a privileged container and
+      # own the box. Never expose it without the token, and never publish the socket over TCP.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Only the registry, not all of ${DATA_DIR}: the DNS provider token in ./dns.env is Traefik's
+      # business, and the API has no reason to be able to read it.
+      - ${DATA_DIR}/deployments:/data/deployments
+      # Accounts, sessions, API tokens (and, later, webhook registrations): one SQLite file. Its own
+      # mounted subdirectory because /data itself is NOT a mount — a database at /data/pstack.db
+      # would live in the container filesystem and silently vanish on every recreate.
+      - ${DATA_DIR}/db:/data/db
+      # Traefik's dynamic config, READ-WRITE here and `:ro` on Traefik above — this is the API's
+      # writing hand for middleware, TLS options and the fallback router. Same container path as
+      # Traefik's so the two agree about what a filename means.
+      #
+      # The blast radius is real: an unparseable file makes Traefik log a parse error for the whole
+      # DIRECTORY and it can discard the rest with it, so the symptom is other people's routes
+      # disappearing. src/routing.ts validates before writing and renames into place so the watcher
+      # never sees a partial file. What it CANNOT break is control.<domain> and api.<domain> — those
+      # are docker labels on this container, so the surface you would use to undo a bad edit survives
+      # one. Keep it that way.
+      - ./traefik-dynamic:/etc/traefik/dynamic
+      # PRIVATE REGISTRY CREDENTIALS. An image pull is authenticated by the CLIENT, not the daemon:
+      # `docker pull` reads its own config.json and hands the credential to the daemon in an
+      # X-Registry-Auth header. pstack shells out to compose from INSIDE this container, so a
+      # `docker login` on the host writes a file this client cannot see — and a private image fails
+      # with `pull access denied` on a host that is logged in.
+      #
+      # The CLI re-reads this on every invocation, so a credential added now applies to the next pull
+      # with nothing to restart. Add one from the host with
+      # `docker login --config <DATA_DIR>/control/docker <registry>`, or through the API.
+      - ./docker:/docker-config
+    environment:
+      # Where the docker CLI looks for config.json — the mount above. Without this it would look in
+      # /root/.docker, which is inside the image and empty.
+      DOCKER_CONFIG: /docker-config
+      # Bearer token for mutating routes. Note GETs are NOT gated — /api/jobs/:id returns full hook
+      # transcripts — so the ingress in front of this is the only protection on reads.
+      PSTACK_TOKEN: ${PSTACK_TOKEN}
+      # First-admin bootstrap, honoured only while no accounts exist. Optional: without it, create
+      # the first account with `POST /api/auth/bootstrap` using the PSTACK_TOKEN bearer.
+      PSTACK_ADMIN_USER: ${PSTACK_ADMIN_USER:-}
+      PSTACK_ADMIN_PASSWORD: ${PSTACK_ADMIN_PASSWORD:-}
+      # Registry root. The Registry appends `deployments/` itself, which is why the mount above
+      # lands at /data/deployments.
+      PSTACK_DATA: /data
+      # Safe here and ONLY here: the container is on a private bridge, reachable from Traefik, and
+      # publishes no host port. `serve` refuses a non-loopback bind without PSTACK_TOKEN anyway.
+      PSTACK_HOST: 0.0.0.0
+      PSTACK_PORT: "7878"
+      # The preview domain, so the API can build an absolute share-link URL and name the control
+      # host. Same value the routers below interpolate.
+      PSTACK_DOMAIN: ${DOMAIN}
+      # `compose` or `swarm` — what `pstack init` decided; the default for a spec that does not say.
+      PSTACK_ORCHESTRATOR: ${PSTACK_ORCHESTRATOR:-compose}
+      # Where the idle meter reads Traefik's request counters (the `metrics` entrypoint above).
+      PSTACK_TRAEFIK_METRICS: http://traefik:8082/metrics
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=preview-ingress
+      # TWO hostnames, ONE container — the API process also serves the UI.
+      #
+      #   control.<domain>   the web UI (an operator's browser)
+      #   api.<domain>       the API (CI, curl, scripts)
+      #
+      # Both routers point at the same service, and the UI calls the API with RELATIVE paths
+      # (`/api/…`). That is deliberate: the UI loaded from control.<domain> then talks to
+      # control.<domain>/api/… — same origin, so no CORS preflight, no cross-origin cookie rules,
+      # and nothing to reconfigure if the hostnames change. `api.<domain>` exists so external
+      # callers have a stable, honest name that is not "the UI host".
+      - traefik.http.routers.pstack-ui.rule=Host(`control.${DOMAIN}`)
+      - traefik.http.routers.pstack-ui.entrypoints=websecure
+      # Advanced UI selected: control.<domain> serves the SPA container below. The API
+      # still serves the basic UI on api.<domain>, so a broken UI image never leaves this
+      # host without an interface.
+      - traefik.http.routers.pstack-ui.service=advanced-ui
+      - traefik.http.routers.pstack-api.rule=Host(`api.${DOMAIN}`)
+      - traefik.http.routers.pstack-api.entrypoints=websecure
+      - traefik.http.routers.pstack-api.service=pstack
+      # THE ONE ROUTER THAT REQUESTS THE WILDCARD. Every other router — including every per-PR
+      # service — sets `tls=true` and NOTHING else, inheriting this certificate by SNI. Adding
+      # `certresolver` to a per-PR router orders a separate certificate and burns the
+      # ~50-per-week limit. The wildcard matches ONE label: `backend-pr-1.${DOMAIN}` is covered,
+      # `backend.pr-1.${DOMAIN}` is not — flatten per-PR hostnames with dashes.
+      - traefik.http.routers.pstack-ui.tls=true
+      - traefik.http.routers.pstack-ui.tls.certresolver=le
+      - traefik.http.routers.pstack-ui.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.pstack-ui.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.routers.pstack-api.tls=true
+      # THE WAKE-ON-CALL CATCH-ALL. Priority 1 — the lowest — so any preview's own router wins while
+      # its containers run. When they do not (asleep, torn down, never deployed), the request lands on
+      # pstack with the original Host: a sleeping stack is woken and the visitor sees "spinning up…";
+      # anything else gets the UI. `tls=true` alone: under DNS-01 the wildcard covers it, under HTTP-01
+      # Traefik serves the certificate it already issued for that hostname while the stack was live.
+      # Rendered by `pstack init` (the domain's dots must be escaped in the regexp).
+      - traefik.http.routers.pstack-wake.rule=HostRegexp(`^[a-z0-9-]+\.preview\.example\.com$$`)
+      - traefik.http.routers.pstack-wake.priority=1
+      - traefik.http.routers.pstack-wake.entrypoints=websecure
+      - traefik.http.routers.pstack-wake.tls=true
+      - traefik.http.routers.pstack-wake.service=pstack
+
+      - traefik.http.services.pstack.loadbalancer.server.port=7878
+
+  # The opt-in advanced UI (`pstack init --ui advanced`). A static SPA behind nginx, which
+  # proxies /api/ back to the pstack container so the browser stays same-origin and needs no
+  # CORS. Build it with `pstack build-image --ui`.
+  advanced-ui:
+    image: ${PSTACK_UI_IMAGE}
+    restart: unless-stopped
+    mem_limit: 128m
+    depends_on: [pstack]
+    networks: [preview-ingress]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=preview-ingress
+      # No router here: control.<domain> is declared on the pstack container (so the TLS
+      # labels stay in one place) and points at this service by name.
+      - traefik.http.services.advanced-ui.loadbalancer.server.port=80
+
+volumes:
+  letsencrypt:
+
+networks:
+  # Declared `external` here AND in every per-PR compose file, because `pstack init` creates them.
+  # Declare one non-external on the per-PR side and Compose makes a *different* network named
+  # `pr-123_preview-ingress`: the container is up, healthy, and unreachable, and Traefik answers
+  # 404 for a hostname that looks correctly configured.
+  preview-ingress:
+    external: true
+  preview-shared:
+    external: true

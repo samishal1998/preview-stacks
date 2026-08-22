@@ -1,0 +1,15 @@
+{
+  "name": "upgrade-to-go-release",
+  "argv": [
+    "upgrade",
+    "--to",
+    "0.29.0"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: pstack 0.29.0 is a Go binary released on GitHub, not an npm package — this command cannot install it.\nRun the one-time hop instead (it reads this host's control/.env, so nothing rotates):\n\n  curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v0.29.0/install.sh | sh && pstack upgrade --resume\n\nRollback, if needed: docker tag pstack:local-previous pstack:local && docker compose -p pstack-control -f <PSTACK_DATA>/control/docker-compose.yml up -d\n"
+}

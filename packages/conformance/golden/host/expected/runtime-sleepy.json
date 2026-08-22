@@ -1,0 +1,72 @@
+{
+  "path": "/api/deployments/sleepy/runtime",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "sleepy",
+    "orchestrator": "swarm",
+    "asleep": {
+      "since": 1787425041682,
+      "reason": "operator: root (PSTACK_TOKEN)",
+      "hosts": [
+        "app-sleepy.preview.example.com"
+      ],
+      "rules": []
+    },
+    "stack": "sleepy",
+    "containers": [
+      {
+        "id": "taskbbb1",
+        "name": "sleepy_app.1",
+        "service": "app",
+        "image": "nginx:alpine",
+        "state": "running",
+        "health": null,
+        "exitCode": null,
+        "restartCount": 0,
+        "networks": [
+          "preview-ingress"
+        ],
+        "ingressIp": null,
+        "ports": [],
+        "traefikLabels": {
+          "traefik.enable": "true",
+          "traefik.swarm.network": "preview-ingress",
+          "traefik.http.routers.app-sleepy.rule": "Host(`app-sleepy.preview.example.com`)",
+          "traefik.http.routers.app-sleepy.entrypoints": "websecure",
+          "traefik.http.routers.app-sleepy.tls": "true",
+          "traefik.http.routers.app-sleepy.service": "app-sleepy",
+          "traefik.http.services.app-sleepy.loadbalancer.server.port": "80"
+        },
+        "startedAt": 1787220000000,
+        "node": "fixture-mgr",
+        "remote": true
+      }
+    ],
+    "routes": [
+      {
+        "router": "app-sleepy",
+        "container": "app",
+        "rule": "Host(`app-sleepy.preview.example.com`)",
+        "hosts": [
+          "app-sleepy.preview.example.com"
+        ],
+        "service": "app-sleepy",
+        "port": 80,
+        "entrypoints": "websecure",
+        "tls": true,
+        "certresolver": null,
+        "priority": null,
+        "target": null
+      }
+    ],
+    "findings": [
+      {
+        "level": "info",
+        "message": "sleepy_app.1 runs on node fixture-mgr. Logs reach it through the manager; a terminal and stop/start do not."
+      }
+    ],
+    "challenge": "dns01",
+    "reachable": true
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "path": "/api/users",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "users": [
+      {
+        "id": 1,
+        "username": "admin",
+        "role": "admin",
+        "email": null,
+        "createdAt": 1787425040358
+      },
+      {
+        "id": 4,
+        "username": "basil",
+        "role": "admin",
+        "email": "basil@example.com",
+        "createdAt": 1787425041608
+      },
+      {
+        "id": 2,
+        "username": "bob",
+        "role": "admin",
+        "email": "bob@example.com",
+        "createdAt": 1787425040372
+      },
+      {
+        "id": 3,
+        "username": "carol",
+        "role": "admin",
+        "email": null,
+        "createdAt": 1787425040503
+      },
+      {
+        "id": 5,
+        "username": "dave",
+        "role": "admin",
+        "email": "dave@example.com",
+        "createdAt": 1787425041690
+      }
+    ]
+  }
+}

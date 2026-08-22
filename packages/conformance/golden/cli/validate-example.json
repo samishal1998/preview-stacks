@@ -1,0 +1,16 @@
+{
+  "name": "validate-example",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "validate"
+  ],
+  "env": {
+    "PR": "1",
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: pr-1\n✓ spec parses — kind: isolated, 4 axis/axes, stack \"pr-1\"\n  compose: docker-compose.preview.yml [backend, frontend]\n  - database: up, down, assert_gone, assert_live\n  - queue-namespace: up, down, assert_gone, assert_live\n  - images: down, assert_gone\n  - ingress: assert_gone\n",
+  "stderr": ""
+}

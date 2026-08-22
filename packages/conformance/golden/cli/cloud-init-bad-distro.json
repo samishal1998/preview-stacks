@@ -1,0 +1,22 @@
+{
+  "name": "cloud-init-bad-distro",
+  "argv": [
+    "cloud-init",
+    "--domain",
+    "preview.example.com",
+    "--acme-email",
+    "ops@example.com",
+    "--ssh-key",
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoldenKeyForTheConformanceSuite0000000 golden@example",
+    "--password",
+    "golden-dashboard-password",
+    "-y",
+    "--distro",
+    "plan9"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: unknown distro \"plan9\" — expected one of ubuntu, debian, fedora, suse, arch, alpine\n"
+}

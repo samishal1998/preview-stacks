@@ -1,0 +1,22 @@
+{
+  "name": "cloud-init-bad-challenge",
+  "argv": [
+    "cloud-init",
+    "--domain",
+    "preview.example.com",
+    "--acme-email",
+    "ops@example.com",
+    "--ssh-key",
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoldenKeyForTheConformanceSuite0000000 golden@example",
+    "--password",
+    "golden-dashboard-password",
+    "-y",
+    "--challenge",
+    "tls-alpn"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: --challenge must be http01 or dns01, got \"tls-alpn\"\n"
+}

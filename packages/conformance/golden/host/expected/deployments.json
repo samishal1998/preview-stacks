@@ -1,0 +1,78 @@
+{
+  "path": "/api/deployments?PR=2",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "deployments": [
+      {
+        "id": "sleepy",
+        "kind": "isolated",
+        "createdAt": 1787425040647,
+        "updatedAt": 1787425040647,
+        "vars": {},
+        "sleep": {
+          "since": 1787425041682,
+          "reason": "operator: root (PSTACK_TOKEN)",
+          "hosts": [
+            "app-sleepy.preview.example.com"
+          ],
+          "rules": []
+        },
+        "asleep": {
+          "since": 1787425041682,
+          "reason": "operator: root (PSTACK_TOKEN)",
+          "hosts": [
+            "app-sleepy.preview.example.com"
+          ],
+          "rules": []
+        },
+        "orchestrator": "swarm",
+        "stack": "sleepy",
+        "busy": false,
+        "running": false
+      },
+      {
+        "id": "shared-db",
+        "kind": "shared",
+        "createdAt": 1787425040646,
+        "updatedAt": 1787425040646,
+        "vars": {},
+        "asleep": null,
+        "orchestrator": "swarm",
+        "stack": "shared-db",
+        "busy": false,
+        "running": false
+      },
+      {
+        "id": "pr-2",
+        "kind": "isolated",
+        "createdAt": 1787425040645,
+        "updatedAt": 1787425040645,
+        "specName": "web",
+        "vars": {
+          "PR": "2"
+        },
+        "x-future": {
+          "k": 1
+        },
+        "asleep": null,
+        "orchestrator": "swarm",
+        "stack": "pr-2",
+        "busy": false,
+        "running": false
+      },
+      {
+        "id": "pr-1",
+        "kind": "isolated",
+        "createdAt": 1787425040643,
+        "updatedAt": 1787425040643,
+        "vars": {},
+        "asleep": null,
+        "orchestrator": "swarm",
+        "stack": "pr-1",
+        "busy": false,
+        "running": true
+      }
+    ]
+  }
+}

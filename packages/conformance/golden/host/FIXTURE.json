@@ -1,0 +1,137 @@
+{
+  "version": "0.28.0",
+  "token": "fixture-token-0123456789abcdef0123456789abcdef",
+  "admin": {
+    "username": "admin",
+    "password": "admin-password-1"
+  },
+  "bob": {
+    "id": 2,
+    "username": "bob",
+    "password": "bob-password-22",
+    "email": "bob@example.com"
+  },
+  "carol": {
+    "id": 3,
+    "username": "carol",
+    "password": "carol-password-1"
+  },
+  "sessions": {
+    "admin": "pstack_ses_522c9638486dd5ef7d743c6f68354ddc40648696cca1b4b92f299c5cd0b8c826",
+    "bob": "pstack_ses_78a9766068e86e4a05c60eaaaf54af26c7d936367e4f8d586ccfb1f1cc4a0a7b",
+    "basil": "pstack_ses_8a3103c6debec6482f10d08e12d80b0bdc5d2c5d7fa2c9e2bf7e86e6768526f8"
+  },
+  "tokens": {
+    "admin": {
+      "id": 1,
+      "token": "pstack_pat_3b136c815bd6e0ba36bdeb32bc0e4fdc1ccfa87bf5040f54d8eb837d60c5eae5"
+    },
+    "bob": {
+      "id": 2,
+      "token": "pstack_pat_41f447ca72c11b5bcc54642bf268f78a4f61811d1eaf561176a952ad60a9015c"
+    }
+  },
+  "sleepy": {
+    "since": 1787425041682,
+    "reason": "operator: root (PSTACK_TOKEN)",
+    "hosts": [
+      "app-sleepy.preview.example.com"
+    ],
+    "rules": []
+  },
+  "notifiers": {
+    "webhook": {
+      "id": 1,
+      "secret": "whsec_fe099633a87c1183ad47760359199b36063db5546a270af6"
+    },
+    "slack": 2,
+    "discord": 3
+  },
+  "sso": {
+    "issuer": "http://127.0.0.1:52077",
+    "subject": "fixture-sub-1",
+    "username": "basil",
+    "googleExpected": {
+      "configured": true,
+      "callbackUrl": "http://127.0.0.1:52078/api/auth/sso/callback",
+      "presets": [
+        {
+          "key": "github",
+          "label": "GitHub",
+          "authorizeUrl": "https://github.com/login/oauth/authorize",
+          "tokenUrl": "https://github.com/login/oauth/access_token",
+          "userInfoUrl": "https://api.github.com/user",
+          "scopes": "read:user user:email",
+          "claimMap": {
+            "subject": "id",
+            "username": "login",
+            "email": "email",
+            "name": "name",
+            "avatar": "avatar_url"
+          }
+        },
+        {
+          "key": "gitlab",
+          "label": "GitLab",
+          "authorizeUrl": "https://gitlab.com/oauth/authorize",
+          "tokenUrl": "https://gitlab.com/oauth/token",
+          "userInfoUrl": "https://gitlab.com/api/v4/user",
+          "scopes": "read_user",
+          "claimMap": {
+            "subject": "id",
+            "username": "username",
+            "email": "email",
+            "name": "name",
+            "avatar": "avatar_url"
+          }
+        },
+        {
+          "key": "bitbucket",
+          "label": "Bitbucket",
+          "authorizeUrl": "https://bitbucket.org/site/oauth2/authorize",
+          "tokenUrl": "https://bitbucket.org/site/oauth2/access_token",
+          "userInfoUrl": "https://api.bitbucket.org/2.0/user",
+          "scopes": "account email",
+          "claimMap": {
+            "subject": "uuid",
+            "username": "username",
+            "email": "email",
+            "name": "display_name",
+            "avatar": "links.avatar.href"
+          }
+        }
+      ],
+      "config": {
+        "mode": "oidc",
+        "enabled": true,
+        "clientId": "google-cid",
+        "allowedEmailDomains": [],
+        "defaultRole": "admin",
+        "label": "Google",
+        "discoveryUrl": "https://accounts.google.com/",
+        "provider": "",
+        "authorizeUrl": "",
+        "tokenUrl": "",
+        "userInfoUrl": "",
+        "emailsUrl": "",
+        "scopes": "openid profile email",
+        "claimMap": {
+          "subject": "sub",
+          "username": "preferred_username",
+          "email": "email",
+          "name": "name",
+          "avatar": "picture"
+        }
+      },
+      "clientSecret": "••••••••",
+      "updatedAt": 1787425041502
+    }
+  },
+  "dave": {
+    "id": 5,
+    "username": "dave",
+    "password": "dave-password-1",
+    "hash": "$argon2id$v=19$m=19456,t=3,p=1$t6EFErvQL8vkFP5N+Hpayqvu2BSKkbA9Fj8CiruX2Ns$9KZEwJVKXYKM2PI/o/dgMZT0kXX6lrpTKMk5+R/7+6k"
+  },
+  "shim": "  \"info --format {{json .Swarm}}\") printf '%s\\n' '{\"NodeID\":\"n1\",\"NodeAddr\":\"10.0.0.1\",\"LocalNodeState\":\"active\",\"ControlAvailable\":true,\"RemoteManagers\":[{\"NodeID\":\"n1\",\"Addr\":\"10.0.0.1:2377\"}]}' ;;\n  \"info --format {{.Swarm.LocalNodeState}}\") printf '%s\\n' 'active' ;;\n  \"node ls --format {{json .}}\") printf '%s\\n' '{\"ID\":\"n1\",\"Hostname\":\"fixture-mgr\",\"Status\":\"Ready\",\"Availability\":\"Active\",\"ManagerStatus\":\"Leader\",\"EngineVersion\":\"28.0.1\",\"Self\":\"true\"}' ;;\n  \"swarm join-token -q worker\") printf '%s\\n' 'SWMTKN-1-fixture-token' ;;\n  \"compose ls --all --format json\") printf '%s\\n' '[{\"Name\":\"pstack-control\",\"Status\":\"running(2)\"}]' ;;\n  \"stack ls --format {{.Name}}\") printf '%s\\n' 'pr-1' ;;\n  \"network ls --format {{.ID}} {{.Name}}\") printf '%s\\n' 'net1 preview-ingress' 'net2 preview-shared' ;;\n  \"service ls -q --filter label=com.docker.stack.namespace=pr-1\") printf '%s\\n' 'svcpr1' ;;\n  \"service inspect svcpr1\") printf '%s\\n' '[{\"ID\":\"svcpr1\",\"UpdatedAt\":\"2026-08-20T10:00:00Z\",\"Spec\":{\"Name\":\"pr-1_app\",\"Labels\":{\"com.docker.stack.namespace\":\"pr-1\",\"traefik.enable\":\"true\",\"traefik.swarm.network\":\"preview-ingress\",\"traefik.http.routers.app-pr-1.rule\":\"Host(`app-pr-1.preview.example.com`)\",\"traefik.http.routers.app-pr-1.entrypoints\":\"websecure\",\"traefik.http.routers.app-pr-1.tls\":\"true\",\"traefik.http.routers.app-pr-1.service\":\"app-pr-1\",\"traefik.http.services.app-pr-1.loadbalancer.server.port\":\"80\"},\"TaskTemplate\":{\"ContainerSpec\":{\"Image\":\"nginx:alpine\"},\"Networks\":[{\"Target\":\"net1\"}]}}}]' ;;\n  \"stack ps pr-1 --no-trunc --filter desired-state=running --format {{json .}}\") printf '%s\\n' '{\"ID\":\"taskaaa1\",\"Name\":\"pr-1_app.1\",\"Image\":\"nginx:alpine\",\"Node\":\"fixture-mgr\",\"DesiredState\":\"Running\",\"CurrentState\":\"Running 2 minutes ago\"}' ;;\n  \"ps -aq --filter label=com.docker.stack.namespace=pr-1\") printf '%s\\n' 'aaa111aaa111' ;;\n  \"inspect aaa111aaa111\") printf '%s\\n' '[{\"Id\":\"aaa111aaa111\",\"Name\":\"/pr-1_app.1.taskaaa1\",\"Config\":{\"Image\":\"nginx:alpine\",\"Labels\":{\"com.docker.stack.namespace\":\"pr-1\",\"com.docker.swarm.service.name\":\"pr-1_app\",\"com.docker.swarm.task.id\":\"taskaaa1\",\"com.docker.swarm.node.id\":\"n1\"}},\"State\":{\"Status\":\"running\",\"StartedAt\":\"2026-08-20T10:01:00Z\"},\"NetworkSettings\":{\"Networks\":{\"preview-ingress\":{\"IPAddress\":\"10.0.1.5\"}},\"Ports\":{}}}]' ;;\n  \"service ls -q --filter label=com.docker.stack.namespace=sleepy\") printf '%s\\n' 'svcslp' ;;\n  \"service inspect svcslp\") printf '%s\\n' '[{\"ID\":\"svcslp\",\"UpdatedAt\":\"2026-08-20T10:00:00Z\",\"Spec\":{\"Name\":\"sleepy_app\",\"Labels\":{\"com.docker.stack.namespace\":\"sleepy\",\"traefik.enable\":\"true\",\"traefik.swarm.network\":\"preview-ingress\",\"traefik.http.routers.app-sleepy.rule\":\"Host(`app-sleepy.preview.example.com`)\",\"traefik.http.routers.app-sleepy.entrypoints\":\"websecure\",\"traefik.http.routers.app-sleepy.tls\":\"true\",\"traefik.http.routers.app-sleepy.service\":\"app-sleepy\",\"traefik.http.services.app-sleepy.loadbalancer.server.port\":\"80\"},\"TaskTemplate\":{\"ContainerSpec\":{\"Image\":\"nginx:alpine\"},\"Networks\":[{\"Target\":\"net1\"}]}}}]' ;;\n  \"stack ps sleepy --no-trunc --filter desired-state=running --format {{json .}}\") printf '%s\\n' '{\"ID\":\"taskbbb1\",\"Name\":\"sleepy_app.1\",\"Image\":\"nginx:alpine\",\"Node\":\"fixture-mgr\",\"DesiredState\":\"Running\",\"CurrentState\":\"Running 1 minute ago\"}' ;;\n  \"ps -aq --filter label=com.docker.stack.namespace=sleepy\") printf '%s\\n' 'bbb222bbb222' ;;\n  \"inspect bbb222bbb222\") printf '%s\\n' '[{\"Id\":\"bbb222bbb222\",\"Name\":\"/sleepy_app.1.taskbbb2\",\"Config\":{\"Image\":\"nginx:alpine\",\"Labels\":{\"com.docker.stack.namespace\":\"sleepy\",\"com.docker.swarm.service.name\":\"sleepy_app\",\"com.docker.swarm.task.id\":\"taskbbb2\",\"com.docker.swarm.node.id\":\"n1\"}},\"State\":{\"Status\":\"running\",\"StartedAt\":\"2026-08-20T10:01:00Z\"},\"NetworkSettings\":{\"Networks\":{\"preview-ingress\":{\"IPAddress\":\"10.0.1.5\"}},\"Ports\":{}}}]' ;;\n  \"service ls -q --filter label=traefik.enable=true\") printf '%s\\n' 'svcpr1' 'svcslp' ;;\n  \"ps -aq --filter label=com.docker.compose.project=pstack-control\") printf '%s\\n' 'cccc11cccc11' ;;\n  \"inspect cccc11cccc11\") printf '%s\\n' '[{\"Id\":\"cccc11cccc11\",\"Name\":\"/pstack-control-traefik-1\",\"Config\":{\"Image\":\"traefik:v3.6.1\",\"Cmd\":[\"--providers.docker=true\",\"--certificatesresolvers.le.acme.dnschallenge=true\"],\"Labels\":{\"com.docker.compose.project\":\"pstack-control\",\"com.docker.compose.service\":\"traefik\"}},\"Args\":[],\"State\":{\"Status\":\"running\",\"Health\":{\"Status\":\"healthy\"}},\"NetworkSettings\":{\"Networks\":{\"preview-ingress\":{\"IPAddress\":\"10.0.1.2\"}},\"Ports\":{\"80/tcp\":[{\"HostPort\":\"80\"}]}}}]' ;;\n  \"stack services sleepy --format {{.Name}}\") exit 0 ;;\n  \"stack services pr-1 --format {{.Name}}\") exit 0 ;;"
+}

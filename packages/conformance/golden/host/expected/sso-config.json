@@ -1,0 +1,80 @@
+{
+  "path": "/api/sso/config",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "configured": true,
+    "callbackUrl": "http://127.0.0.1:<PORT>/api/auth/sso/callback",
+    "presets": [
+      {
+        "key": "github",
+        "label": "GitHub",
+        "authorizeUrl": "https://github.com/login/oauth/authorize",
+        "tokenUrl": "https://github.com/login/oauth/access_token",
+        "userInfoUrl": "https://api.github.com/user",
+        "scopes": "read:user user:email",
+        "claimMap": {
+          "subject": "id",
+          "username": "login",
+          "email": "email",
+          "name": "name",
+          "avatar": "avatar_url"
+        }
+      },
+      {
+        "key": "gitlab",
+        "label": "GitLab",
+        "authorizeUrl": "https://gitlab.com/oauth/authorize",
+        "tokenUrl": "https://gitlab.com/oauth/token",
+        "userInfoUrl": "https://gitlab.com/api/v4/user",
+        "scopes": "read_user",
+        "claimMap": {
+          "subject": "id",
+          "username": "username",
+          "email": "email",
+          "name": "name",
+          "avatar": "avatar_url"
+        }
+      },
+      {
+        "key": "bitbucket",
+        "label": "Bitbucket",
+        "authorizeUrl": "https://bitbucket.org/site/oauth2/authorize",
+        "tokenUrl": "https://bitbucket.org/site/oauth2/access_token",
+        "userInfoUrl": "https://api.bitbucket.org/2.0/user",
+        "scopes": "account email",
+        "claimMap": {
+          "subject": "uuid",
+          "username": "username",
+          "email": "email",
+          "name": "display_name",
+          "avatar": "links.avatar.href"
+        }
+      }
+    ],
+    "config": {
+      "mode": "oidc",
+      "enabled": true,
+      "clientId": "cid",
+      "allowedEmailDomains": [],
+      "defaultRole": "admin",
+      "label": "Fixture IdP",
+      "discoveryUrl": "http://127.0.0.1:<PORT>/",
+      "provider": "",
+      "authorizeUrl": "",
+      "tokenUrl": "",
+      "userInfoUrl": "",
+      "emailsUrl": "",
+      "scopes": "openid profile email",
+      "claimMap": {
+        "subject": "sub",
+        "username": "preferred_username",
+        "email": "email",
+        "name": "name",
+        "avatar": "picture"
+      }
+    },
+    "clientSecret": "••••••••",
+    "updatedAt": 1787425041508
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "path": "/api/deployments/pr-2?PR=2",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "pr-2",
+    "kind": "isolated",
+    "createdAt": 1787425040645,
+    "updatedAt": 1787425040645,
+    "stack": "pr-2",
+    "busy": false,
+    "orchestrator": "swarm",
+    "sleep": null,
+    "asleep": null,
+    "compose": {
+      "file": "docker-compose.yml",
+      "profiles": [],
+      "overlays": [],
+      "subdomains": []
+    },
+    "requires": [],
+    "axes": [
+      {
+        "name": "db",
+        "hooks": [
+          "up",
+          "down",
+          "assert_gone"
+        ],
+        "verifiable": true
+      }
+    ],
+    "env": []
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "ui-switch-dry-http01-basic-swarm",
+  "argv": [
+    "ui",
+    "advanced",
+    "-n"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "basic UI → advanced UI   (preview.example.com)\n  → build the advanced UI image\n  [dry-run] build the advanced UI image\n  → re-run init with the advanced UI\n  [dry-run] re-run init with the advanced UI\n",
+  "stderr": ""
+}

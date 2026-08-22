@@ -1,0 +1,13 @@
+{
+  "name": "validate-shared-example",
+  "argv": [
+    "-f",
+    "examples/shared.yml",
+    "validate"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: shared\n✓ spec parses — kind: isolated, 0 axis/axes, stack \"shared\"\n  compose: docker-compose.shared.yml [no profiles]\n  ! kind: isolated with no axes — nothing per-tenant is provisioned or verified, so this is just a compose project. If it is a host singleton, mark it `kind: shared` so `down` is guarded.\n",
+  "stderr": ""
+}

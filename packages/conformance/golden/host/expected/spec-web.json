@@ -1,0 +1,16 @@
+{
+  "path": "/api/specs/web",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "name": "web",
+    "kind": "isolated",
+    "description": "the web preview, revised",
+    "createdAt": 1787425040641,
+    "updatedAt": 1787425040747,
+    "requiredVars": [
+      "PR"
+    ],
+    "source": "version: 1\nstack: pr-${PR}\ncompose:\n  file: docker-compose.yml\n  profiles: []\naxes:\n  - name: db\n    up: \"true\"\n    down: \"true\"\n    assert_gone: \"true\"\n"
+  }
+}

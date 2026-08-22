@@ -1,0 +1,8 @@
+{
+  "path": "/api/auth/me",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "root": true
+  }
+}

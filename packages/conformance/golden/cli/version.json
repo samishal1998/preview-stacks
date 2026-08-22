@@ -1,0 +1,11 @@
+{
+  "name": "version",
+  "argv": [
+    "--version"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "<VERSION>\n",
+  "stderr": ""
+}

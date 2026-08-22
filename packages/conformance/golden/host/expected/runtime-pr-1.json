@@ -1,0 +1,52 @@
+{
+  "path": "/api/deployments/pr-1/runtime",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "pr-1",
+    "orchestrator": "swarm",
+    "asleep": null,
+    "stack": "pr-1",
+    "containers": [
+      {
+        "id": "aaa111aaa111",
+        "name": "pr-1_app.1.taskaaa1",
+        "service": "app",
+        "image": "nginx:alpine",
+        "state": "running",
+        "health": null,
+        "exitCode": null,
+        "restartCount": 0,
+        "networks": [
+          "preview-ingress"
+        ],
+        "ingressIp": "10.0.1.5",
+        "ports": [],
+        "traefikLabels": {},
+        "startedAt": 1787220060000,
+        "node": "fixture-mgr",
+        "remote": false
+      }
+    ],
+    "routes": [
+      {
+        "router": "app-pr-1",
+        "container": "app",
+        "rule": "Host(`app-pr-1.preview.example.com`)",
+        "hosts": [
+          "app-pr-1.preview.example.com"
+        ],
+        "service": "app-pr-1",
+        "port": 80,
+        "entrypoints": "websecure",
+        "tls": true,
+        "certresolver": null,
+        "priority": null,
+        "target": null
+      }
+    ],
+    "findings": [],
+    "challenge": "dns01",
+    "reachable": true
+  }
+}

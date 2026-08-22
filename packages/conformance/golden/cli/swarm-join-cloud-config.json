@@ -1,0 +1,15 @@
+{
+  "name": "swarm-join-cloud-config",
+  "argv": [
+    "swarm",
+    "join",
+    "--format",
+    "cloud-config"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "#cloud-config\n#\n# pstack swarm WORKER — joins the manager at 10.0.0.1:2377.\n# Rendered by pstack <VERSION> for ubuntu. Boot a machine with it; nothing to run afterwards.\n#\n# ── FIREWALL, BEFORE YOU BOOT ────────────────────────────────────────────────────────────────\n# Between this machine and every other node (the manager included):\n#     2377/tcp       cluster management (worker → manager)\n#     7946/tcp+udp   node discovery (every node ↔ every node)\n#     4789/udp       overlay network traffic — VXLAN (every node ↔ every node)\n#\n# ── THIS FILE HOLDS THE JOIN TOKEN ──────────────────────────────────────────────────────────\n# Whoever has it can add a node that runs any task on the cluster. Rotate it from the manager\n# with `docker swarm join-token --rotate worker` if this file leaks.\n# ─────────────────────────────────────────────────────────────────────────────────────────────\n\ngroups:\n  - docker\n\nusers:\n  - default\n  - name: preview\n    gecos: preview stack operator\n    shell: /bin/bash\n    groups: [docker]\n    sudo: 'ALL=(ALL) NOPASSWD:ALL'\n    lock_passwd: true\n    # No key here: the provider injects its own at boot (e.g. `hcloud server create --ssh-key`).\n\npackage_update: true\npackages:\n  - ca-certificates\n  - curl\n\nruncmd:\n  # ── 1. Docker ───────────────────────────────────────────────────────────────────────────\n  - install -m 0755 -d /etc/apt/keyrings\n  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc\n  - chmod a+r /etc/apt/keyrings/docker.asc\n  - >\n    echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc]\n    https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\"\n    > /etc/apt/sources.list.d/docker.list\n  - apt-get update\n  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io\n      docker-buildx-plugin docker-compose-plugin\n  - systemctl enable --now docker\n  - docker --version\n  # ── 2. Join ─────────────────────────────────────────────────────────────────────────────\n  - docker swarm join --token SWMTKN-1-abc-def 10.0.0.1:2377\n  - docker info --format 'joined as {{.Swarm.NodeID}} ({{.Swarm.LocalNodeState}})'\n\nfinal_message: |\n  swarm worker is up after $UPTIME seconds — joined 10.0.0.1:2377.\n  Check from the manager: docker node ls\n",
+  "stderr": "\n  This is a SECRET — whoever has it can add a node that runs any task on this\n  swarm. Rotate it with `docker swarm join-token --rotate worker`.\n  Open 2377/tcp, 7946/tcp+udp, 4789/udp between every pair of nodes.\n",
+  "goDivergent": "bun|BUN_|@samyx\\/preview-stacks|unzip"
+}

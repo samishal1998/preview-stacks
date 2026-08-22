@@ -1,0 +1,25 @@
+{
+  "path": "/api/deployments/shared-db",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "id": "shared-db",
+    "kind": "shared",
+    "createdAt": 1787425040646,
+    "updatedAt": 1787425040646,
+    "stack": "shared-db",
+    "busy": false,
+    "orchestrator": "swarm",
+    "sleep": null,
+    "asleep": null,
+    "compose": {
+      "file": "docker-compose.yml",
+      "profiles": [],
+      "overlays": [],
+      "subdomains": []
+    },
+    "requires": [],
+    "axes": [],
+    "env": []
+  }
+}

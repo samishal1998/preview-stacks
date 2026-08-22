@@ -1,0 +1,17 @@
+{
+  "name": "validate-set-override",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "validate",
+    "--set",
+    "PR=42",
+    "--set",
+    "GIT_SHA=abc"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: pr-42\n✓ spec parses — kind: isolated, 4 axis/axes, stack \"pr-42\"\n  compose: docker-compose.preview.yml [backend, frontend]\n  - database: up, down, assert_gone, assert_live\n  - queue-namespace: up, down, assert_gone, assert_live\n  - images: down, assert_gone\n  - ingress: assert_gone\n",
+  "stderr": ""
+}

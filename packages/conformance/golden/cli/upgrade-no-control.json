@@ -1,0 +1,14 @@
+{
+  "name": "upgrade-no-control",
+  "argv": [
+    "upgrade",
+    "-n"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: no control stack found at <DATA>/control (<DATA>/control/.env is missing). This host has never run `pstack init`, or its data directory is elsewhere — set PSTACK_DATA to point at it.\n"
+}

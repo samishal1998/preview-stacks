@@ -1,0 +1,9 @@
+{
+  "path": "/api/routing/extra.yml",
+  "as": "token",
+  "status": 200,
+  "body": {
+    "name": "extra.yml",
+    "content": "http:\n  middlewares:\n    compress:\n      compress: {}\n"
+  }
+}

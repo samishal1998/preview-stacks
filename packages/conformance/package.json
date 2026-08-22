@@ -1,0 +1,23 @@
+{
+  "name": "@samyx/preview-stacks-conformance",
+  "private": true,
+  "version": "0.28.0",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "test:bun": "PSTACK_IMPL=bun bun test",
+    "test:go": "PSTACK_IMPL=go bun test",
+    "vacuity": "bun scripts/vacuity.ts",
+    "ratchet": "bun scripts/ratchet.ts",
+    "status": "bun scripts/status.ts",
+    "gen": "bun gen/facts.ts && bun gen/goldens.ts && bun gen/host-fixture.ts",
+    "gen:fresh": "bun gen/goldens.ts && bun gen/facts.ts && git diff --exit-code -- golden/cli golden/render golden/facts ':!golden/facts/argon2.json'",
+    "diff": "bun diff/run.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "bun test && tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.2"
+  }
+}

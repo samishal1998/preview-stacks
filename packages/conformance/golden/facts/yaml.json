@@ -1,0 +1,660 @@
+{
+  "bun": "1.3.12",
+  "notes": [
+    "YAML 1.2 core: yes/no/on/off are strings; 0755 is DECIMAL 755; 0o755 and 0x1f are ints; 0b101 and 1_000 are strings; .inf/.nan are numbers (JSON null).",
+    "Integers beyond 2^53 lose precision (JS number); 9007199254740993 → 9007199254740992.",
+    "JS object key order: integer-like keys are hoisted first in ascending order, then string keys in insertion order — see \"key order is insertion order\". An ordered map that does not hoist is byte-different from JSON.stringify on such a document.",
+    "Duplicate keys: last wins, no error. Merge keys and aliases are expanded. A multi-document stream parses to an array.",
+    "`#notacomment` as a plain scalar is a comment, so the value is null."
+  ],
+  "scalars": [
+    {
+      "input": "yes",
+      "value": "yes",
+      "type": "string",
+      "repr": "yes",
+      "error": null,
+      "json": "\"yes\""
+    },
+    {
+      "input": "no",
+      "value": "no",
+      "type": "string",
+      "repr": "no",
+      "error": null,
+      "json": "\"no\""
+    },
+    {
+      "input": "on",
+      "value": "on",
+      "type": "string",
+      "repr": "on",
+      "error": null,
+      "json": "\"on\""
+    },
+    {
+      "input": "off",
+      "value": "off",
+      "type": "string",
+      "repr": "off",
+      "error": null,
+      "json": "\"off\""
+    },
+    {
+      "input": "Yes",
+      "value": "Yes",
+      "type": "string",
+      "repr": "Yes",
+      "error": null,
+      "json": "\"Yes\""
+    },
+    {
+      "input": "NO",
+      "value": "NO",
+      "type": "string",
+      "repr": "NO",
+      "error": null,
+      "json": "\"NO\""
+    },
+    {
+      "input": "y",
+      "value": "y",
+      "type": "string",
+      "repr": "y",
+      "error": null,
+      "json": "\"y\""
+    },
+    {
+      "input": "n",
+      "value": "n",
+      "type": "string",
+      "repr": "n",
+      "error": null,
+      "json": "\"n\""
+    },
+    {
+      "input": "true",
+      "value": true,
+      "type": "boolean",
+      "repr": "true",
+      "error": null,
+      "json": "true"
+    },
+    {
+      "input": "false",
+      "value": false,
+      "type": "boolean",
+      "repr": "false",
+      "error": null,
+      "json": "false"
+    },
+    {
+      "input": "True",
+      "value": true,
+      "type": "boolean",
+      "repr": "true",
+      "error": null,
+      "json": "true"
+    },
+    {
+      "input": "FALSE",
+      "value": false,
+      "type": "boolean",
+      "repr": "false",
+      "error": null,
+      "json": "false"
+    },
+    {
+      "input": "~",
+      "value": null,
+      "type": "null",
+      "repr": "null",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "null",
+      "value": null,
+      "type": "null",
+      "repr": "null",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "Null",
+      "value": null,
+      "type": "null",
+      "repr": "null",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "NULL",
+      "value": null,
+      "type": "null",
+      "repr": "null",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "",
+      "value": null,
+      "type": "null",
+      "repr": "null",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "0755",
+      "value": 755,
+      "type": "number",
+      "repr": "755",
+      "error": null,
+      "json": "755"
+    },
+    {
+      "input": "0o755",
+      "value": 493,
+      "type": "number",
+      "repr": "493",
+      "error": null,
+      "json": "493"
+    },
+    {
+      "input": "0x1f",
+      "value": 31,
+      "type": "number",
+      "repr": "31",
+      "error": null,
+      "json": "31"
+    },
+    {
+      "input": "0b101",
+      "value": "0b101",
+      "type": "string",
+      "repr": "0b101",
+      "error": null,
+      "json": "\"0b101\""
+    },
+    {
+      "input": "1e3",
+      "value": 1000,
+      "type": "number",
+      "repr": "1000",
+      "error": null,
+      "json": "1000"
+    },
+    {
+      "input": "1E3",
+      "value": 1000,
+      "type": "number",
+      "repr": "1000",
+      "error": null,
+      "json": "1000"
+    },
+    {
+      "input": "+12",
+      "value": 12,
+      "type": "number",
+      "repr": "12",
+      "error": null,
+      "json": "12"
+    },
+    {
+      "input": "-12",
+      "value": -12,
+      "type": "number",
+      "repr": "-12",
+      "error": null,
+      "json": "-12"
+    },
+    {
+      "input": "007",
+      "value": 7,
+      "type": "number",
+      "repr": "7",
+      "error": null,
+      "json": "7"
+    },
+    {
+      "input": "1_000",
+      "value": "1_000",
+      "type": "string",
+      "repr": "1_000",
+      "error": null,
+      "json": "\"1_000\""
+    },
+    {
+      "input": "9007199254740993",
+      "value": 9007199254740992,
+      "type": "number",
+      "repr": "9007199254740992",
+      "error": null,
+      "json": "9007199254740992"
+    },
+    {
+      "input": "123456789012345678901234567890",
+      "value": 1.2345678901234568e+29,
+      "type": "number",
+      "repr": "1.2345678901234568e+29",
+      "error": null,
+      "json": "1.2345678901234568e+29"
+    },
+    {
+      "input": "1.0",
+      "value": 1,
+      "type": "number",
+      "repr": "1",
+      "error": null,
+      "json": "1"
+    },
+    {
+      "input": ".5",
+      "value": 0.5,
+      "type": "number",
+      "repr": "0.5",
+      "error": null,
+      "json": "0.5"
+    },
+    {
+      "input": "5.",
+      "value": 5,
+      "type": "number",
+      "repr": "5",
+      "error": null,
+      "json": "5"
+    },
+    {
+      "input": "1.5e2",
+      "value": 150,
+      "type": "number",
+      "repr": "150",
+      "error": null,
+      "json": "150"
+    },
+    {
+      "input": ".inf",
+      "value": null,
+      "type": "number",
+      "repr": "Infinity",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "-.Inf",
+      "value": null,
+      "type": "number",
+      "repr": "-Infinity",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": ".NaN",
+      "value": null,
+      "type": "number",
+      "repr": "NaN",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": ".nan",
+      "value": null,
+      "type": "number",
+      "repr": "NaN",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "inf",
+      "value": "inf",
+      "type": "string",
+      "repr": "inf",
+      "error": null,
+      "json": "\"inf\""
+    },
+    {
+      "input": "nan",
+      "value": "nan",
+      "type": "string",
+      "repr": "nan",
+      "error": null,
+      "json": "\"nan\""
+    },
+    {
+      "input": "22:22",
+      "value": "22:22",
+      "type": "string",
+      "repr": "22:22",
+      "error": null,
+      "json": "\"22:22\""
+    },
+    {
+      "input": "1:20:30",
+      "value": "1:20:30",
+      "type": "string",
+      "repr": "1:20:30",
+      "error": null,
+      "json": "\"1:20:30\""
+    },
+    {
+      "input": "2001-12-14",
+      "value": "2001-12-14",
+      "type": "string",
+      "repr": "2001-12-14",
+      "error": null,
+      "json": "\"2001-12-14\""
+    },
+    {
+      "input": "2001-12-14t21:59:43.10-05:00",
+      "value": "2001-12-14t21:59:43.10-05:00",
+      "type": "string",
+      "repr": "2001-12-14t21:59:43.10-05:00",
+      "error": null,
+      "json": "\"2001-12-14t21:59:43.10-05:00\""
+    },
+    {
+      "input": "80:80",
+      "value": "80:80",
+      "type": "string",
+      "repr": "80:80",
+      "error": null,
+      "json": "\"80:80\""
+    },
+    {
+      "input": "\"80:80\"",
+      "value": "80:80",
+      "type": "string",
+      "repr": "80:80",
+      "error": null,
+      "json": "\"80:80\""
+    },
+    {
+      "input": "'yes'",
+      "value": "yes",
+      "type": "string",
+      "repr": "yes",
+      "error": null,
+      "json": "\"yes\""
+    },
+    {
+      "input": "\"1\"",
+      "value": "1",
+      "type": "string",
+      "repr": "1",
+      "error": null,
+      "json": "\"1\""
+    },
+    {
+      "input": "a b",
+      "value": "a b",
+      "type": "string",
+      "repr": "a b",
+      "error": null,
+      "json": "\"a b\""
+    },
+    {
+      "input": "a: b",
+      "value": null,
+      "type": "error",
+      "repr": null,
+      "error": "SyntaxError: YAML Parse error: Unexpected token",
+      "json": null
+    },
+    {
+      "input": "#notacomment",
+      "value": null,
+      "type": "null",
+      "repr": "null",
+      "error": null,
+      "json": "null"
+    },
+    {
+      "input": "x#y",
+      "value": "x#y",
+      "type": "string",
+      "repr": "x#y",
+      "error": null,
+      "json": "\"x#y\""
+    },
+    {
+      "input": "null-ish",
+      "value": "null-ish",
+      "type": "string",
+      "repr": "null-ish",
+      "error": null,
+      "json": "\"null-ish\""
+    },
+    {
+      "input": "true-ish",
+      "value": "true-ish",
+      "type": "string",
+      "repr": "true-ish",
+      "error": null,
+      "json": "\"true-ish\""
+    }
+  ],
+  "documents": [
+    {
+      "name": "key order is insertion order",
+      "yaml": "z: 1\na: 2\nm: 3\n\"1\": 4\n\"0\": 5\n",
+      "value": {
+        "0": 5,
+        "1": 4,
+        "z": 1,
+        "a": 2,
+        "m": 3
+      },
+      "json": "{\"0\":5,\"1\":4,\"z\":1,\"a\":2,\"m\":3}"
+    },
+    {
+      "name": "duplicate keys",
+      "yaml": "a: 1\nb: 2\na: 3\n",
+      "value": {
+        "a": 3,
+        "b": 2
+      },
+      "json": "{\"a\":3,\"b\":2}"
+    },
+    {
+      "name": "anchors and aliases",
+      "yaml": "base: &b\n  x: 1\n  y: [1, 2]\nref: *b\n",
+      "value": {
+        "base": {
+          "x": 1,
+          "y": [
+            1,
+            2
+          ]
+        },
+        "ref": {
+          "x": 1,
+          "y": [
+            1,
+            2
+          ]
+        }
+      },
+      "json": "{\"base\":{\"x\":1,\"y\":[1,2]},\"ref\":{\"x\":1,\"y\":[1,2]}}"
+    },
+    {
+      "name": "merge keys",
+      "yaml": "base: &b\n  x: 1\n  y: 2\nchild:\n  <<: *b\n  y: 9\n  z: 3\n",
+      "value": {
+        "base": {
+          "x": 1,
+          "y": 2
+        },
+        "child": {
+          "y": 9,
+          "x": 1,
+          "z": 3
+        }
+      },
+      "json": "{\"base\":{\"x\":1,\"y\":2},\"child\":{\"y\":9,\"x\":1,\"z\":3}}"
+    },
+    {
+      "name": "multi-document",
+      "yaml": "a: 1\n---\nb: 2\n",
+      "value": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "json": "[{\"a\":1},{\"b\":2}]"
+    },
+    {
+      "name": "block scalars",
+      "yaml": "lit: |\n  line1\n  line2\nfold: >\n  one\n  two\n\n  three\nkeep: |+\n  x\n\nstrip: |-\n  y\n",
+      "value": {
+        "lit": "line1\nline2\n",
+        "fold": "one two\nthree\n",
+        "keep": "x\n\n",
+        "strip": "y"
+      },
+      "json": "{\"lit\":\"line1\\nline2\\n\",\"fold\":\"one two\\nthree\\n\",\"keep\":\"x\\n\\n\",\"strip\":\"y\"}"
+    },
+    {
+      "name": "flow collections",
+      "yaml": "seq: [1, \"2\", three, null, ~, true]\nmap: {a: 1, b: [x, y], c: {d: e}}\nempty: []\nemptymap: {}\n",
+      "value": {
+        "seq": [
+          1,
+          "2",
+          "three",
+          null,
+          null,
+          true
+        ],
+        "map": {
+          "a": 1,
+          "b": [
+            "x",
+            "y"
+          ],
+          "c": {
+            "d": "e"
+          }
+        },
+        "empty": [],
+        "emptymap": {}
+      },
+      "json": "{\"seq\":[1,\"2\",\"three\",null,null,true],\"map\":{\"a\":1,\"b\":[\"x\",\"y\"],\"c\":{\"d\":\"e\"}},\"empty\":[],\"emptymap\":{}}"
+    },
+    {
+      "name": "quoted vs plain",
+      "yaml": "a: 'single ''quoted'''\nb: \"double \\\"quoted\\\" \\n newline\"\nc: plain # comment\nd: 'yes'\ne: \"0755\"\n",
+      "value": {
+        "a": "single 'quoted'",
+        "b": "double \"quoted\" \n newline",
+        "c": "plain",
+        "d": "yes",
+        "e": "0755"
+      },
+      "json": "{\"a\":\"single 'quoted'\",\"b\":\"double \\\"quoted\\\" \\n newline\",\"c\":\"plain\",\"d\":\"yes\",\"e\":\"0755\"}"
+    },
+    {
+      "name": "nulls in mappings",
+      "yaml": "a:\nb: ~\nc: null\nd: \"\"\n",
+      "value": {
+        "a": null,
+        "b": null,
+        "c": null,
+        "d": ""
+      },
+      "json": "{\"a\":null,\"b\":null,\"c\":null,\"d\":\"\"}"
+    },
+    {
+      "name": "nested sequences of mappings",
+      "yaml": "axes:\n  - name: a\n    up: \"true\"\n  - name: b\n    up: |\n      echo hi\n      echo there\n",
+      "value": {
+        "axes": [
+          {
+            "name": "a",
+            "up": "true"
+          },
+          {
+            "name": "b",
+            "up": "echo hi\necho there\n"
+          }
+        ]
+      },
+      "json": "{\"axes\":[{\"name\":\"a\",\"up\":\"true\"},{\"name\":\"b\",\"up\":\"echo hi\\necho there\\n\"}]}"
+    },
+    {
+      "name": "compose-shaped",
+      "yaml": "services:\n  web:\n    image: nginx\n    ports:\n      - 80:80\n      - \"443:443\"\n    restart: no\n    labels:\n      - traefik.enable=true\n      - pstack.routing.port=80\n    environment:\n      A: yes\n      B: 0755\n      C: 1e3\n",
+      "value": {
+        "services": {
+          "web": {
+            "image": "nginx",
+            "ports": [
+              "80:80",
+              "443:443"
+            ],
+            "restart": "no",
+            "labels": [
+              "traefik.enable=true",
+              "pstack.routing.port=80"
+            ],
+            "environment": {
+              "A": "yes",
+              "B": 755,
+              "C": 1000
+            }
+          }
+        }
+      },
+      "json": "{\"services\":{\"web\":{\"image\":\"nginx\",\"ports\":[\"80:80\",\"443:443\"],\"restart\":\"no\",\"labels\":[\"traefik.enable=true\",\"pstack.routing.port=80\"],\"environment\":{\"A\":\"yes\",\"B\":755,\"C\":1000}}}}"
+    },
+    {
+      "name": "tabs and odd whitespace",
+      "yaml": "a: 1   \nb:    2\n",
+      "value": {
+        "a": 1,
+        "b": 2
+      },
+      "json": "{\"a\":1,\"b\":2}"
+    },
+    {
+      "name": "unicode",
+      "yaml": "name: Ünïcødé ✓\nemoji: \"🚀\"\n",
+      "value": {
+        "name": "Ünïcødé ✓",
+        "emoji": "🚀"
+      },
+      "json": "{\"name\":\"Ünïcødé ✓\",\"emoji\":\"🚀\"}"
+    }
+  ],
+  "invalid": [
+    {
+      "yaml": "a: [1, 2",
+      "threw": true,
+      "error": "SyntaxError: YAML Parse error: Unexpected token"
+    },
+    {
+      "yaml": "a: b: c",
+      "threw": true,
+      "error": "SyntaxError: YAML Parse error: Unexpected token"
+    },
+    {
+      "yaml": "- a\nb: c",
+      "threw": true,
+      "error": "SyntaxError: YAML Parse error: Unexpected token"
+    },
+    {
+      "yaml": "\t- tab",
+      "value": [
+        "tab"
+      ],
+      "threw": false
+    },
+    {
+      "yaml": "a: \"unterminated",
+      "threw": true,
+      "error": "SyntaxError: YAML Parse error: Unexpected EOF"
+    }
+  ]
+}

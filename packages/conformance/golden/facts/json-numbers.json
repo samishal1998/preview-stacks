@@ -1,0 +1,20 @@
+{
+  "bun": "1.3.12",
+  "compact": "{\"msEpoch\":1755000000000,\"float\":1.5,\"one\":1,\"big\":1e+21,\"tiny\":1e-7,\"negZero\":0,\"html\":\"<a href=\\\"x\\\">&  </a>\",\"unicode\":\"ü✓🚀\",\"nested\":{\"z\":1,\"a\":[1,\"two\",null,true],\"m\":{\"r\":null}},\"nan\":null,\"inf\":null}",
+  "pretty": "{\n  \"msEpoch\": 1755000000000,\n  \"float\": 1.5,\n  \"one\": 1,\n  \"big\": 1e+21,\n  \"tiny\": 1e-7,\n  \"negZero\": 0,\n  \"html\": \"<a href=\\\"x\\\">&  </a>\",\n  \"unicode\": \"ü✓🚀\",\n  \"nested\": {\n    \"z\": 1,\n    \"a\": [\n      1,\n      \"two\",\n      null,\n      true\n    ],\n    \"m\": {\n      \"r\": null\n    }\n  },\n  \"nan\": null,\n  \"inf\": null\n}",
+  "perKey": {
+    "msEpoch": "1755000000000",
+    "float": "1.5",
+    "one": "1",
+    "big": "1e+21",
+    "tiny": "1e-7",
+    "negZero": "0",
+    "html": "\"<a href=\\\"x\\\">&  </a>\"",
+    "unicode": "\"ü✓🚀\"",
+    "nested": "{\"z\":1,\"a\":[1,\"two\",null,true],\"m\":{\"r\":null}}",
+    "undef": "<omitted>",
+    "nan": "null",
+    "inf": "null"
+  },
+  "note": "undefined-valued keys are omitted; NaN/Infinity become null; no HTML escaping; key order is insertion order; ms epochs are integers."
+}

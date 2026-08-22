@@ -1,0 +1,16 @@
+{
+  "name": "status",
+  "argv": [
+    "-f",
+    "examples/preview.yml",
+    "status"
+  ],
+  "env": {
+    "PR": "1",
+    "GIT_SHA": "ci"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "stack: pr-1\n(nothing running)\n",
+  "stderr": ""
+}
