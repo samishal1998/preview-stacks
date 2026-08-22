@@ -50,6 +50,8 @@ type Parsed = {
   /** init/cloud-init/upgrade: how previews deploy. Swarm is the default for a NEW host. */
   orchestrator: 'swarm' | 'compose';
   distro: string;
+  /** `swarm join`: which shape the join material takes. */
+  format: string;
   tag: string;
   ui: 'basic' | 'advanced';
   uiImage: boolean;
@@ -85,6 +87,8 @@ function parseArgs(argv: string[]): Parsed {
     // Swarm by default for a new host (one manager, workers can join later). `upgrade` reads back what
     // the host already runs and does NOT use this default.
     orchestrator: (process.env.PSTACK_ORCHESTRATOR as 'swarm' | 'compose') || 'swarm',
+    // The line you paste into a shell — the shape an operator wants most often.
+    format: 'command',
     // Matches init's PSTACK_IMAGE default, so `build-image` then `init` need no flags at all.
     tag: process.env.PSTACK_IMAGE ?? 'pstack:local',
     // Basic by default: it is embedded in the API bundle, so it costs no extra container and
@@ -144,6 +148,9 @@ function parseArgs(argv: string[]): Parsed {
     else if (a === '--distro') {
       p.distro = argv[++i] ?? '';
     }
+    // Validated by `joinMaterial` against its own list, so the CLI and the API cannot disagree
+    // about which shapes exist.
+    else if (a === '--format') p.format = argv[++i] ?? p.format;
     else if (a === '--orchestrator') {
       const o = argv[++i] ?? '';
       if (o !== 'swarm' && o !== 'compose') fail(`--orchestrator must be swarm or compose, got "${o}"`);
@@ -174,7 +181,7 @@ function usage(): void {
     [
       `pstack ${pkg.version} — declarative lifecycle for ephemeral preview stacks`,
       '',
-      'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|serve> [flags]',
+      'Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|serve> [flags]',
       '',
       'Flags:',
       '  -f, --file <path>   spec file (default: preview.yml)',
@@ -210,6 +217,12 @@ function usage(): void {
       'ui:         pstack ui <basic|advanced>   switch which UI control.<domain> serves.',
       '            Reuses the stored token and domain; builds the SPA image when switching to',
       '            advanced. No version change — that is `upgrade`.',
+      '',
+      'swarm:      pstack swarm [status]            the nodes previews run on (exit 1 if this is not a manager)',
+      '            pstack swarm join                what a new worker runs — a SECRET',
+      '              --format command|script|cloud-config|token   (default command)',
+      '              --distro ubuntu|debian|fedora|suse|arch|alpine   (cloud-config only)',
+      '              -o <file>                  write it to a file instead of stdout',
       '',
       'serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)',
       '            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)',
@@ -251,6 +264,7 @@ const COMMANDS = new Set([
   'dockerfile',
   'upgrade',
   'ui',
+  'swarm',
 ]);
 
 if (!COMMANDS.has(args.cmd)) {
@@ -510,6 +524,51 @@ switch (args.cmd) {
     process.exit(EXIT.ok);
   }
 
+  case 'swarm': {
+    // Read-only, both of them. Creating the swarm belongs to `init` (it also has to recreate the
+    // two shared networks as overlays), and LEAVING one is `docker swarm leave` — a decision with
+    // other people's workers attached to it, which pstack should not make from a subcommand.
+    const { joinMaterial, swarmInfo, swarmReport, JOIN_FORMATS, SWARM_PORTS } = await import('./swarm.ts');
+    const sub = args.sub || 'status';
+
+    if (sub === 'status') {
+      const info = await swarmInfo(runner);
+      console.log(swarmReport(info));
+      // Exit 1 when there is no swarm to report on: a script asking "is this a manager" gets its
+      // answer from the status, not from parsing the text.
+      process.exit(info.reachable && info.active ? EXIT.ok : EXIT.failed);
+    }
+
+    if (sub === 'join') {
+      const made = await joinMaterial({ runner, format: args.format, distro: args.distro || undefined });
+      if (!made.ok) {
+        // A bad flag is usage (3); a host that is not a manager, or a docker that did not answer,
+        // is a failed operation (1) — the same split every other command makes.
+        if (made.kind === 'bad-format' || made.kind === 'bad-distro') fail(made.message);
+        console.error(`pstack: ${made.message}`);
+        process.exit(EXIT.failed);
+      }
+      if (args.out) {
+        await Bun.write(args.out, made.text);
+        console.error(`wrote ${args.out}`);
+      } else {
+        // stdout, so `pstack swarm join --format script > join.sh` composes; everything else this
+        // command says goes to stderr for the same reason.
+        process.stdout.write(made.text);
+      }
+      console.error('');
+      console.error('  This is a SECRET — whoever has it can add a node that runs any task on this');
+      console.error('  swarm. Rotate it with `docker swarm join-token --rotate worker`.');
+      console.error(`  Open ${SWARM_PORTS.map((p) => p.port).join(', ')} between every pair of nodes.`);
+      process.exit(EXIT.ok);
+    }
+
+    fail(
+      `usage: pstack swarm <status|join>   (join: --format ${JOIN_FORMATS.join('|')} ` +
+        `[--distro <name>] [-o <file>])`,
+    );
+  }
+
   case 'upgrade': {
     const { upgrade, UpgradeError } = await import('./upgrade.ts');
     const { dataDir } = await import('./registry.ts');
@@ -623,5 +682,7 @@ switch (args.cmd) {
   }
 
   default:
-    fail(`unknown command "${args.cmd}" (try: up, down, verify, status, validate, cloud-init, dockerfile, build-image, init, serve)`);
+    // Unreachable: the COMMANDS gate above rejects anything not handled here. Built from the same
+    // set rather than a hand-kept list, so it cannot go stale again if that ever changes.
+    fail(`unknown command "${args.cmd}" (try: ${[...COMMANDS].join(', ')})`);
 }

@@ -128,9 +128,9 @@ import { parseSpec, SpecError, type Stack } from './spec.ts';
 import { down, sleep as sleepStack, up, verify } from './stack.ts';
 import { parseDuration } from './spec.ts';
 import { Scheduler, SleepIndex, TrafficMeter, formatDuration, splitHosts, wakePage } from './scheduler.ts';
-import { STACK_LABEL, SWARM_PORTS, joinCommand, joinScript, swarmInfo, workerJoinToken } from './swarm.ts';
+import { STACK_LABEL, SWARM_PORTS, joinMaterial, swarmInfo } from './swarm.ts';
 import { SHARE_VIEWS, looksLikeShareToken, signShare, verifyShare, type ShareView } from './share.ts';
-import { DISTROS, renderWorkerCloudInit, type Distro } from './cloudinit.ts';
+
 import { publicConfig, redactForNotifier, typeOf } from './notify.ts';
 import { HostVars, HostVarsError } from './hostvars.ts';
 import { ReadinessWatcher } from './readiness.ts';
@@ -1352,27 +1352,23 @@ export function createServer(opts: ServerOptions) {
           if (who.kind !== 'root' && !(who.kind === 'user' && who.user.role === 'admin')) {
             return json({ error: 'the join token requires an admin' }, { status: 403 });
           }
-          const format = url.searchParams.get('format') ?? 'command';
-          if (!['token', 'command', 'script', 'cloud-config'].includes(format)) {
-            return json({ error: 'format must be one of: token, command, script, cloud-config' }, { status: 400 });
+          // The same function `pstack swarm join` calls, so the two can never hand an operator
+          // different commands for one cluster. The refusal KIND decides the status: a bad parameter
+          // is the caller's, "not a manager" is a fact about this host, and "docker did not answer"
+          // is neither — it is not knowing.
+          const made = await joinMaterial({
+            runner: host,
+            format: url.searchParams.get('format') ?? 'command',
+            distro: url.searchParams.get('distro') ?? undefined,
+          });
+          if (!made.ok) {
+            const status =
+              made.kind === 'bad-format' || made.kind === 'bad-distro' ? 400
+              : made.kind === 'not-a-manager' ? 409
+              : 503;
+            return json({ error: made.message }, { status });
           }
-          const info = await swarmInfo(host);
-          if (!info.reachable) return json({ error: 'docker did not answer' }, { status: 503 });
-          if (!info.active || !info.managerAddr) {
-            return json({ error: 'this daemon is not a swarm manager — nothing to join' }, { status: 409 });
-          }
-          const token = await workerJoinToken(host);
-          if (!token) return json({ error: 'docker would not hand out a worker join token' }, { status: 503 });
-          const distroRaw = url.searchParams.get('distro') ?? 'ubuntu';
-          if (!(DISTROS as readonly string[]).includes(distroRaw)) {
-            return json({ error: `distro must be one of: ${DISTROS.join(', ')}` }, { status: 400 });
-          }
-          const text =
-            format === 'token' ? `${token}\n`
-            : format === 'command' ? `${joinCommand(token, info.managerAddr)}\n`
-            : format === 'script' ? joinScript(token, info.managerAddr)
-            : renderWorkerCloudInit({ token, managerAddr: info.managerAddr, distro: distroRaw as Distro });
-          return new Response(text, {
+          return new Response(made.text, {
             headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
           });
         }

@@ -410,6 +410,129 @@ export function joinCommand(token: string, managerAddr: string): string {
   return `docker swarm join --token ${token} ${managerAddr}`;
 }
 
+/** The shapes the join material comes in. Add one here and both the API and the CLI offer it. */
+export const JOIN_FORMATS = ['token', 'command', 'script', 'cloud-config'] as const;
+export type JoinFormat = (typeof JOIN_FORMATS)[number];
+
+export function isJoinFormat(v: unknown): v is JoinFormat {
+  return typeof v === 'string' && (JOIN_FORMATS as readonly string[]).includes(v);
+}
+
+/**
+ * Why the join material could not be produced. The CALLER maps it — to an HTTP status in `api.ts`,
+ * to an exit code in `cli.ts` — because the reasons differ in kind: `not-a-manager` is a refusal
+ * about this host, `unreachable` is "could not tell", and the two `bad-*` are the caller's own input.
+ */
+export type JoinRefusal = 'unreachable' | 'not-a-manager' | 'no-token' | 'bad-format' | 'bad-distro';
+
+export type JoinResult =
+  | { ok: true; text: string; managerAddr: string }
+  | { ok: false; kind: JoinRefusal; message: string };
+
+/**
+ * What a new worker runs, in the requested shape.
+ *
+ * ONE implementation, because there are two callers — `GET /api/swarm/join` and `pstack swarm join`
+ * — and a drifted copy here would hand two operators different commands for the same cluster.
+ *
+ * THE RESULT IS A SECRET whichever shape it takes: every one of them embeds the worker join token,
+ * and whoever holds that can add a node that runs any task on this swarm. Neither caller logs it,
+ * and `redactText` masks `SWMTKN-…` anywhere it might otherwise be echoed.
+ */
+export async function joinMaterial(args: {
+  runner: Runner;
+  format: string;
+  /** Only read for `cloud-config`; validated against cloudinit's own list. */
+  distro?: string;
+}): Promise<JoinResult> {
+  if (!isJoinFormat(args.format)) {
+    return { ok: false, kind: 'bad-format', message: `format must be one of: ${JOIN_FORMATS.join(', ')}` };
+  }
+  // Loaded here rather than at the top: cloudinit.ts imports THIS module (for `joinCommand` and the
+  // port table), and a static import back would be a cycle for the sake of one call.
+  const { DISTROS, renderWorkerCloudInit } = await import('./cloudinit.ts');
+  const distro = args.distro ?? 'ubuntu';
+  if (args.format === 'cloud-config' && !(DISTROS as readonly string[]).includes(distro)) {
+    return { ok: false, kind: 'bad-distro', message: `distro must be one of: ${DISTROS.join(', ')}` };
+  }
+
+  const info = await swarmInfo(args.runner);
+  if (!info.reachable) return { ok: false, kind: 'unreachable', message: 'docker did not answer' };
+  if (!info.active || !info.managerAddr) {
+    return { ok: false, kind: 'not-a-manager', message: 'this daemon is not a swarm manager — nothing to join' };
+  }
+  const token = await workerJoinToken(args.runner);
+  if (!token) {
+    return { ok: false, kind: 'no-token', message: 'docker would not hand out a worker join token' };
+  }
+
+  const text =
+    args.format === 'token' ? `${token}\n`
+    : args.format === 'command' ? `${joinCommand(token, info.managerAddr)}\n`
+    : args.format === 'script' ? joinScript(token, info.managerAddr)
+    : renderWorkerCloudInit({ token, managerAddr: info.managerAddr, distro: distro as import('./cloudinit.ts').Distro });
+  return { ok: true, text, managerAddr: info.managerAddr };
+}
+
+/**
+ * The cluster as a person reads it — `pstack swarm` on the host.
+ *
+ * Says WHICH of the three states it is in rather than printing an empty table for two of them:
+ * docker did not answer (nothing is known), this daemon is not a manager (previews run with
+ * compose), or here are the nodes. Never carries a join token.
+ */
+export function swarmReport(info: SwarmInfo): string {
+  if (!info.reachable) {
+    return [
+      'docker did not answer.',
+      '',
+      '  Nothing about the swarm is known — which is not the same as there being no swarm.',
+      '  Check the daemon: `docker info`.',
+    ].join('\n');
+  }
+  if (!info.active) {
+    return [
+      'this host is not a swarm manager.',
+      '',
+      '  Previews here run with `docker compose` on this box. To scale out, re-run init in swarm',
+      '  mode — every preview must be torn down first, because the two shared networks have to be',
+      '  recreated as overlays:',
+      '',
+      '      pstack init --domain <domain> --acme-email <you@example.com> --orchestrator swarm',
+      ...(info.error ? ['', `  docker also said: ${info.error}`] : []),
+    ].join('\n');
+  }
+
+  const rows = info.nodes.map((n) => [
+    n.hostname + (n.self ? ' *' : ''),
+    n.role + (n.managerStatus ? ` (${n.managerStatus})` : ''),
+    n.status,
+    n.availability,
+    n.engineVersion,
+    n.id.slice(0, 12),
+  ]);
+  const head = ['HOSTNAME', 'ROLE', 'STATUS', 'AVAILABILITY', 'ENGINE', 'ID'];
+  const width = head.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
+  const line = (cells: string[]) => '  ' + cells.map((c, i) => c.padEnd(width[i]!)).join('  ').trimEnd();
+
+  return [
+    `swarm manager  ${info.managerAddr ?? '(address unknown)'}`,
+    `${info.nodes.length} node${info.nodes.length === 1 ? '' : 's'}${info.nodes.some((n) => n.self) ? '  (* this host)' : ''}`,
+    ...(info.error ? [`docker also said: ${info.error}`] : []),
+    '',
+    line(head),
+    ...rows.map(line),
+    '',
+    'add a worker:',
+    '  pstack swarm join                       the `docker swarm join` line',
+    '  pstack swarm join --format script       installs Docker first, then joins',
+    '  pstack swarm join --format cloud-config --distro debian -o worker.yaml',
+    '',
+    'open between every pair of nodes first:',
+    ...SWARM_PORTS.map((p) => `  ${p.port.padEnd(14)} ${p.why}`),
+  ].join('\n');
+}
+
 /**
  * A shell script that installs Docker (the vendor convenience script — the same one every quickstart
  * uses; distro-exact installs are the cloud-config's job) and joins. `set -e` so a failed install
