@@ -12,7 +12,7 @@
     },
     "apps/ui": {
       "name": "@samyx/preview-stacks-ui",
-      "version": "0.23.0",
+      "version": "0.28.0",
       "dependencies": {
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
@@ -30,7 +30,15 @@
     },
     "packages/client": {
       "name": "@samyx/preview-stacks-client",
-      "version": "0.24.0",
+      "version": "0.28.0",
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.2",
+      },
+    },
+    "packages/conformance": {
+      "name": "@samyx/preview-stacks-conformance",
+      "version": "0.28.0",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.9.2",
@@ -38,7 +46,7 @@
     },
     "packages/pstack": {
       "name": "@samyx/preview-stacks",
-      "version": "0.23.0",
+      "version": "0.28.0",
       "bin": {
         "pstack": "./dist/cli.js",
       },
@@ -247,6 +255,8 @@
     "@samyx/preview-stacks": ["@samyx/preview-stacks@workspace:packages/pstack"],
 
     "@samyx/preview-stacks-client": ["@samyx/preview-stacks-client@workspace:packages/client"],
+
+    "@samyx/preview-stacks-conformance": ["@samyx/preview-stacks-conformance@workspace:packages/conformance"],
 
     "@samyx/preview-stacks-ui": ["@samyx/preview-stacks-ui@workspace:apps/ui"],
 
@@ -872,6 +882,8 @@
 
     "@dotenvx/dotenvx/open": ["open@8.4.2", "", { "dependencies": { "define-lazy-prop": "^2.0.0", "is-docker": "^2.1.1", "is-wsl": "^2.2.0" } }, "sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ=="],
 
+    "@samyx/preview-stacks-conformance/@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
+
     "@ts-morph/common/minimatch": ["minimatch@10.2.6", "", { "dependencies": { "brace-expansion": "^5.0.8" } }, "sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A=="],
 
     "body-parser/content-type": ["content-type@2.0.0", "", {}, "sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ=="],
@@ -919,6 +931,8 @@
     "@dotenvx/dotenvx/execa/strip-final-newline": ["strip-final-newline@2.0.0", "", {}, "sha512-BrpvfNAE3dcvq7ll3xVumzjKjZQ5tI1sEUIKr3Uoks0XUl45St3FlatVqef9prk4jRDzhW6WZg+3bk93y6pLjA=="],
 
     "@dotenvx/dotenvx/open/define-lazy-prop": ["define-lazy-prop@2.0.0", "", {}, "sha512-Ds09qNh8yw3khSjiJjiUInaGX9xlqZDY7JVryGxdxV7NPeuqQfplOpQ66yJFZut3jLa5zOwkXw1g9EI2uKh4Og=="],
+
+    "@samyx/preview-stacks-conformance/@types/bun/bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
 
     "@ts-morph/common/minimatch/brace-expansion": ["brace-expansion@5.0.9", "", { "dependencies": { "balanced-match": "^4.0.2" } }, "sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg=="],
 

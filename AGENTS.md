@@ -269,6 +269,31 @@ fails. Several bugs in this repo's history shipped behind green tests that asser
 
 If a test cannot fail, it is documentation with a misleading name.
 
+### The conformance suite — the black-box specification
+
+`packages/conformance` is the HTTP/CLI contract as tests that **spawn the real `pstack`** and never
+import `src/`. It exists because the core is being ported to Go (0.29.0): the same tests grade the
+TypeScript reference today and the Go binary as it lands. Three rules, each enforced by a script:
+
+- **`PSTACK_IMPL=bun|go|null`** selects what is spawned (`harness/impl.ts`). `bun` runs
+  `src/cli.ts`; `go` runs `$PSTACK_BIN` (default `packages/pstack/bin/pstack`); `null` is a server
+  answering `200 {}` to everything.
+- **Every test must fail against `null`** — `bun run vacuity` lists any that do not. A test that
+  passes against a server that asserts nothing is the class of bug above, mechanised.
+- **Goldens are generated from the reference and checked in** (`bun run gen`): `golden/cli` exact
+  CLI transcripts, `golden/render` the control compose for all eight init cells, `golden/facts`
+  measured Bun semantics (the YAML dialect, `Number()`, argon2 parameters), `golden/host` a complete
+  data directory the port must open unchanged. CI regenerates the deterministic ones and diffs.
+- **Differential mode** (`bun run diff`) replays eleven scenarios on impl A then B over one data
+  path and compares traces after masking; the docker argv the API issued is a step too. The masks
+  and `KNOWN_DEVIATIONS` live only in `harness/diff.ts`, and `--self` (bun vs bun) must be empty.
+- **Go-mode progress is a ratchet** (`bun run ratchet`, `expected-pass.json`): counts only go up.
+  `bun run status` renders the port matrix from `port-map.json`.
+
+The HTTP tests that moved there still have their originals in `test/stack.test.ts` and friends;
+those are deleted with the rest of `src/` at cutover, not before — the reference keeps its own suite
+until it stops being the reference. A new HTTP-level test belongs in `packages/conformance`.
+
 ## How to add things
 
 ### A new hook type
