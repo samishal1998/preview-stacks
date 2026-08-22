@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.28.0 — 2026-08-22
+
+The **last TypeScript release**. From 0.29.0 pstack is a single static Go binary released on GitHub
+(`github.com/samishal1998/preview-stacks`), and this release is the bridge to it: nothing here
+changes how a host behaves, and everything here is what the hop needs.
+
+### Fixed
+
+- **`pstack upgrade` no longer blanks the DNS-01 credential.** `init` rewrites `control/dns.env`
+  from `PSTACK_DNS_TOKEN` on every run, and `upgrade` — whose whole purpose is "read back what init
+  decided so nothing rotates" — never carried it. On a dns01 host the Cloudflare/Hetzner token was
+  zeroed, Traefik recreated with no credential, and the wildcard's renewal failed silently weeks
+  later. `readControlState` now reads the token back from `dns.env` and the re-init step receives
+  it; the dry-run plan says `(with the existing PSTACK_TOKEN and PSTACK_DNS_TOKEN)`.
+- **`pstack build-image` keeps the image it replaces** as `<tag>-previous` (`pstack:local-previous`),
+  so a build that comes up unhealthy after `init` recreates the stack has a one-line rollback:
+  `docker tag pstack:local-previous pstack:local && docker compose -p pstack-control -f <PSTACK_DATA>/control/docker-compose.yml up -d`.
+
+### Added
+
+- **`pstack healthcheck`** — one GET against `/api/health` on `PSTACK_PORT`, exit 0 or 1. The three
+  Dockerfiles' `HEALTHCHECK` lines call it instead of carrying a `bun --eval` one-liner each, so the
+  check depends on nothing but the binary. `init` blocks on this verdict, and Traefik drops every
+  router on an unhealthy control container (the wake catch-all included), so it stays boring.
+- **`serve` tuning knobs** for a harness that drives the real process black-box:
+  `PSTACK_READINESS_POLL_MS`, `PSTACK_READINESS_TIMEOUT_MS`, `PSTACK_SSO_STATE_TTL_S`,
+  `PSTACK_SSO_DISCOVERY_TTL_S`. Unset means the default; a host never needs them.
+- **`pstack upgrade --to 0.29.0` (or later) refuses** and prints the one-time hop instead of handing
+  a version npm never gets to `bun install -g`:
+  ```
+  curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/v0.29.0/install.sh | sh && pstack upgrade --resume
+  ```
+  `--resume` is never refused by version — it is phase 2 of that hop.
+
 ## 0.10.0 — 2026-07-30
 
 ### ⚠️ Breaking: the API now requires authentication on every route

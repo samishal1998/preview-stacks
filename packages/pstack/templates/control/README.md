@@ -45,7 +45,7 @@ left with no control plane and no remote way to repair it: the only thing that c
 is what just died. A self-upgrade is not a feature with a caveat, it is a way to brick a host from
 a browser tab.
 
-So the host keeps that power. `pstack init` and `pstack self-upgrade` run over SSH, from systemd,
+So the host keeps that power. `pstack init` and `pstack upgrade` run over SSH, from systemd,
 or from CI-with-a-key — always from outside the containers they are recreating, which is the only
 place a failed upgrade is recoverable. That is also why this compose file lives *next to* the
 registry instead of being submitted to it as a deployment: there is no id you could accidentally
