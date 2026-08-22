@@ -5,6 +5,7 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -44,6 +45,21 @@ func (Console) Emit(level Level, message string) {
 		return
 	}
 	fmt.Fprintln(os.Stdout, message)
+}
+
+// Writer is Console over explicit streams — what the CLI uses so a test can capture its output.
+type Writer struct {
+	Out io.Writer
+	Err io.Writer
+}
+
+// Emit prints to Err for errors, Out otherwise.
+func (w Writer) Emit(level Level, message string) {
+	if level == Error {
+		fmt.Fprintln(w.Err, message)
+		return
+	}
+	fmt.Fprintln(w.Out, message)
 }
 
 // Null discards everything. For tests that assert on results rather than output.
