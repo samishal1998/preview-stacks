@@ -1,8 +1,15 @@
 # CI for pstack.
 #
 # Deliberately small — this repo ships a guide about CI patterns, so its own CI should be a
-# legible example rather than a showcase. One job, three checks, no matrix: there is exactly one
-# supported runtime (Bun), so a matrix would test nothing.
+# legible example rather than a showcase. One job, no matrix.
+#
+# Two kinds of test run here. `turbo run test` is each package's own suite. packages/conformance is
+# the BLACK-BOX specification: it spawns the real `pstack` and grades whichever implementation
+# PSTACK_IMPL names, so the same tests grade the TypeScript reference today and the Go port as it
+# lands (docs/port-status.md). Its three extra gates are what make those tests trustworthy: vacuity
+# (every test must fail against a server that answers 200 {} to everything), golden freshness (the
+# checked-in transcripts still match the reference), and the self-diff (the differential masks are
+# tight enough that bun-vs-bun is identical).
 name: CI
 
 on:
@@ -43,10 +50,25 @@ jobs:
       # The spec's own linting must hold for the shipped example, or the guide teaches a spec that
       # its own tool would warn about.
       - name: Validate the example spec
-        env:
-          PR: '1'
-          GIT_SHA: ci
-        run: cd packages/pstack && bun src/cli.ts -f examples/preview.yml validate
+        # Now a byte-diff against the checked-in transcript (golden/cli/validate-example.json).
+        run: cd packages/conformance && PSTACK_IMPL=bun bun test test/cli-goldens.test.ts -t validate-example
+
+      # Every conformance test must FAIL against a server that asserts nothing.
+      - name: Conformance — vacuity
+        run: cd packages/conformance && bun run vacuity
+
+      # The goldens are generated from the reference; a change to the reference must regenerate them.
+      # (The host fixture and the argon2 facts carry random salts and live timestamps, so they are
+      # regenerated deliberately, never compared.)
+      - name: Conformance — golden freshness
+        run: |
+          cd packages/conformance
+          bun gen/goldens.ts && bun gen/facts.ts
+          git diff --exit-code -- golden/cli golden/render golden/facts ':!golden/facts/argon2.json'
+
+      # The differential masks are the only place "allowed to differ" lives; bun-vs-bun must be empty.
+      - name: Conformance — self-diff
+        run: cd packages/conformance && bun run diff -- --self
 
       # The published artifact is a BUNDLE, so build it here: a broken bundle (a bad text import, a
       # dropped asset) is invisible to `bun test`, which runs the sources.
