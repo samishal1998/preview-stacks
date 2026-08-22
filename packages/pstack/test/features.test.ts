@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseSpec, parseDuration, SpecError, warnings } from '../src/spec.ts';
-import { swarmify, stackRmCmd, stackLogsCmd, swarmInfo } from '../src/swarm.ts';
+import { swarmify, stackRmCmd, stackLogsCmd, swarmInfo, swarmReport, joinMaterial, JOIN_FORMATS } from '../src/swarm.ts';
 import { composeDown, composeLogsCommand, composeSleep, composeUp } from '../src/compose.ts';
 import { sleep as sleepStack, down } from '../src/stack.ts';
 import { nullSink } from '../src/log.ts';
@@ -665,6 +665,88 @@ describe('swarm discovery and the swarm routes', () => {
     const info = await swarmInfo(runner);
     expect(info.reachable).toBe(false);
     expect(info.nodes).toEqual([]);
+  });
+});
+
+describe('pstack swarm — the CLI half', () => {
+  let restore: (() => void) | null = null;
+  afterEach(() => { restore?.(); restore = null; });
+
+  const runner = () => createRunner({ dryRun: false, level: 'quiet', baseEnv: process.env as Record<string, string> });
+  const manager = () =>
+    dockerShim(`
+  "info --format {{json .Swarm}}") printf '%s\\n' '{"NodeID":"n1","NodeAddr":"10.0.0.1","LocalNodeState":"active","ControlAvailable":true,"RemoteManagers":[{"NodeID":"n1","Addr":"10.0.0.1:2377"}]}' ;;
+  "node ls --format {{json .}}") printf '%s\\n' '{"ID":"n1abcdef01234567","Hostname":"preview-host","Status":"Ready","Availability":"Active","ManagerStatus":"Leader","EngineVersion":"28.0.1","Self":"true"}' '{"ID":"n2abcdef01234567","Hostname":"worker-1","Status":"Ready","Availability":"Active","ManagerStatus":"","EngineVersion":"28.0.1","Self":"false"}' ;;
+  "swarm join-token -q worker") printf '%s\\n' "SWMTKN-1-abcdef-ghijkl" ;;`);
+
+  test('the report names WHICH of the three states it is in, and never a token', async () => {
+    restore = manager();
+    const active = swarmReport(await swarmInfo(runner()));
+    // The table, the manager address, and every node — `*` marks the host you are typing on.
+    expect(active).toContain('swarm manager  10.0.0.1:2377');
+    expect(active).toContain('preview-host *');
+    expect(active).toContain('manager (leader)');
+    expect(active).toContain('worker-1');
+    expect(active).toContain('2 nodes');
+    expect(active).toContain('pstack swarm join');
+    expect(active).toContain('2377/tcp');
+    expect(active).not.toContain('SWMTKN');
+    restore(); restore = null;
+
+    restore = dockerShim(`  *) exit 1 ;;`);
+    const down = swarmReport(await swarmInfo(runner()));
+    expect(down).toContain('docker did not answer');
+    // "could not tell" must never read as "there is no swarm".
+    expect(down).not.toContain('not a swarm manager');
+    restore(); restore = null;
+
+    restore = dockerShim(`  "info --format {{json .Swarm}}") printf '%s\\n' '{"LocalNodeState":"inactive"}' ;;`);
+    const off = swarmReport(await swarmInfo(runner()));
+    expect(off).toContain('not a swarm manager');
+    expect(off).toContain('--orchestrator swarm');
+    expect(off).not.toContain('HOSTNAME');
+  });
+
+  test('join material: every format, from the one function the API route also calls', async () => {
+    restore = manager();
+    const r = runner();
+    const got = async (format: string, distro?: string) => joinMaterial({ runner: r, format, distro });
+
+    const command = await got('command');
+    expect(command.ok && command.text).toBe('docker swarm join --token SWMTKN-1-abcdef-ghijkl 10.0.0.1:2377\n');
+    expect(command.ok && command.managerAddr).toBe('10.0.0.1:2377');
+    expect((await got('token')).ok && ((await got('token')) as { text: string }).text).toBe('SWMTKN-1-abcdef-ghijkl\n');
+    const script = await got('script');
+    expect(script.ok && script.text).toContain('#!/usr/bin/env bash');
+    expect(script.ok && script.text).toContain('docker swarm join --token SWMTKN-1-abcdef-ghijkl');
+    const cc = await got('cloud-config', 'debian');
+    expect(cc.ok && cc.text.startsWith('#cloud-config')).toBe(true);
+    expect(cc.ok && cc.text).toContain('download.docker.com/linux/debian');
+    // Every shape embeds the token — which is why both callers warn and neither logs it.
+    for (const f of JOIN_FORMATS) {
+      const m = await got(f, 'ubuntu');
+      expect(m.ok && m.text).toContain('SWMTKN-1-abcdef-ghijkl');
+    }
+
+    // The caller's own input is a different KIND of refusal from a fact about the host, because the
+    // API turns one into a 400 and the other into a 409/503, and the CLI into exit 3 vs 1.
+    expect(await got('pdf')).toMatchObject({ ok: false, kind: 'bad-format' });
+    expect(await got('cloud-config', 'plan9')).toMatchObject({ ok: false, kind: 'bad-distro' });
+  });
+
+  test('a host that is not a manager, and a docker that did not answer, refuse differently', async () => {
+    restore = dockerShim(`  "info --format {{json .Swarm}}") printf '%s\\n' '{"LocalNodeState":"inactive"}' ;;`);
+    expect(await joinMaterial({ runner: runner(), format: 'command' })).toMatchObject({
+      ok: false,
+      kind: 'not-a-manager',
+    });
+    restore(); restore = null;
+
+    restore = dockerShim(`  *) exit 1 ;;`);
+    expect(await joinMaterial({ runner: runner(), format: 'command' })).toMatchObject({
+      ok: false,
+      kind: 'unreachable',
+    });
   });
 });
 

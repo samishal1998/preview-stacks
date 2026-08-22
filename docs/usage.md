@@ -1575,8 +1575,23 @@ Three ceilings, stated rather than hidden:
 | `7946/tcp+udp` | node discovery (every node ↔ every node) |
 | `4789/udp` | overlay network traffic, VXLAN (every node ↔ every node) |
 
-Then take the join material from the **Swarm** page (Add a worker → Reveal) or the API, in whichever
-shape the new machine wants:
+Then take the join material — from the host with `pstack swarm join`, from the **Swarm** page (Add a
+worker → Reveal), or from the API — in whichever shape the new machine wants.
+
+On the host, over SSH:
+
+```bash
+pstack swarm                       # the node table, the manager address, the ports
+pstack swarm join                  # → docker swarm join --token SWMTKN-1-… 203.0.113.10:2377
+pstack swarm join --format script > join.sh
+pstack swarm join --format cloud-config --distro debian -o worker.yaml
+```
+
+`pstack swarm` exits **1** when this host is not a manager (or docker did not answer), so a script
+can ask without parsing the table. The join material goes to **stdout** and everything else to
+stderr, so `pstack swarm join --format token` pipes cleanly.
+
+Or over the API, from anywhere:
 
 ```bash
 # one line, for a machine that already runs Docker
@@ -1979,7 +1994,7 @@ Derived from `src/cli.ts`, `src/init.ts`, `src/api.ts`, `src/spec.ts`, `src/comp
 ### Commands
 
 ```
-pstack <up|down|verify|status|validate|init|serve> [flags]
+pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 ```
 
 | Command | Does | Exits |
@@ -1991,9 +2006,11 @@ pstack <up|down|verify|status|validate|init|serve> [flags]
 | `validate` | parse, resolve interpolation, list axes and hooks, print warnings. Touches nothing. | 0 · 3 |
 | `init` | stand up the control stack (`pstack-control`: Traefik + the API/UI) on **this host**. Idempotent. Preconditions → dirs → networks → config → `compose up -d` → wait for the healthcheck. **Never an HTTP route.** | 0 · 1 · 3 |
 | `serve` | HTTP API + UI over the deployment registry. Runs until killed. | 3 on refusal |
+| `swarm [status]` | the swarm's nodes, the manager address and the ports a worker needs. Read-only; reads docker every time. **Exit 1 when this host is not a manager**, so a script need not parse it. | 0 · 1 |
+| `swarm join` | what a new worker runs — `--format command` (default), `script`, `cloud-config` (+`--distro`) or `token`. **The output is a secret**: every shape embeds the join token. To stdout, or `-o <file>`. | 0 · 1 · 3 |
 
-`init` and `serve` are the two **spec-free** commands: they act on the host and on the registry, so
-neither loads `preview.yml` and neither fails because it is absent.
+`init`, `serve` and `swarm` are **spec-free**: they act on the host and on the registry, so none of
+them loads `preview.yml` or fails because it is absent.
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
 `assert_gone` is the only thing that moves the needle. The two ways it still returns 1: the
@@ -2015,6 +2032,9 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--challenge http01\|dns01` | `init` | default **`http01`** (or `PSTACK_CHALLENGE`). Any other value exits 3. |
 | `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
 | `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
+| `--format <shape>` | `swarm join` | `command` (default), `script`, `cloud-config` or `token`. An unknown one exits 3. |
+| `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
+| `-o`, `--out <file>` | `cloud-init` `swarm join` | write the rendered file instead of printing it. |
 | `-h`, `--help` | — | usage, exit 0 |
 
 An unknown flag, an unknown command, no command, a malformed `--set`, a bad `--challenge`, a missing

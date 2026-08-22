@@ -832,16 +832,23 @@ pstack container, which mounts only the registry.
 
 A new host is a one-node swarm manager (`pstack init --orchestrator swarm`, the default), and
 previews deploy as swarm stacks. A second machine joins with material the manager hands out —
-`GET /api/swarm/join?format=…` or the Swarm page — in four shapes: the bare token, the
-`docker swarm join` line, a shell script that installs Docker first, or a cloud-config:
+`pstack swarm join` on the host, the Swarm page, or `GET /api/swarm/join?format=…` — in four shapes:
+the bare token, the `docker swarm join` line, a shell script that installs Docker first, or a
+cloud-config:
 
 ```bash
+# on the manager, over SSH — nothing to paste, you are already root there
+pstack swarm                                   # the node table, the manager address, the ports
+pstack swarm join --format cloud-config --distro ubuntu -o worker.yaml
+
+# or from anywhere, with the API bearer:
 curl -s "https://api.preview.example.com/api/swarm/join?format=cloud-config&distro=ubuntu" \
   -H "Authorization: Bearer $PSTACK_TOKEN" > worker.yaml
+
 hcloud server create --name preview-worker-1 --type cx32 --image ubuntu-24.04 \
   --ssh-key <your-key> --user-data-from-file worker.yaml
-# on the manager, a minute later:
-docker node ls
+# a minute later, from the manager:
+pstack swarm
 ```
 
 The worker runs Docker and nothing else: no Bun, no pstack, no control stack. Everything is managed

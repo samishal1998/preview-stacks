@@ -56,7 +56,7 @@ docs/                See docs/README.md.
 | `spec.ts` | Parse + validate `preview.yml` → resolved `Stack`. Owns interpolation, the stack-name charset rule, axis dedupe, `warnings`. |
 | `stack.ts` | `up` / `down` / `verify` / `status` / `report`. Owns the failure semantics — **the whole product is in this file**. |
 | `compose.ts` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm.ts`. Owns the all-profiles-on-down rule, `composeSleep` (down **without** `-v`) and `shq`. |
-| `swarm.ts` | Docker Swarm: `swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing and join material. Its header states the ceilings (worker volumes, node-local exec). |
+| `swarm.ts` | Docker Swarm: `swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, and `joinMaterial`/`swarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. Its header states the ceilings (worker volumes, node-local exec). |
 | `exec.ts` | The only place a process is spawned. Dry-run, output capture, `captureOutputs`, cancellation via `AbortSignal`. |
 | `log.ts` | The `Sink` seam: `consoleSink` (CLI), `bufferSink` (API jobs), `nullSink` (tests). |
 
