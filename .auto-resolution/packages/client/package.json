@@ -1,0 +1,46 @@
+{
+  "name": "@samyx/preview-stacks-client",
+  "version": "0.26.0",
+  "description": "Typed API client for a pstack control plane: deployments, jobs, readiness, containers, logs, notifiers.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samishal1998/preview-stacks.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/samishal1998/preview-stacks/tree/main/packages/client#readme",
+  "license": "MIT",
+  "author": "sami.mishal",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node --format esm && tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun test && tsc --noEmit && bun run build",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "pstack",
+    "preview-environments",
+    "docker-compose",
+    "api-client",
+    "sdk"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.2"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}
