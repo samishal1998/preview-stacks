@@ -1,12 +1,21 @@
-# The root Dockerfile needs go.mod, go.sum and packages/pstack (sources, ui/, templates/,
-# package.json for the version). Everything else is noise that would invalidate the build cache.
-*
-!go.mod
-!go.sum
-!packages/pstack
-packages/pstack/node_modules
-packages/pstack/dist
+# What the root Dockerfile copies: go.mod, go.sum and packages/pstack (its Go source, ui/,
+# templates/ and package.json — assets.go embeds those three).
+#
+# Written as plain exclusions rather than `*` plus `!re-includes`: re-including a path whose PARENT
+# was excluded by `*` is the fragile corner of .dockerignore, and this build has no way to fail
+# loudly if it silently ships an empty context.
+.git
+.github
+.turbo
+**/node_modules
+**/dist
+**/.turbo
+apps
+docs
+skills
+packages/client
+packages/conformance
 packages/pstack/bin
-packages/pstack/test
-packages/pstack/src
-packages/pstack/scripts
+packages/pstack/examples
+*.tgz
+*.log
