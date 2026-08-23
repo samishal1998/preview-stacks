@@ -20,16 +20,28 @@ import { CASES, DATA_DIR } from '../gen/goldens.table.ts';
 import { GOLDEN, mask, type CliGolden } from '../harness/goldens.ts';
 
 describe.skipIf(NO_CLI)('CLI goldens', () => {
+  /**
+   * Captured on FIRST USE, not in the test below.
+   *
+   * `mask()` replaces it with <VERSION>, so every case needs it — including a single case run
+   * under `-t <name>`, which filters the test below out. Holding it only there left `version` as
+   * the empty string, and `''.split()` shreds the transcript into characters: a filtered run
+   * diffed every character of the output against itself. CI runs exactly such a filtered case.
+   */
   let version = '';
+  const implVersion = async (): Promise<string> => {
+    if (!version) version = (await runCli(['--version'])).stdout.trim();
+    return version;
+  };
   test('the implementation reports a version', async () => {
-    version = (await runCli(['--version'])).stdout.trim();
-    expect(version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(await implVersion()).toMatch(/^\d+\.\d+\.\d+/);
   });
 
   // Cases run IN TABLE ORDER in one data dir — an upgrade plan reads what the init before it wrote.
   for (const c of CASES) {
     test(c.name, async () => {
       const golden = JSON.parse(readFileSync(join(GOLDEN, 'cli', `${c.name}.json`), 'utf8')) as CliGolden;
+      const version = await implVersion();
       if (c.freshData) {
         rmSync(DATA_DIR, { recursive: true, force: true });
         mkdirSync(DATA_DIR, { recursive: true });

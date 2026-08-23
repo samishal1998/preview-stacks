@@ -350,6 +350,16 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, dep *registry.Deploymen
 			"removing the record now would orphan them beyond the control plane's view.", "stack", st.Stack, "containers", len(containers)))
 		return nil
 	}
+	/*
+	 * Stop watching it BEFORE the directory goes.
+	 *
+	 * A readiness watch outlives the `up` that started it and polls docker with the deployment
+	 * directory as its cwd; Remove deletes that directory. `down` and container-stop already
+	 * cancel for the reason that applies here too — nothing should go on narrating about a
+	 * deployment that is gone, least of all emitting `stack.failed` about one an operator
+	 * deliberately forgot.
+	 */
+	s.readiness.Cancel(st.Stack)
 	s.writeMu.Lock()
 	err = s.registry.Remove(dep.ID)
 	if err == nil {
