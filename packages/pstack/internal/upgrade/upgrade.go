@@ -196,8 +196,16 @@ func ReadControlState(dataDir string) (*ControlState, error) {
 // replaced: where the running binary actually is, not the installer's default. A cloud-config host
 // has it at /usr/local/bin/pstack, which is also the installer's default; a user-prefix install
 // (~/.local/bin) would otherwise end up with two binaries and the old one first on PATH — an
-// upgrade that reports success and changes nothing. "" in, "" out (not on PATH).
+// upgrade that reports success and changes nothing.
+//
+// PSTACK_INSTALL_DIR wins, and is the answer when `pstack` is not on PATH at all: invoked by
+// absolute path from cron or a systemd unit, there is nothing to derive from, and an operator
+// needs a way to say where the binary lives. It is the same variable install.sh reads.
+// "" out means neither could be determined.
 func InstallDirFor(binPath string) string {
+	if dir := strings.TrimSpace(os.Getenv("PSTACK_INSTALL_DIR")); dir != "" {
+		return dir
+	}
 	if binPath == "" {
 		return ""
 	}
@@ -457,9 +465,11 @@ func Upgrade(opts Options) (*Result, error) {
 			line += " — switching from " + string(detected.Orchestrator)
 		}
 		say(line + ")")
-		if binPath == "" {
-			say("  note: `pstack` is not on PATH, so the install directory could not be derived.")
-			say("        The installer will use its default (/usr/local/bin), which may not be where this binary lives.")
+		// Only when NOTHING said where to install: not on PATH and no PSTACK_INSTALL_DIR.
+		if InstallDirFor(binPath) == "" {
+			say("  note: `pstack` is not on PATH and PSTACK_INSTALL_DIR is unset, so the install")
+			say("        directory could not be derived. The installer will use its default")
+			say("        (/usr/local/bin), which may not be where this binary lives.")
 		}
 	} else {
 		say("pstack " + version.Get() + " — rebuilding and recreating the control stack")

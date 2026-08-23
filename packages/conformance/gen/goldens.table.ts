@@ -96,7 +96,11 @@ export const CASES: Case[] = [
     return [
       { name: `init-dry-${name}`, argv: [...argv, '-n'], env, shim: INIT_SHIM, freshData: true } as Case,
       { name: `init-${name}`, argv, env, shim: INIT_SHIM, freshData: true, render: { dir: `control/${name}`, files: ['control/docker-compose.yml', 'control/.env', 'control/dns.env'] } } as Case,
-      { name: `upgrade-plan-${name}`, argv: ['upgrade', '-n', '--to', '0.29.1'], env: { PSTACK_DATA: DATA_DIR }, after: `init-${name}` } as Case,
+      // PSTACK_INSTALL_DIR pinned: without it the plan derives the install directory from where
+      // `pstack` sits on PATH, so the transcript said one thing on a machine that has it installed
+      // and another (plus a two-line note) on one that does not — a golden that could only pass
+      // where it was generated.
+      { name: `upgrade-plan-${name}`, argv: ['upgrade', '-n', '--to', '0.29.1'], env: { PSTACK_DATA: DATA_DIR, PSTACK_INSTALL_DIR: '/usr/local/bin' }, after: `init-${name}` } as Case,
       { name: `ui-switch-dry-${name}`, argv: ['ui', c.ui === 'basic' ? 'advanced' : 'basic', '-n'], env: { PSTACK_DATA: DATA_DIR }, after: `init-${name}` } as Case,
     ];
   }),
