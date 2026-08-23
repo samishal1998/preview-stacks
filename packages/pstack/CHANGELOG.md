@@ -36,10 +36,12 @@ What changes around the binary:
   inside that container**: a hook that called `bun`, `bunx`, `node`, `npm` or `npx` must bring its
   own — grep your specs before the hop. The previous image (`oven/bun:1`) also lacked `curl` and
   `ca-certificates`; those are new.
-- **`pstack build-image` copies the running binary into the image** (no npm fetch), so it runs on
-  the Linux host only. A macOS checkout uses the repo's `Dockerfile`, or `PSTACK_BINARY=<linux
-  binary> pstack build-image`. The `-previous` retag is unchanged. The advanced UI image still
-  fetches `@samyx/preview-stacks-ui` from npm inside the build.
+- **`pstack build-image`'s generated Dockerfile installs this version with the release's own
+  `install.sh`** instead of `bun add`ing a package — an empty build context, so the host needs
+  nothing but docker, and it works from macOS since the build runs Linux. It does need the release
+  to be reachable at build time; `PSTACK_BINARY=<path>` copies a local binary in instead (an
+  unpublished build, or no network). The `-previous` retag is unchanged, and the advanced UI image
+  still fetches `@samyx/preview-stacks-ui` from npm inside the build.
 - **`pstack upgrade`'s first phase is the installer** (`PSTACK_VERSION` pinned, into the directory
   the running binary lives in), then the unchanged `pstack upgrade --resume`.
 - **`pstack cloud-init` renders the installer instead of the Bun install block**; re-render saved

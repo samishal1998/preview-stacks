@@ -14,7 +14,13 @@ set -eu
 
 main() {
   repo="samishal1998/preview-stacks"
-  version="${PSTACK_VERSION:-__VERSION__}"
+  # The ONLY occurrence of the sentinel in this file: the release replaces it with that release's
+  # version, so a saved pinned URL keeps installing the version it came from. Every other decision
+  # below reads $version, never the sentinel — an earlier revision compared against it in two more
+  # places, which the release-time sed rewrote too, and the stamped script silently used `latest`.
+  default="__VERSION__"
+  case "$default" in *VERSION*) default="latest" ;; esac
+  version="${PSTACK_VERSION:-$default}"
   dir="${PSTACK_INSTALL_DIR:-/usr/local/bin}"
 
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -29,7 +35,7 @@ main() {
     *) echo "pstack: unsupported architecture '$arch' (amd64 and arm64 are released)" >&2; exit 1 ;;
   esac
 
-  if [ "$version" = "latest" ] || [ "$version" = "__VERSION__" ]; then
+  if [ "$version" = "latest" ]; then
     base="https://github.com/$repo/releases/latest/download"
   else
     version="${version#v}"
@@ -40,7 +46,7 @@ main() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT INT TERM
 
-  echo "pstack: downloading $asset ($([ "$version" = "__VERSION__" ] && echo latest || echo "$version"))" >&2
+  echo "pstack: downloading $asset ($version)" >&2
   curl -fsSL -o "$tmp/$asset" "$base/$asset"
   curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
 

@@ -16,3 +16,6 @@ dist/
 # generator embeds none — tokens are minted at boot.)
 hetzner*.yml
 *.cloud-init.yml
+
+# GoReleaser`s pre-build scratch (the version-stamped installer).
+.build/
