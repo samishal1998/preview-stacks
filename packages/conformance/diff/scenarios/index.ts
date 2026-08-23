@@ -9,8 +9,15 @@ import type { Scenario } from '../../harness/diff.ts';
 import { FIXTURE_SHIM } from '../../harness/host-fixture.ts';
 import { SWARM_SHIM } from '../../gen/goldens.table.ts';
 
+// Two things here are load-bearing for the `compose.generated.yml` trace step:
+//   - `file: compose.yml` is the name registry.Put writes the submitted file under. Anything else
+//     makes materialiseCompose silently find nothing, and the shim's `exit 0` hides it.
+//   - PREVIEW_DOMAIN is what a hostname is derived FROM; with no domain there is nothing to
+//     generate, so the whole label path is skipped.
+// Both were wrong until the trace step existed to notice, so every scenario ran `up` without ever
+// exercising label generation.
 const SPEC = (stack: string, extra = '') =>
-  `version: 1\nstack: ${stack}\ncompose:\n  file: docker-compose.yml\n  profiles: []\n${extra}axes:\n  - name: db\n    up: "echo DB_URL=postgres://db/${stack}"\n    down: "true"\n    assert_gone: "true"\n    assert_live: "true"\n`;
+  `version: 1\nstack: ${stack}\nenv:\n  PREVIEW_DOMAIN: preview.example.com\ncompose:\n  file: compose.yml\n  profiles: []\n${extra}axes:\n  - name: db\n    up: "echo DB_URL=postgres://db/${stack}"\n    down: "true"\n    assert_gone: "true"\n    assert_live: "true"\n`;
 const COMPOSE = 'services:\n  app:\n    image: nginx:alpine\n    labels:\n      - pstack.routing.port=80\n    restart: always\n    mem_limit: 128m\n';
 
 const COMPOSE_SHIM = [
@@ -90,6 +97,10 @@ export const SCENARIOS: Scenario[] = [
       await s.fetch('POST', '/api/deployments/pr-1/up');
       const upJob = await s.waitJob((up.body.job as { id: string }).id);
       void upJob;
+      // A successful `up` hands off to the readiness watcher, which reads docker in the background.
+      // Wait for it to settle before going on, or its calls land in the recorded argv at a position
+      // that depends on scheduling — the one thing a trace cannot have.
+      await s.until('GET', '/api/deployments/pr-1/readiness', (b) => b.state !== 'watching');
       await s.fetch('GET', '/api/jobs');
       await s.fetch('GET', '/api/deployments/pr-1/runtime');
       await s.fetch('GET', '/api/deployments/pr-1/readiness?wait=1');
