@@ -10,6 +10,8 @@
  * (ids, secrets, timestamps, ports) and KNOWN_DEVIATIONS. A deviation that is no longer observed
  * FAILS the run — the list cannot quietly outlive the difference it documents.
  */
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { Shim } from './docker-shim.ts';
 import type { Booted } from './server.ts';
 
@@ -126,10 +128,30 @@ export class Session {
     return this.until('GET', `/api/jobs/${id}`, (b) => !!b.job && (b.job as { state: string }).state !== 'running');
   }
 
-  /** The docker argv the implementation issued, as one pseudo-step. */
+  /**
+   * Two pseudo-steps at the end: the docker argv the implementation issued, and every
+   * `compose.generated.yml` it wrote.
+   *
+   * The argv is otherwise invisible to an HTTP test — the API's runners are quiet — and it is the
+   * spec. The GENERATED COMPOSE is invisible too, and it is the one artifact the whole Traefik
+   * routing story rests on: the labels pstack derives, in order, plus the whole compose→swarm
+   * conversion. Its bytes were pinned only by hand-written expectations until this step existed.
+   */
   finish(): Step[] {
     if (this.shim) {
       this.steps.push({ n: this.steps.length, method: 'docker', path: '(argv)', status: 0, headers: {}, body: maskText(this.shim.calls().join('\n')) });
+    }
+    const deployments = join(this.s.dataDir, 'deployments');
+    let ids: string[] = [];
+    try {
+      ids = readdirSync(deployments).sort();
+    } catch {
+      /* a scenario that submitted nothing */
+    }
+    for (const id of ids) {
+      const p = join(deployments, id, 'compose.generated.yml');
+      if (!existsSync(p)) continue;
+      this.steps.push({ n: this.steps.length, method: 'generated', path: `${id}/compose.generated.yml`, status: 0, headers: {}, body: maskText(readFileSync(p, 'utf8')) });
     }
     return this.steps;
   }
