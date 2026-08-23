@@ -1,0 +1,63 @@
+# CI for pstack.
+#
+# Deliberately small — this repo ships a guide about CI patterns, so its own CI should be a
+# legible example rather than a showcase. One job, three checks, no matrix: there is exactly one
+# supported runtime (Bun), so a matrix would test nothing.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on a PR, but never on main — a main run is the record for that commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned from a committed file so CI and local agree; bumping the runtime is a commit.
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      # Turbo fans these out across the workspace and caches per package, so adding a package
+      # needs no CI change.
+      - name: Test
+        run: bunx turbo run test
+
+      - name: Typecheck
+        run: bunx turbo run typecheck
+
+      # The spec's own linting must hold for the shipped example, or the guide teaches a spec that
+      # its own tool would warn about.
+      - name: Validate the example spec
+        env:
+          PR: '1'
+          GIT_SHA: ci
+        run: cd packages/pstack && bun src/cli.ts -f examples/preview.yml validate
+
+      # The published artifact is a BUNDLE, so build it here: a broken bundle (a bad text import, a
+      # dropped asset) is invisible to `bun test`, which runs the sources.
+      - name: Build
+        run: bunx turbo run build
+
+      # Catch a broken `files`/`exports`/`bin` map before a release does — the failure mode is a
+      # published package whose documented entry points throw "Cannot find module".
+      #
+      # NOT `publish-kit publish --dry-run`: `bun publish` demands registry auth even in dry-run
+      # mode, and handing CI a publish token merely to rehearse a publish is a supply-chain risk
+      # for no benefit. `bun pm pack` needs no credentials and asserts the same invariant.
+      - name: Package entry points are shipped
+        run: cd packages/pstack && bun scripts/check-package.ts
