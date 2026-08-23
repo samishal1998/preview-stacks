@@ -356,12 +356,14 @@ anything. This is a real gap in the credential-free happy path; pick one of two 
 | **Pull from a registry** | `docker pull <registry>/pstack:<tag>`, then run `init` with `PSTACK_IMAGE=<registry>/pstack:<tag>` | you must publish the image somewhere the box can pull. **No source on the host**, and boots are seconds instead of minutes |
 
 **Building on the host is the default here** because it needs nothing but the CLI you just
-installed: `pstack build-image` generates its own Dockerfile and copies the running binary into
-the context, so the image always matches the CLI on that box — and the image that was running is
+installed: `pstack build-image` generates its own Dockerfile, whose only application step is the
+same checksum-verifying `install.sh` an operator runs, **pinned to the version that generated the
+file** — so the image always matches the CLI on that box. The context is empty and the build runs
+Linux whatever the host is, so this works from a macOS checkout too. The image that was running is
 kept as `pstack:local-previous`, the one-line rollback. Upgrading is `pstack upgrade` — the
 installer, then `build-image`, then `init` with the same token — no clone, and no image to publish.
-(It copies the *running* binary, so it runs on the Linux host; on a macOS checkout, use the repo's
-`Dockerfile` or point `PSTACK_BINARY` at a Linux build.)
+(`PSTACK_BINARY=<path>` copies a local binary in instead, for a version that is not published yet
+or a host with no network at build time.)
 
 (A source checkout still works and is what CI uses — the repo's own `Dockerfile` builds the binary
 in a multi-stage build. You just no longer need one on a host.)

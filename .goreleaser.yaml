@@ -11,8 +11,9 @@ project_name: pstack
 before:
   hooks:
     # The installer with this release's version stamped in, so `| sh` without PSTACK_VERSION pins
-    # to the release the script came from.
-    - sh -c 'mkdir -p dist && sed "s/__VERSION__/{{ .Version }}/" install.sh > dist/install.sh'
+    # to the release the script came from. NOT into dist/ — GoReleaser requires that directory to
+    # be empty after the hooks run, and fails with "dist is not empty" even under --clean.
+    - sh -c 'mkdir -p .build && sed "s/__VERSION__/{{ .Version }}/" install.sh > .build/install.sh'
 
 builds:
   - id: pstack
@@ -44,7 +45,7 @@ release:
     owner: samishal1998
     name: preview-stacks
   extra_files:
-    - glob: dist/install.sh
+    - glob: .build/install.sh
   header: |
     One static binary. Install or upgrade:
 

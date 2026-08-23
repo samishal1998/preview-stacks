@@ -1172,13 +1172,15 @@ driver is pure Go, so the binary runs on any libc — or none (Alpine).
 
 ### The control image is built from the binary, on the host
 
-`pstack build-image` writes a Dockerfile into a temp context beside a copy of the **running**
-binary (`os.Executable`), on `debian:bookworm-slim` with `bash`, `ca-certificates`, `curl` and the
-docker CLI + compose plugin lifted from `docker:28-cli`. `pstack dockerfile` prints that Dockerfile.
+`pstack build-image` writes a Dockerfile (`pstack dockerfile` prints it) on
+`debian:bookworm-slim` with `bash`, `ca-certificates`, `curl` and the docker CLI + compose plugin
+lifted from `docker:28-cli`. Its only application step is the release's own checksum-verifying
+`install.sh`, **pinned to the version that generated the file**, so the context is EMPTY — the build
+needs nothing on the host but docker, and it works from macOS because the build itself runs Linux.
 The image that was running is retagged `pstack:local-previous` first, every time — the one-line
-rollback. It copies the running binary, so it runs on the Linux host; a macOS checkout uses the
-repo's multi-stage `Dockerfile` or `PSTACK_BINARY=<linux binary>`. Nothing is published to a
-registry: `init` wants an image that exists locally, and the host can make one from what it has.
+rollback. `PSTACK_BINARY=<path>` copies a local binary in instead (a version that is not published
+yet, or no network at build time). Nothing is published to a registry: `init` wants an image that
+exists locally, and the host can make one from what it has.
 
 ### Assets are embedded, not read from disk
 

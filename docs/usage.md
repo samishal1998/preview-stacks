@@ -1165,8 +1165,9 @@ change, and are worth a glance before you run it:
   inside that container**, so a hook that called `bun`/`npx`/`node` must bring its own: grep your
   specs (`grep -E '\b(bun|bunx|node|npm|npx)\b' deployments/*/spec.yml`) before the hop. `bash`,
   `curl`, `docker` and `docker compose` are there as before.
-- `build-image` copies the running binary into the image, so it runs on the Linux host only (on
-  a macOS checkout use the repo's `Dockerfile`, or `PSTACK_BINARY=<linux binary>`). The previous
+- `build-image` no longer fetches from npm: the generated Dockerfile runs the release's own
+  `install.sh`, pinned to this version, in an empty context. It therefore needs the release to be
+  reachable at build time; `PSTACK_BINARY=<path>` copies a local binary in instead. The previous
   image is kept as `pstack:local-previous` first, every time.
 - Rendered cloud-configs from ≤ 0.28.0 install the old runtime; re-render with `pstack cloud-init`
   before provisioning a new host.
@@ -2174,7 +2175,7 @@ different problems with different owners.
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
 | `PSTACK_SSO_STATE_TTL_S` · `PSTACK_SSO_DISCOVERY_TTL_S` | `serve` | `300` · `3600` | how long a half-finished SSO sign-in is remembered, and how long a provider's discovery document and JWKS are trusted. Same audience. |
 | `PSTACK_PORT` | `healthcheck` | `7878` | the port `pstack healthcheck` probes — the container HEALTHCHECK, exit 0 or 1 on `GET /api/health`. |
-| `PSTACK_BINARY` | `build-image` | *the running binary* | a Linux `pstack` binary to copy into the control image instead of the one running — for a macOS checkout or a cross-build. |
+| `PSTACK_BINARY` | `build-image` | *unset — the image installs this version from its release* | path to a `pstack` binary to copy into the control image instead, for a version that is not published yet or a host with no network at build time. |
 | `PSTACK_VERSION` · `PSTACK_INSTALL_DIR` | `install.sh` | *the script's release* · `/usr/local/bin` | pin the version the installer fetches; where it puts the binary. `pstack upgrade` sets both. |
 
 `serve` needs **no** spec and no stack variable to start.

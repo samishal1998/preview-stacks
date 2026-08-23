@@ -40,15 +40,61 @@ func findCmd(log []string, prefix string) (int, string) {
 // no registry to pull it from, while `init` refuses to run without it. The way out is that the
 // running binary IS the whole application: the context is a copy of it plus the Dockerfile.
 func TestBuildImage(t *testing.T) {
-	t.Run("refuses on a non-Linux build and names the two alternatives", func(t *testing.T) {
-		// negative control: drop the GOOS check — a darwin binary is copied into a Linux image.
+	t.Run("the default context is EMPTY — the image installs the version itself", func(t *testing.T) {
+		// The reason this beats copying the running binary: the build runs Linux whatever the host
+		// is, so `build-image` works from a macOS checkout, and nothing has to be assembled.
+		// negative control: put the COPY back in ControlDockerfile — the "no pstack in the context" check fails.
 		r := exec.NewFake(nil, "")
-		err := Build(BuildOptions{Tag: "pstack:test", Runner: r, GOOS: "darwin", Out: &bytes.Buffer{}})
-		if err == nil || !strings.Contains(err.Error(), "docker build -t pstack:local .") || !strings.Contains(err.Error(), "PSTACK_BINARY=<path>") {
-			t.Fatalf("got %v", err)
+		var hadBinary bool
+		var df string
+		// Read the context INSIDE the call: Build removes it on the way out.
+		r.Answer = func(cmd string) (exec.Result, bool) {
+			if m := buildRe.FindStringSubmatch(cmd); m != nil {
+				hadBinary = exists(filepath.Join(m[1], "pstack"))
+				b, err := os.ReadFile(filepath.Join(m[1], "Dockerfile"))
+				if err != nil {
+					t.Error(err)
+				}
+				df = string(b)
+			}
+			return exec.Result{OK: true}, true
 		}
-		if len(r.Commands()) != 0 {
-			t.Errorf("ran %v", r.Commands())
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Out: &bytes.Buffer{}}); err != nil {
+			t.Fatal(err)
+		}
+		if hadBinary {
+			t.Error("a binary was copied into the context")
+		}
+		if df != ControlDockerfile("") {
+			t.Error("context Dockerfile differs from ControlDockerfile()")
+		}
+	})
+
+	t.Run("PSTACK_BINARY copies a local binary in instead — an unpublished or offline build", func(t *testing.T) {
+		// negative control: ignore opts.Binary in Build — the context has no `pstack` and the
+		// Dockerfile still carries the curl install.
+		r := exec.NewFake(nil, "")
+		var hadBinary bool
+		var df string
+		r.Answer = func(cmd string) (exec.Result, bool) {
+			if m := buildRe.FindStringSubmatch(cmd); m != nil {
+				hadBinary = exists(filepath.Join(m[1], "pstack"))
+				b, err := os.ReadFile(filepath.Join(m[1], "Dockerfile"))
+				if err != nil {
+					t.Error(err)
+				}
+				df = string(b)
+			}
+			return exec.Result{OK: true}, true
+		}
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &bytes.Buffer{}}); err != nil {
+			t.Fatal(err)
+		}
+		if !hadBinary {
+			t.Fatal("the binary was not copied into the context")
+		}
+		if !strings.Contains(df, "COPY pstack /usr/local/bin/pstack") || strings.Contains(df, "install.sh") {
+			t.Errorf("not the local variant:\n%s", df)
 		}
 	})
 
@@ -56,7 +102,7 @@ func TestBuildImage(t *testing.T) {
 		// negative control: drop `defer os.RemoveAll(ctx)` in Build — the Dockerfile survives and the exists check fails.
 		r := exec.NewFake(nil, "")
 		var out bytes.Buffer
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Out: &out}); err != nil {
 			t.Fatal(err)
 		}
 		_, cmd := findCmd(r.Commands(), "docker build")
@@ -117,7 +163,7 @@ func TestBuildImage(t *testing.T) {
 			return exec.Result{OK: true}, true
 		}
 		var out bytes.Buffer
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Out: &out}); err != nil {
 			t.Fatal(err)
 		}
 		if written != ControlDockerfile("") {
@@ -140,7 +186,7 @@ func TestBuildImage(t *testing.T) {
 		r.Answer = func(string) (exec.Result, bool) {
 			return exec.Result{OK: false, Code: 1, Stderr: "no space left on device"}, true
 		}
-		err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &bytes.Buffer{}})
+		err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Out: &bytes.Buffer{}})
 		if err == nil || !strings.Contains(err.Error(), "no space left on device") {
 			t.Fatalf("expected docker output in the error, got %v", err)
 		}
@@ -150,7 +196,7 @@ func TestBuildImage(t *testing.T) {
 		// negative control: drop the `if opts.DryRun` early return — the runner log is no longer empty.
 		r := exec.NewFake(nil, "")
 		var out bytes.Buffer
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DryRun: true, Binary: fakeBinary(t), Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, DryRun: true, Out: &out}); err != nil {
 			t.Fatal(err)
 		}
 		if len(r.Commands()) != 0 {
@@ -169,7 +215,7 @@ func TestBuildImage(t *testing.T) {
 		// first, or it would keep the new image and the point is lost.
 		// negative control: swap the two runner calls in Build — the order assertion fails.
 		r := exec.NewFake(nil, "")
-		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Binary: fakeBinary(t), Out: &bytes.Buffer{}}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack:test", Runner: r, Out: &bytes.Buffer{}}); err != nil {
 			t.Fatal(err)
 		}
 		log := r.Commands()
@@ -254,8 +300,8 @@ func TestGeneratedDockerfiles(t *testing.T) {
 			t.Error("UI image not pinned")
 		}
 		df := ControlDockerfile("9.9.9")
-		for _, want := range []string{"COPY pstack /usr/local/bin/pstack", `CMD ["pstack", "serve"]`, `CMD ["pstack", "healthcheck"]`,
-			"releases/download/v9.9.9/pstack_linux_", "FROM debian:bookworm-slim", "/usr/local/bin/pstack --version"} {
+		for _, want := range []string{"releases/download/v9.9.9/install.sh", "PSTACK_VERSION=9.9.9 sh", `CMD ["pstack", "serve"]`,
+			`CMD ["pstack", "healthcheck"]`, "FROM debian:bookworm-slim", "pstack --version"} {
 			if !strings.Contains(df, want) {
 				t.Errorf("control image lacks %q", want)
 			}

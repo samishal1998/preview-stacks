@@ -162,8 +162,8 @@ func run(argv []string, io IO) *Exit {
 		if args.UIImage && tag == image.DefaultImageTag {
 			tag = image.DefaultUIImageTag
 		}
-		// PSTACK_BINARY: a Linux binary to copy into the image instead of the running one (a macOS
-		// operator, or a cross-build).
+		// PSTACK_BINARY: copy a local binary into the image instead of installing this version from
+		// its release — for a version that is not published yet, or a host with no network at build time.
 		binary, _ := io.Env("PSTACK_BINARY")
 		if err := image.Build(image.BuildOptions{Tag: tag, Runner: runner, DryRun: args.DryRun, UI: args.UIImage, UIDist: args.UIDist, Binary: binary, Out: out}); err != nil {
 			return fail(err.Error())
