@@ -10,6 +10,7 @@
     "status": "bun scripts/status.ts",
     "gen": "bun gen/goldens.ts && bun gen/host-fixture.ts",
     "diff": "bun diff/run.ts",
+    "corpus": "bun diff/corpus.ts",
     "typecheck": "tsc --noEmit",
     "check": "bun test && tsc --noEmit"
   },

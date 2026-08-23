@@ -96,6 +96,14 @@ const write = (name: string, v: unknown) => {
     { name: 'compose-shaped', yaml: 'services:\n  web:\n    image: nginx\n    ports:\n      - 80:80\n      - "443:443"\n    restart: no\n    labels:\n      - traefik.enable=true\n      - pstack.routing.port=80\n    environment:\n      A: yes\n      B: 0755\n      C: 1e3\n' },
     { name: 'tabs and odd whitespace', yaml: 'a: 1   \nb:    2\n' },
     { name: 'unicode', yaml: 'name: Ünïcødé ✓\nemoji: "🚀"\n' },
+    // NO FINAL LINE BREAK. A stream's last break is not content, so clip chomping still keeps one
+    // newline at end-of-input — and any trailing spaces on that last line are content. A spec
+    // submitted over HTTP routinely arrives without a trailing newline, and axis hooks are block
+    // scalars, so this decides the bytes a hook receives. (goccy drops both; found by
+    // diff/corpus.ts over real files, never by the cases above.)
+    { name: 'block scalar at end of input, no trailing newline', yaml: 'hook: |\n  set -e\n  deploy' },
+    { name: 'block scalar at end of input, trailing spaces kept', yaml: 'hook: |\n  a b \n  c d ' },
+    { name: 'plain scalar at end of input, no trailing newline', yaml: 'a: 1\nb: two' },
   ];
   const docRows = docs.map((d) => {
     try {

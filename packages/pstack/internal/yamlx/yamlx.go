@@ -31,6 +31,23 @@ var ErrNotYAML = errors.New("not valid YAML")
 
 // Parse is Bun.YAML.parse(text).
 func Parse(src []byte) (any, error) {
+	/*
+	 * A missing FINAL LINE BREAK is supplied here, before the parser sees it.
+	 *
+	 * YAML streams are a sequence of lines and the last line break is not part of any value, so
+	 * appending one changes nothing for ordinary scalars — but a block scalar (`|`, `>`) chomps
+	 * against the end of its content, and goccy at end-of-INPUT drops the newline clip chomping
+	 * should keep, along with any trailing spaces on that last line. Bun keeps both:
+	 *
+	 *     "k: |\n  a\n  b"    Bun {"k":"a\nb\n"}   goccy {"k":"a\nb"}
+	 *
+	 * Axis hooks ARE block scalars and a spec submitted over HTTP routinely has no trailing
+	 * newline, so this is the difference between the bytes a hook receives here and there. Found
+	 * by diff/corpus.ts over real files, not by the hand-written cases.
+	 */
+	if n := len(src); n > 0 && src[n-1] != '\n' {
+		src = append(append(make([]byte, 0, n+1), src...), '\n')
+	}
 	// A document that is only a comment, or empty, is null — as Bun says.
 	f, err := parser.ParseBytes(src, 0, parser.AllowDuplicateMapKey())
 	if err != nil && strings.Contains(err.Error(), "tab character") {

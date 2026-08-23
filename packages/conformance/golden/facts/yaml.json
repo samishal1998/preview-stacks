@@ -626,6 +626,31 @@
         "emoji": "🚀"
       },
       "json": "{\"name\":\"Ünïcødé ✓\",\"emoji\":\"🚀\"}"
+    },
+    {
+      "name": "block scalar at end of input, no trailing newline",
+      "yaml": "hook: |\n  set -e\n  deploy",
+      "value": {
+        "hook": "set -e\ndeploy\n"
+      },
+      "json": "{\"hook\":\"set -e\\ndeploy\\n\"}"
+    },
+    {
+      "name": "block scalar at end of input, trailing spaces kept",
+      "yaml": "hook: |\n  a b \n  c d ",
+      "value": {
+        "hook": "a b \nc d \n"
+      },
+      "json": "{\"hook\":\"a b \\nc d \\n\"}"
+    },
+    {
+      "name": "plain scalar at end of input, no trailing newline",
+      "yaml": "a: 1\nb: two",
+      "value": {
+        "a": 1,
+        "b": "two"
+      },
+      "json": "{\"a\":1,\"b\":\"two\"}"
     }
   ],
   "invalid": [
