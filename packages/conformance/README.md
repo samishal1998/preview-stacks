@@ -23,7 +23,8 @@ Layout:
 | `test/` | the suite, one file per route group, runnable in any mode |
 | `gen/` | regenerates `golden/` from the binary (`bun run gen`) — after a DELIBERATE contract change, reviewed with the code |
 | `golden/` | checked in: `cli/` exact CLI transcripts, `render/` generated documents, `facts/` the JavaScript semantics the port reproduces (measured once on Bun 1.3.12), `host/` a complete data dir |
-| `diff/` | differential mode: the same scenario on binary A then B (a release vs the working tree), traces compared after masking |
+| `diff/` | `run.ts` differential mode: the same scenario on binary A then B (a release vs the working tree), traces compared after masking. `corpus.ts` reads a pile of real YAML with BOTH parsers (Bun's, which pstack used through 0.28.0, and its own) and reports any file they disagree about — point it at your repos before upgrading a host |
 | `scripts/` | `vacuity`, `ratchet` (pass counts only go up), `status` (the file → package matrix) |
 
-Run: `bun test` · `bun run vacuity` · `bun run diff -- --self` · `bun run diff -- --a /usr/local/bin/pstack`.
+Run: `bun test` · `bun run vacuity` · `bun run diff -- --self` · `bun run diff -- --a /usr/local/bin/pstack` ·
+`bun run corpus ~/code /var/lib/pstack/deployments`.
