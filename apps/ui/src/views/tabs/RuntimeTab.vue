@@ -55,6 +55,32 @@ const infos = computed(() => rt.value?.findings.filter((f) => f.level === 'info'
 const running = computed(() => rt.value?.containers.filter((c) => c.state === 'running').length ?? 0);
 
 /**
+ * Whether the node column exists at all — compose has no nodes to name.
+ *
+ * Hoisted rather than asked twice: the header and the cell were computing this separately, which is
+ * how a header can end up describing a column the body did not render in the same position.
+ */
+const hasNode = computed(() => rt.value?.containers.some((c) => c.node) ?? false);
+
+/**
+ * The part of a container's name worth reading in a table cell.
+ *
+ * Compose names a container `<stack>-<service>-<n>`. Swarm names a TASK
+ * `<stack>_<service>.<slot>.<task id>` — long, and its first half repeats the service already
+ * printed on the line above, in a column that under swarm has to share the row with the node and
+ * the row actions. The tail is the half that identifies which task this is: the slot and the id
+ * `docker service ps` prints. Compose names hold no dots and come back untouched.
+ *
+ * The full name stays in the cell's `title` rather than in the text. Truncating the text would have
+ * cut the id — the one part worth copying — and nothing here needs the whole name by hand anyway:
+ * Logs, Shell and the container actions all carry it themselves.
+ */
+function taskOf(name: string): string {
+  const p = name.split('.');
+  return p.length === 3 ? `${p[1]}.${p[2]}` : name;
+}
+
+/**
  * One container action in flight, as `action:name`.
  *
  * A single ref rather than a per-row flag: two `docker restart`s racing on the same stack is not
@@ -90,7 +116,10 @@ async function act(c: RuntimeContainer, action: 'start' | 'stop' | 'restart'): P
  */
 function urlFor(c: RuntimeContainer): string | null {
   const host = rt.value?.routes
-    .filter((r) => r.container === c.name)
+    // Under swarm the labels live on the service, so a route names `app` where the container is a
+    // task called `pr-1_app.1.<id>`. Matching the name alone left every swarm row without a link to
+    // a router that does point at it. Both tasks of one service share the URL — Traefik balances.
+    .filter((r) => r.container === c.name || r.container === c.service)
     .flatMap((r) => r.hosts)
     .find((h) => !h.startsWith('(pattern)'));
   return host ? `https://${host}` : null;
@@ -242,8 +271,10 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
             <thead>
               <tr>
                 <th>Service</th>
+                <!-- Where, then how it is doing — the order the cells are in. They disagreed, so
+                     under swarm (the only time this column exists) every state read as a node. -->
+                <th v-if="hasNode">Node</th>
                 <th>State</th>
-                <th v-if="rt.containers.some((c) => c.node)">Node</th>
                 <th>Ports</th>
                 <th>Networks</th>
                 <th>Image</th>
@@ -254,9 +285,9 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
               <tr v-for="(c, i) in rt.containers" :key="c.id" :style="{ '--i': i }">
                 <td class="name" data-label="service">
                   {{ c.service ?? c.name }}
-                  <div class="mute" style="font-size: var(--t-sm)">{{ c.name }}</div>
+                  <div class="mute task" :title="c.name">{{ taskOf(c.name) }}</div>
                 </td>
-                <td v-if="rt.containers.some((x) => x.node)" data-label="node">
+                <td v-if="hasNode" data-label="node">
                   {{ c.node ?? '—' }}
                   <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
                   <span v-if="c.remote" class="badge" title="runs on another swarm node — logs reach it through the manager; a shell and stop/start do not">remote</span>
@@ -381,3 +412,19 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
     </template>
   </div>
 </template>
+
+<style scoped>
+/*
+ * The second line of the service cell: the task, under the service it belongs to.
+ *
+ * The cap is a declared ceiling on what this line may bid for in the auto table layout, not a fix
+ * for an overflow — `td.name` already breaks. Under swarm this column shares the row with the node
+ * column and the row actions: `taskOf` makes the line's length independent of the stack and service
+ * names, and this bounds what is left of it. Past the ceiling it wraps rather than widening the
+ * column.
+ */
+.task {
+  font-size: var(--t-sm);
+  max-width: 30ch;
+}
+</style>
