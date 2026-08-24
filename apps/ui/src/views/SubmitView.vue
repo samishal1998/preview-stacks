@@ -44,6 +44,8 @@ const result = ref<{
   created: boolean;
   /** Other deployments resolving to the same stack — reported by the server on a new deployment. */
   stackSharedWith?: string[];
+  /** Compose keys swarm will ignore — reported by the server at submit time. */
+  swarmNotes?: string[];
 } | null>(null);
 
 /**
@@ -200,6 +202,7 @@ async function submit(): Promise<void> {
       stack: r.body.stack ?? '?',
       created: r.status === 201,
       stackSharedWith: r.body.stackSharedWith,
+      swarmNotes: r.body.swarmNotes,
     };
     // Persist the variables that just validated this spec. On an older server this is the single
     // thing keeping a later `down` pointed at the stack the `up` created.
@@ -514,6 +517,22 @@ function loadExample(): void {
           other's containers and <code>verify</code> on either reports the other's leaks. If that was not
           intended, change this one's <code>stack</code> and save again.
         </p>
+      </div>
+
+      <!--
+        The keys swarm drops. Same reasoning as the banner above: advisory, and only knowable once
+        the spec resolved. It is shown here rather than left to the deploy log because the whole
+        point is to reach the author while they are still looking at the file they just wrote.
+      -->
+      <div v-if="result?.swarmNotes?.length" class="banner warn">
+        <b>Swarm will not run this compose file as written.</b>
+        <p>
+          Some keys are dropped and others are rewritten — <code>docker stack deploy</code> reports
+          that once, to a terminal nobody is watching. Every change it makes to what you submitted:
+        </p>
+        <ul>
+          <li v-for="n in result.swarmNotes" :key="n">{{ n }}</li>
+        </ul>
       </div>
 
       <ErrorNote v-if="error" :text="error" title="The server rejected this submission." />

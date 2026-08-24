@@ -1,6 +1,7 @@
 /**
  * Source is a secret: GET /api/specs/:name, GET /api/deployments/:id/source. Plus the HTTP half of
- * per-service logs (the service-name validation) and the stack-sharing report on PUT.
+ * per-service logs (the service-name validation) and the two advisory reports on PUT — the shared
+ * stack, and the compose keys swarm will drop.
  *
  * Ported from packages/pstack/test/stack.test.ts — 'a spec source is a secret; its metadata is
  * not', "a deployment's stored source", and the 'over HTTP' / 'two deployments on one stack'
@@ -245,5 +246,61 @@ describe('per-service logs, and duplicating a deployment', () => {
         await s.stop();
       }
     });
+  });
+});
+
+describe('a swarm submission says what swarm will drop, at submission time', () => {
+  /*
+   * Reported from a host: a compose file with `depends_on:` deployed under swarm, and the dependent
+   * did not wait. That is what swarm does, and pstack already knew it — but the note only reached the
+   * job transcript at `up`, so the person who submitted the spec was told nothing. The same
+   * conversion now runs over the SUBMITTED file and answers in the PUT response.
+   *
+   * Boots the real server because the claim is about the response body of a live PUT; the conversion
+   * itself is already covered where it lives.
+   */
+  const COMPOSE = [
+    'services:',
+    '  db:',
+    '    image: postgres:17',
+    '  api:',
+    '    image: nginx:alpine',
+    '    depends_on:',
+    '      - db',
+    '',
+  ].join('\n');
+  const specFor = (orchestrator: string, stack: string) =>
+    ['version: 1', `stack: ${stack}`, 'compose:', '  file: compose.yml', `  orchestrator: ${orchestrator}`, 'axes: []', ''].join('\n');
+
+  // negative control: flip the append guard in putDeployment to `len(swarmNotes) < 0` — the swarm
+  // half fails; drop the `orchestratorOf(st) != spec.Swarm` guard in swarmNotesFor and the compose
+  // half fails. Both were run.
+  test('swarm names the dropped key and its service; compose is not told anything', async () => {
+    const s = await bootServer({ tag: 'swarmwarn' });
+    try {
+      const put = (id: string, spec: string) =>
+        fetch(`${s.base}/api/deployments/${id}`, {
+          method: 'PUT',
+          headers: s.H,
+          body: JSON.stringify({ spec, compose: COMPOSE }),
+        });
+
+      const swarmRes = await put('pr-swarm', specFor('swarm', 'warn-swarm'));
+      expect(swarmRes.status).toBe(201);
+      const swarmBody = (await swarmRes.json()) as { swarmNotes?: string[] };
+      // The note has to name the key AND the service, or it is not actionable — "something was
+      // dropped" sends the author back to reading swarm's schema, which is the state this fixes.
+      const named = swarmBody.swarmNotes?.find((n) => n.includes('depends_on'));
+      expect(named).toContain('api');
+
+      // Distinct stack, so `stackSharedWith` cannot appear alongside and confuse what is asserted.
+      const composeRes = await put('pr-compose', specFor('compose', 'warn-compose'));
+      expect(composeRes.status).toBe(201);
+      const composeBody = (await composeRes.json()) as { swarmNotes?: string[] };
+      // Absent, not `[]`: under compose nothing was checked, and none of these keys is ignored.
+      expect(composeBody.swarmNotes).toBeUndefined();
+    } finally {
+      await s.stop();
+    }
   });
 });

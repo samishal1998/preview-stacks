@@ -405,6 +405,12 @@ export type SubmitResponse = {
    * same compose project.
    */
   stackSharedWith?: string[];
+  /**
+   * What the swarm conversion will change about the submitted compose file — the keys
+   * `docker stack deploy` ignores, `depends_on` chief among them. Swarm orchestrator only, present
+   * only when non-empty, and advisory: the submission was accepted.
+   */
+  swarmNotes?: string[];
 };
 
 /**
