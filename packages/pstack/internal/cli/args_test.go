@@ -1,13 +1,20 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	stdio "io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/testfacts"
@@ -187,3 +194,261 @@ func diffLines(want, got string) string {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// ── `pstack pull config` / `pstack push config` ─────────────────────────────────────────────────
+
+func TestConfigFlagsParse(t *testing.T) {
+	// negative control: make `-i` a switch rather than a value flag — In stays empty and this fails.
+	p, e := ParseArgs([]string{"push", "config", "-i", "export.sealed", "-y"}, noEnv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.Cmd != "push" || p.Sub != "config" || p.In != "export.sealed" || !p.Yes {
+		t.Errorf("push: %+v", p)
+	}
+	p, _ = ParseArgs([]string{"pull", "config", "-o", "export.sealed"}, noEnv)
+	if p.Cmd != "pull" || p.Sub != "config" || p.Out != "export.sealed" {
+		t.Errorf("pull: %+v", p)
+	}
+	// --config must not be swallowed by --config-repo or --config-url; they are three flags.
+	p, _ = ParseArgs([]string{"cloud-init", "--config", "a.sealed", "--config-url", "https://x/y", "--config-repo", "git@h:r.git"}, noEnv)
+	if p.Config != "a.sealed" || p.ConfigURL != "https://x/y" || p.ConfigRepo != "git@h:r.git" {
+		t.Errorf("cloud-init: %+v", p)
+	}
+	if !IsCommand("pull") || !IsCommand("push") || IsSpecCommand("pull") {
+		t.Error("pull/push are commands, and neither reads a spec")
+	}
+}
+
+// The remote these two talk to is new: nothing in this CLI addressed another pstack before, so
+// PSTACK_API_URL is invented here and every refusal below is a decision about what a typo may cost.
+func TestConfigCommandsRefuseAnUnnamedOrUnsafeRemote(t *testing.T) {
+	// negative control: drop the `u.Scheme == "http" && !privateAddr(...)` guard in apiBase — the
+	// public plain-http case stops failing, and a root token plus every credential on a host goes
+	// out in the clear.
+	env := func(url, token string) func(string) (string, bool) {
+		return func(k string) (string, bool) {
+			switch k {
+			case "PSTACK_API_URL":
+				return url, true
+			case "PSTACK_TOKEN":
+				return token, true
+			}
+			return "", false
+		}
+	}
+	for _, c := range []struct{ url, token, want string }{
+		{"", "tok", "PSTACK_API_URL"},
+		{"http://api.example.com", "tok", "plain http"},
+		{"http://198.51.100.7:7878", "tok", "plain http"},
+		{"ftp://api.example.com", "tok", "http(s) URL"},
+		{"not a url at all", "tok", "http(s) URL"},
+		{"https://api.example.com", "", "PSTACK_TOKEN"},
+	} {
+		if _, _, ex := apiBase(env(c.url, c.token)); ex == nil || !strings.Contains(ex.Msg, c.want) {
+			t.Errorf("apiBase(%q, %q): want /%s/, got %v", c.url, c.token, c.want, ex)
+		}
+	}
+	// Allowed: TLS anywhere, and plain HTTP only where it cannot leave the machine or the local
+	// network — which is what the generated boot step uses to reach the control container.
+	for _, u := range []string{"https://api.example.com", "http://127.0.0.1:7878", "http://localhost:7878", "http://172.18.0.4:7878", "https://api.example.com/"} {
+		base, tok, ex := apiBase(env(u, "tok"))
+		if ex != nil || tok != "tok" || strings.HasSuffix(base, "/") {
+			t.Errorf("apiBase(%q) = %q, %v", u, base, ex)
+		}
+	}
+	// Without a terminal there is nowhere to ask, and there is no flag by design.
+	if _, ex := configPassphrase(IO{Stdin: strings.NewReader(""), Stderr: &bytes.Buffer{}, Env: noEnv}, false); ex == nil || !strings.Contains(ex.Msg, "PSTACK_CONFIG_KEY") {
+		t.Errorf("no passphrase, no tty: %v", ex)
+	}
+}
+
+// The round trip, end to end against a real HTTP server: export → seal → unseal → apply. It is one
+// test rather than three because each scrypt derivation costs about a second by design, and this
+// way the bytes that come back out are provably the bytes that went in.
+func TestPullAndPushConfigRoundTrip(t *testing.T) {
+	// negative control: write `body` instead of `sealed` in pullConfig — the file then contains the
+	// document in the clear and the "not sealed" check fails.
+	// negative control: POST `sealed` instead of `plain` — the API receives the envelope, not the
+	// document, and the `posted != doc` check fails.
+	// negative control: replace `if isTerminal(errOut)` with `if true` — the notifier URL, which is
+	// itself the credential, lands in what at boot is /var/log/cloud-init-output.log.
+	// negative control: print `string(body)` instead of decoding the apply summary — the `trusts` the
+	// route echoes back land on stdout, and the stdout check fails.
+	// negative control: make cloudInit tolerate a failed Unseal — a wrong passphrase stops being
+	// caught while a human is present, and the last check fails.
+	// negative control: join `also` with ", " instead of andList — the metadata warning changes and
+	// the "It also carries" check fails.
+	const pass = "correct horse battery staple"
+	const secretURL = "https://hooks.slack.example/T0/B0/XXXTHISISTHESECRET"
+	doc := `{"version":1,"pstackVersion":"9.9.9","exportedAt":1,"skipped":[],"users":[],"tokens":[],"vars":[],` +
+		`"notifiers":[{"type":"slack","name":"ops","config":{"webhookUrl":"` + secretURL + `"},"events":["job.failed"],"enabled":true,"secret":"sig","createdAt":1}],` +
+		`"sso":null,"registries":[{"registry":"ghcr.io","username":"bot","password":"pw"}],"routing":[],"specs":[]}`
+
+	var mu sync.Mutex
+	var method, path, auth, posted string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		method, path, auth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		if r.Method == http.MethodGet {
+			fmt.Fprint(w, doc)
+			return
+		}
+		b, _ := stdio.ReadAll(r.Body)
+		posted = string(b)
+		// The real route answers with `trusts` too, and every string in it is a credential. This is
+		// here so the CLI is exercised against the shape it will actually meet.
+		fmt.Fprint(w, `{"trusts":["send slack notifications to webhookUrl=`+secretURL+`"],"created":["user alice"],"skipped":["notifier ops: already registered"]}`)
+	}))
+	defer srv.Close()
+
+	env := func(k string) (string, bool) {
+		switch k {
+		case "PSTACK_API_URL":
+			return srv.URL, true
+		case "PSTACK_TOKEN":
+			return "root-token", true
+		case "PSTACK_CONFIG_KEY":
+			return pass, true
+		}
+		return "", false
+	}
+	file := filepath.Join(t.TempDir(), "export.sealed")
+	var out, errOut bytes.Buffer
+	streams := func() IO {
+		out.Reset()
+		errOut.Reset()
+		return IO{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut, Env: env}
+	}
+
+	p, e := ParseArgs([]string{"pull", "config", "-o", file}, env)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if ex := pullConfig(p, streams()); ex != nil {
+		t.Fatalf("pull: %+v", ex)
+	}
+	if method != http.MethodGet || path != "/api/config" || auth != "Bearer root-token" {
+		t.Errorf("GET %s %s auth=%q", method, path, auth)
+	}
+	sealed, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SEALED, and 0600. The client seals so the passphrase never leaves this process; the mode is
+	// set at creation so the window where a world-readable file holds the export does not exist.
+	var envelope struct {
+		Sealed string `json:"sealed"`
+	}
+	if json.Unmarshal(sealed, &envelope) != nil || envelope.Sealed != "scrypt-aes256gcm" {
+		t.Errorf("not a sealed envelope: %.120s", sealed)
+	}
+	if bytes.Contains(sealed, []byte("webhookUrl")) || bytes.Contains(sealed, []byte(secretURL)) {
+		t.Error("the export was written in the clear")
+	}
+	st, err := os.Stat(file)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v (%v)", st.Mode().Perm(), err)
+	}
+	for what, s := range map[string]string{"stdout": out.String(), "stderr": errOut.String(), "the file": string(sealed)} {
+		if strings.Contains(s, pass) {
+			t.Errorf("the passphrase appears in %s", what)
+		}
+	}
+
+	// Push it back. -y with a non-terminal stderr is the boot case: the pre-write summary must
+	// become a COUNT, because the notifier URL in it is itself a credential and stderr there is
+	// /var/log/cloud-init-output.log.
+	p, e = ParseArgs([]string{"push", "config", "-i", file, "-y"}, env)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if ex := pushConfig(p, streams()); ex != nil {
+		t.Fatalf("push: %+v", ex)
+	}
+	if method != http.MethodPost || path != "/api/config" || auth != "Bearer root-token" {
+		t.Errorf("POST %s %s auth=%q", method, path, auth)
+	}
+	if posted != doc {
+		t.Errorf("the API did not receive the document that was exported:\n%s", posted)
+	}
+	if !strings.Contains(out.String(), "created  user alice") || !strings.Contains(out.String(), "skipped  notifier ops: already registered") {
+		t.Errorf("apply summary:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "trust 2 registries and notifier URLs") {
+		t.Errorf("no pre-write count:\n%s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), secretURL) || strings.Contains(errOut.String(), "ghcr.io") {
+		t.Errorf("the trust list was written to a pipe:\n%s", errOut.String())
+	}
+	// The route echoes `trusts` back in its 200. Decoding it and printing only created/skipped is
+	// what keeps those credentials off stdout as well.
+	if strings.Contains(out.String(), secretURL) {
+		t.Errorf("the API's echoed trust list was printed:\n%s", out.String())
+	}
+	// Unattended and NOT told so: refused rather than applied.
+	p, _ = ParseArgs([]string{"push", "config", "-i", file}, env)
+	if ex := pushConfig(p, streams()); ex == nil || !strings.Contains(ex.Msg, "-y") {
+		t.Errorf("push without -y and without a terminal: %v", ex)
+	}
+
+	// `cloud-init --config` embeds THAT file, and proves the key opens it while a human is still
+	// present — the host has nobody to ask, so a wrong passphrase there is a boot that comes up with
+	// none of its credentials.
+	p, _ = ParseArgs([]string{"cloud-init", "--domain", "preview.example.com", "--acme-email", "ops@example.com",
+		"--password", "dashpw", "-y", "--config", file}, env)
+	if ex := cloudInit(p, streams()); ex != nil {
+		t.Fatalf("cloud-init --config: %+v", ex)
+	}
+	if !strings.Contains(out.String(), base64.StdEncoding.EncodeToString(sealed)) {
+		t.Error("the rendered cloud-config does not carry the sealed file")
+	}
+	if strings.Contains(out.String(), secretURL) {
+		t.Error("the cloud-config carries the export unsealed")
+	}
+	// The metadata warning has to name BOTH, because which of the two is in the file is the whole
+	// choice the operator is making. Two items is also the wording `andList` had to preserve.
+	if !strings.Contains(errOut.String(), "It also carries PSTACK_CONFIG_KEY and the sealed config export itself, which that key opens.") {
+		t.Errorf("the warning does not name what the file carries:\n%s", errOut.String())
+	}
+	wrong := func(k string) (string, bool) {
+		if k == "PSTACK_CONFIG_KEY" {
+			return "not the passphrase", true
+		}
+		return env(k)
+	}
+	p, _ = ParseArgs([]string{"cloud-init", "--domain", "preview.example.com", "--acme-email", "ops@example.com",
+		"--password", "dashpw", "-y", "--config", file}, wrong)
+	io := streams()
+	io.Env = wrong
+	if ex := cloudInit(p, io); ex == nil || !strings.Contains(ex.Msg, "wrong passphrase") {
+		t.Errorf("a passphrase that does not open the file: %v", ex)
+	}
+}
+
+func TestAskSecretRefusesRatherThanEchoingIt(t *testing.T) {
+	// /dev/null is a descriptor that is provably not a terminal, which is the same state as a
+	// terminal whose `stty` is missing: echo cannot be turned off. The instruction is that the
+	// passphrase is NEVER echoed, so the only correct behaviour is to read nothing and say why. The
+	// descriptor is passed in rather than taken from the process precisely so this is deterministic —
+	// `go test` gives the binary a real tty in some terminals and /dev/null in others.
+	// negative control: make noEcho return `func() {}, true` when it cannot turn echo off (the shape
+	// it had first) — the prompt is printed, the line is read back, and both checks below fail.
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	var out bytes.Buffer
+	v, err := askSecret(bufio.NewReader(strings.NewReader("hunter2\n")), devnull, &out, "Config passphrase")
+	if err == nil || v != "" {
+		t.Errorf("read %q with echo on (%v)", v, err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("prompted for something it could not hide: %q", out.String())
+	}
+	if err != nil && !strings.Contains(err.Error(), "PSTACK_CONFIG_KEY") {
+		t.Errorf("no way out offered: %v", err)
+	}
+}

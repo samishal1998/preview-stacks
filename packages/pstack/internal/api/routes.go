@@ -44,6 +44,14 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return err
 	}
 
+	// ---- the whole host, portable: every credential on it. ROOT TOKEN ONLY ----
+	// First in the chain after the account routes, and matched on the exact path, so no pattern
+	// added later can reach it before its own gate does. routes_config.go's header is the reason
+	// this one route refuses the admin session every other admin route admits.
+	if path == "/api/config" {
+		return s.configRoutes(w, r, who)
+	}
+
 	// ---- the whole registry ----
 	if path == "/api/deployments" && r.Method == http.MethodGet {
 		return s.listDeployments(w, vars)

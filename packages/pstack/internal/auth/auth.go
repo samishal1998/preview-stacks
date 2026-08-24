@@ -699,3 +699,79 @@ func link(q store.Querier, providerKey, subject string, userID int64) error {
 		providerKey, subject, userID, now(), now())
 	return err
 }
+
+// ── the portable export ─────────────────────────────────────────────────────────────────────────
+//
+// Two READ-ONLY listings that carry the stored digests, for internal/config's `pull config`. They
+// are named to be conspicuous in a diff, like SecretOf in webhooks: a caller outside the export
+// path is the moment to ask why, because everything else in this package is built so that no route
+// returns these columns.
+//
+// A digest is not a credential — nobody logs in with an argon2 hash — but a file full of them is
+// offline-crackable against every account at once, which is why the document that carries them is
+// sealed and root-only. There is no matching Import* here: an insert with an ALREADY-hashed
+// password is not an account operation this package offers (CreateUser hashes a plaintext,
+// CreateToken mints a fresh secret), so the apply side does its own INSERT — see internal/config.
+
+// ExportUser is one account as the portable document carries it. The JSON tags are that document's
+// field names.
+type ExportUser struct {
+	Username string `json:"username"`
+	// PasswordHash is the argon2id PHC string, verbatim, so a login keeps working on the new host.
+	PasswordHash string  `json:"passwordHash"`
+	Role         string  `json:"role"`
+	Email        *string `json:"email"`
+	CreatedAt    int64   `json:"createdAt"`
+}
+
+// ExportToken is one personal token as the portable document carries it. Keyed to its owner by
+// USERNAME, not by id: row ids are per-host and mean nothing on the other side.
+type ExportToken struct {
+	Username string `json:"username"`
+	Name     string `json:"name"`
+	// TokenHash is the SHA-256 of the token, verbatim, so scripts holding the token keep working.
+	TokenHash string `json:"tokenHash"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// ExportUsers is every account WITH its password hash, by username.
+func (a *Auth) ExportUsers() ([]ExportUser, error) {
+	rows, err := a.store.DB.Query("SELECT username, password_hash, role, email, created_at FROM users ORDER BY username")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ExportUser{}
+	for rows.Next() {
+		var u ExportUser
+		var email sql.NullString
+		if err := rows.Scan(&u.Username, &u.PasswordHash, &u.Role, &email, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		if email.Valid {
+			u.Email = jsonx.Str(email.String)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ExportTokens is every personal token WITH its hash, oldest first.
+func (a *Auth) ExportTokens() ([]ExportToken, error) {
+	rows, err := a.store.DB.Query(
+		`SELECT u.username, t.name, t.token_hash, t.created_at FROM tokens t
+         JOIN users u ON u.id = t.user_id ORDER BY t.created_at, t.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ExportToken{}
+	for rows.Next() {
+		var t ExportToken
+		if err := rows.Scan(&t.Username, &t.Name, &t.TokenHash, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

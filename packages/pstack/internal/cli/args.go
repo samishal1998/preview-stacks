@@ -67,10 +67,21 @@ type Parsed struct {
 	AdminPassword string
 	APIToken      string
 	ConfigRepo    string
-	Out           string
-	Yes           bool
-	To            string
-	Resume        bool
+	// Config / ConfigURL are cloud-init's two ways to carry a `pull config` export onto a new host:
+	// the sealed file itself, or a URL the host fetches at boot. Mutually exclusive, and both need
+	// PSTACK_CONFIG_KEY — see cloudInit().
+	//
+	// The PASSPHRASE is deliberately not here and has no flag anywhere: argv is world-readable
+	// through `ps`, so it comes from PSTACK_CONFIG_KEY or a no-echo prompt. Keeping it out of this
+	// struct also keeps it out of the `t.Errorf("got %+v", p)` that every parser test does.
+	Config    string
+	ConfigURL string
+	Out       string
+	// In is `-i` — the file `push config` reads. The counterpart of Out.
+	In     string
+	Yes    bool
+	To     string
+	Resume bool
 	// Typed records which value flags were spelled on the command line, for the two commands that
 	// must only act on an EXPLICIT --ui / --orchestrator (upgrade, ui).
 	Typed map[string]bool
@@ -159,8 +170,14 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.APIToken = next(&i, p.APIToken)
 		case "--config-repo":
 			p.ConfigRepo = next(&i, p.ConfigRepo)
+		case "--config":
+			p.Config = next(&i, p.Config)
+		case "--config-url":
+			p.ConfigURL = next(&i, p.ConfigURL)
 		case "-o", "--out":
 			p.Out = next(&i, p.Out)
+		case "-i", "--in":
+			p.In = next(&i, p.In)
 		case "-y", "--yes":
 			p.Yes = true
 		case "--to":
@@ -239,7 +256,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "healthcheck")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "pull", "push", "healthcheck")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -266,7 +283,7 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|serve> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|pull|push|serve> [flags]",
 		"",
 		"Flags:",
 		"  -f, --file <path>   spec file (default: preview.yml)",
@@ -296,6 +313,10 @@ func Usage(version string) string {
 		"            --admin-user <name> [--admin-password <pw>]  the first UI account, created on first boot",
 		"            --api-token <PSTACK_TOKEN>   default: `init` generates one on the host and prints it once",
 		"            Both land in the rendered file, which the provider stores as instance metadata.",
+		"            --config <sealed-file>       apply a `pull config` export on first boot. The file",
+		"                                         AND its passphrase both land in instance metadata.",
+		"            --config-url <https://…>     fetch it at boot instead — only the passphrase is",
+		"                                         embedded, so the payload stays off metadata.",
 		"",
 		"upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]",
 		"            [--ui basic|advanced to override what it detects]  [--orchestrator swarm|compose to switch — previews must be down]",
@@ -311,6 +332,14 @@ func Usage(version string) string {
 		"              --format command|script|cloud-config|token   (default command)",
 		"              --distro ubuntu|debian|fedora|suse|arch|alpine   (cloud-config only)",
 		"              -o <file>                  write it to a file instead of stdout",
+		"",
+		"pull/push:  pstack pull config -o <file>   seal EVERY credential on a host into one file",
+		"            pstack push config -i <file>   apply one onto this host — creates, never overwrites",
+		"            env: PSTACK_API_URL (e.g. https://api.<domain>) · PSTACK_TOKEN (root token only)",
+		"                 PSTACK_CONFIG_KEY — the passphrase; prompted (no echo) when unset and on a tty.",
+		"            There is no passphrase FLAG on purpose: argv is world-readable through `ps`.",
+		"            `push` names every registry and notifier URL it is about to trust and asks first;",
+		"            -y applies without asking and prints counts instead (a log is not a terminal).",
 		"",
 		"serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)",
 		"            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)",

@@ -20,6 +20,7 @@ package cloudinit
 import (
 	"bufio"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -177,6 +178,19 @@ type Answers struct {
 	Token string
 	// ConfigRepo is an optional git URL cloned to /opt/preview/config for driving the CLI from the host.
 	ConfigRepo string
+	// ConfigSealed is the sealed bytes of a `pstack pull config` export, embedded with write_files;
+	// ConfigURL is the alternative, fetched by the host at boot. Mutually exclusive, and either one
+	// needs ConfigKey. Opaque here on purpose: this package renders text and has no business
+	// importing the store that `internal/config` reaches — the CLI unseals the file before calling,
+	// which is where a wrong passphrase is caught.
+	ConfigSealed []byte
+	ConfigURL    string
+	// ConfigKey is the passphrase, and it IS embedded in both modes: the box being provisioned has to
+	// open the file with no human present. That is the security statement the SECRETS header has to
+	// make honestly rather than paper over — with --config the payload sits beside the key in
+	// instance metadata, so the seal protects it everywhere except here; with --config-url only the
+	// key is here, and opening the export needs the metadata AND access to the URL.
+	ConfigKey string
 	// Distro decides the Docker install/enable fragments. Default ubuntu.
 	Distro string
 	// Orchestrator is `swarm` (the default for a new host) or `compose`; passed to
@@ -206,6 +220,9 @@ var (
 	emailRe     = regexp.MustCompile(`(?i)^[^@\s]+@[^@\s]+\.[a-z]{2,}$`)
 	sshKeyRe    = regexp.MustCompile(`^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+) \S+`)
 	tokenRe     = regexp.MustCompile(`^SWMTKN-[A-Za-z0-9-]+$`)
+	// The URL is interpolated into a single-quoted `curl` argument in the boot script, so a quote or
+	// whitespace would end it early and hand curl a different address than the operator was shown.
+	configURLRe = regexp.MustCompile(`^https?://[^\s'"\\]+$`)
 	addrRe      = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]+$`)
 	wrapRe      = regexp.MustCompile(`.{1,92}(\s|$)`)
 	leftoverRe  = regexp.MustCompile(`\{\{[A-Z_]+\}\}`)
@@ -269,10 +286,37 @@ func validate(a Answers) error {
 	// to this does not.
 	for _, s := range []struct{ what, value string }{
 		{"admin password", a.AdminPassword}, {"PSTACK_TOKEN", a.Token}, {"dashboard password", a.DashboardPassword},
+		// The passphrase and the fetch URL go through exactly the same ordered ReplaceAll, so they
+		// belong in this list and not in a second one beside it. The sealed PAYLOAD does not: it is
+		// base64-encoded before it is placed, and `{` is not in that alphabet.
+		{"config passphrase", a.ConfigKey}, {"config URL", a.ConfigURL},
 	} {
 		if strings.Contains(s.value, "{{") {
 			return &Error{s.what + " must not contain `{{`: this file is rendered by substitution, so a marker inside a credential is replaced and the host gets a different credential than you were shown"}
 		}
+	}
+	// ── the portable config ─────────────────────────────────────────────────────────────────────
+	// Both forms embed the passphrase, so a key with nothing to open is a credential in instance
+	// metadata for no reason, and a payload with no key is a boot step that can only fail. Neither
+	// is a state this generator will render.
+	if len(a.ConfigSealed) > 0 && a.ConfigURL != "" {
+		return &Error{"pass either --config or --config-url, not both — the host applies one file"}
+	}
+	if a.ConfigKey != "" && len(a.ConfigSealed) == 0 && a.ConfigURL == "" {
+		return &Error{"a config passphrase was given but no --config or --config-url: that would put a key in instance metadata with nothing to open"}
+	}
+	if (len(a.ConfigSealed) > 0 || a.ConfigURL != "") && a.ConfigKey == "" {
+		return &Error{"applying a config at boot needs its passphrase (PSTACK_CONFIG_KEY) — the host has no one to ask"}
+	}
+	// Single quotes only. The passphrase is a shell ASSIGNMENT inside the boot script, never an
+	// argument, so `$` is literal there and stays allowed; a `'` would end the quoting, and a newline
+	// would end the line — either hands the host a different passphrase than the file was sealed
+	// with, and the failure surfaces as "the config was not applied" long after anyone is watching.
+	if strings.ContainsAny(a.ConfigKey, "'\n\r") {
+		return &Error{"the config passphrase must be one line with no single quote: it is shell-quoted into the boot script"}
+	}
+	if a.ConfigURL != "" && !configURLRe.MatchString(a.ConfigURL) {
+		return &Error{`--config-url must be an http(s) URL with no quote or whitespace, e.g. https://example.com/pstack.sealed`}
 	}
 	return nil
 }
@@ -378,7 +422,9 @@ func RenderCloudInit(a Answers) (string, error) {
 		"  (/var/log/cloud-init-output.log). Save it now — it is also in",
 		"  /var/lib/pstack/control/.env, mode 0600.",
 	}, "\n")
-	if len(initEnv) > 0 {
+	// The config passphrase is embedded in BOTH --config and --config-url, so it counts here exactly
+	// as the admin pair and PSTACK_TOKEN do: the header's benign three lines would be a lie beside it.
+	if len(initEnv) > 0 || a.ConfigKey != "" {
 		// A provider stores user-data as instance metadata: readable by every process on the box and
 		// by anyone with the provider's API. Saying so once at the top of the file is the only
 		// protection this generator can offer for what it just wrote into it.
@@ -389,7 +435,12 @@ func RenderCloudInit(a Answers) (string, error) {
 			"#",
 			"#   - the Traefik dashboard password — hashed into an htpasswd on the host, plain text here.",
 		}
-		note := []string{"  # The env prefix on the init call below carries credentials IN THE CLEAR (see the header)."}
+		// Only when there IS one: with a config but no admin and no token, the init call carries no
+		// env prefix and a line describing one would be prose about something that is not in the file.
+		var note []string
+		if len(initEnv) > 0 {
+			note = append(note, "  # The env prefix on the init call below carries credentials IN THE CLEAR (see the header).")
+		}
 		if a.AdminUser != "" {
 			secrets = append(secrets,
 				`#   - the first pstack account ("`+a.AdminUser+`") and its password. It is spent on first boot —`,
@@ -421,6 +472,40 @@ func RenderCloudInit(a Answers) (string, error) {
 			tokenMessage = "  Sign in at https://control." + a.Domain + " as `" + a.AdminUser + "` with the password shown\n" +
 				"  when this file was rendered. It is also in /var/lib/pstack/control/.env (0600).\n\n" + tokenMessage
 		}
+		// The two modes differ in ONE fact and it is the only one worth the space: whether the sealed
+		// export is in this file too. Saying "the config is encrypted" and stopping there would be
+		// true and useless, because with --config the key that opens it is three lines further down.
+		if len(a.ConfigSealed) > 0 {
+			secrets = append(secrets,
+				"#   - PSTACK_CONFIG_KEY *and the sealed export itself* (write_files, below). Both are in this",
+				"#     file, so the seal protects that export everywhere EXCEPT here: whoever reads this",
+				"#     metadata can open it. It holds every credential of the host it came from — account",
+				"#     password hashes, API tokens, host secrets, notifier URLs and registry logins.",
+				"#     Use --config-url instead to keep the payload off instance metadata.")
+		}
+		if a.ConfigURL != "" {
+			secrets = append(secrets,
+				"#   - PSTACK_CONFIG_KEY, but NOT the export it opens: the host fetches that at boot from",
+				"#     "+a.ConfigURL+".",
+				"#     Opening it needs this file AND access to that URL, which is the combination worth",
+				"#     having. Serve it from somewhere only this host can reach, and take it down after.")
+		}
+		if a.ConfigKey != "" {
+			secrets = append(secrets,
+				"#     The host DELETES /var/lib/pstack/config.sealed as soon as it has applied it.")
+			// What that deletion is worth differs by mode, and claiming it "so the export is not left
+			// at rest on the box" was only true for --config-url. cloud-init keeps this very file at
+			// /var/lib/cloud/instance/user-data.txt for the life of the instance, so with --config the
+			// payload AND the key are still on disk after the rm — root-only, but present. Saying
+			// otherwise would tell an operator a copy is gone when it is not.
+			if len(a.ConfigSealed) > 0 {
+				secrets = append(secrets,
+					"#     That does NOT clear this mode, though: cloud-init keeps the user-data it booted from",
+					"#     at /var/lib/cloud/instance/user-data.txt for the life of the instance, and the sealed",
+					"#     export and its key are both in it. Root-only, but not gone. --config-url is the mode",
+					"#     where the deletion means what it sounds like.")
+			}
+		}
 	}
 
 	extraPackages := ""
@@ -430,6 +515,74 @@ func RenderCloudInit(a Answers) (string, error) {
 			lines = append(lines, "  - "+p)
 		}
 		extraPackages = "\n" + strings.Join(lines, "\n")
+	}
+
+	// ── the portable config ─────────────────────────────────────────────────────────────────────
+	// write_files runs before runcmd and cloud-init creates the parent directory, so the export is on
+	// disk 0600 before anything else starts. `encoding: b64` rather than a literal block because the
+	// payload is JSON full of braces and quotes: base64 is the one form in which nothing about its
+	// bytes can reach the YAML around it, and the alphabet contains no `{`, which makes it the one
+	// value in this file that cannot be rewritten by the substitution that places it.
+	//
+	// The sentence introducing the section is a marker too, and its default is the one that was
+	// there before this existed, byte for byte: a file with no config in it must render EXACTLY as
+	// the checked-in transcripts do, and "No `write_files:` here any more" would otherwise be a lie
+	// sitting directly under a `write_files:` block.
+	configFile, writeFilesNote := "", "No `write_files:` here any more."
+	if len(a.ConfigSealed) > 0 {
+		writeFilesNote = "The `write_files:` above is the sealed config and nothing else."
+		configFile = "\n\n" + strings.Join([]string{
+			"# THE SEALED CONFIG, embedded. The last runcmd step applies it and then deletes it from the",
+			"# host; the SECRETS header above says what it holds and who can open it.",
+			"write_files:",
+			"  - path: /var/lib/pstack/config.sealed",
+			"    owner: root:root",
+			"    permissions: '0600'",
+			"    encoding: b64",
+			"    content: " + base64.StdEncoding.EncodeToString(a.ConfigSealed),
+		}, "\n")
+	}
+	// The apply step. A YAML LITERAL block, not the folded scalar the init call uses: this needs real
+	// lines, and it needs the passphrase to be a shell variable rather than a command argument —
+	// /proc/<pid>/cmdline is world-readable, so an env prefix on the command would publish the key to
+	// every process on the box, while a variable inside the script does not.
+	configStep := ""
+	if a.ConfigKey != "" {
+		// With --config-url the fetch is the first link in the same `&&` chain: a URL that 404s or
+		// returns an error page would otherwise be written to disk and then fail to unseal, which
+		// reports the wrong problem.
+		fetch := ""
+		if a.ConfigURL != "" {
+			fetch = `curl -fsSL --retry 3 --retry-delay 2 -o "$f" '` + a.ConfigURL + `' && `
+		}
+		configStep = "\n" + strings.Join([]string{
+			"",
+			"  # ── 8. Apply the exported config — LAST, because it needs the API answering ────────────────",
+			"  # A `pstack pull config` export from another host: accounts, API tokens, host vars and",
+			"  # secrets, notifiers, SSO, registry logins, routing files and named specs. `push config`",
+			"  # CREATES what is missing and never overwrites, so re-running it changes nothing already here.",
+			"  #",
+			"  # It reaches the API on the docker bridge (http://<container-ip>:7878) and NOT",
+			"  # https://api." + a.Domain + ": this early in a first boot the DNS records may not have",
+			"  # propagated and Traefik may hold no certificate yet, and a config that silently failed to",
+			"  # apply is the one outcome this step must not have. PSTACK_TOKEN is read out of",
+			"  # control/.env, which `init` wrote 0600 in the step above — it is not carried in this file.",
+			"  #",
+			"  # The sealed file is deleted whether the apply worked or not: a sealed export left in",
+			"  # /var/lib is a credential at rest that nothing else would ever clean up.",
+			"  - |",
+			"    umask 077",
+			"    f=/var/lib/pstack/config.sealed",
+			"    PSTACK_CONFIG_KEY='" + a.ConfigKey + "'",
+			"    export PSTACK_CONFIG_KEY",
+			`    PSTACK_TOKEN="$(sed -n 's/^PSTACK_TOKEN=//p' /var/lib/pstack/control/.env)"`,
+			"    export PSTACK_TOKEN",
+			`    ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$(docker compose -p pstack-control ps -q pstack)" 2>/dev/null | awk '{print $1}')" || ip=`,
+			"    applied=no",
+			`    if ` + fetch + `[ -n "$ip" ] && PSTACK_API_URL="http://$ip:7878" /usr/local/bin/pstack push config -i "$f" -y; then applied=yes; fi`,
+			`    rm -f "$f"`,
+			`    [ "$applied" = yes ] || echo 'pstack: THE SEALED CONFIG WAS NOT APPLIED — /var/lib/pstack/config.sealed has been deleted. Re-run ` + "`pstack push config`" + ` by hand.'`,
+		}, "\n")
 	}
 
 	values := []kv{
@@ -449,6 +602,9 @@ func RenderCloudInit(a Answers) (string, error) {
 		{"EXTRA_PACKAGES", extraPackages},
 		{"PKG_SETUP", profile.pkgSetup},
 		{"DOCKER_ENABLE", profile.dockerEnable},
+		{"WRITE_FILES_NOTE", writeFilesNote},
+		{"CONFIG_FILE", configFile},
+		{"CONFIG_STEP", configStep},
 		// THE PINS — the point of this generator knowing versions at all. Stamped from the running
 		// CLI (same pattern as the generated Dockerfiles in image), so the file reproduces the
 		// toolchain that rendered it rather than whatever is latest on the day someone reuses it.
