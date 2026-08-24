@@ -380,6 +380,34 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	if generated {
 		dashboardPassword = cloudinit.RandomPassword()
 	}
+	// The first pstack account. OPT-IN, unlike the dashboard password: this file ends up in instance
+	// metadata, so an account nobody asked for is a credential nobody asked for — and with no admin
+	// named, `POST /api/auth/bootstrap` with the bearer token is still the way in, exactly as before.
+	adminUser := args.AdminUser
+	if adminUser == "" && !args.Yes {
+		adminUser = cloudinit.AskOptional(in, errOut, "First pstack admin username")
+	}
+	// A password on a flag with no account to attach it to is a credential that silently does
+	// nothing. Refuse it rather than render a file the operator will believe carries it.
+	if adminUser == "" && args.AdminPassword != "" {
+		return fail("--admin-password needs --admin-user (or answer the admin prompt) — on its own it creates no account")
+	}
+	// Generated for the same reason as the dashboard password, and one more that is specific to this
+	// one: it is readable by every process on the box for the life of the instance, so it must be a
+	// value that exists nowhere else and can be thrown away after the first sign-in. Never prompted.
+	adminGenerated := adminUser != "" && args.AdminPassword == ""
+	adminPassword := args.AdminPassword
+	if adminGenerated {
+		adminPassword = cloudinit.RandomPassword()
+	}
+	// Blank is the SAFER answer here, so it is the default and never generated: `init` mints a token
+	// on the host and prints it once into the boot log, which keeps it out of instance metadata
+	// altogether. Set one only when something already holds it — a CI secret, a second host.
+	//
+	// Flag only, deliberately unprompted, like the dashboard password beside it: a prompt whose right
+	// answer is almost always "press enter" is a prompt that teaches operators to paste a bearer
+	// token into one.
+	apiToken := args.APIToken
 	configRepo := args.ConfigRepo
 	if configRepo == "" && !args.Yes {
 		configRepo = cloudinit.AskOptional(in, errOut, "Config repo git URL")
@@ -387,6 +415,7 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	yaml, err := cloudinit.RenderCloudInit(cloudinit.Answers{
 		Domain: domain, AcmeEmail: acmeEmail, SSHKey: sshKey, DashboardPassword: dashboardPassword,
 		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator,
+		AdminUser: adminUser, AdminPassword: adminPassword, Token: apiToken,
 		ConfigRepo: configRepo, Distro: args.Distro,
 	})
 	if err != nil {
@@ -411,9 +440,32 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	fmt.Fprintln(errOut, "")
 	fmt.Fprintln(errOut, "  Traefik dashboard:  admin / "+dashboardPassword+gen)
 	fmt.Fprintln(errOut, "  Save it now — it is hashed into the file, not recoverable from it.")
+	// This is the only time the admin password is shown: the file carries it, but `init` on the host
+	// never prints it, so a copy taken here is the copy the operator keeps.
+	if adminUser != "" {
+		adminGen := ""
+		if adminGenerated {
+			adminGen = "  (generated)"
+		}
+		fmt.Fprintln(errOut, "")
+		fmt.Fprintln(errOut, "  pstack admin:       "+adminUser+" / "+adminPassword+adminGen)
+		fmt.Fprintln(errOut, "  Created on first boot only — sign in at https://control."+domain+".")
+	}
 	fmt.Fprintln(errOut, "")
 	fmt.Fprintln(errOut, "  This file carries that password and your ACME email, and a provider stores")
 	fmt.Fprintln(errOut, "  user-data where any process on the instance can read it. Do not commit it.")
+	// Named one by one, because "do not commit it" is advice and "the bearer token for a Docker
+	// socket is in this file" is a fact about blast radius.
+	var also []string
+	if adminUser != "" {
+		also = append(also, "the admin password")
+	}
+	if apiToken != "" {
+		also = append(also, "PSTACK_TOKEN")
+	}
+	if len(also) > 0 {
+		fmt.Fprintln(errOut, "  It also carries "+strings.Join(also, " and ")+".")
+	}
 	fmt.Fprintln(errOut, "")
 	fmt.Fprintln(errOut, "  DNS first:  "+domain+"  and  *."+domain+"   A -> <server-ip>")
 	if args.Challenge == "http01" {

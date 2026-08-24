@@ -165,6 +165,16 @@ type Answers struct {
 	DNSProvider string
 	// UI is "basic" or "advanced".
 	UI string
+	// AdminUser is the first pstack account, created by the control plane on first boot. Empty (the
+	// default) renders no account at all, and the operator makes one afterwards with
+	// `POST /api/auth/bootstrap` and the bearer token.
+	AdminUser string
+	// AdminPassword is that account's password. Only read when AdminUser is set.
+	AdminPassword string
+	// Token is PSTACK_TOKEN for the host. Empty (the default) is the SAFER one: `init` generates a
+	// token on the box and prints it once into the boot log, so it never exists in instance metadata
+	// at all. Set it only when something already holds the token — a CI secret, a second host.
+	Token string
 	// ConfigRepo is an optional git URL cloned to /opt/preview/config for driving the CLI from the host.
 	ConfigRepo string
 	// Distro decides the Docker install/enable fragments. Default ubuntu.
@@ -190,13 +200,15 @@ func RandomPassword() string {
 }
 
 var (
-	domainRe   = regexp.MustCompile(`(?i)^[a-z0-9.-]+\.[a-z]{2,}$`)
-	emailRe    = regexp.MustCompile(`(?i)^[^@\s]+@[^@\s]+\.[a-z]{2,}$`)
-	sshKeyRe   = regexp.MustCompile(`^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+) \S+`)
-	tokenRe    = regexp.MustCompile(`^SWMTKN-[A-Za-z0-9-]+$`)
-	addrRe     = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]+$`)
-	wrapRe     = regexp.MustCompile(`.{1,92}(\s|$)`)
-	leftoverRe = regexp.MustCompile(`\{\{[A-Z_]+\}\}`)
+	domainRe = regexp.MustCompile(`(?i)^[a-z0-9.-]+\.[a-z]{2,}$`)
+	// The same rule internal/auth enforces when it creates the account.
+	adminUserRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{1,31}$`)
+	emailRe     = regexp.MustCompile(`(?i)^[^@\s]+@[^@\s]+\.[a-z]{2,}$`)
+	sshKeyRe    = regexp.MustCompile(`^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+) \S+`)
+	tokenRe     = regexp.MustCompile(`^SWMTKN-[A-Za-z0-9-]+$`)
+	addrRe      = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]+$`)
+	wrapRe      = regexp.MustCompile(`.{1,92}(\s|$)`)
+	leftoverRe  = regexp.MustCompile(`\{\{[A-Z_]+\}\}`)
 )
 
 func validate(a Answers) error {
@@ -219,6 +231,48 @@ func validate(a Answers) error {
 	if strings.Contains(a.DashboardPassword, "'") {
 		// It is interpolated into a single-quoted shell command in the template.
 		return &Error{"dashboard password must not contain a single quote"}
+	}
+	// The admin pair is checked HERE and not on the host, because everything it can get wrong fails
+	// at a point where nobody is watching: `serve` refuses the account with one line on the container's
+	// stderr, the boot reports success, and the operator meets the failure as "my password does not
+	// work" days later. The rule is auth's own (internal/auth `createUser`) — copied rather than
+	// imported so the generator does not pull the database layer in for one regexp; if that rule ever
+	// moves, this is the message that goes stale.
+	if a.AdminUser != "" && !adminUserRe.MatchString(a.AdminUser) {
+		return &Error{`admin username must match /^[a-z0-9][a-z0-9._-]{1,31}$/ — lowercase, 2–32 chars, letters/digits/._-`}
+	}
+	if a.AdminUser != "" && js.Len(a.AdminPassword) < 8 {
+		return &Error{"admin password must be at least 8 characters"}
+	}
+	// Both values travel through a single-quoted shell assignment in the boot script and then into
+	// control/.env, which Compose interpolates — so `'` ends the quoting and `$` silently becomes
+	// something else by the time the container reads it. A newline is worse than either: the init
+	// call is a YAML folded scalar, where one becomes a space, so the credential the container gets
+	// is not the credential the operator was shown. That is precisely the failure this feature exists
+	// to remove, so the three are refused rather than escaped. (The generated password is hex for the
+	// same reason, and so is `init`'s generated token.)
+	for _, s := range []struct{ what, value string }{{"admin password", a.AdminPassword}, {"PSTACK_TOKEN", a.Token}} {
+		if strings.ContainsAny(s.value, "'$\n\r") {
+			return &Error{s.what + " must be one line with no single quote and no `$`: it is shell-quoted into this file and expanded by Compose on the host"}
+		}
+	}
+	// A credential may not contain a substitution marker, because it is PLACED by substitution and the
+	// list is walked in order: a `{{PSTACK_VERSION}}` inside a value put down at INIT_ENV (index 6) is
+	// still there when PSTACK_VERSION (last) is replaced, so the host boots with `0.29.0` as its
+	// password while the operator was shown the marker. A marker that comes EARLIER in the list is
+	// caught by leftoverRe instead and hard-errors, so today the same input either corrupts silently
+	// or fails obscurely depending on which marker was named — neither is an answer.
+	//
+	// `{{` and not `{`: expansion needs the literal marker, so this refuses exactly the values that
+	// could be rewritten and leaves a password with one brace in it working. Every credential is
+	// checked, including the dashboard password, whose quoting rules above differ but whose exposure
+	// to this does not.
+	for _, s := range []struct{ what, value string }{
+		{"admin password", a.AdminPassword}, {"PSTACK_TOKEN", a.Token}, {"dashboard password", a.DashboardPassword},
+	} {
+		if strings.Contains(s.value, "{{") {
+			return &Error{s.what + " must not contain `{{`: this file is rendered by substitution, so a marker inside a credential is replaced and the host gets a different credential than you were shown"}
+		}
 	}
 	return nil
 }
@@ -291,6 +345,84 @@ func RenderCloudInit(a Answers) (string, error) {
 		distroNote = "\n#\n# ── DISTRO NOTE (" + distro + ") ─────────────────────────────────────────────────────────────────\n" +
 			strings.Join(lines, "\n")
 	}
+	// ── The credentials this file may carry ─────────────────────────────────────────────────────
+	// An env PREFIX on the init call rather than flags, because that is how `init` already takes
+	// PSTACK_TOKEN (there is no --token) and `serve` already takes the admin pair — one spelling of
+	// each name across the host. Single-quoted: validate() has refused `'` and `$` in them, so this
+	// quoting is what makes that refusal sufficient rather than a second guess at the shell's rules.
+	//
+	// Every block below defaults to EXACTLY what the file said before this existed. A cloud-config
+	// with no admin and no token in it is unchanged, down to the byte — including the header
+	// sentence "nothing in this file is a credential except the dashboard password", which is true
+	// only of that file and had to stop being unconditional prose for it to stay true.
+	var initEnv []string
+	if a.AdminUser != "" {
+		initEnv = append(initEnv, "PSTACK_ADMIN_USER='"+a.AdminUser+"'", "PSTACK_ADMIN_PASSWORD='"+a.AdminPassword+"'")
+	}
+	if a.Token != "" {
+		initEnv = append(initEnv, "PSTACK_TOKEN='"+a.Token+"'")
+	}
+	initEnvPrefix := ""
+	if len(initEnv) > 0 {
+		initEnvPrefix = strings.Join(initEnv, " ") + " "
+	}
+
+	secrets := []string{
+		"# Nothing in this file is a credential except the dashboard password: HTTP-01 needs no DNS token,",
+		"# and PSTACK_TOKEN is generated by `init` and printed once into /var/log/cloud-init-output.log.",
+		"# Read it from there, store it in your password manager, then use it as the API bearer token.",
+	}
+	initNote := "  # No PSTACK_TOKEN ⇒ generated, stored 0600 in control/.env, and printed once (see the header)."
+	tokenMessage := strings.Join([]string{
+		"  The API bearer token was generated by `pstack init` and printed above in this log",
+		"  (/var/log/cloud-init-output.log). Save it now — it is also in",
+		"  /var/lib/pstack/control/.env, mode 0600.",
+	}, "\n")
+	if len(initEnv) > 0 {
+		// A provider stores user-data as instance metadata: readable by every process on the box and
+		// by anyone with the provider's API. Saying so once at the top of the file is the only
+		// protection this generator can offer for what it just wrote into it.
+		secrets = []string{
+			"# THIS FILE CARRIES CREDENTIALS. A provider keeps user-data as instance metadata: every process",
+			"# on the box can read it, and so can anyone holding the provider's own API credentials. Treat",
+			"# all of it as already disclosed to this host, and rotate it if the file gets out:",
+			"#",
+			"#   - the Traefik dashboard password — hashed into an htpasswd on the host, plain text here.",
+		}
+		note := []string{"  # The env prefix on the init call below carries credentials IN THE CLEAR (see the header)."}
+		if a.AdminUser != "" {
+			secrets = append(secrets,
+				`#   - the first pstack account ("`+a.AdminUser+`") and its password. It is spent on first boot —`,
+				"#     the account is created only while there is none — so change it once you have signed in.")
+			note = append(note, "  #   PSTACK_ADMIN_*  the first admin account, created on first boot and inert after.")
+		}
+		if a.Token != "" {
+			secrets = append(secrets,
+				"#   - PSTACK_TOKEN — the bearer token of an API that holds a read-write Docker socket, so it",
+				"#     is root on this host. Rotate it with `PSTACK_TOKEN=<new> pstack init …` over SSH.")
+			note = append(note, "  #   PSTACK_TOKEN    used as given; `init` generates nothing and prints nothing.")
+			tokenMessage = strings.Join([]string{
+				"  The API bearer token is the one this file set, stored in",
+				"  /var/lib/pstack/control/.env, mode 0600. It was NOT printed above — whoever",
+				"  rendered this file already has it.",
+			}, "\n")
+		} else {
+			secrets = append(secrets,
+				"#   - not the API bearer token: `init` generates one on the host and prints it once into",
+				"#     /var/log/cloud-init-output.log. Read it from there and store it.")
+			note = append(note, "  # No PSTACK_TOKEN ⇒ generated, stored 0600 in control/.env, and printed once (see the header).")
+		}
+		initNote = strings.Join(note, "\n")
+		// The boot log is where an operator looks when the console says "up after N seconds", so the
+		// account they can actually sign in with belongs there — the name, never the password: this
+		// message is printed to the console and kept in the log, and the password has already been
+		// handed to whoever rendered the file.
+		if a.AdminUser != "" {
+			tokenMessage = "  Sign in at https://control." + a.Domain + " as `" + a.AdminUser + "` with the password shown\n" +
+				"  when this file was rendered. It is also in /var/lib/pstack/control/.env (0600).\n\n" + tokenMessage
+		}
+	}
+
 	extraPackages := ""
 	if len(profile.extraPackages) > 0 {
 		var lines []string
@@ -305,6 +437,10 @@ func RenderCloudInit(a Answers) (string, error) {
 		{"ACME_EMAIL", a.AcmeEmail},
 		{"SSH_BLOCK", sshBlock},
 		{"DASHBOARD_PASSWORD", a.DashboardPassword},
+		{"SECRETS_LIST", strings.Join(secrets, "\n")},
+		{"INIT_ENV_NOTE", initNote},
+		{"INIT_ENV", initEnvPrefix},
+		{"TOKEN_MESSAGE", tokenMessage},
 		{"INIT_EXTRA_FLAGS", initExtra},
 		{"UI_IMAGE_STEP", uiImageStep},
 		{"CONFIG_REPO", a.ConfigRepo},

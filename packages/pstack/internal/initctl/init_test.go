@@ -385,6 +385,54 @@ func some(list []string, pred func(string) bool) bool {
 	return false
 }
 
+// The control container gets the first admin from .env or not at all: the compose template has
+// passed ${PSTACK_ADMIN_USER:-} through since accounts existed, and Compose resolves it from this
+// file — so a pair that never reaches .env is a pair the operator sets and never sees applied.
+func TestInitCarriesTheFirstAdminIntoTheEnvFile(t *testing.T) {
+	const password = "correct-horse-battery"
+	initEnv := func(t *testing.T, user, pass string) (env, log string) {
+		t.Helper()
+		t.Setenv("PSTACK_ADMIN_USER", user)
+		t.Setenv("PSTACK_ADMIN_PASSWORD", pass)
+		dir := t.TempDir()
+		var out bytes.Buffer
+		if err := initctl.Init(initctl.Options{
+			DataDir: dir, Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			UI: initctl.Basic, Orchestrator: spec.Compose, Runner: okRunner("inactive", ""), Out: &out,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return read(t, filepath.Join(dir, "control", ".env")), out.String()
+	}
+
+	t.Run("both set: the pair is in .env, and the password is in nothing init prints", func(t *testing.T) {
+		// negative control: drop the admin block from envFile — both line assertions fail.
+		env, log := initEnv(t, "alice", password)
+		for _, want := range []string{"PSTACK_ADMIN_USER=alice\n", "PSTACK_ADMIN_PASSWORD=" + password + "\n"} {
+			if !strings.Contains(env, want) {
+				t.Errorf(".env lacks %q:\n%s", want, env)
+			}
+		}
+		// Unlike a generated token, this password has an owner who already has a copy — printing it
+		// puts it in the terminal scrollback and the cloud-init log for nothing.
+		if strings.Contains(log, password) {
+			t.Errorf("init printed the admin password:\n%s", log)
+		}
+	})
+
+	t.Run("unset, or half a pair, writes no admin lines at all", func(t *testing.T) {
+		// negative control: write the two lines unconditionally in envFile — both cases fail.
+		// `serve` honours only a complete pair, so a half one is a slot that looks fillable by hand
+		// and is not: the file is read at `up` time, and by then the users table has decided.
+		for _, c := range []struct{ user, pass string }{{"", ""}, {"alice", ""}, {"", password}} {
+			env, _ := initEnv(t, c.user, c.pass)
+			if strings.Contains(env, "PSTACK_ADMIN_") {
+				t.Errorf("user=%q pass=%q wrote an admin line:\n%s", c.user, c.pass, env)
+			}
+		}
+	})
+}
+
 // The conformance cells: the golden generator's DATA_DIR, token and DNS credential.
 const (
 	goldenDataDir  = "/tmp/pstack-golden-data"

@@ -58,11 +58,19 @@ type Parsed struct {
 	UIDist       string
 	SSHKey       string
 	Password     string
-	ConfigRepo   string
-	Out          string
-	Yes          bool
-	To           string
-	Resume       bool
+	// AdminUser / AdminPassword / APIToken are cloud-init's credential flags. Deliberately WITHOUT
+	// environment defaults, unlike --password (PSTACK_DASHBOARD_PASSWORD) beside them: an operator's
+	// shell has PSTACK_TOKEN set precisely because it is talking to a host that already exists, and a
+	// default would silently clone that host's bearer token into a new host's user-data. The pair
+	// follows the token because they are the same decision — the credentials of one specific host.
+	AdminUser     string
+	AdminPassword string
+	APIToken      string
+	ConfigRepo    string
+	Out           string
+	Yes           bool
+	To            string
+	Resume        bool
 	// Typed records which value flags were spelled on the command line, for the two commands that
 	// must only act on an EXPLICIT --ui / --orchestrator (upgrade, ui).
 	Typed map[string]bool
@@ -143,6 +151,12 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.SSHKey = next(&i, p.SSHKey)
 		case "--password":
 			p.Password = next(&i, p.Password)
+		case "--admin-user":
+			p.AdminUser = next(&i, p.AdminUser)
+		case "--admin-password":
+			p.AdminPassword = next(&i, p.AdminPassword)
+		case "--api-token":
+			p.APIToken = next(&i, p.APIToken)
 		case "--config-repo":
 			p.ConfigRepo = next(&i, p.ConfigRepo)
 		case "-o", "--out":
@@ -279,6 +293,9 @@ func Usage(version string) string {
 		"",
 		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator]",
 		"            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)",
+		"            --admin-user <name> [--admin-password <pw>]  the first UI account, created on first boot",
+		"            --api-token <PSTACK_TOKEN>   default: `init` generates one on the host and prints it once",
+		"            Both land in the rendered file, which the provider stores as instance metadata.",
 		"",
 		"upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]",
 		"            [--ui basic|advanced to override what it detects]  [--orchestrator swarm|compose to switch — previews must be down]",

@@ -247,6 +247,132 @@ func TestCloudInitGeneration(t *testing.T) {
 	})
 }
 
+// The credentials a cloud-config may carry: the first admin account and PSTACK_TOKEN. Both reach
+// `init` as an environment PREFIX on the boot command, which is the part that can go wrong quietly —
+// a prefix that lands outside the command, or a quote that ends early, produces a host that boots
+// clean and cannot be signed into.
+func TestCloudInitAdminAccountAndToken(t *testing.T) {
+	withCreds := base
+	withCreds.AdminUser, withCreds.AdminPassword, withCreds.Token = "alice", "correct-horse-battery", "tok-0123456789abcdef"
+
+	t.Run("the env prefix stays part of the init command the shell will run", func(t *testing.T) {
+		// The init call is a YAML folded scalar: the assignments must fold onto the same command,
+		// not become a line of their own. Taken from the PARSED runcmd, so this asserts what
+		// cloud-init hands the shell rather than what the template looks like.
+		// negative control: render INIT_ENV on its own template line — the call no longer carries the prefix.
+		out := render(t, withCreds)
+		call := initCall(t, out)
+		for _, want := range []string{
+			"PSTACK_ADMIN_USER='alice' ", "PSTACK_ADMIN_PASSWORD='correct-horse-battery' ",
+			"PSTACK_TOKEN='tok-0123456789abcdef' /usr/local/bin/pstack init",
+			"--domain preview.example.com",
+		} {
+			if !strings.Contains(call, want) {
+				t.Errorf("init call lacks %q:\n%s", want, call)
+			}
+		}
+		if !yamlOK(t, out) || leftoverRe.MatchString(out) {
+			t.Error("invalid YAML or placeholders left")
+		}
+	})
+
+	t.Run("the header names every credential the file actually carries, and only those", func(t *testing.T) {
+		// The dashboard password's warning is already in the header; anything added sits in the same
+		// instance metadata and gets the same treatment. The negative case matters as much: a file
+		// with no credential in it must keep saying so.
+		// negative control: make SECRETS_LIST unconditional (the credential branch always) — the plain case fails.
+		plain := render(t, base)
+		if !strings.Contains(plain, "Nothing in this file is a credential except the dashboard password") {
+			t.Error("the plain file stopped saying it carries nothing")
+		}
+		if strings.Contains(plain, "PSTACK_ADMIN_USER") || strings.Contains(plain, "PSTACK_TOKEN=") {
+			t.Error("a credential rendered into a file that was given none")
+		}
+		full := render(t, withCreds)
+		for _, want := range []string{
+			"THIS FILE CARRIES CREDENTIALS",
+			`the first pstack account ("alice")`,
+			"PSTACK_TOKEN — the bearer token",
+			"carries credentials IN THE CLEAR",
+		} {
+			if !strings.Contains(full, want) {
+				t.Errorf("header lacks %q", want)
+			}
+		}
+		// With no token given, the file must still say where the generated one appears — and must not
+		// claim to hold one.
+		adminOnly := withCreds
+		adminOnly.Token = ""
+		out := render(t, adminOnly)
+		if !strings.Contains(out, "not the API bearer token: `init` generates one on the host") {
+			t.Error("no account of the generated token")
+		}
+		if strings.Contains(out, "PSTACK_TOKEN='") {
+			t.Error("a token in a file that was given none")
+		}
+	})
+
+	t.Run("refuses credentials that would reach the host altered, or not at all", func(t *testing.T) {
+		// Each of these boots a host whose admin password is not the one the operator was shown, and
+		// says nothing until they try to sign in.
+		// negative control: drop the `'$\n\r` check in validate — the last three cases pass.
+		expectErr := func(a Answers, re string) {
+			t.Helper()
+			_, err := RenderCloudInit(a)
+			if err == nil || !regexp.MustCompile(re).MatchString(err.Error()) {
+				t.Errorf("want error /%s/, got %v", re, err)
+			}
+			if _, ok := err.(*Error); err != nil && !ok {
+				t.Errorf("not a *cloudinit.Error: %T", err)
+			}
+		}
+		a := withCreds
+		a.AdminUser = "Alice@example.com" // auth would refuse it on the host, with nobody watching
+		expectErr(a, "admin username must match")
+		a = withCreds
+		a.AdminPassword = "short"
+		expectErr(a, "at least 8 characters")
+		a = withCreds
+		a.AdminPassword = "pa'ssword" // ends the shell quoting
+		expectErr(a, "single quote")
+		a = withCreds
+		a.AdminPassword = "pa$$word" // Compose expands it out of .env
+		expectErr(a, `\$`)
+		a = withCreds
+		a.Token = "tok\nen" // the folded scalar turns it into a space
+		expectErr(a, "one line")
+		// A marker inside a credential is expanded by the renderer itself: the value is placed at
+		// INIT_ENV and PSTACK_VERSION is substituted after it, so the host booted with "0.29.0" as
+		// the password while the operator was shown "{{PSTACK_VERSION}}".
+		// negative control: drop the `{{` loop in validate — these three pass, and the rendered file
+		// then contains the version where the credential should be.
+		for _, m := range []struct {
+			what string
+			set  func(*Answers)
+		}{
+			{"admin password", func(x *Answers) { x.AdminPassword = "{{PSTACK_VERSION}}" }},
+			{"PSTACK_TOKEN", func(x *Answers) { x.Token = "{{PSTACK_VERSION}}" }},
+			{"dashboard password", func(x *Answers) { x.DashboardPassword = "{{PSTACK_VERSION}}" }},
+		} {
+			a = withCreds
+			m.set(&a)
+			expectErr(a, "must not contain")
+		}
+		// One brace is not a marker and must keep working — the check is `{{`, not `{`.
+		a = withCreds
+		a.AdminPassword = "pa{ssword"
+		if out := render(t, a); !strings.Contains(out, "pa{ssword") {
+			t.Error("a single brace was refused or mangled")
+		}
+		// The username is only checked when there is one — the account is opt-in.
+		a = base
+		a.AdminPassword = "" // nothing set: renders, and carries no account
+		if out := render(t, a); strings.Contains(out, "PSTACK_ADMIN") {
+			t.Error("an account without a username")
+		}
+	})
+}
+
 func TestCloudInitPinnedVersionsAndDistros(t *testing.T) {
 	pinned := Answers{
 		Domain:            "preview.example.com",
