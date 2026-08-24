@@ -115,13 +115,29 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # publish-kit shells out to `bun publish`, and bun reads registry auth from .npmrc — NOT from
-      # NPM_TOKEN in the environment. Handing it the variable alone produced "missing
-      # authentication (run `bunx npm login`)" AFTER the binaries had already been published, which
-      # is the one place in this pipeline where a failure is not free.
+      # publish-kit shells out to `bun publish`, which takes registry auth from .npmrc — NOT from
+      # NPM_TOKEN in the environment. Passing the variable alone produced "missing authentication
+      # (run `bunx npm login`)", and so did writing only $HOME/.npmrc: bun resolves .npmrc from the
+      # directory it publishes IN, and publish-kit runs it per package. So write it at the repo
+      # root as well, which is on the path up from every package, and pass NPM_CONFIG_TOKEN for
+      # good measure.
+      #
+      # The guard is first because the failure it prevents is expensive: this job runs AFTER the
+      # binaries are public, so an empty or unset secret should stop here with a sentence saying so
+      # rather than surfacing as a confusing auth error at the end of a pack.
       - name: Authenticate to npm
-        run: printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc"
+        run: |
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is empty or unset. Set it with: gh secret set NPM_TOKEN" >&2
+            exit 1
+          fi
+          line="//registry.npmjs.org/:_authToken=${NPM_TOKEN}"
+          printf '%s\n' "$line" > "$HOME/.npmrc"
+          printf '%s\n' "$line" > "$GITHUB_WORKSPACE/.npmrc"
+          echo "wrote .npmrc to \$HOME and the workspace root"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish the UI and the client SDK
         run: bunx publish-kit publish
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
