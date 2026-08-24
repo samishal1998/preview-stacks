@@ -87,6 +87,10 @@ RUN curl -fsSL https://github.com/samishal1998/preview-stacks/releases/download/
 # Non-root by default. The control stack overrides it with ` + "`user: \"0:0\"`" + ` because it mounts the
 # Docker socket read-write.
 RUN useradd --uid 1000 --create-home --shell /bin/bash pstack
+# The default PSTACK_DATA, owned by the user this image runs as. The control stack mounts a host
+# path over it and runs as root, so this changes nothing there — but without it a bare
+# ` + "`docker run`" + ` of this image dies on ` + "`mkdir /var/lib/pstack: permission denied`" + `.
+RUN mkdir -p /var/lib/pstack && chown pstack:pstack /var/lib/pstack
 WORKDIR /app
 USER pstack
 
