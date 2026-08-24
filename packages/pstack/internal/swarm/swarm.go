@@ -506,8 +506,23 @@ type LogsOptions struct {
 // StackLogsCmd is `docker service logs`, per service. A whole-stack read loops over the stack's
 // services; FOLLOWED, they run in parallel and `wait` keeps the shell alive until every one ends.
 // service "" means the whole stack. tail is a JS number (the API echoes `?tail=1.5`), truncated.
+//
+// The flags are `docker service logs`'s OWN, not compose's. It takes --details, --follow,
+// --no-resolve, --no-task-ids, --no-trunc, --raw, --since, --tail and --timestamps, and answers
+// anything else with `unknown flag` and a usage dump — so one borrowed flag breaks every log read on
+// the host, not just the option that was borrowed. `--no-color` was borrowed from `compose logs` and
+// did precisely that. It bought nothing to begin with: this runs down a pipe, and the prefix is only
+// coloured on a TTY.
+//
+// `--no-task-ids` is deliberately NOT passed, though it is the noisiest thing here — every line
+// arrives prefixed `<stack>_<svc>.<slot>.<taskid>@<node>    |`, some 45 bytes of it, which is why a
+// swarm log read is so much heavier than a compose one. The task id is the only in-band evidence
+// that swarm destroyed a task and scheduled a new one; drop it and a crash-looping preview reads as
+// one unbroken log, which is the failure this product exists to make visible. Prefix noise a reader
+// can skim beats a restart a reader cannot see. It is also the bytes GET /logs returns, so flipping
+// it is a contract decision, not a cleanup — which is the other reason it is not bundled in here.
 func StackLogsCmd(stack string, tail float64, service string, opts LogsOptions) string {
-	flags := []string{"--no-color --tail " + TruncString(tail)}
+	flags := []string{"--tail " + TruncString(tail)}
 	if opts.Follow {
 		flags = append(flags, "--follow")
 	}
@@ -523,14 +538,17 @@ func StackLogsCmd(stack string, tail float64, service string, opts LogsOptions) 
 	}
 	s := Shq(stack)
 	each := "docker service logs " + f + " \"$svc\" 2>&1"
-	tail2 := ""
+	// `&` is itself a command terminator: `cmd &; done` is a bash syntax error, not a background job,
+	// and it took the whole followed read down with it. So the separator before `done` is the `&` when
+	// following, a `;` when not.
+	sep, tail2 := "; ", ""
 	if opts.Follow {
 		each += " &"
-		tail2 = "; wait"
+		sep, tail2 = " ", "; wait"
 	}
 	return "svcs=$(docker stack services --format '{{.Name}}' " + s + "); " +
 		"[ -n \"$svcs\" ] || { echo \"no services in stack " + stack + "\" >&2; exit 1; }; " +
-		"for svc in $svcs; do " + each + "; done" + tail2
+		"for svc in $svcs; do " + each + sep + "done" + tail2
 }
 
 // TruncString is `${Math.trunc(n)}`.

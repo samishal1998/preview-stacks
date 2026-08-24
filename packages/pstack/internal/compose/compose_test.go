@@ -190,7 +190,7 @@ func TestComposeDispatchesOnTheOrchestrator(t *testing.T) {
 		if log[2] != swarm.StackRmCmd("s1", false) || strings.Contains(log[2], "docker volume") {
 			t.Errorf("sleep: %s", log[2])
 		}
-		if logs.Cmd != `docker service logs --no-color --tail 50 --follow --timestamps 's1_web'` {
+		if logs.Cmd != `docker service logs --tail 50 --follow --timestamps 's1_web'` {
 			t.Errorf("logs: %s", logs.Cmd)
 		}
 		if !strings.Contains(swarm.StackLogsCmd("s1", 10, "", LogsOptions{Follow: true}), "wait") {
