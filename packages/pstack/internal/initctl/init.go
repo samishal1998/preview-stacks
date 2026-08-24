@@ -433,7 +433,7 @@ func Init(opts Options) error {
 		"                 then POST /api/deployments/<id>/up. A spec with `stack: pr-${PR}` needs",
 		"                 its variables on every call (…?PR=7) — and the SAME ones on `down`, or",
 		"                 teardown targets a different stack than deploy created. Full route list:",
-		"                 the header of src/api.ts. Or just use the UI.",
+		"                 the header of internal/api/server.go. Or just use the UI.",
 		"  4. Upgrade     pstack upgrade  — reads this .env so the token, domain and challenge",
 		"                 mode all survive. Never from inside the control stack; SSH in.",
 		"  5. Rotate      PSTACK_TOKEN=<new> pstack init …  — re-running rewrites .env and recreates",
