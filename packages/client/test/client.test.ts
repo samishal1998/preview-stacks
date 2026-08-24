@@ -67,14 +67,23 @@ describe('the client speaks the real API', () => {
     expect((await client.jobs.list()).some((j) => j.id === job.id)).toBe(true);
 
     /*
-     * Forgetting is refused when docker cannot be reached — "cannot confirm" is not evidence of
-     * absence, and this machine has no docker, so the refusal is what a correct server does here.
-     * Asserting it (rather than skipping the call) pins the guard through the client too.
+     * DELETE fails closed, and BOTH outcomes here are the server being correct — which one you get
+     * depends on the machine, so the assertion accepts either:
+     *
+     *   docker absent   → 409, "cannot confirm … docker did not answer" (not evidence of absence)
+     *   docker present  → 200, nothing is running, so the record goes
+     *
+     * An earlier revision asserted only the refusal, with a comment claiming "this machine has no
+     * docker" — true of the box it was written on and false of a CI runner, where docker is
+     * installed. It has failed on every push since.
      */
-    const refused = await client.deployments.remove('pr-1').catch((e: PstackError) => e);
-    expect(refused).toBeInstanceOf(PstackError);
-    expect((refused as PstackError).status).toBe(409);
-    expect((refused as PstackError).message).toContain('docker did not answer');
+    const removed = await client.deployments.remove('pr-1').catch((e: PstackError) => e);
+    if (removed instanceof PstackError) {
+      expect(removed.status).toBe(409);
+      expect(removed.message).toContain('docker did not answer');
+    } else {
+      expect(removed.removed).toBe('pr-1');
+    }
   }, 30_000);
 
   test('a 409 arrives as a PstackError carrying the server\'s own message', async () => {
