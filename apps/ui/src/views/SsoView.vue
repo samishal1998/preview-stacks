@@ -40,15 +40,22 @@ const blank = (): SsoConfig => ({
   tokenUrl: '',
   userInfoUrl: '',
   emailsUrl: '',
+  groupsUrl: '',
   scopes: '',
   claimMap: { ...OIDC_CLAIMS },
   allowedEmailDomains: [],
+  allowedUsernames: [],
+  requiredGroups: [],
   defaultRole: 'admin',
 });
 
 const form = ref<SsoConfig>(blank());
 const secret = ref('');
+// The three rule lists are edited as comma-separated text, split on save. A `string[]` bound to an
+// input cannot hold "acme," while someone is still typing the second entry.
 const domains = ref('');
+const usernames = ref('');
+const groups = ref('');
 const presets = ref<SsoPreset[]>([]);
 const callbackUrl = ref('');
 const configured = ref(false);
@@ -70,6 +77,8 @@ async function load(): Promise<void> {
   if (r.body.config) {
     form.value = { ...blank(), ...r.body.config };
     domains.value = (r.body.config.allowedEmailDomains ?? []).join(', ');
+    usernames.value = (r.body.config.allowedUsernames ?? []).join(', ');
+    groups.value = (r.body.config.requiredGroups ?? []).join(', ');
   }
   // The mask, so leaving the field alone re-submits it and the server keeps what it has.
   secret.value = r.body.clientSecret;
@@ -86,30 +95,44 @@ function applyPreset(key: string): void {
     form.value.tokenUrl = '';
     form.value.userInfoUrl = '';
     form.value.emailsUrl = '';
+    form.value.groupsUrl = '';
     form.value.claimMap = { ...OIDC_CLAIMS };
     return;
   }
   form.value.authorizeUrl = p.authorizeUrl;
   form.value.tokenUrl = p.tokenUrl;
   form.value.userInfoUrl = p.userInfoUrl ?? '';
-  // Left blank on purpose: the server fills the preset's own emails endpoint back in, and only
-  // while userInfoUrl is still the preset's.
+  // Left blank on purpose: the server fills the preset's own emails and groups endpoints back in,
+  // and only while userInfoUrl is still the preset's.
   form.value.emailsUrl = '';
+  form.value.groupsUrl = '';
   form.value.scopes = p.scopes;
   form.value.claimMap = { ...p.claimMap };
   if (!form.value.label || presets.value.some((x) => x.label === form.value.label)) form.value.label = p.label;
 }
 
+const list = (s: string): string[] => s.split(',').map((v) => v.trim()).filter(Boolean);
+
 async function save(): Promise<void> {
   saving.value = true;
-  const r = await api.put<{ ok: boolean; callbackUrl: string }>('/api/sso/config', {
+  // Annotated, not inline: `api.put` takes `unknown`, so without a type here a mistyped key
+  // (`allowedUsernams`) would compile, the server would see no such field, the rule would silently
+  // restrict nobody, and the form would say "Saved".
+  const body: SsoConfig & { clientSecret: string } = {
     ...form.value,
     clientSecret: secret.value,
-    allowedEmailDomains: domains.value.split(',').map((d) => d.trim()).filter(Boolean),
-  });
+    allowedEmailDomains: list(domains.value),
+    allowedUsernames: list(usernames.value),
+    requiredGroups: list(groups.value),
+  };
+  const r = await api.put<{ ok: boolean; callbackUrl: string }>('/api/sso/config', body);
   saving.value = false;
   if (!r.ok) {
     error.value = problem(r, 'save the provider');
+    // The banner is above the panels and this button is at the bottom of a long form, so a refusal
+    // — the "requiredGroups needs the … scope" one especially — otherwise lands off-screen and
+    // reads as the button having done nothing.
+    toast('error', 'Not saved. The server said why, at the top of this page.');
     return;
   }
   error.value = '';
@@ -127,6 +150,8 @@ async function remove(): Promise<void> {
   form.value = blank();
   secret.value = '';
   domains.value = '';
+  usernames.value = '';
+  groups.value = '';
   configured.value = false;
   void load();
 }
@@ -163,8 +188,8 @@ const canSave = computed(() => {
               <b>Anyone who authenticates gets an account</b>, created on their first sign-in. That is
               deliberate: your provider already decides who may authenticate (Workspace restricts to
               internal users, a GitHub app can be org-approved), and duplicating that policy here
-              would just be a second list to keep in step. Narrow it with the allowed email domains
-              below if you need to.
+              would just be a second list to keep in step. Narrow it with the sign-in rules below if
+              you need to.
             </p>
             <p>
               <b>Identity is the provider's subject, not the email.</b> Someone changing their
@@ -291,6 +316,16 @@ const canSave = computed(() => {
               own host.
             </p>
           </div>
+          <div class="field">
+            <label for="sso-groups-url">Groups URL <span class="mute">(optional)</span></label>
+            <input id="sso-groups-url" v-model="form.groupsUrl" type="text" spellcheck="false" />
+            <p class="hint">
+              Where this host asks which groups someone is in. Only consulted when there is a group
+              rule below. Filled in automatically for a preset — but only while the user info URL is
+              still the preset's, because a self-hosted host's token must not be sent to the public
+              one, so a self-hosted provider needs this typed.
+            </p>
+          </div>
         </template>
 
         <div class="field">
@@ -322,7 +357,10 @@ const canSave = computed(() => {
         <p class="dim">
           By default, anyone your provider lets authenticate. It already owns that decision; this is
           only here for the case where the application you registered is broader than the people who
-          should reach this control plane.
+          should reach this control plane. <b>Any one entry in a list is enough to satisfy that
+          list, and every list you fill in has to be satisfied</b> — fill all three in and a login
+          needs a listed domain, a matching username, and one of the groups. A list left empty is not
+          a rule at all: it lets everyone past that check, it does not lock everyone out.
         </p>
         <div class="field">
           <label for="sso-domains">Allowed email domains</label>
@@ -332,6 +370,33 @@ const canSave = computed(() => {
             with no email address at all is refused too</b> — a provider that hides the address (a
             private GitHub profile with no <code>user:email</code> scope) cannot be checked, so it is
             not waved through.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="sso-usernames">Allowed usernames</label>
+          <input id="sso-usernames" v-model="usernames" type="text" spellcheck="false" placeholder="octocat, qa-[0-9]*" />
+          <p class="hint">
+            Comma-separated patterns, case-insensitive: <code>*</code>, <code>?</code> and
+            <code>[0-9]</code> classes. Empty means no restriction. <b>Non-empty means a login whose
+            provider sends no username is refused too</b> — so this is a rule for a provider that
+            actually has usernames (GitHub's <code>login</code>, GitLab's <code>username</code>). On
+            an OpenID Connect issuer that sends no <code>preferred_username</code> it refuses
+            everyone rather than nobody, so set it only where you know the provider sends one.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="sso-groups">Required groups</label>
+          <input id="sso-groups" v-model="groups" type="text" spellcheck="false" placeholder="acme, acme/backend" />
+          <p class="hint">
+            Comma-separated, and <b>exact names, not patterns</b> — an organisation login, or a group
+            path like <code>acme/backend</code>. Case-insensitive. Empty means no restriction.
+            Non-empty makes every sign-in ask the provider for that person's groups, so it needs the
+            OAuth scope that endpoint requires: <b>add it to Scopes above, or the save is refused</b>
+            — and the refusal names the scope. It also needs a provider whose group list this host
+            knows how to read, which a discovered OpenID Connect issuer never is; the save says so by
+            name. If that call does not answer, the sign-in is refused rather than allowed.
           </p>
         </div>
       </section>

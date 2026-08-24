@@ -286,10 +286,28 @@ export type SsoConfig = {
   userInfoUrl: string;
   /** Consulted only when the profile carries no address (GitHub's default). */
   emailsUrl: string;
+  /** Where the provider lists this user's groups/orgs. Preset-filled; only read when `requiredGroups` is set. */
+  groupsUrl: string;
   scopes: string;
   claimMap: SsoClaimMap;
-  /** Non-empty ⇒ a login outside these domains is refused, INCLUDING one with no address at all. */
+  /**
+   * The three sign-in rules. Each list is ANY-OF, and the three are ANDed with each other. An empty
+   * list is no constraint; a non-empty one FAILS CLOSED — a login the rule cannot be evaluated
+   * against is refused, not waved through.
+   */
   allowedEmailDomains: string[];
+  /**
+   * Glob patterns (`path.Match` semantics, so `*`, `?` and `[a-z]` all work), matched case-folded
+   * against the provider's username. Inert on a provider that supplies no username claim, which
+   * many bare OIDC providers do not — and inert here means every login is refused, not admitted.
+   */
+  allowedUsernames: string[];
+  /**
+   * Group/org names, matched exactly and case-folded. Setting this requires a provider whose preset
+   * knows a groups endpoint, and scopes that can read it — the server refuses the save otherwise
+   * rather than letting every later login fail.
+   */
+  requiredGroups: string[];
   defaultRole: string;
 };
 

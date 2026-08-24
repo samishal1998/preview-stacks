@@ -57,6 +57,8 @@
       "enabled": true,
       "clientId": "cid",
       "allowedEmailDomains": [],
+      "allowedUsernames": [],
+      "requiredGroups": [],
       "defaultRole": "admin",
       "label": "Fixture IdP",
       "discoveryUrl": "http://127.0.0.1:<PORT>/",
@@ -65,6 +67,7 @@
       "tokenUrl": "",
       "userInfoUrl": "",
       "emailsUrl": "",
+      "groupsUrl": "",
       "scopes": "openid profile email",
       "claimMap": {
         "subject": "sub",

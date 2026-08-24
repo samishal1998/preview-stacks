@@ -448,9 +448,19 @@ export type SsoConfig = {
   tokenUrl: string;
   userInfoUrl: string;
   emailsUrl: string;
+  /** Where the provider lists this user's groups. Preset-filled server-side, like `emailsUrl`. */
+  groupsUrl: string;
   scopes: string;
   claimMap: ClaimMap;
+  /**
+   * The three sign-in rules. Each list is any-of, the three are ANDed, and an empty list is no rule
+   * at all — but a non-empty one fails closed, so a login the rule cannot be evaluated for (no
+   * address, no username claim, no answer from the groups endpoint) is refused rather than waved
+   * through. `allowedUsernames` holds globs, `requiredGroups` exact names.
+   */
   allowedEmailDomains: string[];
+  allowedUsernames: string[];
+  requiredGroups: string[];
   defaultRole: string;
 };
 

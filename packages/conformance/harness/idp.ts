@@ -1,7 +1,8 @@
 /**
  * A fake identity provider: discovery, JWKS, an authorize endpoint that bounces straight back, a
- * token endpoint that REALLY checks the PKCE verifier and the client secret, userinfo, emails.
- * Ported from packages/pstack/test/sso.test.ts so the SSO round trip can be graded black-box.
+ * token endpoint that REALLY checks the PKCE verifier and the client secret, userinfo, emails,
+ * groups. Ported from packages/pstack/test/sso.test.ts so the SSO round trip can be graded
+ * black-box.
  */
 const b64url = (b: ArrayBuffer | Uint8Array) => Buffer.from(b as ArrayBuffer).toString('base64url');
 
@@ -17,6 +18,9 @@ export type FakeProvider = {
   tokenBody: string | null;
   userInfo: Record<string, unknown>;
   emails: unknown;
+  /** What /groups serves, and the status it serves it with — an endpoint that fails is its own case. */
+  groups: unknown;
+  groupsStatus: number;
   idToken: string | null;
   jwks: { keys: unknown[] };
   hits: string[];
@@ -37,6 +41,8 @@ export async function fakeProvider(): Promise<FakeProvider> {
     tokenBody: null as string | null,
     userInfo: {} as Record<string, unknown>,
     emails: [] as unknown,
+    groups: [] as unknown,
+    groupsStatus: 200,
     idToken: null as string | null,
     jwks: { keys: [] as unknown[] },
     hits: [] as string[],
@@ -102,6 +108,12 @@ export async function fakeProvider(): Promise<FakeProvider> {
         return j(p.userInfo);
       }
       if (url.pathname === '/emails') return j(p.emails);
+      if (url.pathname === '/groups') {
+        // Behind the access token, as GitHub's `/user/orgs` is — so a caller that forgot to send it
+        // gets a 401 here rather than an empty membership list that looks like "not a member".
+        if (req.headers.get('authorization') !== 'Bearer at-1') return j({ error: 'unauthorized' }, 401);
+        return j(p.groupsStatus === 200 ? p.groups : { message: 'no' }, p.groupsStatus);
+      }
       return new Response('no', { status: 404 });
     },
   });

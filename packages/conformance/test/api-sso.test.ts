@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { bootServer, type BootOptions, type Booted } from '../harness/server.ts';
-import { fakeProvider, rsaSigner } from '../harness/idp.ts';
+import { fakeProvider, rsaSigner, type FakeProvider } from '../harness/idp.ts';
 
 describe('API: the SSO round trip', () => {
   const servers: Array<{ stop: () => void | Promise<void> }> = [];
@@ -354,5 +354,164 @@ describe('API: the SSO round trip', () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/could not reach|answered/);
     expect(((await (await fetch(`${base}/api/health`)).json()) as { sso: unknown }).sso).toBeNull();
+  });
+});
+
+/**
+ * The allow rules, end to end: username globs and group membership.
+ *
+ * A unit test can prove the matchers; only a round trip proves the WIRING — that each rule reaches
+ * the gate at all, that the group list is fetched with the access token and only when a rule needs
+ * it, and that a groups endpoint which does not answer is a DIFFERENT refusal from "you are not a
+ * member". That last distinction is the point: one is fixed by adding somebody to a group, the
+ * other is a scope, a rate limit or an outage, and an operator handed the wrong sentence spends the
+ * afternoon on the wrong problem.
+ *
+ * One describe rather than three: the three tests share a boot + fake-provider pair and the login
+ * helper, and splitting them would only duplicate that.
+ */
+describe('API: the SSO allow rules', () => {
+  const servers: Array<{ stop: () => void | Promise<void> }> = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) await s.stop();
+  });
+
+  /** A booted host and a fake provider, both torn down by the afterEach above. */
+  async function pair(): Promise<{ p: FakeProvider; s: Booted }> {
+    const p = await fakeProvider();
+    servers.push(p);
+    const s = await bootServer({ tag: 'rules', sso: { stateTtlS: 300 } });
+    servers.push(s);
+    return { p, s };
+  }
+
+  const put = (s: Booted, body: Record<string, unknown>) =>
+    fetch(`${s.base}/api/sso/config`, { method: 'PUT', headers: s.H, body: JSON.stringify(body) });
+
+  /** A whole login: /start, hand the provider the challenge it must now expect, then the callback. */
+  async function login(s: Booted, p: FakeProvider): Promise<Response> {
+    const started = await fetch(`${s.base}/api/auth/sso/start`, { redirect: 'manual' });
+    expect(started.status).toBe(302);
+    const to = new URL(started.headers.get('location')!);
+    p.expectChallenge = to.searchParams.get('code_challenge')!;
+    const state = encodeURIComponent(to.searchParams.get('state')!);
+    return fetch(`${s.base}/api/auth/sso/callback?code=abc&state=${state}`, { redirect: 'manual' });
+  }
+
+  const where = (res: Response) => decodeURIComponent(res.headers.get('location') ?? '');
+  const username = async (s: Booted, res: Response) => {
+    const cookie = res.headers.get('set-cookie')!.split(';')[0]!;
+    const me = (await (await fetch(`${s.base}/api/auth/me`, { headers: { cookie } })).json()) as { user: { username: string } };
+    return me.user.username;
+  };
+
+  /** Test 2 asserts this refusal; test 3 asserts it is NOT this one. Hence a shared constant. */
+  const NOT_A_MEMBER = '/login?sso_error=you are not in a group this host allows to sign in (acme)';
+
+  /** The group rule's whole configuration — the github preset, pointed at the fake provider. */
+  const groupsCfg = (p: FakeProvider) => ({
+    mode: 'oauth2',
+    provider: 'github',
+    clientId: 'cid',
+    clientSecret: 'shh',
+    authorizeUrl: `${p.base}/authorize`,
+    tokenUrl: `${p.base}/token`,
+    userInfoUrl: `${p.base}/userinfo`,
+    // Typed by hand, because moving userinfo off api.github.com stops the preset's endpoints being
+    // inherited — the host will not send a self-hosted provider's token to github.com.
+    groupsUrl: `${p.base}/groups`,
+    // Without read:org the save is refused, so a group rule can never be configured against a token
+    // that cannot read the memberships.
+    scopes: 'read:user user:email read:org',
+    requiredGroups: ['acme'],
+  });
+
+  test('allowedUsernames: outside the globs is refused, inside is admitted, and no username at all is refused too', async () => {
+    // negative control: delete `AllowedUsernames: cfg.AllowedUsernames,` from the SsoSignInOpts
+    // literal in internal/api/routes_auth.go — mallory is admitted and the first assertion fails.
+    const { p, s } = await pair();
+    expect(
+      (
+        await put(s, {
+          mode: 'oauth2',
+          provider: 'custom',
+          clientId: 'cid',
+          clientSecret: 'shh',
+          authorizeUrl: `${p.base}/authorize`,
+          tokenUrl: `${p.base}/token`,
+          userInfoUrl: `${p.base}/userinfo`,
+          claimMap: { subject: 'id', username: 'login', email: 'email' },
+          allowedUsernames: ['qa-[0-9]*', 'octo?at'],
+        })
+      ).status,
+    ).toBe(200);
+
+    p.userInfo = { id: 'u-mallory', login: 'mallory', email: 'mallory@example.com' };
+    const refused = await login(s, p);
+    expect(where(refused)).toBe('/login?sso_error=mallory is not an allowed username');
+    expect(refused.headers.get('set-cookie')).toBeNull();
+
+    // Fails CLOSED, the same direction allowedEmailDomains does: a rule and nothing to check it
+    // against is a refusal, not a pass. This is exactly what the rule does to every login on a
+    // provider that supplies no username claim.
+    p.userInfo = { id: 'u-nameless', email: 'nameless@example.com' };
+    const nameless = await login(s, p);
+    expect(where(nameless)).toBe('/login?sso_error=this provider returned no username, and sign-in is restricted to specific usernames');
+    expect(nameless.headers.get('set-cookie')).toBeNull();
+
+    // `octo?at` matched the 'C' as well as a 'c': both sides of the match are folded. The account
+    // is created here, by the login that passed — the two refusals above created nothing.
+    p.userInfo = { id: 'u-octo', login: 'OctoCat', email: 'octo@example.com' };
+    const admitted = await login(s, p);
+    expect(where(admitted)).toBe('/');
+    expect(await username(s, admitted)).toBe('octocat');
+
+    // No group rule was configured, so the provider was never asked for a membership list — a rule
+    // nobody set must not cost a call against somebody's provider.
+    expect(p.hits.some((h) => h.endsWith('/groups'))).toBe(false);
+  });
+
+  test('requiredGroups: a member is admitted and a non-member is refused, on the same identity', async () => {
+    // negative control: delete `RequiredGroups: cfg.RequiredGroups,` from the SsoSignInOpts literal
+    // in internal/api/routes_auth.go — the non-member is admitted.
+    const { p, s } = await pair();
+    expect((await put(s, groupsCfg(p))).status).toBe(200);
+    // One person throughout: only the membership changes, so nothing else can explain the two
+    // outcomes.
+    p.userInfo = { id: 42, login: 'gitter', email: 'gitter@example.com' };
+
+    p.groups = [{ login: 'other-org' }, { login: 'personal' }];
+    const refused = await login(s, p);
+    expect(where(refused)).toBe(NOT_A_MEMBER);
+    expect(refused.headers.get('set-cookie')).toBeNull();
+
+    // Case-folded on both sides: the rule was stored as `acme`, GitHub spells the org `Acme`.
+    p.groups = [{ login: 'other-org' }, { login: 'Acme' }];
+    const admitted = await login(s, p);
+    expect(where(admitted)).toBe('/');
+    expect(await username(s, admitted)).toBe('gitter');
+
+    // Both logins asked, and the fake serves /groups only to `Bearer at-1` — so the access token
+    // reached the groups endpoint, which nothing short of a round trip can show.
+    expect(p.hits.filter((h) => h === 'GET /groups').length).toBe(2);
+  });
+
+  test('a groups endpoint that fails refuses the login, and says something other than "not a member"', async () => {
+    // negative control: in internal/api/routes_auth.go, drop the `groupsErr = err` carry in the
+    // groups-fetch default branch (leave the empty identity.Groups) — the refusal collapses into
+    // NOT_A_MEMBER, which is the distinction this test exists for.
+    const { p, s } = await pair();
+    expect((await put(s, groupsCfg(p))).status).toBe(200);
+    p.userInfo = { id: 42, login: 'gitter', email: 'gitter@example.com' };
+    // A member — of a list nobody can read. Being in the group must not save the login here.
+    p.groups = [{ login: 'acme' }];
+    p.groupsStatus = 500;
+
+    const res = await login(s, p);
+    expect(where(res)).toBe(
+      `/login?sso_error=your group memberships could not be determined, and sign-in is restricted to specific groups — ${p.base}/groups answered 500`,
+    );
+    expect(where(res)).not.toBe(NOT_A_MEMBER);
+    expect(res.headers.get('set-cookie')).toBeNull();
   });
 });

@@ -209,6 +209,7 @@ func TestClaimMapping(t *testing.T) {
 			Name:     "The Octocat",
 			Avatar:   "https://x/y.png",
 			// GitHub never says, and nil is NOT permission to adopt an account
+			Groups: []string{}, // never nil, and empty until something asks (routes_auth)
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("github %+v", got)
@@ -221,12 +222,13 @@ func TestClaimMapping(t *testing.T) {
 			Name:          "Alice",
 			Avatar:        "https://x/a.png",
 			EmailVerified: jsonx.Bool(true),
+			Groups:        []string{},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("oidc %+v", got)
 		}
-		// The JSON shape carries emailVerified as null, not absent.
-		if b := string(jsonx.Must(MapClaimsMust(t, `{"sub":"x"}`))); !strings.HasSuffix(b, `"emailVerified":null}`) {
+		// The JSON shape carries emailVerified as null, not absent — and groups as [], not null.
+		if b := string(jsonx.Must(MapClaimsMust(t, `{"sub":"x"}`))); !strings.HasSuffix(b, `"emailVerified":null,"groups":[]}`) {
 			t.Fatalf("json %s", b)
 		}
 		// String booleans are honoured; anything else is "never said".
@@ -281,6 +283,79 @@ func TestClaimMapping(t *testing.T) {
 		for _, c := range cases {
 			if EmailAllowed(c.email, c.domains) != c.want {
 				t.Fatalf("%q %v", c.email, c.domains)
+			}
+		}
+	})
+
+	t.Run("the username allow-list fails CLOSED, and `*` does not rescue a missing username", func(t *testing.T) {
+		// negative control: drop the `username == ""` guard in UsernameAllowed → the {"*"} + "" case passes
+		cases := []struct {
+			username string
+			patterns []string
+			want     bool
+		}{
+			{"", []string{}, true},      // no rule allows everything, including no username
+			{"", []string{"*"}, false},  // path.Match("*", "") is TRUE in Go — the guard is what refuses
+			{"", []string{"a*"}, false}, // and a list with no username is a refusal either way
+			{"octocat", []string{"octocat"}, true},
+			{"OctoCat", []string{"octocat"}, true}, // GitHub logins are case-insensitive
+			{"octocat", []string{"OCTOCAT"}, true}, // …so BOTH sides are folded
+			{"octocat", []string{"octo*"}, true},   // globs
+			{"octocat", []string{"oct?at"}, false}, // `?` is exactly ONE character, never a run
+			{"octo-1", []string{"octo-[0-9]"}, true},
+			{"octo-x", []string{"octo-[0-9]"}, false}, // a character class is more than */?
+			{"mallory", []string{"octo*", "alice"}, false},
+			{"alice", []string{"octo*", "alice"}, true}, // any-of
+		}
+		for _, c := range cases {
+			if UsernameAllowed(c.username, c.patterns) != c.want {
+				t.Fatalf("%q %v → %v", c.username, c.patterns, !c.want)
+			}
+		}
+	})
+
+	t.Run("group membership is any-of, exact and case-insensitive", func(t *testing.T) {
+		// negative control: drop the ToLower on the member's name → the "Acme" case fails
+		cases := []struct {
+			groups   []string
+			required []string
+			want     bool
+		}{
+			{[]string{}, []string{}, true},          // no rule allows everything
+			{[]string{}, []string{"acme"}, false},   // a rule and no groups is a refusal
+			{[]string{""}, []string{"acme"}, false}, // and a blank name matches nothing
+			{[]string{"Acme"}, []string{"acme"}, true},
+			{[]string{"acme"}, []string{"other", "acme"}, true},
+			{[]string{"acme-labs"}, []string{"acme"}, false}, // exact, not a prefix
+			{[]string{"acme/backend"}, []string{"acme/backend"}, true},
+			// NOT globbed: `*` is a literal group name here, which is why it matches nothing. If
+			// group globbing is ever added, path.Match's `/` rule bites exactly this case.
+			{[]string{"acme/backend"}, []string{"*"}, false},
+		}
+		for _, c := range cases {
+			if GroupsAllowed(c.groups, c.required) != c.want {
+				t.Fatalf("%v %v → %v", c.groups, c.required, !c.want)
+			}
+		}
+	})
+
+	t.Run("group names are read out of both response shapes, by the preset's key", func(t *testing.T) {
+		// negative control: ignore the `key` argument and read "login" always → the GitLab case is empty
+		gh := GroupNamesOf(parse(t, `[{"login":"acme","id":1},{"id":2},{"login":""},"junk"]`), PresetFor("github").GroupsKey)
+		if !reflect.DeepEqual(gh, []string{"acme"}) { // an item with no name, and a non-object, are skipped
+			t.Fatalf("github %v", gh)
+		}
+		gl := GroupNamesOf(parse(t, `[{"id":1,"name":"Backend","path":"backend","full_path":"acme/backend"}]`), PresetFor("gitlab").GroupsKey)
+		if !reflect.DeepEqual(gl, []string{"acme/backend"}) { // the PATH, not the display name
+			t.Fatalf("gitlab %v", gl)
+		}
+		if got := GroupNamesOf(parse(t, `{"values":[{"login":"a"}]}`), "login"); !reflect.DeepEqual(got, []string{"a"}) {
+			t.Fatalf("values %v", got)
+		}
+		// Never nil (Go rule 3), and no key means nothing can be read.
+		for _, got := range [][]string{GroupNamesOf(parse(t, `[]`), "login"), GroupNamesOf(nil, "login"), GroupNamesOf(parse(t, `[{"login":"a"}]`), "")} {
+			if got == nil || len(got) != 0 {
+				t.Fatalf("empty %v", got)
 			}
 		}
 	})
@@ -348,6 +423,87 @@ func TestConfiguration(t *testing.T) {
 		}
 	})
 
+	t.Run("the preset's groups endpoint follows the same inheritance rule as its emails endpoint", func(t *testing.T) {
+		// negative control: inherit preset.GroupsURL unconditionally → the self-hosted case carries gitlab.com
+		if got := mustConfig(t, `{"mode":"oauth2","provider":"github","clientId":"c"}`).GroupsURL; got != "https://api.github.com/user/orgs" {
+			t.Fatalf("%q", got)
+		}
+		// A self-hosted userinfo endpoint means this is NOT gitlab.com, and sending its access token
+		// there to ask about groups would hand a third party a live credential.
+		selfHosted := `{"mode":"oauth2","provider":"gitlab","clientId":"c","authorizeUrl":"https://git.corp.example/oauth/authorize","tokenUrl":"https://git.corp.example/oauth/token","userInfoUrl":"https://git.corp.example/api/v4/user"`
+		if got := mustConfig(t, selfHosted+`}`).GroupsURL; got != "" {
+			t.Fatalf("%q", got)
+		}
+		typed := mustConfig(t, selfHosted+`,"groupsUrl":"https://git.corp.example/api/v4/groups","requiredGroups":["Acme/Backend"],"scopes":"read_user read_api"}`)
+		if typed.GroupsURL != "https://git.corp.example/api/v4/groups" {
+			t.Fatalf("%q", typed.GroupsURL)
+		}
+		// The lists are normalised the way the domain list is: trimmed, lowercased, empties dropped.
+		if !reflect.DeepEqual(typed.RequiredGroups, []string{"acme/backend"}) {
+			t.Fatalf("%v", typed.RequiredGroups)
+		}
+		if got := mustConfig(t, `{"mode":"oauth2","provider":"github","clientId":"c","allowedUsernames":[" Octo* ","","QA-[0-9]*"]}`).AllowedUsernames; !reflect.DeepEqual(got, []string{"octo*", "qa-[0-9]*"}) {
+			t.Fatalf("%v", got)
+		}
+	})
+
+	t.Run("a group rule the token could not read is refused AT SAVE, naming the scope", func(t *testing.T) {
+		// negative control: drop the hasScope check → the github-without-read:org case saves and every login then refuses
+		// The github preset's own scopes do not include read:org, so requiring a group with them is
+		// a config that would refuse every login instead of a sign-in that works.
+		_, err := ParseConfig(parse(t, `{"mode":"oauth2","provider":"github","clientId":"c","requiredGroups":["acme"]}`))
+		wantErr(t, err, `requiredGroups needs the "read:org" scope`)
+		if err.Error() != `requiredGroups needs the "read:org" scope to read https://api.github.com/user/orgs (or any of: read:org, user, write:org, admin:org) — add it to scopes (currently "read:user user:email")` {
+			t.Fatalf("%q", err.Error())
+		}
+		// The preset's own default scopes are `read:user user:email`. Neither token IS `user`, so the
+		// refusal above is not an accident of substring matching — it is the real state of that config.
+		// Adding it is what the sentence asks for, and then it saves.
+		ok := mustConfig(t, `{"mode":"oauth2","provider":"github","clientId":"c","requiredGroups":["Acme"],"scopes":"read:user user:email read:org"}`)
+		if !reflect.DeepEqual(ok.RequiredGroups, []string{"acme"}) || ok.Scopes != "read:user user:email read:org" {
+			t.Fatalf("%+v", ok)
+		}
+		// A comma-separated paste is the same set of scopes.
+		if _, err := ParseConfig(parse(t, `{"mode":"oauth2","provider":"github","clientId":"c","requiredGroups":["acme"],"scopes":"read:user,read:org"}`)); err != nil {
+			t.Fatal(err)
+		}
+		// GitHub documents `user` as granting this read too, so a config naming it must SAVE. The check
+		// asks what the provider accepts, not what this table happens to recommend first.
+		// negative control: make hasAnyScope compare only GroupsScopes[0] → this save is refused.
+		if _, err := ParseConfig(parse(t, `{"mode":"oauth2","provider":"github","clientId":"c","requiredGroups":["acme"],"scopes":"user user:email"}`)); err != nil {
+			t.Fatalf("`user` is sufficient per GitHub's own docs, and was refused: %v", err)
+		}
+		// A scope that merely CONTAINS the string is not the scope.
+		_, err = ParseConfig(parse(t, `{"mode":"oauth2","provider":"github","clientId":"c","requiredGroups":["acme"],"scopes":"read:organization"}`))
+		wantErr(t, err, `needs the "read:org" scope`)
+		// GitLab's read_user is the /user endpoint only; groups need read_api.
+		_, err = ParseConfig(parse(t, `{"mode":"oauth2","provider":"gitlab","clientId":"c","requiredGroups":["acme"]}`))
+		wantErr(t, err, `requiredGroups needs the "read_api" scope`)
+	})
+
+	t.Run("a group rule with nothing to read it with is refused too", func(t *testing.T) {
+		// negative control: scope the requiredGroups block to `preset != nil` → the custom case is accepted and every login then refuses
+		// No preset ⇒ nothing says which field of the response names a group.
+		_, err := ParseConfig(parse(t, `{"mode":"oauth2","provider":"custom","clientId":"c","authorizeUrl":"https://x.test/a","tokenUrl":"https://x.test/t","groupsUrl":"https://x.test/groups","requiredGroups":["acme"]}`))
+		wantErr(t, err, `requiredGroups is not supported for provider "custom"`)
+		// A self-hosted GitLab did not inherit gitlab.com's endpoint and did not type one.
+		_, err = ParseConfig(parse(t, `{"mode":"oauth2","provider":"gitlab","clientId":"c","userInfoUrl":"https://git.corp.example/api/v4/user","requiredGroups":["acme"],"scopes":"read_api"}`))
+		wantErr(t, err, `requiredGroups needs a groups endpoint — set groupsUrl`)
+		// An OIDC issuer declares no groups endpoint in its discovery document and this host maps no
+		// groups claim, so a group rule there could only ever fail every login.
+		_, err = ParseConfig(parse(t, `{"mode":"oidc","clientId":"c","issuer":"https://accounts.google.com","requiredGroups":["acme"]}`))
+		wantErr(t, err, `requiredGroups needs a provider whose groups endpoint this host knows`)
+		// And a groups endpoint is held to the same https rule every other endpoint is.
+		_, err = ParseConfig(parse(t, `{"mode":"oauth2","provider":"gitlab","clientId":"c","groupsUrl":"http://git.corp.example/api/v4/groups"}`))
+		wantErr(t, err, `groupsUrl must be https`)
+	})
+
+	t.Run("a malformed username glob is refused while a human is looking at the form", func(t *testing.T) {
+		// negative control: drop the path.Match probe loop → "qa-[0-9" is stored and silently matches nobody
+		_, err := ParseConfig(parse(t, `{"mode":"oauth2","provider":"github","clientId":"c","allowedUsernames":["ok*","qa-[0-9"]}`))
+		wantErr(t, err, `allowedUsernames entry "qa-\[0-9" is not a valid pattern`)
+	})
+
 	t.Run("what it refuses", func(t *testing.T) {
 		// negative control: allow http off-loopback in httpsURL → the 'http://idp.example.com' case passes
 		refuse := func(input, pattern string) {
@@ -392,7 +548,7 @@ func TestConfiguration(t *testing.T) {
 		// negative control: return u.String() instead of whatwgString → the issuer loses its trailing '/'
 		// This is the `config` the golden fixture's GET /api/sso/config carries (FIXTURE.json googleExpected).
 		cfg := mustConfig(t, `{"mode":"oidc","clientId":"google-cid","issuer":"https://accounts.google.com","label":"Google"}`)
-		want := `{"mode":"oidc","enabled":true,"clientId":"google-cid","allowedEmailDomains":[],"defaultRole":"admin","label":"Google","discoveryUrl":"https://accounts.google.com/","provider":"","authorizeUrl":"","tokenUrl":"","userInfoUrl":"","emailsUrl":"","scopes":"openid profile email","claimMap":{"subject":"sub","username":"preferred_username","email":"email","name":"name","avatar":"picture"}}`
+		want := `{"mode":"oidc","enabled":true,"clientId":"google-cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"admin","label":"Google","discoveryUrl":"https://accounts.google.com/","provider":"","authorizeUrl":"","tokenUrl":"","userInfoUrl":"","emailsUrl":"","groupsUrl":"","scopes":"openid profile email","claimMap":{"subject":"sub","username":"preferred_username","email":"email","name":"name","avatar":"picture"}}`
 		if got := string(jsonx.Must(cfg)); got != want {
 			t.Fatalf("\n got %s\nwant %s", got, want)
 		}

@@ -1806,12 +1806,51 @@ By default, **anyone who successfully authenticates**. Your provider already own
 Workspace restricts to internal users, a GitHub OAuth app can be org-approved — and duplicating it
 here would only be a second list to keep in step.
 
-Two optional knobs:
+If you want a second list anyway: three allow rules, the endpoint one of them needs, and a
+placeholder.
 
 | Field | Effect |
 |---|---|
 | `allowedEmailDomains: []` | Non-empty ⇒ a login whose email is outside the list is refused. **Fails closed**: a provider that returns *no* address (a private GitHub profile) is refused too, not waved through |
+| `allowedUsernames: []` | Non-empty ⇒ a login whose username matches none of these **glob** patterns is refused. `*`, `?` and character classes (`qa-[0-9]*`), matched case-insensitively; a malformed pattern (`qa-[0-9`) is refused when you save rather than left silently matching nobody. **Fails closed the same way** — see the warning below, because this one has a sharp edge |
+| `requiredGroups: []` | Non-empty ⇒ the provider is asked which groups/orgs this user belongs to, and a login in none of them is refused. **Exact** names, case-insensitive — not globs, because a GitLab group is a path (`acme/backend`) and `*` would not mean what you'd expect across the `/`. Needs a preset and a scope: see below |
+| `groupsUrl` | Where that group list is read from. Filled in by the preset (`https://api.github.com/user/orgs`, `https://gitlab.com/api/v4/groups`); type your own for a self-hosted provider |
 | `defaultRole` | Role for auto-provisioned accounts. Only `admin` exists today, so this is a placeholder for when roles land |
+
+The rules **and** together: each list is any-of, and every rule you set has to pass.
+
+> **A username rule on a provider that supplies no username locks out everyone, not no one.** The
+> username is whatever `claimMap.username` names in the provider's answer — `login` on GitHub,
+> `username` on GitLab, `preferred_username` on OIDC. Plenty of OIDC providers send no such claim,
+> and there is nothing to match against, so the rule refuses (`this provider returned no username,
+> and sign-in is restricted to specific usernames`) rather than quietly passing. That is the same
+> direction `allowedEmailDomains` fails in, and it is deliberate — but on a provider you have not
+> checked, `allowedEmailDomains` is the safer rule to reach for. Log in once with the rule unset and
+> look at the username you were given.
+
+`requiredGroups` asks more of the configuration than the other two, and **all of it is checked while
+you save**, not at somebody's first login:
+
+- **An OAuth 2.0 preset — `github` or `gitlab`.** The group list is a second call to a
+  provider-specific endpoint, and only the preset knows which field of the answer names a group
+  (`login` for GitHub, `full_path` for GitLab, so a GitLab rule is written `acme/backend`).
+  `custom`, `bitbucket` and OIDC are refused outright: a discovery document declares no groups
+  endpoint and there is no groups claim in the mapping, so an OIDC group rule could only ever fail
+  every login.
+- **The scope that endpoint needs, in `scopes`** — `read:org` for GitHub, `read_api` for GitLab.
+  Without it the answer omits private memberships or is refused outright, and a legitimate member is
+  locked out with no diagnostic anywhere. The save refuses and names the scope. Adding it changes
+  what `/start` asks the provider for, so expect a consent screen the next time people sign in.
+- **`groupsUrl`, if you moved `userInfoUrl` off the preset's host.** A self-hosted GitLab's access
+  token is not sent to gitlab.com to ask what groups it is in, so the preset's URL is not inherited
+  once the endpoints stop being the preset's. The response shape is still assumed to be the
+  preset's.
+
+**A group rule fails closed, in two deliberately different ways.** Not a member is `you are not in
+a group this host allows to sign in (…)`. A group list that never arrived — a revoked scope, a
+rate limit, an outage — is `your group memberships could not be determined, …`, and carries what
+the provider actually answered. The login is refused either way; the sentence is the difference
+between adding somebody to a group and fixing your OAuth app.
 
 An account is keyed on **`(provider, subject)`**, never the email — someone changing their address
 keeps their account, their history and their personal tokens. An address is used for exactly one
