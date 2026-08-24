@@ -19,3 +19,6 @@ hetzner*.yml
 
 # GoReleaser`s pre-build scratch (the version-stamped installer).
 .build/
+
+# CI writes one at the workspace root to authenticate `bun publish`; never commit a token.
+.npmrc
