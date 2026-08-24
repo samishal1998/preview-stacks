@@ -7,6 +7,7 @@ package swarm
 
 import (
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -207,11 +208,11 @@ func TestCommandLines(t *testing.T) {
 	if got := StackPsCmd("a b"); got != "docker stack ps 'a b'" {
 		t.Errorf("ps: %s", got)
 	}
-	if got := StackLogsCmd("s1", 50.9, "web", LogsOptions{Follow: true, Timestamps: true}); got != `docker service logs --no-color --tail 50 --follow --timestamps 's1_web'` {
+	if got := StackLogsCmd("s1", 50.9, "web", LogsOptions{Follow: true, Timestamps: true}); got != `docker service logs --tail 50 --follow --timestamps 's1_web'` {
 		t.Errorf("logs: %s", got)
 	}
 	whole := StackLogsCmd("s1", 10, "", LogsOptions{Follow: true, Since: "1h"})
-	if whole != `svcs=$(docker stack services --format '{{.Name}}' 's1'); [ -n "$svcs" ] || { echo "no services in stack s1" >&2; exit 1; }; for svc in $svcs; do docker service logs --no-color --tail 10 --follow --since '1h' "$svc" 2>&1 &; done; wait` {
+	if whole != `svcs=$(docker stack services --format '{{.Name}}' 's1'); [ -n "$svcs" ] || { echo "no services in stack s1" >&2; exit 1; }; for svc in $svcs; do docker service logs --tail 10 --follow --since '1h' "$svc" 2>&1 & done; wait` {
 		t.Errorf("whole: %s", whole)
 	}
 	if strings.Contains(StackLogsCmd("s1", 10, "", LogsOptions{}), "wait") {
@@ -220,6 +221,88 @@ func TestCommandLines(t *testing.T) {
 	if Shq("a'b") != `'a'\''b'` || Shq("a b$c") != `'a b$c'` {
 		t.Errorf("shq")
 	}
+}
+
+// serviceLogsFlags is `docker service logs`'s flag set as documented at
+// https://docs.docker.com/reference/cli/docker/service/logs/. Docker answers anything else with
+// `unknown flag: …` and a usage dump, so an option borrowed from `docker compose logs` — which
+// accepts a wider set — does not degrade, it takes down every log read on the host. That is how
+// `--no-color` shipped.
+//
+// This list is TRANSCRIBED, not measured: no swarm host runs in CI, so nothing here has asked a real
+// docker. It is safe in the direction that matters — every flag the code actually emits is checked
+// against it, so an entry that is missing fails loudly. It is NOT safe in the other direction: an
+// entry that should not be here would greenlight that flag if someone later emits it. Before adding
+// a flag to StackLogsCmd, run `docker service logs --help` on a manager and confirm it there. The
+// `bash -n` check below is the load-bearing one; it depends on nothing but bash.
+var serviceLogsFlags = map[string]bool{
+	"--details": true, "--follow": true, "--no-resolve": true, "--no-task-ids": true, "--no-trunc": true,
+	"--raw": true, "--since": true, "--tail": true, "--timestamps": true,
+}
+
+// logsForms is every shape StackLogsCmd returns: one service or the whole stack, followed or not.
+// Both axes matter — the flags differ by option, and the loop's shell syntax differs by follow.
+func logsForms() []struct{ name, cmd string } {
+	return []struct{ name, cmd string }{
+		{"one service", StackLogsCmd("s1", 50.9, "web", LogsOptions{Timestamps: true, Since: "1h"})},
+		{"one service followed", StackLogsCmd("s1", 10, "web", LogsOptions{Follow: true, Timestamps: true})},
+		{"whole stack", StackLogsCmd("s1", 10, "", LogsOptions{Since: "1h"})},
+		{"whole stack followed", StackLogsCmd("s1", 10, "", LogsOptions{Follow: true, Timestamps: true, Since: "1h"})},
+	}
+}
+
+// Everything above compares StackLogsCmd's output to a string someone wrote down, which is only ever
+// as right as the person who wrote it: `--no-color` and a `&;` that no shell will parse both matched
+// their expected line exactly, for four releases. These two read the command the way docker and bash
+// read it instead.
+func TestStackLogsCmdIsSomethingDockerAndBashAccept(t *testing.T) {
+	t.Run("no flag outside the set `docker service logs` takes", func(t *testing.T) {
+		// negative control: put `--no-color ` back in StackLogsCmd's first flag — all four forms fail.
+		for _, f := range logsForms() {
+			i := strings.Index(f.cmd, "docker service logs ")
+			if i < 0 {
+				t.Fatalf("%s: no `docker service logs` in %s", f.name, f.cmd)
+			}
+			// Only what follows it: the whole-stack form's `--format` belongs to `docker stack
+			// services`, a different command with a different flag set.
+			seen := 0
+			for _, tok := range strings.Fields(f.cmd[i:]) {
+				if !strings.HasPrefix(tok, "--") {
+					continue // a flag's value, `"$svc"`, the quoted name, `2>&1`, `done` — not our business
+				}
+				seen++
+				if !serviceLogsFlags[tok] {
+					t.Errorf("%s: %s is not a `docker service logs` flag: %s", f.name, tok, f.cmd)
+				}
+			}
+			// Without this, renaming the command turns the scan into a loop over nothing that passes
+			// forever — the same silence that let the borrowed flag through.
+			if seen == 0 {
+				t.Errorf("%s: scanned no flags at all: %s", f.name, f.cmd)
+			}
+		}
+	})
+
+	t.Run("every form is a script bash can parse", func(t *testing.T) {
+		// negative control: restore `"; done"` after the backgrounded `&` — `bash -n` reports `syntax
+		// error near unexpected token ';'` for both followed forms. `&` already terminates a command,
+		// so `cmd &; done` never ran; the string assertion could not tell, because bytes that do not
+		// parse still compare equal to themselves.
+		bash, err := osexec.LookPath("bash")
+		if err != nil {
+			t.Skip("no bash")
+		}
+		dir := t.TempDir()
+		for i, f := range logsForms() {
+			script := filepath.Join(dir, "logs"+string(rune('a'+i))+".sh")
+			if err := os.WriteFile(script, []byte(f.cmd), 0o666); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := osexec.Command(bash, "-n", script).CombinedOutput(); err != nil {
+				t.Errorf("%s: %v: %s\n%s", f.name, err, out, f.cmd)
+			}
+		}
+	})
 }
 
 func TestSwarmDiscovery(t *testing.T) {
