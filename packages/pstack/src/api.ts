@@ -910,6 +910,25 @@ export function createServer(opts: ServerOptions) {
                   { status: 409 },
                 );
               }
+              /*
+               * Stop watching it BEFORE the directory goes.
+               *
+               * A readiness watch outlives the `up` that started it, and it polls docker through a
+               * runner whose `cwd` is the deployment directory — which `registry.remove` deletes.
+               * The next tick then spawns into a path that no longer exists: ENOENT, thrown from
+               * inside a background loop nobody awaits, which takes down whatever happens to be
+               * running at the time.
+               *
+               * `down` and the container-stop route already cancel, for the reason that applies
+               * here too: nothing should go on narrating about a deployment that is gone, least of
+               * all announce `stack.timedout` about one an operator deliberately forgot. Forgetting
+               * one was the third case and was missed.
+               *
+               * Only reachable where docker ANSWERS — the guard above refuses while it cannot, so
+               * a host without docker never gets this far. That is why it survived: it needs a
+               * machine with docker, which the test suite's own box was not.
+               */
+              readiness.cancel(spec.stack);
               await registry.remove(id);
               events.emit('deployment.deleted', { id, stack: spec.stack, kind: dep.kind });
               return json({ removed: id, stack: spec.stack });
