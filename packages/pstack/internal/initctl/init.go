@@ -205,6 +205,18 @@ func Init(opts Options) error {
 		pstackToken = randomToken()
 	}
 
+	// The first admin account, from the environment for the same reason the token is: `serve` inside
+	// the container reads these very names, so there is one spelling of them on the whole host and no
+	// flag to keep in step. They are a PAIR — `serve` ignores a half of one — and never printed: a
+	// generated token is printed once because nobody else has a copy, whereas this password came from
+	// whoever ran init, and a credential with an owner has no business in a log.
+	//
+	// `pstack upgrade` re-runs init with only PSTACK_TOKEN in its environment, so an upgrade drops
+	// these lines from .env. That is the wanted outcome, not an oversight: by then the account exists
+	// and the bootstrap is inert (internal/auth), so keeping a spent password in a 0600 file buys
+	// nothing.
+	adminUser, adminPassword := os.Getenv("PSTACK_ADMIN_USER"), os.Getenv("PSTACK_ADMIN_PASSWORD")
+
 	// ── 0. Preconditions ────────────────────────────────────────────────────────────────────────
 	// Same shape and same reason as a spec's `requires:` — fail immediately, by name, before
 	// anything is created, rather than deep inside a compose error nobody can read.
@@ -365,6 +377,7 @@ func Init(opts Options) error {
 	if err := write(out, filepath.Join(controlDir, ".env"), envFile(envValues{
 		dataDir: dataDir, domain: domain, acmeEmail: acmeEmail, dnsProvider: dnsProvider, image: image,
 		pstackToken: pstackToken, ui: ui, uiImage: uiImage, orchestrator: orchestrator,
+		adminUser: adminUser, adminPassword: adminPassword,
 	}), 0o600, dryRun); err != nil {
 		return err
 	}
@@ -495,15 +508,17 @@ func waitHealthy(runner exec.Runner) string {
 }
 
 type envValues struct {
-	ui           UI
-	uiImage      string
-	orchestrator spec.Orchestrator
-	dataDir      string
-	domain       string
-	acmeEmail    string
-	dnsProvider  string
-	image        string
-	pstackToken  string
+	ui            UI
+	uiImage       string
+	orchestrator  spec.Orchestrator
+	dataDir       string
+	domain        string
+	acmeEmail     string
+	dnsProvider   string
+	image         string
+	pstackToken   string
+	adminUser     string
+	adminPassword string
 }
 
 // envFile is the values every `${...}` in the compose template reads. Compose loads this from `.env`.
@@ -512,7 +527,7 @@ func envFile(v envValues) string {
 	if uiImage == "" {
 		uiImage = "pstack-ui:local"
 	}
-	return strings.Join([]string{
+	lines := []string{
 		"# Written by `pstack init`. Compose reads this file from the project directory at `up` time.",
 		"# Re-run `pstack init` to change anything here rather than editing by hand — the two must agree.",
 		"#",
@@ -533,7 +548,23 @@ func envFile(v envValues) string {
 		"# the only gate on job transcripts and the stack list (docs/bootstrap.md §9).",
 		"PSTACK_TOKEN=" + v.pstackToken,
 		"",
-	}, "\n")
+	}
+	// The pair the compose template already passes through as ${PSTACK_ADMIN_USER:-} — until this was
+	// written it resolved to nothing on every host, so the flags existed and the account never
+	// appeared. Written only when BOTH are set: `serve` honours nothing less, and an empty
+	// `PSTACK_ADMIN_PASSWORD=` line reads like a slot to fill in by hand, which is the one way to
+	// create an account that does NOT work (the file is read at `up` time, and by then the users
+	// table decides). After first boot these are inert; `POST /api/auth/bootstrap` is the other door.
+	if v.adminUser != "" && v.adminPassword != "" {
+		lines = append(lines,
+			"# The first admin account, created on FIRST BOOT ONLY — honoured while the users table is",
+			"# empty and inert forever after. Remove them once you have signed in; nothing re-reads them.",
+			"PSTACK_ADMIN_USER="+v.adminUser,
+			"PSTACK_ADMIN_PASSWORD="+v.adminPassword,
+			"",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // AcmeChallengeArgs is Traefik's ACME challenge flags for the chosen mode, at the template's indentation.

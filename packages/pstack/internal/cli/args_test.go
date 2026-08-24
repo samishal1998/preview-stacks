@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -97,6 +99,72 @@ func TestEnvDefaultsUseTheRightNullishness(t *testing.T) {
 	p, _ := ParseArgs([]string{"init"}, env)
 	if p.Challenge != "http01" || p.Orchestrator != "swarm" || p.UI != "basic" || p.Tag != "custom:tag" || p.Domain != "" {
 		t.Errorf("got %+v", p)
+	}
+}
+
+func TestCloudInitCredentialFlagsTakeNoEnvDefault(t *testing.T) {
+	// negative control: default APIToken with get("PSTACK_TOKEN", "") — the second block fails.
+	p, e := ParseArgs([]string{"cloud-init", "--admin-user", "alice", "--admin-password", "pw1", "--api-token", "tok-1"}, noEnv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.AdminUser != "alice" || p.AdminPassword != "pw1" || p.APIToken != "tok-1" {
+		t.Errorf("got %+v", p)
+	}
+	// An operator's shell holds PSTACK_TOKEN because it talks to a host that ALREADY EXISTS. Picking
+	// it up here would bake that host's bearer token into a new host's user-data — where the provider
+	// keeps it as instance metadata — without anyone asking for it. The admin pair follows it: same
+	// decision, same blast radius.
+	env := func(k string) (string, bool) {
+		switch k {
+		case "PSTACK_TOKEN", "PSTACK_ADMIN_USER", "PSTACK_ADMIN_PASSWORD":
+			return "from-the-shell", true
+		}
+		return "", false
+	}
+	p, _ = ParseArgs([]string{"cloud-init"}, env)
+	if p.APIToken != "" || p.AdminUser != "" || p.AdminPassword != "" {
+		t.Errorf("an environment credential leaked into the render: %+v", p)
+	}
+}
+
+// `cloud-init` is where the credentials are decided, so the two decisions it makes on its own — a
+// generated admin password, and a refusal — are checked here rather than only in the transcripts.
+func TestCloudInitDecidesTheAdminCredentials(t *testing.T) {
+	run := func(t *testing.T, argv ...string) (*Exit, string, string) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		base := []string{"cloud-init", "--domain", "preview.example.com", "--acme-email", "ops@example.com", "--password", "dashpw", "-y"}
+		p, e := ParseArgs(append(base, argv...), noEnv)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return cloudInit(p, IO{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut, Env: noEnv}), out.String(), errOut.String()
+	}
+
+	// negative control: drop the adminUser == "" guard in cloudInit — this returns nil and renders a
+	// file with no account in it, exactly as if the flag had not been passed.
+	e, _, _ := run(t, "--admin-password", "hunter2hunter2")
+	if e == nil || e.Code != ExitUsage || !strings.Contains(e.Msg, "--admin-password needs --admin-user") {
+		t.Errorf("a password with no account: %+v", e)
+	}
+
+	// Generated, not prompted, and not left empty: this password lives in instance metadata for the
+	// life of the host, so it must be a value that exists nowhere else — and the ONE place it is ever
+	// shown is here, since `init` on the host prints nothing.
+	e, yaml, said := run(t, "--admin-user", "alice")
+	if e != nil {
+		t.Fatalf("got %+v", e)
+	}
+	m := regexp.MustCompile(`(?m)^  pstack admin:       alice / ([0-9a-f]{24})  \(generated\)$`).FindStringSubmatch(said)
+	if m == nil {
+		t.Fatalf("no generated admin line:\n%s", said)
+	}
+	if !strings.Contains(yaml, "PSTACK_ADMIN_USER='alice' PSTACK_ADMIN_PASSWORD='"+m[1]+"'") {
+		t.Error("the rendered file carries a different password than the one printed")
+	}
+	if !strings.Contains(said, "It also carries the admin password.") {
+		t.Error("the metadata warning does not name the admin password")
 	}
 }
 
