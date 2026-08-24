@@ -10,12 +10,23 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Re-publish the npm half for a tag whose binaries already went out. `release` cannot simply be
+  # re-run — GoReleaser refuses an existing release — and moving a tag to retry the last job is a
+  # bad trade. Dispatch it AT THE TAG so the packages come from the released tree:
+  #   gh workflow run release.yml --ref v0.29.0 -f npm_only=true
+  workflow_dispatch:
+    inputs:
+      npm_only:
+        description: 'Publish the npm packages only, for the tag this is dispatched at'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   verify:
+    if: ${{ !inputs.npm_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -63,6 +74,7 @@ jobs:
 
   release:
     needs: verify
+    if: ${{ !inputs.npm_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -89,6 +101,9 @@ jobs:
 
   npm:
     needs: release
+    # `always()` so the dispatch path reaches this with `release` skipped; the explicit result check
+    # keeps a FAILED release from publishing packages anyway.
+    if: ${{ always() && (needs.release.result == 'success' || inputs.npm_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -100,7 +115,13 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - name: Publish the UI and the client SDK
-        run: bunx publish-kit publish
+      # publish-kit shells out to `bun publish`, and bun reads registry auth from .npmrc — NOT from
+      # NPM_TOKEN in the environment. Handing it the variable alone produced "missing
+      # authentication (run `bunx npm login`)" AFTER the binaries had already been published, which
+      # is the one place in this pipeline where a failure is not free.
+      - name: Authenticate to npm
+        run: printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish the UI and the client SDK
+        run: bunx publish-kit publish
