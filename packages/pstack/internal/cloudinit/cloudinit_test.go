@@ -1,6 +1,7 @@
 package cloudinit
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -604,4 +605,202 @@ func TestCloudInitGoldens(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The portable config (`pstack pull config` → `--config` / `--config-url`). The whole feature is a
+// trade the operator has to be able to see, so most of what is asserted here is the SECRETS header
+// telling the truth about which half of it they took.
+//
+// Everything below checks rendered text. No instance is booted anywhere in this repo, so the boot
+// step's behaviour — that the API answers on the bridge address, that the file is really gone — is
+// NOT covered by any test; what is covered is that the commands cloud-init will hand the shell are
+// the ones intended, taken from the PARSED runcmd rather than scraped out of the prose.
+func TestCloudInitPortableConfig(t *testing.T) {
+	sealedBytes := []byte(`{"version":1,"sealed":"scrypt-aes256gcm","payload":"AA=="}`)
+	const key = "correct horse $tapler" // a `$` is legal: it is a shell assignment, not an argument
+	embed := base
+	embed.ConfigSealed, embed.ConfigKey = sealedBytes, key
+	fetch := base
+	fetch.ConfigURL, fetch.ConfigKey = "https://vault.example.com/pstack.sealed", key
+
+	applyStep := func(t *testing.T, yaml string) string {
+		t.Helper()
+		for _, c := range runcmd(t, yaml) {
+			if strings.Contains(c, "pstack push config") {
+				return c
+			}
+		}
+		return ""
+	}
+	writeFiles := func(t *testing.T, yaml string) []any {
+		t.Helper()
+		doc, err := yamlx.ParseString(yaml)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc.(*omap.Map).GetSlice("write_files")
+	}
+
+	t.Run("--config embeds the sealed payload 0600, byte for byte", func(t *testing.T) {
+		// negative control: render CONFIG_FILE as "" — write_files disappears and the first check fails.
+		out := render(t, embed)
+		if !yamlOK(t, out) || leftoverRe.MatchString(out) {
+			t.Fatal("invalid YAML or placeholders left")
+		}
+		files := writeFiles(t, out)
+		if len(files) != 1 {
+			t.Fatalf("want one write_files entry, got %d", len(files))
+		}
+		f, ok := files[0].(*omap.Map)
+		if !ok {
+			t.Fatalf("write_files entry is %T", files[0])
+		}
+		if f.GetString("path") != "/var/lib/pstack/config.sealed" || f.GetString("permissions") != "0600" || f.GetString("encoding") != "b64" {
+			t.Errorf("write_files entry: path=%q permissions=%q encoding=%q", f.GetString("path"), f.GetString("permissions"), f.GetString("encoding"))
+		}
+		// Base64 is not cosmetic: it is the one encoding whose alphabet contains no `{`, so the
+		// payload cannot be rewritten by the substitution that places it, and no byte of it can
+		// reach the YAML around it.
+		got, err := base64.StdEncoding.DecodeString(f.GetString("content"))
+		if err != nil || string(got) != string(sealedBytes) {
+			t.Errorf("the embedded payload is not the sealed file: %q (%v)", got, err)
+		}
+	})
+
+	t.Run("--config-url keeps the payload off instance metadata", func(t *testing.T) {
+		// The only thing this mode buys is that the export is NOT here. If a write_files block ever
+		// appeared for it, the two modes would be identical and the header's promise would be false.
+		// negative control: render configFile for ConfigURL too — the write_files check fails.
+		out := render(t, fetch)
+		if !yamlOK(t, out) || leftoverRe.MatchString(out) {
+			t.Fatal("invalid YAML or placeholders left")
+		}
+		if len(writeFiles(t, out)) != 0 {
+			t.Error("--config-url wrote the payload into the file it was chosen to keep it out of")
+		}
+		step := applyStep(t, out)
+		if !strings.Contains(step, `curl -fsSL --retry 3 --retry-delay 2 -o "$f" 'https://vault.example.com/pstack.sealed' &&`) {
+			t.Errorf("no guarded fetch in the apply step:\n%s", step)
+		}
+	})
+
+	t.Run("the header states which of the two was used, and both name the key", func(t *testing.T) {
+		// This is the requirement: the seal protects the file everywhere except the box it provisions
+		// under --config, and only the key is exposed under --config-url. Saying "it is encrypted" and
+		// stopping would be true and useless.
+		// negative control: use the --config wording for both — the --config-url assertions fail.
+		e, f := render(t, embed), render(t, fetch)
+		for _, out := range []string{e, f} {
+			if !strings.Contains(out, "THIS FILE CARRIES CREDENTIALS") || !strings.Contains(out, "PSTACK_CONFIG_KEY") {
+				t.Error("a file carrying the passphrase does not say so")
+			}
+			if !strings.Contains(out, "DELETES /var/lib/pstack/config.sealed as soon as it has applied it") {
+				t.Error("the header does not promise the deletion")
+			}
+		}
+		if !strings.Contains(e, "*and the sealed export itself*") || !strings.Contains(e, "the seal protects that export everywhere EXCEPT here") {
+			t.Error("--config does not admit that the key sits beside the payload")
+		}
+		if strings.Contains(e, "but NOT the export it opens") {
+			t.Error("--config claims the payload is elsewhere")
+		}
+		if !strings.Contains(f, "but NOT the export it opens") || !strings.Contains(f, "https://vault.example.com/pstack.sealed") {
+			t.Error("--config-url does not say where the export actually is")
+		}
+		if strings.Contains(f, "*and the sealed export itself*") {
+			t.Error("--config-url claims to carry the payload")
+		}
+		// A file with no config in it must go on saying it carries nothing.
+		if !strings.Contains(render(t, base), "Nothing in this file is a credential except the dashboard password") {
+			t.Error("the plain file stopped saying it carries nothing")
+		}
+	})
+
+	t.Run("the apply step deletes the sealed file whether or not it worked", func(t *testing.T) {
+		// A sealed export left in /var/lib is a credential at rest that nothing would ever clean up.
+		// `rm` sits AFTER the if, not inside it, so the failure path deletes it too — that ordering is
+		// the assertion, not the presence of the word.
+		// negative control: drop the `rm -f "$f"` line from configStep — the first check fails.
+		step := applyStep(t, render(t, embed))
+		if step == "" {
+			t.Fatal("no apply step in the rendered file")
+		}
+		rm := strings.Index(step, `rm -f "$f"`)
+		iff := strings.Index(step, "if [ -n \"$ip\"")
+		if rm < 0 || iff < 0 || rm < iff {
+			t.Errorf("rm at %d, if at %d — the delete must follow the attempt unconditionally:\n%s", rm, iff, step)
+		}
+		if !strings.Contains(step, `[ "$applied" = yes ] || echo 'pstack: THE SEALED CONFIG WAS NOT APPLIED`) {
+			t.Errorf("a failed apply is silent:\n%s", step)
+		}
+		// The passphrase is a shell VARIABLE, never an argument: /proc/<pid>/cmdline is world-readable.
+		if !strings.Contains(step, "PSTACK_CONFIG_KEY='"+key+"'\nexport PSTACK_CONFIG_KEY") {
+			t.Errorf("the passphrase is not a plain assignment:\n%s", step)
+		}
+		if strings.Contains(step, "PSTACK_CONFIG_KEY='"+key+"' /usr/local/bin/pstack") {
+			t.Error("the passphrase became a command-line env prefix, visible in `ps`")
+		}
+		// The token comes off the host, not out of this file.
+		if !strings.Contains(step, `sed -n 's/^PSTACK_TOKEN=//p' /var/lib/pstack/control/.env`) {
+			t.Errorf("the token is not read from control/.env:\n%s", step)
+		}
+	})
+
+	t.Run("refuses a config that would reach the host altered, or a key with nothing to open", func(t *testing.T) {
+		// negative control: drop {"config passphrase", a.ConfigKey} from the `{{` loop in validate — the
+		// first case renders, and the rendered file then carries the pstack version as the passphrase.
+		expectErr := func(a Answers, re string) {
+			t.Helper()
+			_, err := RenderCloudInit(a)
+			if err == nil || !regexp.MustCompile(re).MatchString(err.Error()) {
+				t.Errorf("want error /%s/, got %v", re, err)
+			}
+			if _, ok := err.(*Error); err != nil && !ok {
+				t.Errorf("not a *cloudinit.Error: %T", err)
+			}
+		}
+		a := embed
+		a.ConfigKey = "{{PSTACK_VERSION}}"
+		expectErr(a, "must not contain")
+		a = embed
+		a.ConfigKey = "pa'ssword" // ends the shell quoting inside the boot script
+		expectErr(a, "single quote")
+		a = embed
+		a.ConfigKey = "two\nlines"
+		expectErr(a, "one line")
+		a = embed
+		a.ConfigURL = fetch.ConfigURL // both at once
+		expectErr(a, "not both")
+		a = embed
+		a.ConfigKey = ""
+		expectErr(a, "needs its passphrase")
+		a = base
+		a.ConfigKey = key // a key in metadata with nothing to open
+		expectErr(a, "nothing to open")
+		a = fetch
+		a.ConfigURL = "https://vault.example.com/a'b"
+		expectErr(a, "no quote or whitespace")
+		a = fetch
+		a.ConfigURL = "file:///etc/shadow"
+		expectErr(a, "http")
+		// One brace is not a marker: the check is `{{`, and a legal passphrase must reach the boot
+		// script byte for byte. This is the assertion on the OUTPUT that the refusals above cannot
+		// make — with the `{{` check dropped, the same shape of value is silently rewritten instead.
+		a = embed
+		a.ConfigKey = "pa{ssword$x"
+		if out := render(t, a); !strings.Contains(out, "PSTACK_CONFIG_KEY='pa{ssword$x'") {
+			t.Error("a legal passphrase was refused or rewritten on its way into the file")
+		}
+	})
+
+	t.Run("a file with no config in it is unchanged, down to the byte", func(t *testing.T) {
+		// Both markers are appended to the END of an existing line for exactly this reason: an empty
+		// value must leave no trace, or every checked-in cloud-init transcript moves.
+		// negative control: drop the `len(a.ConfigSealed) > 0` guard on configFile — a write_files block
+		// renders into a file that was given no config, and the first check fails.
+		out := render(t, base)
+		if strings.Contains(out, "config.sealed") || strings.Contains(out, "PSTACK_CONFIG_KEY") || regexp.MustCompile(`(?m)^write_files:`).MatchString(out) {
+			t.Error("a config step rendered into a file that was given none")
+		}
+	})
 }

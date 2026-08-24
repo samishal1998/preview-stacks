@@ -76,9 +76,9 @@ packages:
   - curl
   - git
   - jq
-  - openssl{{EXTRA_PACKAGES}}
+  - openssl{{EXTRA_PACKAGES}}{{CONFIG_FILE}}
 
-# No `write_files:` here any more. The catch-all router a dead or sleeping preview link lands on is
+# {{WRITE_FILES_NOTE}} The catch-all router a dead or sleeping preview link lands on is
 # rendered by `pstack init` itself since 0.26.0 (labels on the pstack container, priority 1 over the
 # whole `*.{{DOMAIN}}`), so it exists on every host — and it is what wakes a sleeping preview.
 #
@@ -156,7 +156,7 @@ runcmd:
   # Host-local only: there is no published host port (pstack is reached through Traefik), and
   # DNS/TLS may not be ready this early. This is the same probe `init` waits on.
   - docker compose -p pstack-control ps
-  - docker inspect -f '{{.State.Health.Status}}' "$(docker compose -p pstack-control ps -q pstack)"
+  - docker inspect -f '{{.State.Health.Status}}' "$(docker compose -p pstack-control ps -q pstack)"{{CONFIG_STEP}}
 
   # NOTE: no systemd unit for `pstack serve`. The API is a CONTAINER in the control stack that
   # `init` just created, with `restart: unless-stopped`, so Docker restarts it on boot. A systemd

@@ -2,15 +2,26 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
+	osexec "os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/autolabel"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/cloudinit"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/config"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/image"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/initctl"
@@ -217,6 +228,12 @@ func run(argv []string, io IO) *Exit {
 	case "swarm":
 		return swarmCmd(args, runner, io)
 
+	case "pull":
+		return pullConfig(args, io)
+
+	case "push":
+		return pushConfig(args, io)
+
 	case "upgrade":
 		opts := upgrade.Options{DataDir: registry.DataDir(), Target: args.To, Phase: upgrade.Install, Runner: runner, Log: func(l string) { fmt.Fprintln(out, l) }}
 		if args.Resume {
@@ -412,11 +429,51 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	if configRepo == "" && !args.Yes {
 		configRepo = cloudinit.AskOptional(in, errOut, "Config repo git URL")
 	}
+	// The portable config, if one was asked for. Its passphrase is resolved exactly as `push config`
+	// resolves it — PSTACK_CONFIG_KEY or a no-echo prompt — and never from a flag.
+	var sealed []byte
+	configKey := ""
+	if args.Config != "" || args.ConfigURL != "" {
+		var ex *Exit
+		configKey, ex = configPassphrase(io, false)
+		if ex != nil {
+			return ex
+		}
+	}
+	if args.Config != "" {
+		b, err := os.ReadFile(args.Config)
+		if err != nil {
+			return &Exit{Code: ExitFailed, Msg: err.Error()}
+		}
+		// OPEN IT HERE. The host has nobody to ask, so a passphrase that does not match the file shows
+		// up as an instance that booted with none of its credentials and one line in a log nobody
+		// reads. This is the last moment a human is present to be told. (--config-url cannot be
+		// checked this way: the URL is often reachable only from the host being provisioned.)
+		plain, err := config.Unseal(b, configKey)
+		if err != nil {
+			return fail(err.Error())
+		}
+		doc, err := config.Parse(plain)
+		if err != nil {
+			return fail(err.Error())
+		}
+		sealed = b
+		// Same rule as `push config`: a notifier URL IS a credential, so the list goes to a terminal
+		// or nowhere — never into whatever this command's stderr was redirected to.
+		if trusts := doc.Trusts(); len(trusts) > 0 && isTerminal(errOut) {
+			fmt.Fprintln(errOut, "The host this file boots will trust:")
+			for _, t := range trusts {
+				fmt.Fprintln(errOut, "  - "+t)
+			}
+			fmt.Fprintln(errOut, "")
+		}
+	}
 	yaml, err := cloudinit.RenderCloudInit(cloudinit.Answers{
 		Domain: domain, AcmeEmail: acmeEmail, SSHKey: sshKey, DashboardPassword: dashboardPassword,
 		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator,
 		AdminUser: adminUser, AdminPassword: adminPassword, Token: apiToken,
 		ConfigRepo: configRepo, Distro: args.Distro,
+		ConfigSealed: sealed, ConfigURL: args.ConfigURL, ConfigKey: configKey,
 	})
 	if err != nil {
 		if _, ok := err.(*cloudinit.Error); ok {
@@ -463,8 +520,16 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	if apiToken != "" {
 		also = append(also, "PSTACK_TOKEN")
 	}
+	// The passphrase is in the file in BOTH modes; the sealed export is only in the --config one.
+	// Naming them separately is the whole point — it is the difference the operator is choosing between.
+	if configKey != "" {
+		also = append(also, "PSTACK_CONFIG_KEY")
+	}
+	if len(sealed) > 0 {
+		also = append(also, "the sealed config export itself, which that key opens")
+	}
 	if len(also) > 0 {
-		fmt.Fprintln(errOut, "  It also carries "+strings.Join(also, " and ")+".")
+		fmt.Fprintln(errOut, "  It also carries "+andList(also)+".")
 	}
 	fmt.Fprintln(errOut, "")
 	fmt.Fprintln(errOut, "  DNS first:  "+domain+"  and  *."+domain+"   A -> <server-ip>")
@@ -522,4 +587,377 @@ func swarmCmd(args *Parsed, runner exec.Runner, io IO) *Exit {
 		return nil
 	}
 	return fail("usage: pstack swarm <status|join>   (join: --format " + strings.Join(swarm.JoinFormats, "|") + " [--distro <name>] [-o <file>])")
+}
+
+// ── `pstack pull config` / `pstack push config` ─────────────────────────────────────────────────
+//
+// THE FIRST COMMANDS THAT TALK TO A REMOTE pstack, and there was no convention for addressing one.
+// Everything else either runs on the host it manages (`init`, `upgrade`, `swarm`) or IS the server
+// (`serve`; `healthcheck` hardcodes 127.0.0.1 because it runs inside the container it probes). So
+// PSTACK_API_URL is invented here, and deliberately has NO DEFAULT: the control stack publishes no
+// host port, so a loopback default would fail on the very host an operator would try it on, and any
+// other guess would silently talk to the wrong pstack. An empty value is a refusal with a sentence.
+//
+// THE PASSPHRASE HAS NO FLAG, on any command, ever. `/proc/<pid>/cmdline` is world-readable and
+// `ps` prints it, so a flag would publish it to every user on the box for the life of the process.
+// It comes from PSTACK_CONFIG_KEY or from a no-echo prompt, and is never echoed, logged or written.
+//
+// SEALING IS THE CLIENT'S JOB (see the design note): the API egresses plaintext over authenticated
+// TLS and the passphrase never leaves this process, because sending it to the server would put
+// every host's key in the place the keys are protecting.
+//
+// This is more logic than `cli` normally holds — the package is meant to be argv, dispatch and exit
+// codes. It is here because `internal/config` is owned elsewhere and these functions are HTTP,
+// prompting and file modes, which is CLI work; if a second caller ever needs them they belong in a
+// package of their own.
+
+// isTerminal reports whether v is a real terminal. It is the ONE gate on printing credentials: the
+// pre-write summary below names notifier URLs, and for a chat notifier the URL *is* the secret, so
+// it is shown to a human looking at a tty and never to a pipe — which at boot is
+// /var/log/cloud-init-output.log.
+// A character-device test is NOT a terminal test, which is how this was first written: `/dev/null`
+// is a character device and passed it, and so does `/dev/console` — whose output most providers
+// persist and expose over their API, which is the copy this gate exists to keep credentials out of.
+// So the mode check is only a cheap pre-filter (a pipe cannot be a terminal, and rejecting one costs
+// no subprocess), and the answer comes from asking the terminal driver.
+//
+// `stty` rather than golang.org/x/term for the reason noEcho gives below: four justified
+// dependencies, and this does not make five. When stty is missing — a real state on a minimal image
+// — every caller sees "not a terminal", which refuses to print credentials and demands `-y`. That is
+// the safe direction, and it is the same direction noEcho already fails in.
+func isTerminal(v any) bool {
+	f, ok := v.(*os.File)
+	if !ok {
+		return false
+	}
+	st, err := f.Stat()
+	if err != nil || st.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	c := osexec.Command("stty")
+	c.Stdin = f
+	return c.Run() == nil
+}
+
+// noEcho turns terminal echo off and returns the restore, or ok=false when it could not.
+//
+// FAILING CLOSED IS THE POINT: if echo cannot be turned off, nothing is prompted for. Reading a
+// passphrase onto a screen that is echoing it — and into the scrollback, and into whatever recorded
+// the session — is the one outcome this must never have, and the cost of refusing is one
+// environment variable. `stty` is a subprocess, so "it is not installed" is a real state on a
+// minimal image; the earlier version swallowed that error and typed the passphrase in the clear.
+//
+// Via `stty` rather than golang.org/x/term because go.mod holds four dependencies, each justified,
+// and one passphrase prompt does not justify a fifth (AGENTS.md). It acts on the PROCESS's stdin,
+// not on IO.Stdin, because a terminal mode is a property of a file descriptor and an injected
+// io.Reader has none — which is also why the descriptor is a PARAMETER: a test can hand it one that
+// is provably not a terminal and get the refusal deterministically, on any machine.
+//
+// The interrupt handler is not decoration — Ctrl-C at a passphrase prompt is common, and a terminal
+// left with echo off is invisible typing until the operator knows to run `stty sane`.
+func noEcho(tty *os.File) (func(), bool) {
+	if tty == nil || !isTerminal(tty) {
+		return nil, false
+	}
+	stty := func(arg string) error {
+		c := osexec.Command("stty", arg)
+		c.Stdin = tty
+		return c.Run()
+	}
+	if err := stty("-echo"); err != nil {
+		return nil, false
+	}
+	var once sync.Once
+	restore := func() { once.Do(func() { _ = stty("echo") }) }
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		if _, ok := <-sig; ok {
+			restore()
+			os.Exit(130) // 128 + SIGINT, what an interrupted shell command returns
+		}
+	}()
+	return func() {
+		signal.Stop(sig)
+		close(sig)
+		restore()
+	}, true
+}
+
+// askSecret prompts without echoing. Only the line terminator is stripped — a passphrase may
+// legitimately start or end with a space, and TrimSpace would silently change it.
+func askSecret(in *bufio.Reader, tty *os.File, out io.Writer, label string) (string, error) {
+	restore, ok := noEcho(tty)
+	if !ok {
+		return "", &Exit{Code: ExitUsage, Msg: "cannot turn terminal echo off, so a typed passphrase would be shown and kept in the scrollback — set PSTACK_CONFIG_KEY instead"}
+	}
+	defer restore()
+	fmt.Fprint(out, label+": ")
+	v, err := in.ReadString('\n')
+	fmt.Fprintln(out) // the Enter the terminal did not echo
+	if err != nil && v == "" {
+		return "", &Exit{Code: ExitUsage, Msg: "no passphrase on stdin (it closed). Set PSTACK_CONFIG_KEY for non-interactive use."}
+	}
+	return strings.TrimRight(v, "\r\n"), nil
+}
+
+// configPassphrase resolves PSTACK_CONFIG_KEY, or prompts. `confirm` is for `pull`, where a typo
+// produces a file that nothing — including the operator who made it — can ever open again.
+func configPassphrase(ios IO, confirm bool) (string, *Exit) {
+	if v, ok := ios.Env("PSTACK_CONFIG_KEY"); ok && v != "" {
+		return v, nil
+	}
+	if !isTerminal(ios.Stdin) {
+		return "", fail("no passphrase: set PSTACK_CONFIG_KEY, or run this on a terminal so it can be asked for. There is no flag on purpose — argv is world-readable through `ps`.")
+	}
+	in := bufio.NewReader(ios.Stdin)
+	// isTerminal above has already established that this is one, so the assertion cannot fail here;
+	// noEcho re-checks anyway, because it is the function that must never be wrong about it.
+	tty, _ := ios.Stdin.(*os.File)
+	p, err := askSecret(in, tty, ios.Stderr, "Config passphrase")
+	if err != nil {
+		return "", fail(err.Error())
+	}
+	if p == "" {
+		return "", fail("the passphrase was empty — an unsealed export is a plaintext copy of every credential on the host")
+	}
+	if confirm {
+		again, err := askSecret(in, tty, ios.Stderr, "Again")
+		if err != nil {
+			return "", fail(err.Error())
+		}
+		if again != p {
+			return "", fail("the two passphrases differ — nothing was written")
+		}
+	}
+	return p, nil
+}
+
+// apiBase resolves and CHECKS the remote before anything is sent to it.
+func apiBase(env func(string) (string, bool)) (string, string, *Exit) {
+	base, _ := env("PSTACK_API_URL")
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "", "", fail("set PSTACK_API_URL to the pstack this should talk to, e.g. https://api.preview.example.com — there is deliberately no default, because a guess would silently talk to the wrong host")
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", "", fail(`PSTACK_API_URL must be an http(s) URL, e.g. https://api.preview.example.com (got "` + base + `")`)
+	}
+	// Plain HTTP is allowed only where it cannot leave the machine or the local network: the boot
+	// step talks to the control container's bridge address, which has no certificate and needs none.
+	// Anywhere else, `http://` would put a root token and every credential on the host on the wire
+	// in the clear, and this is the one command where that is the entire payload.
+	if u.Scheme == "http" && !privateAddr(u.Hostname()) {
+		return "", "", fail("refusing to send the root token and every credential on a host over plain http to " + u.Hostname() + " — use https://, or a loopback/private address")
+	}
+	tok, _ := env("PSTACK_TOKEN")
+	if tok == "" {
+		return "", "", fail("set PSTACK_TOKEN — /api/config is root-token only, and an admin session is deliberately not enough for a full credential dump")
+	}
+	return base, tok, nil
+}
+
+// privateAddr is Go rule 13: parse, never compare strings. `localhost` is spelled, not resolved —
+// a name that resolves off-box is exactly what this must not admit.
+func privateAddr(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast()
+}
+
+// apiCall is one authenticated request. A redirect is a FAILURE, never a hop (the same control
+// `notify` uses): following one would resend the bearer token — and, on push, the entire plaintext
+// config — to whatever host the redirect names.
+func apiCall(method, endpoint, token string, body []byte) (int, []byte, error) {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, endpoint, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	c := &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	// Bounded, and a body AT the bound is an error rather than a silent truncation: this response
+	// becomes the sealed export, and half a document sealed successfully is worse than no file.
+	// 64 MiB is far above any real config (the largest thing in one is a stored compose file).
+	const max = 64 << 20
+	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err == nil && len(b) > max {
+		return resp.StatusCode, nil, errors.New("the API's answer is larger than 64 MiB — refusing to seal a response that may be truncated")
+	}
+	return resp.StatusCode, b, err
+}
+
+// apiError turns a non-2xx into one line. `fail()`'s shape first, then the raw body truncated —
+// never the whole thing, because an unexpected body could be anything at all.
+func apiError(status int, body []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && e.Error != "" {
+		return e.Error
+	}
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "the API answered " + js.NumberString(float64(status))
+	}
+	return "the API answered " + js.NumberString(float64(status)) + ": " + js.Truncate(s, 300)
+}
+
+func pullConfig(args *Parsed, ios IO) *Exit {
+	if args.Sub != "config" {
+		return fail("usage: pstack pull config -o <file>")
+	}
+	if args.Out == "" {
+		// Never stdout: a terminal's scrollback, a shell's history and a CI log are all places this
+		// file must not be, and `-o` is the only spelling that can also set the mode.
+		return fail("pull config needs -o <file> — the export is written 0600 to a file, never to stdout")
+	}
+	base, token, ex := apiBase(ios.Env)
+	if ex != nil {
+		return ex
+	}
+	pass, ex := configPassphrase(ios, true)
+	if ex != nil {
+		return ex
+	}
+	status, body, err := apiCall("GET", base+"/api/config", token, nil)
+	if err != nil {
+		return &Exit{Code: ExitFailed, Msg: err.Error()}
+	}
+	if status < 200 || status >= 300 {
+		return &Exit{Code: ExitFailed, Msg: apiError(status, body)}
+	}
+	sealed, err := config.Seal(body, pass)
+	if err != nil {
+		return fail(err.Error())
+	}
+	// 0600 at creation, so the window in which a world-readable file holds the export never exists;
+	// the Chmod after it is for the case where the path already existed with a looser mode, which
+	// O_TRUNC does not change.
+	if err := os.WriteFile(args.Out, sealed, 0o600); err != nil {
+		return &Exit{Code: ExitFailed, Msg: err.Error()}
+	}
+	if err := os.Chmod(args.Out, 0o600); err != nil {
+		return &Exit{Code: ExitFailed, Msg: err.Error()}
+	}
+	errOut := ios.Stderr
+	fmt.Fprintln(errOut, "wrote "+args.Out+" (0600, sealed with "+config.SealScheme+")")
+	fmt.Fprintln(errOut, "")
+	fmt.Fprintln(errOut, "  This is EVERY credential on that host: account password hashes, API tokens,")
+	fmt.Fprintln(errOut, "  host secrets, notifier URLs, the SSO client secret and registry logins. A copy")
+	fmt.Fprintln(errOut, "  that leaks is offline-crackable against every account. Keep the file and the")
+	fmt.Fprintln(errOut, "  passphrase apart, and commit neither.")
+	return nil
+}
+
+func pushConfig(args *Parsed, ios IO) *Exit {
+	if args.Sub != "config" {
+		return fail("usage: pstack push config -i <file>")
+	}
+	if args.In == "" {
+		return fail("push config needs -i <file> — the sealed export written by `pstack pull config`")
+	}
+	base, token, ex := apiBase(ios.Env)
+	if ex != nil {
+		return ex
+	}
+	// Read BEFORE prompting: a missing or unreadable file should not cost the operator a passphrase.
+	sealed, err := os.ReadFile(args.In)
+	if err != nil {
+		return &Exit{Code: ExitFailed, Msg: err.Error()}
+	}
+	pass, ex := configPassphrase(ios, false)
+	if ex != nil {
+		return ex
+	}
+	plain, err := config.Unseal(sealed, pass)
+	if err != nil {
+		return fail(err.Error())
+	}
+	doc, err := config.Parse(plain)
+	if err != nil {
+		return fail(err.Error())
+	}
+	errOut := ios.Stderr
+	// THE PRE-WRITE SUMMARY. A hostile file otherwise silently repoints this host's image pulls at
+	// an attacker's registry and its notifications at an attacker's URL. Those strings ARE
+	// credentials, so the list itself is printed only to a terminal; a pipe gets the count. Under
+	// -y at boot this output is /var/log/cloud-init-output.log, which is not a place for either.
+	trusts := doc.Trusts()
+	if len(trusts) > 0 {
+		if isTerminal(errOut) {
+			fmt.Fprintln(errOut, "Applying "+args.In+" would make this host trust:")
+			for _, t := range trusts {
+				fmt.Fprintln(errOut, "  - "+t)
+			}
+		} else {
+			fmt.Fprintln(errOut, "Applying "+args.In+" would make this host trust "+js.NumberString(float64(len(trusts)))+" registries and notifier URLs — run it on a terminal to see them (they are credentials, so they are not written to a log).")
+		}
+	}
+	if !args.Yes {
+		if !isTerminal(ios.Stdin) {
+			return fail("push config will not apply a file unattended without -y — and -y means you have read what it trusts")
+		}
+		in := bufio.NewReader(ios.Stdin)
+		fmt.Fprint(errOut, "Apply it? [y/N]: ")
+		answer, _ := in.ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+			return fail("not applied")
+		}
+	}
+	status, body, err := apiCall("POST", base+"/api/config", token, plain)
+	if err != nil {
+		return &Exit{Code: ExitFailed, Msg: err.Error()}
+	}
+	if status < 200 || status >= 300 {
+		return &Exit{Code: ExitFailed, Msg: apiError(status, body)}
+	}
+	// Decoded, never echoed. The route answers 200 with `trusts` alongside `created`/`skipped`, and
+	// `trusts` is the list of registries and notifier URLs — credentials. Printing the raw body as a
+	// fallback would put them on stdout, which is the very thing the terminal gate above exists to
+	// stop, so an unrecognised body is an error with no body in it.
+	var sum config.Summary
+	if err := json.Unmarshal(body, &sum); err != nil {
+		return &Exit{Code: ExitFailed, Msg: "the config was applied, but the API answered with a body this pstack does not understand — check that both ends are the same version (" + err.Error() + ")"}
+	}
+	out := ios.Stdout
+	for _, c := range sum.Created {
+		fmt.Fprintln(out, "created  "+c)
+	}
+	for _, s := range sum.Skipped {
+		fmt.Fprintln(out, "skipped  "+s)
+	}
+	fmt.Fprintln(errOut, "")
+	fmt.Fprintln(errOut, "  "+js.NumberString(float64(len(sum.Created)))+" created, "+js.NumberString(float64(len(sum.Skipped)))+" skipped. Nothing was overwritten — `push` only ever creates,")
+	fmt.Fprintln(errOut, "  so anything already on this host kept the value it had.")
+	return nil
+}
+
+// andList is "a", "a and b", "a, b and c". Two items is the existing wording, byte for byte — the
+// cloud-init summary could only ever say two things before this.
+func andList(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }

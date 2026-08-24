@@ -7,5 +7,5 @@
   "cwd": "packages/pstack",
   "code": 3,
   "stdout": "",
-  "stderr": "pstack: unknown command \"upgradee\". This build is pstack <VERSION> — if you expected a newer command, the host is on an older version than you think (`pstack --version`).\n\nCommands: up, down, verify, status, validate, init, serve, build-image, cloud-init, dockerfile, upgrade, ui, swarm, healthcheck\n"
+  "stderr": "pstack: unknown command \"upgradee\". This build is pstack <VERSION> — if you expected a newer command, the host is on an older version than you think (`pstack --version`).\n\nCommands: up, down, verify, status, validate, init, serve, build-image, cloud-init, dockerfile, upgrade, ui, swarm, pull, push, healthcheck\n"
 }

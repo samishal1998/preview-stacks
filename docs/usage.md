@@ -1878,6 +1878,139 @@ The provider is forgotten and the button disappears. **Nobody is deleted** — t
 their personal tokens, and pointing the same provider back at this host re-links them by subject.
 Set a password on one (`PUT /api/users/:id/password`) if someone needs to get in meanwhile.
 
+## 7d. Move a host's configuration to another host
+
+Rebuilding a host, moving to a bigger box, or standing up a staging twin used to mean recreating
+every account, secret, notifier and registry login by hand. `pull config` seals the whole lot into
+one file; `push config` applies it somewhere else.
+
+```bash
+# on the host you are copying FROM
+export PSTACK_API_URL=https://api.preview.example.com
+export PSTACK_TOKEN=…
+pstack pull config -o host.sealed          # asks for a passphrase, twice
+
+# on the host you are copying TO
+export PSTACK_API_URL=https://api.staging.example.com
+export PSTACK_TOKEN=…                      # ITS root token, not the first host's
+pstack push config -i host.sealed          # asks for the same passphrase
+```
+
+`host.sealed` is written `0600`, and it is a scrypt + AES-256-GCM envelope sealed on **your**
+machine — never on the server, because sealing server-side would mean sending the passphrase to the
+server, which is strictly worse. The passphrase comes from `PSTACK_CONFIG_KEY`, or is prompted for
+without echo. **There is no passphrase flag on purpose**: argv is world-readable through `ps`.
+
+`PSTACK_API_URL` has no default. A guess would silently talk to the wrong host, and this is the one
+command where the payload is every credential you have. Plain `http://` is refused unless the host
+is loopback or a private address, for the same reason.
+
+### What travels, and what deliberately does not
+
+| Travels | Stays behind |
+|---|---|
+| accounts, with their password hashes — people keep the passwords they already have | deployments: they are per-PR and ephemeral, and belong to the host's Docker |
+| API tokens (hashes), so scripts keep working | login sessions and half-finished SSO sign-ins |
+| host variables **and secrets** | notifier delivery history |
+| notifiers, with their signing secrets and URLs | terminal sessions |
+| the SSO provider and its client secret | |
+| registry logins, routing files, named specs | |
+
+Restoring the right-hand column into a *different* host would be wrong, not merely useless — so
+none of it is in the file, and nothing in the file names it.
+
+### Only `PSTACK_TOKEN` can do this
+
+`/api/config` answers for the **root token** and nothing else. An admin browser session gets `403`,
+and so does an admin's personal API token — the two credentials the UI hands out. The cost is
+deliberate and permanent: there is no button for this in the UI and there should never be one. A
+full credential dump reachable from a cookie means one XSS, or one stolen laptop with a live
+session, empties the host from the victim's own browser.
+
+Both directions emit an event — `config.exported` and `config.imported` — so a credential dump
+reaches your notifiers instead of happening silently. The payloads carry counts and identities
+(which registries, which notifier names), never contents.
+
+### `push` creates; it never overwrites
+
+Everything is matched by its natural key — username, variable name, notifier name, registry host —
+and anything already on the target is **skipped**, not updated:
+
+```
+created  user alice
+created  secret DB_PASSWORD
+created  notifier "ops"
+created  registry ghcr.io as bot
+```
+
+Run it again and every line becomes a `skipped` with the reason:
+
+```
+skipped  user alice: an account with that name already exists here
+skipped  registry ghcr.io: a credential for it is already stored here
+```
+
+So this is a *merge onto* a host, not a *restore over* one: to change a value that is already
+there, change it the normal way afterwards. Applying the same file twice creates nothing the second
+time, which is also the repair procedure — **apply is not transactional.** A step that fails
+part-way leaves whatever it had already written, so if `push` errors, fix the cause and run it
+again; the entries that landed the first time are simply skipped.
+
+Before it writes anything, `push` names every registry and notifier URL the file would make this
+host trust, and asks:
+
+```
+Applying host.sealed would make this host trust:
+  - pull images from ghcr.io as bot
+  - send slack notifications to webhookUrl=https://hooks.slack.com/services/… ("ops")
+Apply it? [y/N]:
+```
+
+Those strings **are** credentials, so they are printed to a terminal only. With `-y`, or anywhere
+stderr is a pipe, you get a count instead and the list never reaches a log file. `-y` is also
+mandatory when there is no terminal to ask: `push` will not apply a file unattended without it.
+
+### Onto a machine that does not exist yet
+
+`pstack cloud-init` can carry the export into a first boot:
+
+```bash
+pstack cloud-init --domain … --acme-email … --config host.sealed          # embed the file
+pstack cloud-init --domain … --acme-email … --config-url https://…        # fetch it at boot
+```
+
+Both need `PSTACK_CONFIG_KEY` set when you render, because the machine being provisioned is what
+has to open the file. That is the tension, and the rendered file states it in its own SECRETS
+header rather than papering over it:
+
+- `--config` puts **the sealed export and its passphrase in the same file**, which your provider
+  stores as instance metadata. The seal protects that export everywhere except exactly there.
+- `--config-url` embeds only the passphrase. Opening the export then needs the metadata **and**
+  access to the URL — the combination that actually buys something. Serve it from somewhere only
+  the new host can reach, and take it down afterwards.
+
+The apply runs as the **last** boot step, after `init`, reaching the API on the control container's
+Docker bridge address rather than `https://api.<domain>` — this early in a first boot your DNS may
+not have propagated and Traefik may hold no certificate, and a config that silently failed to apply
+is the one outcome that step must not have. It reads `PSTACK_TOKEN` out of `control/.env` itself, so
+that token is not carried in the file. The sealed copy is deleted whether the apply worked or not,
+and a failure shouts in the boot log rather than leaving you with a host that looks finished.
+
+### What this costs you
+
+Two risks come with the feature itself. Neither is a bug, and neither goes away.
+
+1. **A leaked export is offline-crackable against every account.** It contains argon2 password
+   hashes for every user on the host — that is *why* logins keep working after a move. Someone who
+   gets both the file and the passphrase does not need to crack anything; someone who gets only the
+   file can grind at the hashes with no rate limit and nobody watching. Keep the file and the
+   passphrase apart, commit neither, and delete the file when the move is done. Rotate the source
+   host's credentials if you cannot account for a copy.
+2. **`push` writes registry credentials**, which is to say a config file decides where a host pulls
+   its images from — and its notifiers decide where that host's events are sent. A file you did not
+   produce yourself can repoint both. That is what the pre-write summary above is for; read it, and
+   do not pipe `-y` at a file whose origin you cannot name.
+
 ## 8. Wire it into CI
 
 Two jobs: bring the preview up on demand, tear it down when the PR closes. Keep previews **opt-in by
@@ -2150,8 +2283,10 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `serve` | HTTP API + UI over the deployment registry. Runs until killed. | 3 on refusal |
 | `swarm [status]` | the swarm's nodes, the manager address and the ports a worker needs. Read-only; reads docker every time. **Exit 1 when this host is not a manager**, so a script need not parse it. | 0 · 1 |
 | `swarm join` | what a new worker runs — `--format command` (default), `script`, `cloud-config` (+`--distro`) or `token`. **The output is a secret**: every shape embeds the join token. To stdout, or `-o <file>`. | 0 · 1 · 3 |
+| `pull config` | seal this host's whole portable configuration — accounts, tokens, host secrets, notifiers, SSO, registry logins, routing files, named specs — into one `0600` file (`-o`, never stdout). Talks to `PSTACK_API_URL` as the **root token**. | 0 · 1 · 3 |
+| `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
 
-`init`, `serve` and `swarm` are **spec-free**: they act on the host and on the registry, so none of
+`init`, `serve`, `swarm` and `pull`/`push` are **spec-free**: they act on the host and on the registry, so none of
 them loads `preview.yml` or fails because it is absent.
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
@@ -2176,7 +2311,11 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
 | `--format <shape>` | `swarm join` | `command` (default), `script`, `cloud-config` or `token`. An unknown one exits 3. |
 | `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
-| `-o`, `--out <file>` | `cloud-init` `swarm join` | write the rendered file instead of printing it. |
+| `-o`, `--out <file>` | `cloud-init` `swarm join` `pull config` | write the rendered file instead of printing it. **Required** for `pull config`, which never writes an export to stdout and creates the file `0600`. |
+| `-i`, `--in <file>` | `push config` | the sealed export to apply. **Required** — there is no stdin form. |
+| `--config <file>` | `cloud-init` | embed a sealed export in the rendered file, applied on first boot. The **passphrase is embedded too**, so both sit in instance metadata. |
+| `--config-url <url>` | `cloud-init` | fetch the export at boot instead, so only the passphrase is embedded. Mutually exclusive with `--config`. |
+| `-y` | `cloud-init` `push config` | never prompt. On `push config` it also replaces the list of registries and notifier URLs with a count — those strings are credentials, and a log is not a terminal. |
 | `-h`, `--help` | — | usage, exit 0 |
 
 An unknown flag, an unknown command, no command, a malformed `--set`, a bad `--challenge`, a missing
@@ -2200,6 +2339,8 @@ different problems with different owners.
 |---|---|---|---|
 | `PSTACK_TOKEN` | `serve` `init` | *unset* / *generated* | bearer token for mutating routes. **Required** to bind off-loopback. `init` generates one when unset and prints it once. |
 | `PSTACK_PORT` | `serve` | `7878` | listen port |
+| `PSTACK_API_URL` | `pull config` `push config` | — | which pstack to talk to, e.g. `https://api.preview.example.com`. **No default on purpose** — a guess would silently talk to the wrong host. Plain `http://` is refused unless the host is loopback or a private address. |
+| `PSTACK_CONFIG_KEY` | `pull config` `push config` `cloud-init` | *prompted* | the passphrase the export is sealed with. Prompted without echo when unset and on a terminal; **flag-less on purpose**, because argv is world-readable through `ps`. |
 | `PSTACK_HOST` | `serve` | `127.0.0.1` | listen address. Forced to `127.0.0.1` without a token; a non-loopback value without a token is refused with exit 3. |
 | `PSTACK_DATA` | `serve` `init` | `/var/lib/pstack` | registry + control-stack config root. The registry lives at `<PSTACK_DATA>/deployments`. |
 | `PSTACK_DOMAIN` | `init` | — | same as `--domain` |
@@ -2238,6 +2379,8 @@ two SSO legs, which are how you become one. A session cookie is what lets the lo
 | POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
 | POST | `/api/deployments/:id/sleep` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy or `kind: shared` · 400 without a compose section. Compose project down, volumes and axes kept |
 | POST | `/api/deployments/:id/wake` | spec variables as `?K=V` | **202** `{ job }` — `up`, recorded as a wake |
+| GET | `/api/config` | — | the whole portable configuration in **plaintext**: password hashes, token hashes, host secrets, notifier secrets, the SSO client secret, registry logins. **Root token only** — an admin session or personal token is `403`. `cache-control: no-store`. Emits `config.exported` |
+| POST | `/api/config` | that document | applies it create-or-skip → `{ trusts, created, skipped }` · 400 on a document this build does not understand · 403 for anything but the root token · 413 over 8 MiB. Emits `config.imported`, **including when it fails part-way** |
 | POST | `/api/users` | `{ username, password, email? }` | **201** `{ user }`. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
 | POST | `/api/deployments/:id/share` | `{ views?: ["details","logs"], ttl?: "7d" }` | **201** `{ url, token, views, expiresAt }` — a read-only link; 400 with no `PSTACK_TOKEN` to sign with, or a ttl over `30d` |
 | GET | `/api/auth/sso/start` | `?next=<same-origin path>` | **302** to the provider, with PKCE. **404** when no provider is configured. No auth — this *is* how you sign in |
@@ -2255,7 +2398,7 @@ two SSO legs, which are how you become one. A session cookie is what lets the lo
 | GET | `/` and **any** non-`/api/` path | — | the embedded single-page UI. No filesystem lookup, so a deep link renders rather than 404s |
 
 Status codes: **202** accepted · **400** bad spec or missing variable · **401** unauthorized ·
-**404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
+**403** a credential the route admits, doing something it may not (`/api/config`) · **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 
 Job `state`: `running` · `ok` · `failed` · `leaked` · `cancelled`. Job `action`: `up` · `down` ·

@@ -80,6 +80,13 @@ var Names = []string{
 	"stack.woken",
 	// A read-only link to one deployment was minted. Carries WHAT was granted, never the token.
 	"share.created",
+	// The portable host configuration moved (`GET`/`POST /api/config`). `config.exported` is a
+	// complete credential dump leaving the host and `config.imported` is one arriving — the two
+	// events exist so neither can happen silently, which is the only reason the route is allowed to
+	// exist. Both carry COUNTS AND IDENTITIES ONLY: registry hostnames and notifier names, never a
+	// password, a hash or a notifier URL. See internal/api/routes_config.go.
+	"config.exported",
+	"config.imported",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a
