@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,7 +175,7 @@ func TestAuth(t *testing.T) {
 		// The stored JSON is the full normalised shape in the TypeScript's key order.
 		var raw string
 		a.store.DB.QueryRow("SELECT config FROM sso_config WHERE id = 1").Scan(&raw)
-		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"defaultRole":"admin","label":"GitHub","discoveryUrl":"","provider":"github",`) {
+		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"admin","label":"GitHub","discoveryUrl":"","provider":"github",`) {
 			t.Fatalf("stored %s", raw)
 		}
 		// A hand-edited row that no longer validates reads as "no provider".
@@ -203,7 +204,8 @@ func mustParse(t *testing.T, s string) any {
 // ── provisioning: port of test/sso.test.ts 'sso: provisioning' ───────────────────────────────────
 
 func identity(over func(*sso.Identity)) *sso.Identity {
-	id := &sso.Identity{Subject: "s-1", Username: "Octo Cat", Email: "octo@example.com", Name: "The Octocat", EmailVerified: jsonx.Bool(true)}
+	// Groups is non-nil the way MapClaims builds it — empty means "nothing asked", never "no groups".
+	id := &sso.Identity{Subject: "s-1", Username: "Octo Cat", Email: "octo@example.com", Name: "The Octocat", EmailVerified: jsonx.Bool(true), Groups: []string{}}
 	if over != nil {
 		over(id)
 	}
@@ -292,6 +294,68 @@ func TestProvisioning(t *testing.T) {
 		}
 		if len(usernames(t, a)) != 0 {
 			t.Fatal("something was created")
+		}
+	})
+
+	t.Run("the username allow-list refuses before anything is created, and fails closed on no username", func(t *testing.T) {
+		// negative control: drop the UsernameAllowed gate in SsoSignIn → "mallory" is created
+		a := open(t)
+		_, err := a.SsoSignIn("github", identity(func(i *sso.Identity) { i.Username = "mallory" }), SsoSignInOpts{AllowedUsernames: []string{"octo*"}})
+		if !sso.IsError(err) || !strings.Contains(err.Error(), "mallory is not an allowed username") {
+			t.Fatalf("outside: %v", err)
+		}
+		// A provider that supplies no username at all is refused too — the same direction the email
+		// list fails in, and the message says which half is missing.
+		_, err = a.SsoSignIn("github", identity(func(i *sso.Identity) { i.Username = "" }), SsoSignInOpts{AllowedUsernames: []string{"*"}})
+		if !sso.IsError(err) || !strings.Contains(err.Error(), "no username") {
+			t.Fatalf("no username: %v", err)
+		}
+		if len(usernames(t, a)) != 0 {
+			t.Fatal("something was created")
+		}
+		// The glob is the rule, and it is matched case-insensitively.
+		in, err := a.SsoSignIn("github", identity(func(i *sso.Identity) { i.Username = "OctoCat" }), SsoSignInOpts{AllowedUsernames: []string{"octo*"}})
+		if err != nil || in.How != Created {
+			t.Fatalf("allowed: %+v %v", in, err)
+		}
+	})
+
+	t.Run("a group rule refuses membership and an UNANSWERED fetch differently, and never blocks local login", func(t *testing.T) {
+		// negative control: drop the `opts.GroupsErr != nil` branch → an unanswered fetch is not a refusal at all and the login succeeds
+		a := open(t)
+		// The escape hatch first: a local account exists, and whatever SSO does it can still sign in.
+		local, err := a.CreateUser("opsvictim", "password123", CreateOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rule := SsoSignInOpts{RequiredGroups: []string{"acme"}}
+		// Not a member: fixed by adding someone to the group.
+		_, err = a.SsoSignIn("github", identity(func(i *sso.Identity) { i.Groups = []string{"other-org"} }), rule)
+		if !sso.IsError(err) || !strings.Contains(err.Error(), "not in a group this host allows") {
+			t.Fatalf("member: %v", err)
+		}
+		// Could not be determined: a revoked scope, a rate limit, an outage. A DIFFERENT sentence,
+		// because it is a different repair — and it carries the provider's own words.
+		broken := rule
+		broken.GroupsErr = errors.New("https://api.github.com/user/orgs answered 403")
+		_, err = a.SsoSignIn("github", identity(func(i *sso.Identity) { i.Groups = []string{"acme"} }), broken)
+		if !sso.IsError(err) || !strings.Contains(err.Error(), "could not be determined") || !strings.Contains(err.Error(), "answered 403") {
+			t.Fatalf("unknown: %v", err)
+		}
+		// Neither refusal provisioned anything…
+		if got := usernames(t, a); len(got) != 1 || got[0] != "opsvictim" {
+			t.Fatalf("created %v", got)
+		}
+		// …and THE POINT: a group rule that is refusing every SSO login has not locked the host.
+		// Password login is a different path and stays open.
+		session, user, err := a.Login("opsvictim", "password123")
+		if err != nil || session == "" || user.ID != local.ID {
+			t.Fatalf("local login: %+v %v", user, err)
+		}
+		// A member is let through, matched case-insensitively.
+		in, err := a.SsoSignIn("github", identity(func(i *sso.Identity) { i.Groups = []string{"Other", "ACME"} }), rule)
+		if err != nil || in.How != Created {
+			t.Fatalf("allowed: %+v %v", in, err)
 		}
 	})
 

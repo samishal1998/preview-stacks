@@ -36,6 +36,13 @@ type Endpoints struct {
 	TokenURL     string
 	UserInfoURL  string
 	EmailsURL    string
+	// GroupsURL and GroupsKey travel together — the endpoint that lists this user's groups, and the
+	// field of each item that names one. The key is the PRESET's (Config carries no claim for it),
+	// so a self-hosted host with a typed groupsUrl is still read with the preset's field name.
+	// Empty in mode A: a discovery document declares no such endpoint, which is why ParseConfig
+	// refuses a group rule there.
+	GroupsURL string
+	GroupsKey string
 	// Issuer and JwksURI, mode A only — what an ID token's `iss` must equal, and where its signing keys are.
 	Issuer  string
 	JwksURI string
@@ -206,11 +213,17 @@ func (c *Client) EndpointsFor(cfg *Config) (Endpoints, error) {
 	if cfg.Mode == OIDC {
 		return c.Discover(cfg.DiscoveryURL, false)
 	}
+	groupsKey := ""
+	if p := PresetFor(cfg.Provider); p != nil {
+		groupsKey = p.GroupsKey
+	}
 	return Endpoints{
 		AuthorizeURL: cfg.AuthorizeURL,
 		TokenURL:     cfg.TokenURL,
 		UserInfoURL:  cfg.UserInfoURL,
 		EmailsURL:    cfg.EmailsURL,
+		GroupsURL:    cfg.GroupsURL,
+		GroupsKey:    groupsKey,
 		TokenAuth:    Post,
 	}, nil
 }

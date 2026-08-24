@@ -52,6 +52,7 @@ import (
 	"errors"
 	"math"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 
@@ -104,9 +105,19 @@ type Preset struct {
 	// EmailsURL is where to look when the userinfo response carries no email — providers that let a
 	// user keep it private serve it from a second endpoint. Optional, and the ONLY per-provider
 	// special case in this package; adding one stays a table edit.
-	EmailsURL string   `json:"emailsUrl,omitempty"`
-	Scopes    string   `json:"scopes"`
-	ClaimMap  ClaimMap `json:"claimMap"`
+	EmailsURL string `json:"emailsUrl,omitempty"`
+	// GroupsURL is where the provider lists the groups/orgs this user belongs to, GroupsKey is the
+	// field of each returned item that NAMES one, and GroupsScope is the OAuth scope that endpoint
+	// needs. All three or none: without a key there is nothing to read the response with, which is
+	// why `requiredGroups` is refused for a provider that has no preset (ParseConfig).
+	GroupsURL string `json:"groupsUrl,omitempty"`
+	GroupsKey string `json:"groupsKey,omitempty"`
+	// GroupsScopes is every scope SUFFICIENT to read GroupsURL, not one required scope — GitHub
+	// documents `user` as granting the same read as `read:org`, and refusing a config that names it
+	// would contradict the provider. The FIRST entry is the one the refusal message recommends.
+	GroupsScopes []string `json:"groupsScopes,omitempty"`
+	Scopes       string   `json:"scopes"`
+	ClaimMap     ClaimMap `json:"claimMap"`
 }
 
 // Presets is the preset table. Adding a provider is one entry here and nothing else — no code
@@ -122,8 +133,22 @@ var Presets = []Preset{
 		// `GET /user` returns `email: null` for anyone whose profile email is private, which is the
 		// default. Without this, `allowedEmailDomains` would reject the entire org.
 		EmailsURL: "https://api.github.com/user/emails",
-		Scopes:    "read:user user:email",
-		ClaimMap:  ClaimMap{Subject: "id", Username: "login", Email: "email", Name: "name", Avatar: "avatar_url"},
+		// `GET /user/orgs` — "List organizations for the authenticated user", each item carrying
+		// `login`. THE SCOPE IS NOT OPTIONAL, which is the whole reason ParseConfig refuses a group
+		// rule without it. Two sources, both read:
+		//   - https://docs.github.com/en/rest/orgs/orgs (current): this endpoint "requires at least
+		//     user or read:org scope for OAuth app tokens and personal access tokens (classic)".
+		//   - https://developer.github.com/changes/22/ (the changelog that announced that rule):
+		//     "If you have `user`, `read:org`, `write:org`, or `admin:org` scope, the response also
+		//     includes your private organization memberships."
+		// So without the scope a member of a PRIVATE org is either refused outright or simply comes
+		// back invisible — a legitimate member locked out, with no diagnostic anywhere.
+		GroupsURL: "https://api.github.com/user/orgs",
+		GroupsKey: "login",
+		// Any of these grants the read; `read:org` is the least of them, so it leads.
+		GroupsScopes: []string{"read:org", "user", "write:org", "admin:org"},
+		Scopes:       "read:user user:email",
+		ClaimMap:     ClaimMap{Subject: "id", Username: "login", Email: "email", Name: "name", Avatar: "avatar_url"},
 	},
 	{
 		Key:          "gitlab",
@@ -131,6 +156,16 @@ var Presets = []Preset{
 		AuthorizeURL: "https://gitlab.com/oauth/authorize",
 		TokenURL:     "https://gitlab.com/oauth/token",
 		UserInfoURL:  "https://gitlab.com/api/v4/user",
+		// `GET /groups` — as documented at https://docs.gitlab.com/api/groups/, an AUTHENTICATED
+		// request returns "only the groups you're a member of and does not include public groups",
+		// and each item carries `full_path` ("acme/backend"), which is the name an operator writes.
+		// `read_user` is not enough: it is the `/user` endpoint only, while `read_api` "Grants read
+		// access to the API, including all groups and projects" — the scopes are as listed at
+		// https://docs.gitlab.com/integration/oauth_provider/.
+		GroupsURL: "https://gitlab.com/api/v4/groups",
+		GroupsKey: "full_path",
+		// `api` is a superset of `read_api` — GitLab grants full API access with it.
+		GroupsScopes: []string{"read_api", "api"},
 		Scopes:       "read_user",
 		ClaimMap:     ClaimMap{Subject: "id", Username: "username", Email: "email", Name: "name", Avatar: "avatar_url"},
 	},
@@ -168,6 +203,21 @@ type Config struct {
 	ClientID string `json:"clientId"`
 	// AllowedEmailDomains non-empty ⇒ a login whose email is outside the list is refused — including one with NO email.
 	AllowedEmailDomains []string `json:"allowedEmailDomains"`
+	// AllowedUsernames non-empty ⇒ a login whose username matches none of these globs is refused,
+	// and — the same way the email list fails closed — a login with NO username is refused too.
+	//
+	// The username is whatever `ClaimMap.Username` names in the provider's response (MapClaims), so
+	// this rule is meaningful on GitHub (`login`) and GitLab (`username`) and is FREQUENTLY INERT
+	// elsewhere: a bare OIDC provider often supplies no `preferred_username` at all, and then every
+	// login is refused rather than none — which is why an empty list is the default and means "no
+	// rule". Matching is `path.Match` over lowercased pattern and value: `*` and `?`, and also
+	// `[a-z]` character classes, so `qa-[0-9]*` is a legal rule.
+	AllowedUsernames []string `json:"allowedUsernames"`
+	// RequiredGroups non-empty ⇒ the provider is asked which groups/orgs this user belongs to, and a
+	// login in none of them is refused. EXACT names, case-insensitive — not globs, because a GitLab
+	// group is a path (`acme/backend`) and `path.Match` gives `/` a meaning that would surprise
+	// whoever typed `*`. GitHub org logins are case-preserving but case-insensitive, hence the fold.
+	RequiredGroups []string `json:"requiredGroups"`
 	// DefaultRole is the role for auto-provisioned users.
 	DefaultRole string `json:"defaultRole"`
 	// Label is the button text and the `providerKey` half of a link's identity.
@@ -182,7 +232,10 @@ type Config struct {
 	// EmailsURL is consulted ONLY when the userinfo response carries no email. Preset-filled (GitHub
 	// and Bitbucket both keep the address off the profile); an operator only types it for a
 	// self-hosted provider.
-	EmailsURL string   `json:"emailsUrl"`
+	EmailsURL string `json:"emailsUrl"`
+	// GroupsURL is consulted ONLY when RequiredGroups is non-empty. Preset-filled under the same
+	// rule EmailsURL is, and typed by hand for a self-hosted provider.
+	GroupsURL string   `json:"groupsUrl"`
 	Scopes    string   `json:"scopes"`
 	ClaimMap  ClaimMap `json:"claimMap"`
 }
@@ -193,6 +246,19 @@ func str(v any) string {
 		return strings.TrimSpace(s)
 	}
 	return ""
+}
+
+// lowerList is a submitted string array, trimmed, lowercased, empties dropped — and never nil
+// (Go rule 3: a stored `null` is a blank list in the UI).
+func lowerList(v any) []string {
+	out := []string{}
+	list, _ := v.([]any)
+	for _, x := range list {
+		if s := strings.ToLower(str(x)); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // truthy is `!!v` over the document value universe.
@@ -317,6 +383,11 @@ func ParseConfig(input any) (*Config, error) {
 		Enabled:             true,
 		ClientID:            clientID,
 		AllowedEmailDomains: domains,
+		// Both lists are read HERE, in the literal, and not in a mode branch: the scope check below
+		// reads RequiredGroups, and a field populated after it would leave that check reading an
+		// empty slice — a refusal that never fires and a test that proves nothing.
+		AllowedUsernames: lowerList(get("allowedUsernames")),
+		RequiredGroups:   lowerList(get("requiredGroups")),
 		// Only 'admin' exists today (store migration 1 defaults the column to it and there is no
 		// role UI). The field is here so granting less than admin is a data change when roles land.
 		DefaultRole: str(get("defaultRole")),
@@ -326,6 +397,14 @@ func ParseConfig(input any) (*Config, error) {
 	}
 	if v, ok := o.Get("enabled"); ok {
 		cfg.Enabled = truthy(v)
+	}
+	// A malformed glob is refused here rather than silently matching nothing forever. `path.Match`
+	// reports ErrBadPattern for `qa-[0-9` whatever it is matched against, so an empty name is a
+	// complete probe of the pattern's syntax.
+	for _, p := range cfg.AllowedUsernames {
+		if _, err := path.Match(p, ""); err != nil {
+			return nil, errorf(`allowedUsernames entry "` + p + `" is not a valid pattern: ` + err.Error())
+		}
 	}
 
 	if mode == "oidc" {
@@ -352,6 +431,12 @@ func ParseConfig(input any) (*Config, error) {
 		cfg.Scopes = str(get("scopes"))
 		if cfg.Scopes == "" {
 			cfg.Scopes = "openid profile email"
+		}
+		// There is no groups endpoint in a discovery document and no groups claim in the mapping, so
+		// an OIDC config with a group rule could only ever fail every login with "your groups could
+		// not be determined". Refuse it while the operator is looking at the form.
+		if len(cfg.RequiredGroups) > 0 {
+			return nil, errorf("requiredGroups needs a provider whose groups endpoint this host knows — that is an OAuth 2.0 preset (github, gitlab), not a discovered OIDC issuer")
 		}
 		cfg.ClaimMap = mergeClaims(OIDCClaims, pickClaims(get("claimMap")))
 		return cfg, nil
@@ -393,6 +478,14 @@ func ParseConfig(input any) (*Config, error) {
 	if emailsURL == "" && preset != nil && userInfoURL == preset.UserInfoURL {
 		emailsURL = preset.EmailsURL
 	}
+	// Same rule, same reason, for the groups endpoint: gitlab.com is not the self-hosted GitLab
+	// whose token this is, and asking it for the user's groups would hand a third party a live
+	// credential. An operator who moved userinfo types their own groupsUrl (the response shape is
+	// the preset's, so its GroupsKey still reads it).
+	groupsURL := str(get("groupsUrl"))
+	if groupsURL == "" && preset != nil && userInfoURL == preset.UserInfoURL {
+		groupsURL = preset.GroupsURL
+	}
 	var err error
 	cfg.Label = str(get("label"))
 	if cfg.Label == "" {
@@ -418,7 +511,29 @@ func ParseConfig(input any) (*Config, error) {
 			return nil, err
 		}
 	}
+	if groupsURL != "" {
+		if cfg.GroupsURL, err = httpsURL(groupsURL, "groupsUrl"); err != nil {
+			return nil, err
+		}
+	}
 	cfg.Scopes = presetOr(str(get("scopes")), func(p *Preset) string { return p.Scopes })
+	// THE SCOPE IS RESOLVED HERE, at save time, and not at /start: cfg.Scopes is what the operator
+	// reads back in the UI and what AuthorizeURL sends, and if the two could disagree the IdP would
+	// be handed a scope nobody chose. A group rule the token has no scope for is not a runtime
+	// hiccup either — every login refuses, identically, forever — so it is refused while there is
+	// still a human at the form to read the sentence.
+	if len(cfg.RequiredGroups) > 0 {
+		if preset == nil || preset.GroupsKey == "" {
+			return nil, errorf(`requiredGroups is not supported for provider "` + provider + `" — no preset says which field of its groups response names a group`)
+		}
+		if cfg.GroupsURL == "" {
+			return nil, errorf("requiredGroups needs a groups endpoint — set groupsUrl (this host does not assume " + preset.GroupsURL + " belongs to a self-hosted " + preset.Label + ")")
+		}
+		if len(preset.GroupsScopes) > 0 && !hasAnyScope(cfg.Scopes, preset.GroupsScopes) {
+			return nil, errorf(`requiredGroups needs the "` + preset.GroupsScopes[0] + `" scope to read ` + cfg.GroupsURL +
+				` (or any of: ` + strings.Join(preset.GroupsScopes, ", ") + `) — add it to scopes (currently "` + cfg.Scopes + `")`)
+		}
+	}
 	cfg.ClaimMap = OIDCClaims
 	if preset != nil {
 		cfg.ClaimMap = mergeClaims(cfg.ClaimMap, preset.ClaimMap)
@@ -499,6 +614,11 @@ type Identity struct {
 	// EmailVerified is false only when the provider says so explicitly. nil means it never said —
 	// which is NOT permission to link an existing local account (auth requires true).
 	EmailVerified *bool `json:"emailVerified"`
+	// Groups are the group/org names the provider listed, as it spelled them. Non-nil but EMPTY
+	// unless the callback actually asked (it only asks when there is a rule to answer), so empty
+	// here is never evidence of anything — "the fetch failed" travels separately, as an error, and
+	// the two produce different refusals in auth.SsoSignIn.
+	Groups []string `json:"groups"`
 }
 
 // lookup is `payload[key]`, or `links.avatar.href` — one dotted path, because two providers nest
@@ -549,6 +669,7 @@ func MapClaims(payload any, cm ClaimMap) (*Identity, error) {
 		Email:    strings.ToLower(text(cm.Email)),
 		Name:     text(cm.Name),
 		Avatar:   text(cm.Avatar),
+		Groups:   []string{},
 	}
 	switch v, _ := o.Get("email_verified"); x := v.(type) {
 	case bool:
@@ -647,6 +768,94 @@ func EmailAllowed(email string, domains []string) bool {
 	for _, d := range domains {
 		if domain == d || strings.HasSuffix(domain, "."+d) {
 			return true
+		}
+	}
+	return false
+}
+
+// UsernameAllowed fails CLOSED, exactly as EmailAllowed does: an empty list allows everything, and a
+// non-empty one requires a username that matches — so NO username is a refusal, not a pass.
+//
+// The empty-username guard is explicit and cannot be folded into the loop: `path.Match("*", "")` is
+// true in Go, so the commonest pattern of all would otherwise wave through the identity that has
+// nothing to check.
+//
+// `path.Match` is the whole matcher — `*`, `?`, and `[a-z]` character classes, so a rule can be
+// `qa-[0-9]*` and not only `qa-*`. It also gives `/` a meaning (`*` does NOT cross one), which is
+// nothing to a username and would be a trap for a GitLab group path; groups are matched by name.
+func UsernameAllowed(username string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	if username == "" {
+		return false
+	}
+	name := strings.ToLower(username)
+	for _, p := range patterns {
+		// GitHub usernames are case-preserving but case-insensitive, so both sides are folded. A
+		// pattern that failed to compile was refused by ParseConfig; here it simply matches nothing.
+		if ok, err := path.Match(strings.ToLower(p), name); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// GroupsAllowed fails CLOSED: an empty requirement allows everything, and a non-empty one needs the
+// user to be in at least ONE of the named groups. Exact names, case-folded — not globs (see the
+// RequiredGroups comment on Config).
+func GroupsAllowed(groups, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	for _, g := range groups {
+		name := strings.ToLower(strings.TrimSpace(g))
+		for _, want := range required {
+			if name != "" && name == strings.ToLower(want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// GroupNamesOf pulls the group names out of a provider's groups endpoint, `key` being the field that
+// names one (Preset.GroupsKey). Tolerates the two shapes PrimaryEmailOf does: a bare array (GitHub,
+// GitLab) and `{ values: [...] }`. Never nil.
+func GroupNamesOf(payload any, key string) []string {
+	out := []string{}
+	if key == "" {
+		return out
+	}
+	var list []any
+	switch x := payload.(type) {
+	case []any:
+		list = x
+	case *omap.Map:
+		list = x.GetSlice("values")
+	}
+	for _, r := range list {
+		m, ok := r.(*omap.Map)
+		if !ok || m == nil {
+			continue
+		}
+		if v, found := lookup(m, key); found {
+			if name := asText(v); name != "" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// hasScope is whether an OAuth scope string already asks for `want`. Space-delimited per RFC 6749;
+// commas are tolerated because GitHub accepts a comma-separated list and operators paste one.
+func hasAnyScope(scopes string, sufficient []string) bool {
+	for _, s := range strings.FieldsFunc(scopes, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r' }) {
+		for _, want := range sufficient {
+			if s == want {
+				return true
+			}
 		}
 	}
 	return false

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -306,7 +307,36 @@ func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	signed, err := s.auth.SsoSignIn(providerKey, identity, auth.SsoSignInOpts{DefaultRole: cfg.DefaultRole, AllowedEmailDomains: cfg.AllowedEmailDomains})
+	// The group list, and ONLY when there is a rule that needs it: an operator who set no group rule
+	// must not have a new scope requested on their behalf or a new call made against their provider.
+	// The failure is CARRIED, not swallowed like the emails backfill above — an unanswered fetch is
+	// not "no groups", and the gate turns the two into different refusals.
+	var groupsErr error
+	if len(cfg.RequiredGroups) > 0 {
+		switch {
+		case endpoints.GroupsURL == "" || endpoints.GroupsKey == "":
+			// Unreachable through the API today: ParseConfig refuses this combination at save, and
+			// SsoConfig re-validates on every READ — so a hand-edited row carrying it reads as "not
+			// configured" and never gets here. Fail closed rather than depend on that.
+			groupsErr = errors.New("no groups endpoint is configured for this provider")
+		case accessToken == "":
+			groupsErr = errors.New("the provider returned no access token")
+		default:
+			list, err := s.ssoClient.FetchJSON(endpoints.GroupsURL, accessToken)
+			if err != nil {
+				groupsErr = err
+			} else {
+				identity.Groups = sso.GroupNamesOf(list, endpoints.GroupsKey)
+			}
+		}
+	}
+	signed, err := s.auth.SsoSignIn(providerKey, identity, auth.SsoSignInOpts{
+		DefaultRole:         cfg.DefaultRole,
+		AllowedEmailDomains: cfg.AllowedEmailDomains,
+		AllowedUsernames:    cfg.AllowedUsernames,
+		RequiredGroups:      cfg.RequiredGroups,
+		GroupsErr:           groupsErr,
+	})
 	if err != nil {
 		fail(err)
 		return

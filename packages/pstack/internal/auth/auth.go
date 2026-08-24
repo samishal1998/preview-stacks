@@ -513,10 +513,19 @@ const (
 	Created How = "created"
 )
 
-// SsoSignInOpts are the provider's provisioning rules.
+// SsoSignInOpts are the provider's provisioning rules: the whole allow-rule set travels here, as
+// one argument, so that adding a rule is a field rather than a third positional parameter and every
+// one of them is enforced in the single gate at the top of SsoSignIn.
 type SsoSignInOpts struct {
 	DefaultRole         string
 	AllowedEmailDomains []string
+	AllowedUsernames    []string
+	RequiredGroups      []string
+	// GroupsErr is why the provider's group list did not arrive, or nil. The caller does the fetch
+	// (it holds the access token), and this is how the failure reaches the gate INSTEAD of being
+	// swallowed: a rate limit, a revoked scope and a network blip are not "you are not a member",
+	// and collapsing them into one refusal sends the operator to fix the wrong thing.
+	GroupsErr error
 }
 
 // SignIn is a minted session.
@@ -544,6 +553,26 @@ func (a *Auth) SsoSignIn(providerKey string, identity *sso.Identity, opts SsoSig
 			return nil, &sso.Error{Msg: identity.Email + " is not in an allowed email domain"}
 		}
 		return nil, &sso.Error{Msg: "this provider returned no email address, and sign-in is restricted to specific email domains"}
+	}
+	// Same shape, same failure direction: a rule and nothing to check it against is a refusal. A
+	// bare OIDC provider frequently supplies no username at all, which is why the message says which
+	// half is missing rather than "access denied".
+	if !sso.UsernameAllowed(identity.Username, opts.AllowedUsernames) {
+		if identity.Username != "" {
+			return nil, &sso.Error{Msg: identity.Username + " is not an allowed username"}
+		}
+		return nil, &sso.Error{Msg: "this provider returned no username, and sign-in is restricted to specific usernames"}
+	}
+	if len(opts.RequiredGroups) > 0 {
+		// TWO DISTINCT REASONS, deliberately. "Not a member" is fixed by adding someone to a group;
+		// "could not be determined" is a scope, a rate limit or an outage, and is the one an
+		// operator would otherwise spend an afternoon debugging as the other.
+		if opts.GroupsErr != nil {
+			return nil, &sso.Error{Msg: "your group memberships could not be determined, and sign-in is restricted to specific groups — " + opts.GroupsErr.Error()}
+		}
+		if !sso.GroupsAllowed(identity.Groups, opts.RequiredGroups) {
+			return nil, &sso.Error{Msg: "you are not in a group this host allows to sign in (" + strings.Join(opts.RequiredGroups, ", ") + ")"}
+		}
 	}
 
 	var out *SignIn

@@ -106,6 +106,8 @@
         "enabled": true,
         "clientId": "google-cid",
         "allowedEmailDomains": [],
+        "allowedUsernames": [],
+        "requiredGroups": [],
         "defaultRole": "admin",
         "label": "Google",
         "discoveryUrl": "https://accounts.google.com/",
@@ -114,6 +116,7 @@
         "tokenUrl": "",
         "userInfoUrl": "",
         "emailsUrl": "",
+        "groupsUrl": "",
         "scopes": "openid profile email",
         "claimMap": {
           "subject": "sub",
