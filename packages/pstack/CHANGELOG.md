@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Container logs in swarm mode never worked, in two separate ways.** The command carried
+  `--no-color`, which is a `docker compose logs` flag — `docker service logs` answers an unknown
+  flag with a usage dump instead of logs. Underneath it, the whole-stack FOLLOWED form emitted
+  `… & ; done`, and `&` is itself a command terminator, so bash never parsed it: live tailing of a
+  whole stack has been failing since the feature shipped. Both assertions that should have caught
+  this compared the command to a string someone wrote down; the tests now check that every flag is
+  one `docker service logs` accepts and that every form survives `bash -n`.
+- **The runtime container table mislabelled every swarm row.** The header rendered
+  `Service, State, Node` while the body rendered `service, node, state`, so under swarm — the only
+  mode where that column exists — every column sat one place to the left of its heading. Swarm rows
+  also never got a preview link (routes name the service, the table matched the task name), and the
+  long task name now shows as `slot.task` with the full name on hover.
+- **A cloud-config credential containing `{{…}}` was silently rewritten.** Values are placed by
+  ordered substitution, so a `{{PSTACK_VERSION}}` inside a password survived until that marker was
+  replaced and the host booted with the version string as its password. Every credential is now
+  refused if it contains `{{`. The hole already existed for `--password`.
+
+### Added
+
+- **`pstack cloud-init --admin-user/--admin-password/--api-token`** — the first UI account and
+  `PSTACK_TOKEN` can be set from the cloud-config instead of read back over SSH. `init` writes the
+  admin pair into `control/.env`, where the control compose template already expected them: until
+  now `${PSTACK_ADMIN_USER:-}` interpolated to nothing on every host, so the account never appeared.
+  Neither credential is ever logged, and the file's SECRETS header names whatever it actually
+  carries.
+- **Submitting a compose file under swarm now reports what swarm will change about it.** `PUT`
+  returns `swarmNotes`, produced by the same conversion the deploy runs, and the submit page shows
+  them. A `depends_on:` that swarm ignores was previously mentioned only in the deploy transcript,
+  after the container had already not waited.
+- **SSO sign-in rules: `allowedUsernames` and `requiredGroups`.** Username globs are matched
+  case-folded against the provider's username; group membership is read from a per-preset endpoint
+  (`/user/orgs` on GitHub, `/groups` on GitLab) and matched exactly. Both fail closed, and a group
+  rule is refused **at save time** unless the configured scopes can actually read that endpoint —
+  because without `read:org` GitHub returns private org memberships as *invisible*, which would
+  lock out legitimate members with no diagnostic anywhere. A membership that cannot be determined is
+  refused with a different message than one that is absent: a revoked scope and a non-member are
+  different problems with different fixes.
+
 ## 0.29.0 — 2026-08-23
 
 ### ⚠️ Breaking: runtime — pstack is one static Go binary
