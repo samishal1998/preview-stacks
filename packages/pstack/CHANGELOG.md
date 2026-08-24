@@ -33,6 +33,25 @@
   returns `swarmNotes`, produced by the same conversion the deploy runs, and the submit page shows
   them. A `depends_on:` that swarm ignores was previously mentioned only in the deploy transcript,
   after the container had already not waited.
+- **`pstack pull config` / `pstack push config`** — a portable, sealed export of everything that is
+  not per-PR: accounts (argon2 hashes, so logins keep working), API tokens, host vars including
+  secrets, notifiers including theirs, the SSO provider, registry logins, routing files and named
+  specs. Deployments, sessions and delivery history are deliberately excluded — restoring those into
+  a different host is wrong, not merely useless.
+
+  The file is sealed with scrypt + AES-256-GCM under a passphrase from `PSTACK_CONFIG_KEY` or a
+  no-echo prompt; there is no flag, so it never reaches `ps` or a shell history. The API egresses
+  plaintext over authenticated TLS and the CLI seals locally — sealing server-side would mean
+  sending the passphrase to the server. Export is **root-token only**, not an admin session, because
+  a credential dump reachable from a cookie is one XSS away from being taken; it emits an event, so
+  it is never silent. Apply creates and never updates or deletes, so it is idempotent and a hostile
+  file can add but never repoint.
+
+  `pstack cloud-init --config <file>` embeds it; `--config-url <url>` fetches it at boot. The
+  generated SECRETS header states which was used and what it does and does not protect: with
+  `--config` the payload and its key both live in instance metadata, so the seal protects the file
+  everywhere except the box it is provisioning.
+
 - **SSO sign-in rules: `allowedUsernames` and `requiredGroups`.** Username globs are matched
   case-folded against the provider's username; group membership is read from a per-preset endpoint
   (`/user/orgs` on GitHub, `/groups` on GitLab) and matched exactly. Both fail closed, and a group
