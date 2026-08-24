@@ -24,7 +24,9 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/share"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/specs"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/terminal"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
 )
 
 var (
@@ -60,6 +62,34 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+// swarmNotesFor is what the swarm conversion will change about a submitted compose file, produced by
+// the same pure `Swarmify` the deploy runs, so the submission and the job log can never name
+// different keys. A `depends_on` that swarm ignores is the reason this exists: hearing about it once
+// the container is already not waiting is too late.
+//
+// The document is the SUBMITTED one, before the routing labels autolabel generates — so these notes
+// name what the AUTHOR wrote, which is what the author can act on, and `up`'s list can be longer
+// (the generated traefik.* labels move too).
+//
+// Advisory, so every reason not to look is silence, never a rejection: not swarm, no compose file,
+// or a compose file that does not parse (which `up` will report far better than a guess here).
+func swarmNotesFor(st *spec.Stack, composeSource *string) []string {
+	if orchestratorOf(st) != spec.Swarm || composeSource == nil {
+		return []string{}
+	}
+	parsed, err := yamlx.ParseString(*composeSource)
+	if err != nil {
+		return []string{}
+	}
+	doc, ok := parsed.(*omap.Map)
+	if !ok || doc == nil {
+		return []string{}
+	}
+	// The spec's profiles, exactly as autolabel passes them. With none, every service behind a
+	// profile would be reported as left out of a stack that will in fact contain it.
+	return swarm.Swarmify(doc, st.Compose.Profiles).Notes
 }
 
 // listDeployments is GET /api/deployments.
@@ -240,6 +270,9 @@ func (s *Server) putDeployment(w http.ResponseWriter, r *http.Request, id string
 			}
 		}
 	}
+	// The other advisory finding about this submission: the keys swarm drops. Same shape as
+	// stackSharedWith — reported, never a refusal.
+	swarmNotes := swarmNotesFor(parsed, composeSource)
 	ordered := omap.New()
 	for _, k := range varKeys {
 		ordered.Set(k, vars[k])
@@ -261,9 +294,13 @@ func (s *Server) putDeployment(w http.ResponseWriter, r *http.Request, id string
 	}
 	resp := jsonx.O("id", dep.ID, "kind", dep.Kind, "stack", parsed.Stack, "specName", nullable(dep.SpecName),
 		"vars", storedVars, "createdAt", dep.CreatedAt, "updatedAt", dep.UpdatedAt)
-	// Omitted when empty, so a client cannot mistake `[]` for "not checked".
+	// Both omitted when empty, so a client cannot mistake `[]` for "not checked" — and under
+	// compose, where nothing was checked, `swarmNotes` is absent for exactly that reason.
 	if len(stackSharedWith) > 0 {
 		resp = append(resp, jsonx.KV{K: "stackSharedWith", V: stackSharedWith})
+	}
+	if len(swarmNotes) > 0 {
+		resp = append(resp, jsonx.KV{K: "swarmNotes", V: swarmNotes})
 	}
 	status := 201
 	if existed {
