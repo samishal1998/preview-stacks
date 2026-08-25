@@ -40,6 +40,11 @@ var (
 // regexps on the ESCAPED path: a mux cannot reproduce greedy /api/registries/(.+), any-method
 // /api/jobs, or undecoded-path semantics.
 func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who *auth.Principal, vars map[string]string) error {
+	// THE ROLE GATE, above every route in this file and in accountRoutes, and DEFAULT-DENY: a route
+	// with no row in permissions.go is root's. See that file's header before adding a route.
+	if !permit(w, who, r.Method, path) {
+		return nil
+	}
 	if done, err := s.accountRoutes(w, r, path, who); done || err != nil {
 		return err
 	}
@@ -124,10 +129,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return nil
 	}
 	if path == "/api/swarm/join" && r.Method == http.MethodGet {
-		if who.Kind != auth.KindRoot && !(who.Kind == auth.KindUser && who.User.Role == "admin") {
-			writeError(w, 403, "the join token requires an admin")
-			return nil
-		}
+		// The admin check that used to be inline here is a row in permissions.go now, where it
+		// reads MAINTAINER — a deliberate loosening, argued in that file's header.
 		format, ok := query(r.URL.RawQuery, "format")
 		if !ok {
 			format = "command"
@@ -270,10 +273,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		if err != nil {
 			return err
 		}
-		if !terminal.MayOpenTerminal(*who) {
-			writeError(w, 403, "opening a terminal requires an admin")
-			return nil
-		}
+		// terminal.MayOpenTerminal's admin check used to be here; permissions.go's row says
+		// DEVELOPER, and that file's header says why refusing the shell to someone who can already
+		// `up` an arbitrary compose file is theatre. A share principal never reaches this line —
+		// shareAllows refuses it before the chain.
 		dep, err := s.depOr404(w, m[1])
 		if err != nil || dep == nil {
 			return err

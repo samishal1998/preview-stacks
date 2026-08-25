@@ -476,7 +476,9 @@ describe('applying a sealed config from a browser session', () => {
       const made = await fetch(`${b.base}/api/users`, {
         method: 'POST',
         headers: { authorization: `Bearer ${b.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ username: 'operator', password: PASS }),
+        // An explicit admin: since RBAC, a role-less POST /api/users creates a VIEWER, and this
+        // account has to hold an admin session for the sealed-config apply below.
+        body: JSON.stringify({ username: 'operator', password: PASS, role: 'admin' }),
       });
       expect(made.status).toBe(201);
       const login = await fetch(`${b.base}/api/auth/login`, {

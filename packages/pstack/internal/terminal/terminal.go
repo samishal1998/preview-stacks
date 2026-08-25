@@ -58,15 +58,6 @@ func ActorOf(who auth.Principal) string {
 	return who.User.Username
 }
 
-// MayOpenTerminal: may this principal open a terminal? Everyone is role admin today, so this does
-// nothing yet — which is exactly why it goes in now. A share link is read-only by construction.
-func MayOpenTerminal(who auth.Principal) bool {
-	if who.Kind == auth.KindShare {
-		return false
-	}
-	return who.Kind == auth.KindRoot || (who.User != nil && who.User.Role == "admin")
-}
-
 // Session is one audit row.
 type Session struct {
 	ID         int64  `json:"id"`

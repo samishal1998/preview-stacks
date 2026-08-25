@@ -436,8 +436,15 @@ this UI's history were invisible in code review and obvious in a screenshot (a s
 **Prefer deleting over adding.** Deliberate non-goals, and what each would actually require:
 
 - **Multi-tenancy.** Needs a per-tenant isolation boundary — separate VMs/microVMs or Kubernetes
-  namespaces — plus a credential boundary. That is a different product. Do not add tenant IDs or RBAC
-  to `internal/api` as a substitute.
+  namespaces — plus a credential boundary. That is a different product. Do not add tenant IDs to
+  `internal/api` as a substitute.
+
+  There IS role-based access control now (`internal/api/permissions.go`: viewer, developer,
+  maintainer, admin) and it is **not** the substitute this line used to warn against. It divides
+  what one trusted team may do on one host — it does not isolate anyone from anyone. Every role
+  shares one Docker socket, one spec set and one set of secrets, and a developer runs arbitrary
+  shell through a hook or `up`. If you find yourself reaching for a per-tenant scope on a role,
+  that is the boundary above, and it is still a different product.
 - **Untrusted specs.** Same boundary problem, plus hooks are shell strings by design.
 - **Inbound git-webhook deploys, a service catalog.** Use a PaaS.
 - **Persistence / reconciliation of what exists.** Invariant 10.

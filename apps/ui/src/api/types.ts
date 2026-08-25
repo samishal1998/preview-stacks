@@ -25,6 +25,38 @@ export type JobAction = 'up' | 'down' | 'verify' | 'sleep' | 'wake';
 export type Orchestrator = 'compose' | 'swarm';
 export type ShareView = 'details' | 'logs';
 
+/**
+ * THE FOUR ROLES, ORDERED — the array IS the order, and rank is the index.
+ *
+ * `viewer < developer < maintainer < admin`. Above all four sits `root`, the PSTACK_TOKEN bearer,
+ * which is not a role and holds none (see `can()` in composables/useAuth.ts).
+ *
+ * These names let the UI SHOW the right thing. They never decide anything: the server's table in
+ * `packages/pstack/internal/api/permissions.go` is the only gate, and it answers 403 to a request
+ * this app was wrong about.
+ */
+export const ROLES = ['viewer', 'developer', 'maintainer', 'admin'] as const;
+export type Role = (typeof ROLES)[number];
+
+/**
+ * An account. `GET /api/users` → `{ users }`; `GET /api/auth/me` → `{ root, user? }`; the login and
+ * create responses carry one of these as `user`.
+ *
+ * `role` is typed `string`, NOT `Role`, on purpose: an older or newer server may name a role this
+ * build has never heard of, and an unknown role has to render as itself rather than crash or be
+ * silently read as a known one. Ranking it is the guarded step (`rank()`), and an unknown ranks
+ * below viewer.
+ */
+export type User = {
+  id: number;
+  username: string;
+  role: string;
+  /** From an SSO provider's claims; null for a locally-created account. */
+  email?: string | null;
+  createdAt: number;
+};
+export type UsersResponse = { users: User[] };
+
 /** Present while a deployment is asleep: when, why, and the hostnames a request to which wakes it. */
 export type SleepRecord = {
   since: number;

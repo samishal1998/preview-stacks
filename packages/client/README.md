@@ -1,8 +1,8 @@
 # @samyx/preview-stacks-client
 
 Typed API client for a [pstack](https://github.com/samishal1998/preview-stacks) control plane —
-deployments, jobs, readiness, containers, logs and notifiers, plus webhook verification for the
-receiving end.
+deployments, jobs, readiness, containers, logs, notifiers and accounts, plus webhook verification for
+the receiving end.
 
 Zero dependencies. Works in Node, Bun, Deno and the browser (it uses `fetch` and WebCrypto, nothing
 else).
@@ -110,6 +110,35 @@ const script = await pstack.swarm.join({ format: 'script' });   // a SECRET: tre
 // formats: 'token' | 'command' | 'script' | 'cloud-config' (+ distro for cloud-config)
 ```
 
+### Accounts and roles
+
+Every account holds one of four ordered roles. Each includes everything below it:
+
+| Role | What it adds |
+|---|---|
+| `viewer` | every read — deployments, jobs, logs, specs, routing, notifiers, the swarm, the user roster |
+| `developer` | stacks: `up` / `down` / `verify` / `sleep` / `wake`, container actions, specs, the terminal |
+| `maintainer` | host configuration: host vars, registries, routing files, notifiers, the swarm join material |
+| `admin` | people, and anything that can mint them: accounts, roles, SSO configuration, sealed config |
+
+`PSTACK_TOKEN` is above all four (`me().root === true`) and holds no account. A share-link token is
+not a role at all — it reaches the views its link names, on its one deployment.
+
+```ts
+const me = await pstack.me();
+if (!me.root && me.user?.role !== 'admin') throw new Error('this script mints accounts');
+
+const ci = await pstack.users.create({ username: 'ci-bot', password, role: 'developer' });
+await pstack.users.setRole(ci.id, 'maintainer');   // takes effect on that account's next request
+await pstack.users.remove(ci.id);
+const roster = await pstack.users.list();          // a viewer may read this
+```
+
+**An omitted `role` means `viewer`.** `users.create` used to produce an *administrator* every time; a
+script that relied on that must now say `role: 'admin'` and mean it. `user.role` is typed `string`,
+not `Role`, on the way back: the column is one an operator can repair by hand, and the server ranks a
+value it does not recognise *below* `viewer` — read an unfamiliar role as less, never as more.
+
 ### Single sign-on
 
 The sign-in itself is two browser redirects (`/api/auth/sso/start` → the provider →
@@ -153,6 +182,8 @@ Bun.serve({
   (`/api/deployments/:id/logs/stream`) and is left to `EventSource` or your own reader.
 - **No terminal.** That is a WebSocket carrying a session cookie, which belongs to a browser.
 - **No spec authoring helpers.** A spec is YAML you own; this client submits it verbatim.
+- **No password changes.** `PUT /api/users/:id/password` signs that account out of everything it has;
+  it is a person's job at a keyboard, not a script's.
 
 Anything not wrapped is still reachable with the same auth and error handling:
 

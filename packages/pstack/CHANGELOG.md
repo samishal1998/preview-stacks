@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### ⚠️ Breaking: accounts have roles
+
+Four of them, and every route is gated: **viewer** reads, **developer** owns stacks and
+deployments, **maintainer** adds host configuration, **admin** manages people. The `PSTACK_TOKEN`
+bearer still outranks all four; share links are unchanged.
+
+**Every existing account is an admin and stays one** — the users table has always defaulted the
+column to `admin`, so an upgrade locks nobody out. You opt people *down*.
+
+Two behaviours change for anything scripting the API:
+
+- **`POST /api/users` was reachable by any authenticated principal and always created an admin**,
+  because the route passed no role and the insert fell through to `COALESCE(?, 'admin')`. It is now
+  admin-only, takes a `role`, and an absent role means **viewer**. A script that wants an admin must
+  say so.
+- **SSO no longer provisions admins by default.** `defaultRole` filled itself with `admin` — written
+  when admin was the only role and left behind when the others arrived. With `allowedEmailDomains`,
+  `allowedUsernames` and `requiredGroups` all empty, which is how every preset saves, any stranger
+  who completed the OAuth flow was minted a full administrator. It now defaults to `viewer`, and the
+  API refuses a `defaultRole` that is not one of the four. **Check your existing providers**: a host
+  configured before this release still carries `"defaultRole": "admin"` in its stored config, and it
+  is honoured because it is explicit.
+
+Permissions live in one default-deny table (`internal/api/permissions.go`): a route with no entry
+requires the root token rather than being open, and a test fails if the router dispatches a path the
+table does not name. `GET /api/swarm/join` moved from admin to maintainer. The last admin cannot be
+deleted or demoted, root included — a host with no admins and no reachable `PSTACK_TOKEN` is
+unrecoverable.
+
+This is coarse, host-wide RBAC: one role per account, no per-stack scope. A developer can deploy
+every stack, and still runs arbitrary shell through `up` or a hook. It divides what one trusted team
+may do; it does not isolate anyone from anyone.
+
 ## 0.31.0 — 2026-08-25
 
 ### Added

@@ -492,6 +492,9 @@ func (s *Server) accountRoutes(w http.ResponseWriter, r *http.Request, path stri
 		writeJSON(w, 200, jsonx.O("users", users))
 		return true, nil
 	}
+	// WHOSE password this is decides who may set it — the caller's own is self-service, anyone
+	// else's is admin — and that decision is one row in permissions.go (the `self` flag), not a
+	// check here. This handler is reached only by someone already entitled to it.
 	if m := userPasswordRe.FindStringSubmatch(path); m != nil && r.Method == http.MethodPut {
 		body := bodyObject(r)
 		password, ok := getStr(body, "password")
@@ -517,7 +520,7 @@ func (s *Server) accountRoutes(w http.ResponseWriter, r *http.Request, path stri
 		username, uok := getStr(body, "username")
 		password, pok := getStr(body, "password")
 		if body == nil || !uok || !pok {
-			writeError(w, 400, "body must be { username, password, email? }")
+			writeError(w, 400, "body must be { username, password, email?, role? }")
 			return true, nil
 		}
 		// The optional email is what makes an SSO login able to ADOPT this account later.
@@ -525,24 +528,65 @@ func (s *Server) accountRoutes(w http.ResponseWriter, r *http.Request, path stri
 		if e, ok := getStr(body, "email"); ok && strings.TrimSpace(e) != "" {
 			email = strings.ToLower(strings.TrimSpace(e))
 		}
-		user, err := s.auth.CreateUser(username, password, auth.CreateOpts{Email: email})
+		// AN ABSENT ROLE IS THE LEAST PRIVILEGE, NEVER THE MOST. This route used to pass no role at
+		// all, so the insert fell through to `COALESCE(?, 'admin')` and every account it created was
+		// an administrator — which, on a route that was itself ungated, meant any authenticated
+		// caller could mint one. Defaulting to viewer is the deliberate breaking change: a script
+		// that relied on the old behaviour must now say `"role": "admin"` and mean it.
+		role := string(auth.Viewer)
+		if raw, ok := getStr(body, "role"); ok && strings.TrimSpace(raw) != "" {
+			role = strings.TrimSpace(raw)
+			// Refused here as well as in CreateUser so the message names the field the caller sent.
+			if !auth.ValidRole(role) {
+				writeError(w, 400, "role must be one of: "+auth.RolesText)
+				return true, nil
+			}
+		}
+		user, err := s.auth.CreateUser(username, password, auth.CreateOpts{Role: role, Email: email})
 		if err != nil {
 			return true, err
 		}
 		writeJSON(w, 201, jsonx.O("user", user))
 		return true, nil
 	}
-	if m := userRe.FindStringSubmatch(path); m != nil && r.Method == http.MethodDelete {
-		deleted, err := s.auth.DeleteUser(intID(m[1]))
-		if err != nil {
-			return true, err
-		}
-		if !deleted {
-			writeError(w, 404, "no such user")
+	if m := userRe.FindStringSubmatch(path); m != nil {
+		switch r.Method {
+		case http.MethodPatch:
+			// Promotion and demotion. Admin-only (permissions.go) because it is a promotion path:
+			// anyone who can set a role can set their own to admin.
+			body := bodyObject(r)
+			role, ok := getStr(body, "role")
+			if body == nil || !ok {
+				writeError(w, 400, "body must be { role } — one of: "+auth.RolesText)
+				return true, nil
+			}
+			// SetRole validates the role and refuses the last admin's demotion; both are an
+			// auth.Error, which fail() maps to a 400 carrying the sentence.
+			role = strings.TrimSpace(role)
+			changed, err := s.auth.SetRole(intID(m[1]), auth.Role(role))
+			if err != nil {
+				return true, err
+			}
+			if !changed {
+				writeError(w, 404, "no such user: "+m[1])
+				return true, nil
+			}
+			// Takes effect on that account's NEXT request: every principal lookup joins users and
+			// reads the role fresh, so there are no sessions to revoke.
+			writeJSON(w, 200, jsonx.O("updated", intID(m[1]), "role", role))
+			return true, nil
+		case http.MethodDelete:
+			deleted, err := s.auth.DeleteUser(intID(m[1]))
+			if err != nil {
+				return true, err
+			}
+			if !deleted {
+				writeError(w, 404, "no such user")
+				return true, nil
+			}
+			writeJSON(w, 200, jsonx.O("deleted", intID(m[1])))
 			return true, nil
 		}
-		writeJSON(w, 200, jsonx.O("deleted", intID(m[1])))
-		return true, nil
 	}
 
 	// Personal tokens are scoped to the CALLER — root has PSTACK_TOKEN and needs none, and one
@@ -642,6 +686,14 @@ func (s *Server) ssoConfigRoutes(w http.ResponseWriter, r *http.Request) error {
 		config, err := sso.ParseConfig(body)
 		if err != nil {
 			return err
+		}
+		// The role this provider hands out is validated HERE because internal/sso cannot see
+		// internal/auth (auth imports sso, so the reverse would be a cycle). An unvalidated role
+		// would be stored, rank 0, and lock every account it provisions out of everything — a
+		// silent failure discovered one confused user at a time.
+		if !auth.ValidRole(config.DefaultRole) {
+			writeError(w, 400, "defaultRole must be one of: "+auth.RolesText)
+			return nil
 		}
 		key, _ := getStr(body, "key")
 		key = strings.TrimSpace(key)

@@ -13,10 +13,29 @@
  * SECRETS ARE SHOWN ONCE, and the page says so in the same breath as showing them. Same discipline
  * as a notifier signing secret and a registry credential: there is no read path on the server, so
  * this is not a policy that could be relaxed later — the value genuinely stops existing.
+ *
+ * ── ROLES ────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * The roster is ordinary team information, so ANY signed-in account reads this page. Changing it —
+ * adding an account, setting a role, deleting one, setting someone ELSE's password — is admin's,
+ * and those controls are simply not rendered for anyone else. Your OWN password stays yours at
+ * every role, so that one button is there for everybody, on their own row only.
+ *
+ * Hiding is UX. `can('admin')` decides what to DRAW; the server's permission table decides what is
+ * allowed, and a hidden control that is somehow reached still comes back 403 — which lands in
+ * `listError` and says which role the route wanted. That path is not a fallback, it is the actual
+ * enforcement, so it stays.
+ *
+ * THE LAST ADMIN is the one rule the server has that the UI can see coming: it refuses to delete or
+ * demote the final admin account. A request that can only fail is worse than a control that says
+ * why it cannot be pressed, so that row's role picker and Delete arrive already disabled, carrying
+ * the same remedy the server would have answered with — promote another account first.
  */
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
-import { authState } from '../composables/useAuth';
+import { ROLES, type Role, type User, type UsersResponse } from '../api/types';
+import { authState, can, checkAuth } from '../composables/useAuth';
+import { sentence } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
@@ -25,8 +44,8 @@ import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RefreshButton from '../components/RefreshButton.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 
-type User = { id: number; username: string; role: string; createdAt: number };
 type Token = { id: number; name: string; createdAt: number; lastUsedAt: number | null };
 
 const users = ref<User[]>([]);
@@ -34,7 +53,11 @@ const tokens = ref<Token[]>([]);
 const loaded = ref(false);
 const listError = ref('');
 
-const newUser = ref({ username: '', password: '' });
+const newUser = ref<{ username: string; password: string; role: Role }>({
+  username: '',
+  password: '',
+  role: 'viewer',
+});
 const newToken = ref('');
 const pwFor = ref<User | null>(null);
 const pwValue = ref('');
@@ -46,9 +69,29 @@ const canCreateUser = computed(
   () => newUser.value.username.trim().length > 0 && newUser.value.password.length >= 8,
 );
 
+/** One line each, in the picker itself — a role name alone does not say what it costs to grant. */
+const ROLE_WHAT: Record<Role, string> = {
+  viewer: 'reads everything',
+  developer: 'deploys and tears down',
+  maintainer: 'host configuration',
+  admin: 'accounts and sign-on',
+};
+const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE_WHAT[r] }));
+
+const adminCount = computed(() => users.value.filter((u) => u.role === 'admin').length);
+/**
+ * The last admin cannot be demoted or deleted — the server refuses both, and a host with no admin
+ * has nobody who can add one back. Counting ROWS is the same thing the server counts: root holds
+ * PSTACK_TOKEN, not an account, and may not exist as a human at all.
+ */
+function lastAdmin(u: User): boolean {
+  return u.role === 'admin' && adminCount.value === 1;
+}
+const LAST_ADMIN_WHY = 'The only admin — promote another account first.';
+
 async function load(): Promise<void> {
   const [u, t] = await Promise.all([
-    api.get<{ users: User[] }>('/api/users'),
+    api.get<UsersResponse>('/api/users'),
     api.get<{ tokens: Token[] }>('/api/tokens'),
   ]);
   loaded.value = true;
@@ -64,16 +107,20 @@ async function load(): Promise<void> {
 void load();
 
 async function createUser(): Promise<void> {
+  // The role is always sent, never left to the server's default: what this form creates should be
+  // whatever the form is showing. (An absent role means viewer there, which is the same answer —
+  // but the day it is not, this page would be creating something other than what it said.)
   const r = await api.post<{ user: User }>('/api/users', {
     username: newUser.value.username.trim(),
     password: newUser.value.password,
+    role: newUser.value.role,
   });
   if (!r.ok) {
     listError.value = problem(r, 'create this account');
     return;
   }
-  toast('ok', `Created ${r.body.user.username}.`);
-  newUser.value = { username: '', password: '' };
+  toast('ok', `Created ${r.body.user.username} as a ${r.body.user.role}.`);
+  newUser.value = { username: '', password: '', role: 'viewer' };
   void load();
 }
 
@@ -86,6 +133,27 @@ async function removeUser(u: User): Promise<void> {
     return;
   }
   toast('ok', `Deleted ${u.username}.`);
+  void load();
+}
+
+async function changeRole(u: User, role: string): Promise<void> {
+  if (role === u.role) return;
+  const r = await api.patch(`/api/users/${u.id}`, { role });
+  if (!r.ok) {
+    listError.value = problem(r, `change the role for ${u.username}`);
+    return;
+  }
+  listError.value = '';
+  if (u.id === authState.user?.id) {
+    // You just changed your OWN role, and this whole app — the rail, this page's controls, the
+    // footer — is drawn from the role it is holding. Re-read it before anything renders again,
+    // or the UI keeps offering what the server will now refuse. (The server needs no prompting:
+    // every request looks the role up fresh.)
+    await checkAuth();
+    toast('ok', `You are now a ${role}. What this app offers you changed with it.`);
+  } else {
+    toast('ok', `${u.username} is now a ${role}.`);
+  }
   void load();
 }
 
@@ -182,6 +250,7 @@ async function removeToken(t: Token): Promise<void> {
           <thead>
             <tr>
               <th>User</th>
+              <th>Role</th>
               <th>Added</th>
               <th aria-label="Actions" />
             </tr>
@@ -192,12 +261,43 @@ async function removeToken(t: Token): Promise<void> {
                 <b>{{ u.username }}</b>
                 <span v-if="u.id === authState.user?.id" class="badge info">you</span>
               </td>
+              <!-- An admin gets the picker in place: promotion is a one-step decision about one
+                   person, and a dialog for a four-option choice is a page-blocking ceremony. Anyone
+                   else reads the role as text — `sentence()` at render only, never on the value.
+                   A role this build does not know still shows: it falls through to `placeholder`. -->
+              <td data-label="role">
+                <span
+                  v-if="can('admin')"
+                  class="role-pick"
+                  :title="lastAdmin(u) ? LAST_ADMIN_WHY : undefined"
+                >
+                  <SelectMenu
+                    :model-value="u.role"
+                    :label="`Role for ${u.username}`"
+                    :options="roleOptions"
+                    :disabled="lastAdmin(u)"
+                    :placeholder="sentence(u.role)"
+                    @update:model-value="(v) => changeRole(u, v)"
+                  />
+                </span>
+                <span v-else>{{ sentence(u.role) }}</span>
+              </td>
               <td class="dim nowrap" data-label="added"><RelativeTime :at="u.createdAt" /></td>
               <td class="right nowrap" data-label="">
-                <button class="ghost sm" @click="pwFor = u; pwValue = ''">Change password</button>
+                <!-- Your own password is yours at any role; someone else's is an admin operation. -->
+                <button
+                  v-if="u.id === authState.user?.id || can('admin')"
+                  class="ghost sm"
+                  @click="pwFor = u; pwValue = ''"
+                >
+                  Change password
+                </button>
                 <ActionButton
+                  v-if="can('admin')"
                   class="danger sm"
                   :confirm="`Delete ${u.username}?`"
+                  :disabled="lastAdmin(u)"
+                  :title="lastAdmin(u) ? LAST_ADMIN_WHY : undefined"
                   @run="removeUser(u)"
                   >Delete</ActionButton
                 >
@@ -207,7 +307,7 @@ async function removeToken(t: Token): Promise<void> {
         </table>
         <p v-else class="hint">No accounts yet.</p>
 
-        <form class="stack-form" @submit.prevent="createUser">
+        <form v-if="can('admin')" class="stack-form" @submit.prevent="createUser">
           <h3>Add an account</h3>
           <div class="row wrap two-up">
             <label class="field grow">
@@ -219,7 +319,17 @@ async function removeToken(t: Token): Promise<void> {
               <input v-model="newUser.password" type="password" autocomplete="new-password" />
             </label>
           </div>
-          <p class="hint">At least 8 characters.</p>
+          <div class="field">
+            <label for="new-role">Role</label>
+            <SelectMenu
+              id="new-role"
+              :model-value="newUser.role"
+              label="Role for the new account"
+              :options="roleOptions"
+              @update:model-value="(v) => (newUser.role = v as Role)"
+            />
+          </div>
+          <p class="hint">At least 8 characters. A new account starts as a viewer unless you say otherwise.</p>
           <div class="row">
             <button class="primary" type="submit" :disabled="!canCreateUser">Add account</button>
             <span class="grow" />
@@ -228,9 +338,14 @@ async function removeToken(t: Token): Promise<void> {
             what="this account creation"
             method="POST"
             path="/api/users"
-            :body="{ username: newUser.username || 'alice', password: '…' }"
+            :body="{ username: newUser.username || 'alice', password: '…', role: newUser.role }"
           />
         </form>
+        <!-- Not an apology for a missing button: it says who to ask, which is the thing the reader
+             actually needs. Reading the roster is every account's; changing it is admin's. -->
+        <p v-else class="hint">
+          Only an admin can add an account or change a role. Ask one of the admins above.
+        </p>
       </section>
 
       <section class="panel">
@@ -340,5 +455,15 @@ td.right {
 }
 td.right button {
   margin-inline-start: var(--s2);
+}
+/* The picker sits in a row, not a form: it takes the width its longest label needs and no more,
+ * so the Role column does not eat the table. The wrapper exists to carry `title` when the control
+ * inside it is disabled — a disabled button does not reliably show one of its own. */
+.role-pick {
+  display: inline-block;
+}
+.role-pick :deep(.selm-trigger) {
+  width: auto;
+  min-width: 150px;
 }
 </style>

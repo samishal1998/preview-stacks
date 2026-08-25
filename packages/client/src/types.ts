@@ -272,6 +272,46 @@ export type PstackEvent = {
   data: Record<string, unknown>;
 };
 
+// ── accounts and roles ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The four ordered roles, weakest first — each includes everything below it:
+ *
+ *   viewer      every read
+ *   developer   + stacks and deployments (up/down/verify/sleep/wake, containers, specs, terminal)
+ *   maintainer  + host configuration (host vars, registries, routing, notifiers, swarm join)
+ *   admin       + people, and anything that can mint them (users, SSO config, sealed config)
+ *
+ * `root` — the `PSTACK_TOKEN` bearer — sits ABOVE all four and is not one of them. A share link is
+ * not a role at any rank: it reaches the reads its own deployment allows and nothing else.
+ */
+export type Role = 'viewer' | 'developer' | 'maintainer' | 'admin';
+
+/** An account, as every response carries it. */
+export type User = {
+  id: number;
+  username: string;
+  /**
+   * `string`, not `Role`, on the way OUT: `users.role` is a plain TEXT column an operator is
+   * expected to be able to repair over SSH, so a value outside the four is possible. The server
+   * ranks such a role BELOW viewer — read an unfamiliar one as *less* than viewer, never as more.
+   * What you SEND is a `Role`; anything else is a 400.
+   */
+  role: string;
+  /** From an SSO provider's claims; null for every locally-created account. */
+  email: string | null;
+  createdAt: number;
+};
+
+/** Who a token is. `user` is present only for an account, `share` only for a share link. */
+export type Me = {
+  /** The `PSTACK_TOKEN` bearer — above every role, and it carries no account. */
+  root: boolean;
+  user?: User;
+  /** Epoch ms, or absent when the link could not be re-verified. */
+  share?: { deployment: string; views: ShareView[]; expiresAt?: number | null };
+};
+
 // ── single sign-on ────────────────────────────────────────────────────────────────────────────────
 
 export type SsoClaimMap = { subject: string; username: string; email: string; name: string; avatar: string };
@@ -314,6 +354,11 @@ export type SsoConfig = {
    * rather than letting every later login fail.
    */
   requiredGroups: string[];
+  /**
+   * The role an account this provider MINTS is created at. Deliberately not narrowed to `Role`: the
+   * server stores this string without validating it, and one it does not recognise ranks below
+   * viewer. Whatever it says is the floor every person who signs in through this provider gets.
+   */
   defaultRole: string;
 };
 

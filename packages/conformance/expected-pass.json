@@ -4,6 +4,7 @@
     "test/api-config.test.ts": 7,
     "test/api-host-vars.test.ts": 2,
     "test/api-jobs-and-containers.test.ts": 7,
+    "test/api-rbac.test.ts": 7,
     "test/api-routing-and-registries.test.ts": 8,
     "test/api-share-sleep-swarm.test.ts": 6,
     "test/api-source-and-logs.test.ts": 12,

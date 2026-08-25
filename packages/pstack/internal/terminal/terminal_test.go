@@ -10,17 +10,19 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
 
-// negative control: return true for KindShare in MayOpenTerminal → the share case fails.
+// negative control: return who.User.Username for KindShare in ActorOf → the share case nil-derefs.
+//
+// MayOpenTerminal used to live here and is gone: it hard-coded "admin", which contradicted the
+// agreed matrix once roles landed (a terminal is developer-and-above, because a developer can
+// already run arbitrary compose through `up`). Who may open one is now one row in
+// internal/api/permissions.go, and permissions_test.go asserts it — a second, weaker copy of an
+// authorization rule is exactly the drift this codebase keeps closing.
 func TestPrincipals(t *testing.T) {
 	root := auth.Principal{Kind: auth.KindRoot}
 	share := auth.Principal{Kind: auth.KindShare, Deployment: "pr-1"}
 	user := auth.Principal{Kind: auth.KindUser, User: &auth.UserRow{Username: "bob", Role: "admin"}}
-	viewer := auth.Principal{Kind: auth.KindUser, User: &auth.UserRow{Username: "eve", Role: "viewer"}}
 	if ActorOf(root) != "root (PSTACK_TOKEN)" || ActorOf(share) != "share-link (pr-1)" || ActorOf(user) != "bob" {
 		t.Fatal("actorOf")
-	}
-	if !MayOpenTerminal(root) || MayOpenTerminal(share) || !MayOpenTerminal(user) || MayOpenTerminal(viewer) {
-		t.Fatal("mayOpenTerminal")
 	}
 	if !IsShell("bash") || IsShell("cmd") || IsShell(nil) || IsShell(1) {
 		t.Fatal("isShell")
