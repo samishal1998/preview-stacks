@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.32.0 — 2026-08-25
 
 ### ⚠️ Breaking: a busy stack queues instead of refusing
 
