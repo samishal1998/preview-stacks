@@ -173,6 +173,8 @@ export type RuntimeContainer = {
   node?: string | null;
   /** A swarm task on ANOTHER node: listed, but out of reach of exec/stop from the manager. */
   remote?: boolean;
+  /** A one-shot swarm service's synthetic row (0.31.0+): container verbs have nothing to act on. */
+  job?: boolean;
 };
 
 export type RuntimeRoute = {

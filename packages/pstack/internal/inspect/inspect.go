@@ -65,6 +65,10 @@ type ContainerInfo struct {
 	StartedAt     *int64            `json:"startedAt"`
 	Node          *string           `json:"node"`
 	Remote        bool              `json:"remote"`
+	// Job marks the SYNTHESISED row that stands for a one-shot swarm service's verdict — its id and
+	// name are the service's, and no container answers to them, so start/stop/exec can only fail.
+	// Plain bool without omitempty (Go rule 2): false must serialize.
+	Job bool `json:"job"`
 }
 
 // RouteInfo is a Traefik router as declared by labels, joined to the service it points at.
@@ -725,6 +729,7 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 		containers = append(containers, toContainer(raw, stack))
 	}
 	routes := []RouteInfo{}
+	findings := []Finding{}
 	var subjects []subject
 
 	if swarm {
@@ -747,11 +752,14 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 			}
 			// A job whose progress column does not parse stays a job with Total 0, which reads as
 			// NOT DONE below. Fail closed: an unrecognised format must not certify a seed that may
-			// never have run.
+			// never have run. But say so — otherwise readiness reads `created` on every poll and
+			// burns its whole deadline with no diagnosis.
 			j := swarmJob{}
 			if m := jobReplicas.FindStringSubmatch(ls.Replicas); m != nil {
 				j.Completed, _ = strconv.ParseInt(m[1], 10, 64)
 				j.Total, _ = strconv.ParseInt(m[2], 10, 64)
+			} else {
+				findings = append(findings, Finding{"warn", ls.Name + " is a one-shot job, but its `docker service ls` replicas column reads " + strconv.Quote(ls.Replicas) + " where \"(<completed>/<total> completed)\" was expected, so its verdict cannot be read and readiness will treat it as never finishing. Check it by hand with `docker service ps " + ls.Name + "`; if it completed, this docker version renders the column differently — report that."})
 			}
 			jobsByName[ls.Name] = j
 		}
@@ -881,7 +889,7 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 					continue
 				}
 				service := svc.Service
-				info := ContainerInfo{ID: svc.ID, Name: svc.Name, Service: &service, Image: svc.Image, Networks: svc.Networks, Ports: []PortMap{}, TraefikLabels: svc.TraefikLabels, StartedAt: svc.UpdatedAt}
+				info := ContainerInfo{ID: svc.ID, Name: svc.Name, Service: &service, Image: svc.Image, Networks: svc.Networks, Ports: []PortMap{}, TraefikLabels: svc.TraefikLabels, StartedAt: svc.UpdatedAt, Job: true}
 				if j.Total > 0 && j.Completed >= j.Total {
 					zero := int64(0)
 					// Exactly what a compose one-shot looks like when it succeeds, so readiness needs
@@ -950,7 +958,6 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 	if challenge == "" {
 		challenge = DetectChallenge(r)
 	}
-	findings := []Finding{}
 	networkKey := "traefik.docker.network"
 	kind := "container"
 	if swarm {

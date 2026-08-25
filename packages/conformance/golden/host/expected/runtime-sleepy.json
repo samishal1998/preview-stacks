@@ -31,16 +31,17 @@
         "ports": [],
         "traefikLabels": {
           "traefik.enable": "true",
-          "traefik.swarm.network": "preview-ingress",
-          "traefik.http.routers.app-sleepy.rule": "Host(`app-sleepy.preview.example.com`)",
           "traefik.http.routers.app-sleepy.entrypoints": "websecure",
-          "traefik.http.routers.app-sleepy.tls": "true",
+          "traefik.http.routers.app-sleepy.rule": "Host(`app-sleepy.preview.example.com`)",
           "traefik.http.routers.app-sleepy.service": "app-sleepy",
-          "traefik.http.services.app-sleepy.loadbalancer.server.port": "80"
+          "traefik.http.routers.app-sleepy.tls": "true",
+          "traefik.http.services.app-sleepy.loadbalancer.server.port": "80",
+          "traefik.swarm.network": "preview-ingress"
         },
         "startedAt": 1787220000000,
         "node": "fixture-mgr",
-        "remote": true
+        "remote": true,
+        "job": false
       }
     ],
     "routes": [

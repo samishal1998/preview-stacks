@@ -263,6 +263,11 @@ export type RuntimeContainer = {
   node: string | null;
   /** A swarm task on ANOTHER node: listed, but `docker exec`/`stop` cannot reach it from here. */
   remote: boolean;
+  /**
+   * A one-shot (`deploy.mode: replicated-job`) synthesised from its SERVICE, not a real container —
+   * its id and name are the service's, so start/stop/shell have nothing to act on.
+   */
+  job: boolean;
 };
 export type RuntimeRoute = {
   router: string;

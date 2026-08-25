@@ -1015,7 +1015,8 @@ page view must not put "did not become ready in time" in a notifier about a depl
 a watch started by an actual `up` emits events.
 
 Add `?refresh=1` to re-run a watch that already settled, `?timeout=<seconds>` to override the
-180-second deadline. The same convergence is pushed to notifiers as `healthcheck.*`, `container.*`
+deadline (default 180s, or the host's `PSTACK_READINESS_TIMEOUT_MS`; floored at 5s — an unusable
+value defers to the host default rather than silently shortening the watch). The same convergence is pushed to notifiers as `healthcheck.*`, `container.*`
 and `stack.*` events — see [webhook-events.md](webhook-events.md).
 
 ### One job per stack
@@ -2375,6 +2376,7 @@ different problems with different owners.
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
 | `PSTACK_TRAEFIK_METRICS` | `serve` | — | Traefik's Prometheus endpoint, what `sleep.idle` reads. `http://traefik:8082/metrics` inside the control stack; unset means `idle` never triggers. |
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
+| `PSTACK_READINESS_RESTART_LOOP` | `serve` | `3` | restarts tolerated before the readiness watcher calls a container a crash loop. Unlike the two above, this is operator-facing: raise it on a swarm host — swarm has no `depends_on`, so a dependent service legitimately restarts a few times while its database converges. |
 | `PSTACK_SSO_STATE_TTL_S` · `PSTACK_SSO_DISCOVERY_TTL_S` | `serve` | `300` · `3600` | how long a half-finished SSO sign-in is remembered, and how long a provider's discovery document and JWKS are trusted. Same audience. |
 | `PSTACK_PORT` | `healthcheck` | `7878` | the port `pstack healthcheck` probes — the container HEALTHCHECK, exit 0 or 1 on `GET /api/health`. |
 | `PSTACK_BINARY` | `build-image` | *unset — the image installs this version from its release* | path to a `pstack` binary to copy into the control image instead, for a version that is not published yet or a host with no network at build time. |

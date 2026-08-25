@@ -25,7 +25,8 @@
         "traefikLabels": {},
         "startedAt": 1787220060000,
         "node": "fixture-mgr",
-        "remote": false
+        "remote": false,
+        "job": false
       }
     ],
     "routes": [

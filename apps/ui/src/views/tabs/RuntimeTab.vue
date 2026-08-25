@@ -336,7 +336,10 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     would do something. Both destructive ones confirm in place.
                   -->
                   <!-- None of these reach a task on another node; docker's verbs are node-local. -->
-                  <span v-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="runs on another swarm node — redeploy the stack, or act on the worker itself">
+                  <!-- And none of them reach a one-shot job's row, which stands for the SERVICE:
+                       there is no container behind its name, so the verbs could only fail. -->
+                  <span v-if="c.job" class="badge" title="a one-shot job — it runs to completion; there is no long-lived container to start, stop, or open a shell in">one-shot</span>
+                  <span v-else-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="runs on another swarm node — redeploy the stack, or act on the worker itself">
                     on {{ c.node }}
                   </span>
                   <ActionButton
@@ -363,7 +366,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     Stop
                   </ActionButton>
                   <ActionButton
-                    v-if="!c.remote"
+                    v-if="!c.remote && !c.job"
                     class="sm"
                     variant="ghost"
                     :pending="busy === `restart:${c.name}`"
@@ -380,7 +383,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     Logs
                   </RouterLink>
                   <RouterLink
-                    v-if="c.state === 'running' && !c.remote"
+                    v-if="c.state === 'running' && !c.remote && !c.job"
                     class="btn sm ghost"
                     :to="`/deployments/${encodeURIComponent(dep.id)}/terminal?container=${encodeURIComponent(c.name)}`"
                   >

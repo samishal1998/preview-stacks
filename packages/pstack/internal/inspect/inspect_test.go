@@ -262,6 +262,10 @@ func TestReplicatedJobVerdictComesFromTheServiceNotItsTasks(t *testing.T) {
 	// negative control: drop the `len(jobsByName) > 0` block — every case below yields 0 containers
 	// (a finished job's task is never desired-running, so nothing survives the corpse skip), and a
 	// stack whose seed FAILED then reads as ready over whatever else is in it.
+	// negative control (Job): drop `Job: true` from the synthetic row — the marker check fails, and
+	// the UI is back to offering Start/Stop on a "container" that is really a service id.
+	// negative control (finding): drop the unparseable-column `else` branch — the finding check
+	// fails, and an operator watching readiness burn its deadline gets no diagnosis.
 	cases := []struct {
 		name      string
 		replicas  string
@@ -292,6 +296,21 @@ func TestReplicatedJobVerdictComesFromTheServiceNotItsTasks(t *testing.T) {
 		}
 		if got.Service == nil || *got.Service != "seed" {
 			t.Fatalf("%s: service name not carried: %+v", c.name, got.Service)
+		}
+		// The row is synthesised from the SERVICE — its id/name answer to no container, so the UI
+		// needs the marker to withhold start/stop/shell.
+		if !got.Job {
+			t.Fatalf("%s: the synthetic service row must carry job:true: %+v", c.name, got)
+		}
+		// Fail closed AND say why: an unparseable column must surface a finding quoting the raw
+		// text, or readiness reads `created` forever with no diagnosis.
+		f := find(rt, "replicas column")
+		if c.replicas == "something else" {
+			if f == nil || !strings.Contains(f.Message, `"something else"`) {
+				t.Fatalf("%s: want a finding quoting the raw column, got %v", c.name, rt.Findings)
+			}
+		} else if f != nil {
+			t.Fatalf("%s: a parseable column must not warn: %+v", c.name, f)
 		}
 	}
 }
