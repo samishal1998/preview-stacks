@@ -120,17 +120,20 @@ func numParam(rawQuery, key string, fallback float64) float64 {
 	return js.ParseNumber(v)
 }
 
-// boundedSeconds is a `?key=<seconds>` parameter: a positive value capped at max, anything else the
-// fallback. ONE definition because `up?timeout=`, `readiness?timeout=` and `readiness?wait=` must
-// agree on the ceiling — a watch deadline the deploy route would accept and the read route would
-// clamp is a watch nobody can poll to completion.
-func boundedSeconds(rawQuery, key string, fallback, max float64) float64 {
+// boundedSeconds is a `?key=<seconds>` parameter: a positive value clamped to [floor, max],
+// anything else the fallback. ONE definition because `up?timeout=`, `readiness?timeout=` and
+// `readiness?wait=` must agree on the ceiling — a watch deadline the deploy route would accept and
+// the read route would clamp is a watch nobody can poll to completion.
+//
+// The floor exists for the timeout call sites: the up route starts its watch with Emit:true, so a
+// sub-poll deadline (`?timeout=0.01`) expires before the first docker read and fires stack.timedout
+// at every notifier for a deploy that SUCCEEDED. It is a parameter, not baked in, because `?wait=`
+// is a long-poll duration on the same helper where 1s is legitimate — that site passes 0.
+// The fallback is NOT floored: the timeout sites pass 0, meaning "the watcher decides".
+func boundedSeconds(rawQuery, key string, fallback, floor, max float64) float64 {
 	raw := numParam(rawQuery, key, 0)
 	if js.IsFinite(raw) && raw > 0 {
-		if raw < max {
-			return raw
-		}
-		return max
+		return clamp(raw, floor, max, fallback)
 	}
 	return fallback
 }

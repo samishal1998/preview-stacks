@@ -437,16 +437,15 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, dep *registry
 	}
 	o := lifecycleOptions{By: terminal.ActorOf(*who), Reason: "operator: " + terminal.ActorOf(*who)}
 	// `?timeout=<seconds>` sets the deadline of the watch this job hands off to. Without it the
-	// watcher default (180s) applies, which is far too short for a stack whose one-shot seed runs for
-	// ten minutes — and under SWARM that seed is the whole wait, because `docker stack deploy
-	// --detach=true` returns in seconds and the job goes `ok` long before anything is serving.
+	// watcher default (180s, or the host's PSTACK_READINESS_TIMEOUT_MS) applies — far too short for
+	// a stack whose one-shot seed runs for ten minutes — and under SWARM that seed is the whole
+	// wait, because `docker stack deploy --detach=true` returns in seconds and the job goes `ok`
+	// long before anything is serving.
 	// `jobs.Up` only. A wake is triggered by an inbound request to a sleeping
 	// hostname, which passes nothing and wants the default; offering the parameter
 	// on a manual wake would only let someone park an hour-long watch nobody polls.
 	if action == jobs.Up {
-		if _, has := query(r.URL.RawQuery, "timeout"); has {
-			o.ReadinessTimeoutMs = int64(boundedSeconds(r.URL.RawQuery, "timeout", ReadinessTimeoutDefaultS, ReadinessTimeoutMaxS) * 1000)
-		}
+		o.ReadinessTimeoutMs = watchTimeoutMs(r.URL.RawQuery)
 	}
 	if v, present := body.Get("verify"); present && v != nil {
 		b := truthy(v)
@@ -742,11 +741,22 @@ func (s *Server) deploymentRuntime(w http.ResponseWriter, dep *registry.Deployme
 }
 
 // Bounds of the `?timeout=` watch deadline, shared by `POST …/up` and `GET …/readiness`. The max is
-// the job cap: a watch that could outlive every job would report on a stack nothing is driving.
+// the job cap: a watch that could outlive every job would report on a stack nothing is driving. The
+// min is over two poll intervals (readiness.PollMs is 2s): the up route's watch runs with Emit:true,
+// and a deadline shorter than the first poll times out a SUCCESSFUL deploy into every notifier.
 const (
-	ReadinessTimeoutDefaultS = 180
-	ReadinessTimeoutMaxS     = 3600
+	ReadinessTimeoutMinS = 5
+	ReadinessTimeoutMaxS = 3600
 )
+
+// watchTimeoutMs maps `?timeout=` to a StartOptions.TimeoutMs. ONE function because both routes
+// above hand off to the same watcher and must agree. An absent or unusable value (0, negative, NaN)
+// yields 0 — "the watcher decides" — which is the only value that lets the host's
+// PSTACK_READINESS_TIMEOUT_MS default apply (readiness.Start replaces TimeoutMs <= 0 with it). A
+// concrete fallback here, however sensible-looking, would silently override that knob.
+func watchTimeoutMs(rawQuery string) int64 {
+	return int64(boundedSeconds(rawQuery, "timeout", 0, ReadinessTimeoutMinS, ReadinessTimeoutMaxS) * 1000)
+}
 
 // deploymentReadiness is GET …/readiness: is it SERVING yet — poll, or ?wait=<seconds>.
 func (s *Server) deploymentReadiness(w http.ResponseWriter, r *http.Request, dep *registry.Deployment, vars map[string]string) error {
@@ -755,11 +765,8 @@ func (s *Server) deploymentReadiness(w http.ResponseWriter, r *http.Request, dep
 		return err
 	}
 	q := r.URL.RawQuery
-	waitMs := int64(boundedSeconds(q, "wait", 0, 60) * 1000)
-	var timeoutMs int64
-	if _, has := query(q, "timeout"); has {
-		timeoutMs = int64(boundedSeconds(q, "timeout", ReadinessTimeoutDefaultS, ReadinessTimeoutMaxS) * 1000)
-	}
+	waitMs := int64(boundedSeconds(q, "wait", 0, 0, 60) * 1000)
+	timeoutMs := watchTimeoutMs(q)
 	refresh, _ := query(q, "refresh")
 	existing, found := s.readiness.Get(st.Stack)
 	if !found || (existing.State != readiness.Watching && refresh == "1") {
