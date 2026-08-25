@@ -726,9 +726,13 @@ func TestCloudInitPortableConfig(t *testing.T) {
 			t.Fatal("no apply step in the rendered file")
 		}
 		rm := strings.Index(step, `rm -f "$f"`)
-		iff := strings.Index(step, "if [ -n \"$ip\"")
+		iff := strings.Index(step, `if `)
 		if rm < 0 || iff < 0 || rm < iff {
 			t.Errorf("rm at %d, if at %d — the delete must follow the attempt unconditionally:\n%s", rm, iff, step)
+		}
+		// And from inside the container too, where `docker cp` put a second copy.
+		if !strings.Contains(step, "rm -f /tmp/config.sealed") {
+			t.Errorf("the copy inside the container is never deleted:\n%s", step)
 		}
 		if !strings.Contains(step, `[ "$applied" = yes ] || echo 'pstack: THE SEALED CONFIG WAS NOT APPLIED`) {
 			t.Errorf("a failed apply is silent:\n%s", step)
@@ -740,9 +744,33 @@ func TestCloudInitPortableConfig(t *testing.T) {
 		if strings.Contains(step, "PSTACK_CONFIG_KEY='"+key+"' /usr/local/bin/pstack") {
 			t.Error("the passphrase became a command-line env prefix, visible in `ps`")
 		}
-		// The token comes off the host, not out of this file.
-		if !strings.Contains(step, `sed -n 's/^PSTACK_TOKEN=//p' /var/lib/pstack/control/.env`) {
-			t.Errorf("the token is not read from control/.env:\n%s", step)
+		// The token is never read into a host shell at all: `docker exec` runs inside the container,
+		// which already holds PSTACK_TOKEN in its own environment.
+		if strings.Contains(step, "control/.env") {
+			t.Errorf("the token is read out of control/.env, into a host shell that does not need it:\n%s", step)
+		}
+	})
+
+	// THE BUG THIS EXISTS FOR: the first version dialled the control container's own address, taken
+	// from `docker inspect`. Under `--orchestrator swarm` — the DEFAULT — preview-ingress and
+	// preview-shared are attachable OVERLAY networks, so every address it can report is one the host
+	// has no route to. A real Hetzner boot failed with `dial tcp 10.0.1.2:7878: i/o timeout`, and no
+	// amount of waiting would have helped: a timeout rather than a refusal is what unroutable looks
+	// like, and the container was already healthy by then because `init` blocks on it.
+	//
+	// negative control: put the `docker inspect …IPAddress…` line and `PSTACK_API_URL="http://$ip:7878"`
+	// back — the first two checks fail.
+	t.Run("the apply runs inside the container, never against an address the host must route to", func(t *testing.T) {
+		step := applyStep(t, render(t, embed))
+		if strings.Contains(step, "IPAddress") || strings.Contains(step, "docker inspect") {
+			t.Errorf("the step still picks an address out of `docker inspect`:\n%s", step)
+		}
+		if !strings.Contains(step, "PSTACK_API_URL=http://127.0.0.1:7878") || !strings.Contains(step, "docker exec") {
+			t.Errorf("the step does not run inside the container against loopback:\n%s", step)
+		}
+		// Bounded: a config that cannot apply must fail the boot loudly, not hang it forever.
+		if !strings.Contains(step, `while [ "$n" -le 5 ]`) {
+			t.Errorf("the retry is absent or unbounded:\n%s", step)
 		}
 	})
 
