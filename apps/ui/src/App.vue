@@ -31,6 +31,7 @@ import {
   Plus,
   Settings2,
   ShieldCheck,
+  Upload,
   Users,
   Variable,
   Waypoints,
@@ -152,6 +153,11 @@ void settings;
         <RouterLink to="/sso" class="navlink">
           <ShieldCheck :size="17" aria-hidden="true" />
           <span>Sign-on</span>
+        </RouterLink>
+
+        <RouterLink to="/config" class="navlink">
+          <Upload :size="17" aria-hidden="true" />
+          <span>Apply config</span>
         </RouterLink>
 
         <RouterLink to="/settings" class="navlink" title="g s">

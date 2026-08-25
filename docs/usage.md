@@ -1901,6 +1901,28 @@ machine — never on the server, because sealing server-side would mean sending 
 server, which is strictly worse. The passphrase comes from `PSTACK_CONFIG_KEY`, or is prompted for
 without echo. **There is no passphrase flag on purpose**: argv is world-readable through `ps`.
 
+### Applying one from the UI
+
+The advanced UI has an **Apply config** page: pick the sealed file, type the passphrase, press
+Preview to see what the file will make this host trust, then Apply. It posts to
+`POST /api/config/sealed` and needs an **admin** — a session is enough.
+
+**It can apply a config and cannot produce one, on purpose.** Export is exfiltration: one request
+and every credential on this host is in the caller's hands, so `GET /api/config` refuses a browser
+session and answers only to the `PSTACK_TOKEN` bearer. A download button would mean an XSS, a
+borrowed laptop or a stolen cookie yields the lot in one click. Import runs the other way — whoever
+uses that page must already hold the file *and* its passphrase, so it shows them nothing they could
+not read for themselves.
+
+That asymmetry is also why the passphrase is sent to the server here while `pull config` keeps it
+local: every secret in the file is about to be plaintext on this host anyway, so there is nothing
+left for it to protect from *this* host. It is used once and never stored.
+
+Preview exists because this is the widest-reaching write in the API — a config can create an
+administrator and choose where the host pulls its images from — and a browser has no equivalent of
+the CLI's confirmation prompt unless the server offers it one. Nothing is written until you have
+seen the list.
+
 `PSTACK_API_URL` has no default. A guess would silently talk to the wrong host, and this is the one
 command where the payload is every credential you have. Plain `http://` is refused unless the host
 is loopback or a private address, for the same reason.

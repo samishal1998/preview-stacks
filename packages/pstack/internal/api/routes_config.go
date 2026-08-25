@@ -46,6 +46,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -59,6 +60,22 @@ import (
 // tested without booting a server and so there is exactly one copy of it. Root — the PSTACK_TOKEN
 // bearer — and nothing else. See the file header before widening it.
 func mayMoveConfig(who *auth.Principal) bool { return who != nil && who.Kind == auth.KindRoot }
+
+// mayApplySealedConfig is the gate on the SEALED import, and it is deliberately wider than
+// mayMoveConfig: an admin session may apply a config, but still may not export one.
+//
+// The asymmetry is the whole point. Export is exfiltration — one GET and every credential on the
+// host is in the caller's hands, so a stolen cookie must not be enough. Import is the opposite
+// direction: the caller must already POSSESS the file and its passphrase, and everything in it is
+// about to be plaintext on this host anyway. An attacker who can already reach an admin session can
+// create an admin account through /api/users without this route's help.
+//
+// It is still the widest-reaching write in the API — it can add an administrator and choose where
+// this host pulls images from — which is why the response names every grant before it is applied
+// and why the preview exists.
+func mayApplySealedConfig(who *auth.Principal) bool {
+	return who != nil && (who.Kind == auth.KindRoot || (who.Kind == auth.KindUser && who.User.Role == "admin"))
+}
 
 // configNoStore is on both responses: this is the one route in the codebase where a cached response body
 // is a complete credential dump.
@@ -136,6 +153,14 @@ func (s *Server) importConfig(w http.ResponseWriter, r *http.Request, who *auth.
 		s.failConfig(w, err)
 		return
 	}
+	s.applyParsedConfig(w, doc, who)
+}
+
+// applyParsedConfig is the half both import routes share: emit what is about to be trusted, apply,
+// emit the outcome, answer. Split out when the sealed route arrived so the two cannot drift — an
+// import that emitted a different event depending on which door it came through would make the
+// audit trail a guess.
+func (s *Server) applyParsedConfig(w http.ResponseWriter, doc *config.Document, who *auth.Principal) {
 	trusts := doc.Trusts()
 
 	// Identities, not values: which registries this host will now pull from, and which notifiers
@@ -176,11 +201,68 @@ func (s *Server) importConfig(w http.ResponseWriter, r *http.Request, who *auth.
 	writeJSON(w, 200, jsonx.O("trusts", trusts, "created", sum.Created, "skipped", sum.Skipped), configNoStore)
 }
 
+// importSealedConfig is POST /api/config/sealed: the same import, but the caller hands over the
+// SEALED file and its passphrase and the server opens it.
+//
+// Export deliberately does not work this way — the CLI seals locally, because sending the passphrase
+// to the server would put every host's key on the server the keys protect. Import inverts that
+// argument rather than ignoring it: this host is about to hold every secret in that file in
+// plaintext, so learning the passphrase that opens it tells it nothing it is not about to know. The
+// passphrase is used once, on the stack, and never stored, logged or emitted.
+//
+// `preview` returns what the file WOULD do and writes nothing. It is not politeness: a config can
+// add an administrator and repoint this host's image pulls, and a browser has no equivalent of the
+// CLI's confirmation prompt unless the server offers it one.
+func (s *Server) importSealedConfig(w http.ResponseWriter, r *http.Request, who *auth.Principal) {
+	if !mayApplySealedConfig(who) {
+		writeError(w, 403, "applying a host configuration requires an admin")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "use POST")
+		return
+	}
+	body := bodyObject(r)
+	sealed, sok := getStr(body, "sealed")
+	passphrase, pok := getStr(body, "passphrase")
+	if body == nil || !sok || !pok {
+		writeError(w, 400, "body must be { sealed, passphrase, preview? }")
+		return
+	}
+	plain, err := config.Unseal([]byte(sealed), passphrase)
+	if err != nil {
+		s.failConfig(w, err)
+		return
+	}
+	doc, err := config.Parse(plain)
+	if err != nil {
+		s.failConfig(w, err)
+		return
+	}
+	// Trusts() carries credentials — a chat notifier's URL IS its secret — so it goes to this caller
+	// and nowhere else. That is safe here in a way it would not be elsewhere: whoever sent this
+	// request already holds the file AND the passphrase, so the response reveals nothing they could
+	// not read for themselves.
+	if preview, _ := getBool(body, "preview"); preview {
+		writeJSON(w, 200, jsonx.O(
+			"preview", true, "trusts", doc.Trusts(),
+			"users", len(doc.Users), "tokens", len(doc.Tokens), "vars", len(doc.Vars),
+			"notifiers", len(doc.Notifiers), "registries", len(doc.Registry),
+			"routing", len(doc.Routing), "specs", len(doc.Specs), "sso", doc.SSO != nil,
+		), configNoStore)
+		return
+	}
+	s.applyParsedConfig(w, doc, who)
+}
+
 // failConfig maps a refused document to 400 the way `fail` maps every other domain error. It is
 // here rather than in `fail`'s switch only because server.go is not this change's to edit — the
 // integrator should add `config.IsError(err)` to that list and delete this.
 func (s *Server) failConfig(w http.ResponseWriter, err error) {
-	if config.IsError(err) {
+	// ErrPassphrase is a SENTINEL, not a *config.Error, so IsError does not catch it — and a wrong
+	// passphrase is the caller's mistake, not this server's fault. Without this arm the sealed
+	// import answered 500 to the single most likely thing a human gets wrong on that page.
+	if config.IsError(err) || errors.Is(err, config.ErrPassphrase) {
 		writeError(w, 400, err.Error())
 		return
 	}

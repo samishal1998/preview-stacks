@@ -51,6 +51,13 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	if path == "/api/config" {
 		return s.configRoutes(w, r, who)
 	}
+	// The sealed import, which an ADMIN SESSION may reach and the export above may not — the caller
+	// must already hold the file and its passphrase, and everything in it is about to be plaintext
+	// on this host regardless. routes_config.go's mayApplySealedConfig has the full argument.
+	if path == "/api/config/sealed" {
+		s.importSealedConfig(w, r, who)
+		return nil
+	}
 
 	// ---- the whole registry ----
 	if path == "/api/deployments" && r.Method == http.MethodGet {
