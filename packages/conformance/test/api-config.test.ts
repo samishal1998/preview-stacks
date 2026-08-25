@@ -453,3 +453,90 @@ describe('moving a host configuration — pull, seal, push, and the new host ans
     // to Document — the key-set assertion fails. Run.
   }, 60_000);
 });
+
+// The SEALED import (`POST /api/config/sealed`), which is what the UI's Apply-a-config page uses.
+//
+// Its gate is deliberately WIDER than /api/config's: an admin session may apply, but still may not
+// export. Export is exfiltration — one GET and every credential is in the caller's hands — while
+// import requires already holding the file AND its passphrase, and everything in it is about to be
+// plaintext on this host anyway. These tests exist to keep that asymmetry from being "fixed" in
+// either direction by someone who reads one half of it.
+describe('applying a sealed config from a browser session', () => {
+  test('an admin session may preview and apply, though it still may not export', async () => {
+    const a = await host('cfg-sealed-a');
+    const b = await host('cfg-sealed-b');
+    const file = `${tmpd('cfg-sealed')}.sealed`;
+    try {
+      await seed(a);
+      const pull = await runCli(['pull', 'config', '-o', file], { env: cliEnv(a) });
+      expect(`${pull.code}: ${pull.all}`).toBe(`0: ${pull.all}`);
+      const sealed = await Bun.file(file).text();
+
+      // B needs an admin to hold the session, so bootstrap one that is NOT in the export.
+      const made = await fetch(`${b.base}/api/users`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${b.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'operator', password: PASS }),
+      });
+      expect(made.status).toBe(201);
+      const login = await fetch(`${b.base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'operator', password: PASS }),
+      });
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+
+      // The asymmetry, asserted directly: the same session that may apply may NOT export.
+      expect((await fetch(`${b.base}/api/config`, { headers: { cookie } })).status).toBe(403);
+
+      const post = (body: unknown, headers: Record<string, string> = { cookie }) =>
+        fetch(`${b.base}/api/config/sealed`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+      // ── preview writes NOTHING ────────────────────────────────────────────────────────────────
+      const pre = await post({ sealed, passphrase: KEY, preview: true });
+      expect(pre.status).toBe(200);
+      const preview = (await pre.json()) as { preview: boolean; trusts: string[]; users: number };
+      expect(preview.preview).toBe(true);
+      expect(preview.users).toBeGreaterThan(0);
+      // It must name what the file will make this host trust — that is the whole reason it exists.
+      expect(preview.trusts.join('\n')).toContain('alice');
+      // …and alice still cannot log in, because preview applied nothing.
+      expect((await fetch(`${b.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'alice', password: PASS }) })).status).not.toBe(200);
+
+      // ── a wrong passphrase is a clean refusal, not a half-apply ───────────────────────────────
+      const wrong = await post({ sealed, passphrase: `${KEY}-nope` });
+      expect(wrong.status).toBe(400);
+      expect((await wrong.text()).toLowerCase()).toContain('passphrase');
+      expect((await fetch(`${b.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'alice', password: PASS }) })).status).not.toBe(200);
+
+      // ── apply, for real ───────────────────────────────────────────────────────────────────────
+      const done = await post({ sealed, passphrase: KEY });
+      expect(done.status).toBe(200);
+      const applied = (await done.json()) as { created: string[]; trusts: string[] };
+      expect(applied.created.join('\n')).toContain('alice');
+      const now = await fetch(`${b.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'alice', password: PASS }) });
+      expect(now.status).toBe(200);
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+    // negative control: change mayApplySealedConfig to require KindRoot — the preview call 403s.
+  }, 180_000);
+
+  test('an anonymous caller is refused', async () => {
+    const a = await host('cfg-sealed-anon');
+    try {
+      const r = await fetch(`${a.base}/api/config/sealed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sealed: '{}', passphrase: 'x' }),
+      });
+      expect(r.status).toBe(401);
+    } finally {
+      await a.stop();
+    }
+    // negative control: move the /api/config/sealed branch above THE GATE in server.go — this 401
+    // becomes a 400, and an unauthenticated caller reaches the unseal.
+  }, 60_000);
+});

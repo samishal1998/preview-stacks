@@ -54,6 +54,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/users', name: 'users', component: () => import('./views/UsersView.vue') },
   { path: '/sso', name: 'sso', component: () => import('./views/SsoView.vue') },
   { path: '/variables', name: 'variables', component: () => import('./views/VariablesView.vue') },
+  { path: '/config', name: 'config', component: () => import('./views/ConfigView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
   // A path that matches nothing renders a message, never a blank screen.
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },
