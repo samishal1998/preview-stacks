@@ -1,14 +1,29 @@
 # CI for pstack.
 #
-# Deliberately small — this repo ships a guide about CI patterns, so its own CI should be a
-# legible example rather than a showcase. One job, no matrix.
+# FAN-OUT, and the shape is the point. This was one job of fifteen sequential steps, which took
+# 5m49s of which about 32s was setup — everything else waited on whatever ran before it, whether or
+# not it depended on it. `go vet` does not need the UI to have typechecked; the docker image does
+# not need the conformance ratchet. Now each independent gate is its own job, and the wall clock is
+# the SLOWEST gate rather than the SUM of all of them.
 #
-# Two kinds of test run here. `turbo run test` is each package's own suite (Go under -race for
-# pstack, bun for the UI and the client). packages/conformance is the BLACK-BOX specification: it
-# spawns the real `pstack` binary and grades it against checked-in transcripts. Its extra gates are
-# what make those tests trustworthy: vacuity (every test must fail against a server that answers
-# 200 {} to everything), the ratchet (pass counts only go up), and the self-diff (the differential
-# masks are tight enough that the same binary twice is identical).
+# The cost is honest: every job repeats checkout and toolchain setup, so total machine time goes up
+# while elapsed time comes down by roughly 4×. That is the trade a contributor waiting on a PR
+# actually wants.
+#
+# Two things make the fan-out cheap rather than merely parallel:
+#   - The Go binary is built ONCE, in `go`, and handed to the three conformance jobs as an
+#     artifact. They need the binary, not a Go toolchain — skipping setup-go saves ~22s each.
+#   - `web` EXCLUDES packages/pstack from turbo. Its `test` script is `go test -race ./...` and its
+#     `typecheck` is `go vet ./...` — the same commands the `go` job runs. The old single job ran
+#     the entire Go race suite twice and vetted twice, which cost ~47s for nothing.
+#
+# Two kinds of test run here. Each package's own suite (Go under -race for pstack, bun for the UI
+# and the client) and packages/conformance, the BLACK-BOX specification: it spawns the real `pstack`
+# binary and grades it against checked-in transcripts. Its extra gates are what make those tests
+# trustworthy: vacuity (every test must fail against a server that answers 200 {} to everything),
+# the ratchet (pass counts only go up), and the self-diff (the differential masks are tight enough
+# that the same binary twice is identical). Those three are independent of each other, so they run
+# side by side.
 name: CI
 
 on:
@@ -25,68 +40,147 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # ── the Go half, and the binary everything else grades ────────────────────────────────────────
+  go:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
+      # -race is what makes the concurrency claims checkable. It is not optional and it is not
+      # duplicated anywhere else in this workflow.
+      - name: vet, race
+        run: |
+          go vet ./...
+          go test -race -timeout 180s ./...
+
+      # Built here so the conformance jobs need no Go toolchain at all. The build cache is already
+      # warm from the test above, so this costs seconds.
+      - name: Build the binary
+        run: go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pstack-binary
+          path: packages/pstack/bin/pstack
+          retention-days: 1
+
+  # ── the bun half: the UI and the client SDK ───────────────────────────────────────────────────
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # packages/client's test spawns the REAL binary through the conformance harness, so this job
+    # needs the artifact even though it runs no Go itself.
+    needs: go
+    steps:
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           # Pinned from a committed file so CI and local agree; bumping the runtime is a commit.
           bun-version-file: .bun-version
-
       - run: bun install --frozen-lockfile
 
-      # The Go suite first and on its own: -race is what makes the concurrency claims checkable.
-      - name: Go — vet, race
+      - uses: actions/download-artifact@v4
+        with:
+          name: pstack-binary
+          path: packages/pstack/bin
+      - run: chmod +x packages/pstack/bin/pstack
+
+      # The UI and the client publish BUNDLES, so build them: a broken bundle (a dropped asset) is
+      # invisible to `bun test`, which runs the sources.
+      #
+      # Two exclusions and an `--only`, each load-bearing, all three verified with `--dry-run=json`
+      # rather than assumed:
+      #   - `!@samyx/preview-stacks` — its `test` IS `go test -race ./...` and its `typecheck` is
+      #     `go vet ./...`, both of which the `go` job already ran. Without this the Go suite runs
+      #     twice per CI run.
+      #   - `!@samyx/preview-stacks-conformance` — the `conformance` jobs below own it; without this
+      #     the whole black-box suite runs here as well.
+      #   - `--only` — packages/client depends on `@samyx/preview-stacks` (it spawns the binary), so
+      #     turbo's `^build` would schedule `pstack#build`, i.e. `go build`, in a job with no Go
+      #     toolchain. `--only` runs the named tasks without their dependency tasks; the binary is
+      #     already here as an artifact.
+      - name: typecheck, test, build
+        run: bunx turbo run typecheck test build --filter='!@samyx/preview-stacks' --filter='!@samyx/preview-stacks-conformance' --only
+
+  # ── the black-box specification, three independent gates ─────────────────────────────────────
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: go
+    strategy:
+      # One red gate must not cancel the others: knowing that BOTH the ratchet and the self-diff
+      # broke is worth more than finding out one at a time.
+      fail-fast: false
+      matrix:
+        gate: [suite, vacuity, diff]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pstack-binary
+          path: packages/pstack/bin
+      - run: chmod +x packages/pstack/bin/pstack
+
+      # `suite` carries this package's OWN typecheck too: `web` excludes conformance, and the old
+      # single job covered it via `turbo run typecheck`. Splitting a job is where a gate goes
+      # missing, so this list was diffed against the old one command by command.
+      #
+      # `suite` is the tests themselves plus the ratchet (pass counts only go up, per file), and the
+      # example-spec byte-diff — the shipped example must not be a spec its own tool would warn
+      # about. `vacuity` proves every test fails against a server that asserts nothing. `diff`
+      # proves the differential masks are tight enough that the same binary twice is identical.
+      - name: ${{ matrix.gate }}
+        working-directory: packages/conformance
         run: |
-          go vet ./...
-          go test -race -timeout 120s ./...
+          case "${{ matrix.gate }}" in
+            suite)   bun run typecheck && bun test && bun run ratchet ;;
+            vacuity) bun run vacuity ;;
+            diff)    bun run diff -- --self ;;
+          esac
 
-      # Turbo fans these out across the workspace and caches per package, so adding a package
-      # needs no CI change. packages/pstack's scripts run both runtimes (bun test + go test).
-      - name: Test
-        run: bunx turbo run test
+  # ── the contributor's own path: a control image from a checkout ──────────────────────────────
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      # No Go, no bun: the Dockerfile builds what it needs. This job is the same runtime layer
+      # `pstack build-image` generates on a host.
+      - name: Image builds
+        run: docker build -t pstack:ci . && docker run --rm pstack:ci pstack --version
 
-      - name: Typecheck
-        run: bunx turbo run typecheck
-
-      # The Go binary the conformance suite grades in go mode.
-      - name: Build the Go binary
-        run: go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
-
-      # The spec's own linting must hold for the shipped example, or the guide teaches a spec that
-      # its own tool would warn about. A byte-diff against the checked-in transcript.
-      - name: Validate the example spec
-        run: cd packages/conformance && bun test test/cli-goldens.test.ts -t validate-example
-
-      # Pass counts only go up (expected-pass.json), per file.
-      - name: Conformance — ratchet
-        run: cd packages/conformance && bun run ratchet
-
-      # Every conformance test must FAIL against a server that asserts nothing.
-      - name: Conformance — vacuity
-        run: cd packages/conformance && bun run vacuity
-
-      # The differential masks are the only place "allowed to differ" lives; the same binary twice
-      # must be empty.
-      - name: Conformance — self-diff
-        run: cd packages/conformance && bun run diff -- --self
-
+  # ── seconds, and independent of everything ───────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
       - name: Installer is POSIX
         run: shellcheck install.sh
 
-      # The UI and the client publish BUNDLES, so build them here: a broken bundle (a dropped asset)
-      # is invisible to `bun test`, which runs the sources. The Go binary was built above.
-      - name: Build
-        run: bunx turbo run build
-
-      # The control image from a checkout builds and reports its version — the contributor's path,
-      # and the same runtime layer `pstack build-image` generates on a host.
-      - name: Image builds
-        run: docker build -t pstack:ci . && docker run --rm pstack:ci pstack --version
+  # ── one required check for branch protection, so the fan-out above can change freely ──────────
+  #
+  # Without this, every job name is a separately-configured required check and splitting or renaming
+  # one silently stops gating. `always()` plus an explicit result test is deliberate: a needs-only
+  # gate would pass when a dependency was SKIPPED.
+  ci:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [go, web, conformance, image, lint]
+    steps:
+      - name: Every gate passed
+        run: |
+          results='${{ join(needs.*.result, " ") }}'
+          echo "gates: $results"
+          for r in $results; do
+            [ "$r" = "success" ] || { echo "::error::a gate did not succeed: $r"; exit 1; }
+          done
