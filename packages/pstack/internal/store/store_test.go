@@ -39,7 +39,7 @@ func TestOpen(t *testing.T) {
 		}
 		// Every table the migrations declare exists — the multi-statement Exec ran to the end.
 		// sso_config is deliberately absent: migration 7 replaced it with sso_providers.
-		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state"} {
+		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state", "settings"} {
 			var n int
 			if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n); err != nil || n != 1 {
 				t.Fatalf("table %s missing", tbl)
@@ -120,6 +120,50 @@ func TestOpen(t *testing.T) {
 				t.Fatalf("%s: sso_config survived", c.name)
 			}
 			s.Close()
+		}
+	})
+
+	t.Run("migration 8 adds an EMPTY settings table and touches nothing else", func(t *testing.T) {
+		// negative control: delete the CREATE TABLE from migration 8's string, leaving the entry (so
+		// user_version still reaches 8 and the failure is about the table, not the version) → the
+		// SELECT COUNT(*) FROM settings errors with "no such table" and this fails.
+		//
+		// The checked-in host fixture is a real database that every future run migrates. An empty
+		// settings table is what makes that database behave EXACTLY as it did before: every reader
+		// in internal/settings falls back to the environment and then to the built-in default.
+		dir := t.TempDir()
+		saved := Migrations
+		Migrations = saved[:7]
+		s, err := Open(dir) // a real v7 database, made by the shipped migrations
+		Migrations = saved
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='settings'").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("v7 already has a settings table (%d, %v)", n, err)
+		}
+		// A row that predates the migration, to prove the hop is additive.
+		if _, err := s.DB.Exec("INSERT INTO host_vars (name, value, secret, created_at, updated_at) VALUES ('REGION', 'eu', 0, 1, 1)"); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		s, err = Open(dir) // reopening runs migration 8
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM settings").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("settings after migration 8: %d rows, %v — it must exist and be empty", n, err)
+		}
+		var v int
+		s.DB.QueryRow("PRAGMA user_version").Scan(&v)
+		if v != len(Migrations) {
+			t.Fatalf("user_version %d, want %d", v, len(Migrations))
+		}
+		var region string
+		if err := s.DB.QueryRow("SELECT value FROM host_vars WHERE name='REGION'").Scan(&region); err != nil || region != "eu" {
+			t.Fatalf("the v7 data did not survive migration 8: %q %v", region, err)
 		}
 	})
 

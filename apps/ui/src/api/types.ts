@@ -521,6 +521,56 @@ export type ConflictBody = {
 /** Variable pairs as the editors hold them: an ordered list, so a blank row can exist while typing. */
 export type VarPair = { k: string; v: string };
 
+// ── host settings ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The two settings an operator may change at RUNTIME. Not a general key/value store — the server
+ * refuses a key it does not know rather than storing it, so this union is the entire surface.
+ */
+export type SettingKey = 'max_jobs' | 'default_role';
+
+/**
+ * One setting as `GET /api/settings` returns it, and as `PUT /api/settings/<key>` returns it back.
+ *
+ * `source` is the answer to "I changed it and it did not stick", which is otherwise unanswerable:
+ * `db` — someone set it here; `env` — `PSTACK_MAX_JOBS` is supplying it; `default` — what the
+ * binary ships with. Precedence is **database > environment > built-in default**, so the
+ * environment variable is the DEFAULT and no longer the authority: an operator who never opens this
+ * page keeps exactly the behaviour they had, and one who sets a value here is not overridden by the
+ * next restart.
+ *
+ * `minRole` is served FROM the server's own permission table — `max_jobs` is maintainer's
+ * (operational, like host configuration), `default_role` is admin's (user management by another
+ * name). Read it; never re-derive it here, or this app and the gate drift and a control gets
+ * offered that can only 403. It is `string` rather than `Role` for the same reason `User.role` is,
+ * and an unknown name must be read as the MOST privileged rather than the least — `rank()` scores
+ * one it has never heard of as 0, which would otherwise enable the control for everybody.
+ */
+export type SettingRow = {
+  key: SettingKey;
+  /** A number for `max_jobs`; a role name for `default_role`. */
+  value: number | string;
+  source: 'db' | 'env' | 'default';
+  minRole: string;
+};
+
+export type HostSettings = {
+  settings: SettingRow[];
+  /**
+   * What the environment contributes, named once because it is what `source: "env"` refers to.
+   * `null` when nothing usable was set — never `0`, which the server reads as unset.
+   */
+  env: { PSTACK_MAX_JOBS: number | null };
+  precedence: string;
+};
+
+/**
+ * `PUT /api/settings/<key>` → the fresh row (its `source` is now `db`), plus `stored`, plus — for
+ * `max_jobs` — the `note` that says what a LOWERED cap does not do. It applies to the next
+ * dispatch; jobs already running run to completion and nothing was cancelled.
+ */
+export type SettingWritten = SettingRow & { stored: true; note?: string };
+
 // ── single sign-on ────────────────────────────────────────────────────────────────────────────────
 
 export type ClaimMap = { subject: string; username: string; email: string; name: string; avatar: string };
@@ -550,6 +600,17 @@ export type SsoConfig = {
   allowedEmailDomains: string[];
   allowedUsernames: string[];
   requiredGroups: string[];
+  /**
+   * The role an account this provider MINTS is created at, and **empty means INHERIT** — the host's
+   * `default_role` setting, resolved at provision time rather than frozen when the provider was
+   * saved, so raising or lowering the host default moves this provider with it.
+   *
+   * Empty used to be filled in with a literal role by the server (`admin`, then `viewer`), which is
+   * why providers stored before 0.33.0 carry `"viewer"` written out: they keep viewer until someone
+   * re-saves them as inheriting. Inherit resolves to `viewer` when the host default is unset, and
+   * NEVER to admin by omission — granting this product's full privilege has to be something a
+   * person chose, in words, on screen.
+   */
   defaultRole: string;
 };
 

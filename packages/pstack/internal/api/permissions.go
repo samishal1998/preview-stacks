@@ -133,6 +133,18 @@ var permissions = []perm{
 	{path: "/api/sso/config", methods: mPutDelete, min: auth.Admin},
 	{re: ssoProviderRe, methods: mPutDelete, min: auth.Admin},
 
+	// ── the two runtime host settings: PER KEY, because they are different kinds of thing ───────
+	// Reading both is a viewer's — the values explain why a job is queued and what a new account
+	// gets, and neither is a secret. Writing splits: `max_jobs` is operational and sits with host
+	// configuration; `default_role` decides the role of every account created without one, which is
+	// user management by another name and belongs with the promotion paths.
+	//
+	// Exact paths, one per key. A third key would be a third row, and until it has one the table's
+	// default-deny answers it — see routes_settings.go.
+	{path: "/api/settings", methods: mGet, min: auth.Viewer},
+	{path: "/api/settings/max_jobs", methods: mPut, min: auth.Maintainer},
+	{path: "/api/settings/default_role", methods: mPut, min: auth.Admin},
+
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},

@@ -427,13 +427,7 @@ func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	signed, err := s.auth.SsoSignIn(providerKey, identity, auth.SsoSignInOpts{
-		DefaultRole:         cfg.DefaultRole,
-		AllowedEmailDomains: cfg.AllowedEmailDomains,
-		AllowedUsernames:    cfg.AllowedUsernames,
-		RequiredGroups:      cfg.RequiredGroups,
-		GroupsErr:           groupsErr,
-	})
+	signed, err := s.auth.SsoSignIn(providerKey, identity, s.ssoSignInOpts(cfg, groupsErr))
 	if err != nil {
 		fail(err)
 		return
@@ -448,6 +442,50 @@ func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 		s.opts.Log("[sso] " + what + ` "` + signed.User.Username + `" for ` + providerKey + " subject " + identity.Subject)
 	}
 	redirect(w, sso.SafeNext(next), [2]string{"set-cookie", sessionCookie(r, signed.Session, sessionMaxAge)})
+}
+
+// ssoSignInOpts turns a stored provider config into the provisioning rules auth.SsoSignIn enforces
+// — one function so no caller can assemble them and forget half.
+//
+// THE INHERIT RESOLUTION IS HERE, and it is the security-sensitive line. A provider whose
+// `defaultRole` is empty means "use the host default" (the `default_role` setting, viewer when
+// nobody set one), read NOW rather than frozen into the row when it was saved — so changing the
+// host default changes what every inheriting provider mints, which is the point of inheriting.
+//
+// It must be resolved BEFORE SsoSignIn and never inside it: that call is one long transaction, and
+// the settings reader goes to the single pooled connection the transaction is holding — a permanent
+// self-deadlock (internal/settings' header). Empty has never meant admin and must never mean admin:
+// see sso.ParseConfig, which used to fill it in.
+func (s *Server) ssoSignInOpts(cfg *sso.Config, groupsErr error) auth.SsoSignInOpts {
+	role := cfg.DefaultRole
+	if role == "" {
+		// Inherit the host default — but NEVER up to admin. The two settings are individually
+		// sane and compose into the exact failure this whole area exists to prevent: a host with
+		// `default_role: admin` and a provider saved from a preset (defaultRole omitted, all three
+		// allow-lists empty) mints a FULL ADMINISTRATOR for any stranger who completes the OAuth
+		// flow. Measured against a real IdP, not reasoned about.
+		//
+		// So an inheriting provider stops at the tier below admin. Handing out the most privilege
+		// this product has stays possible and stays DELIBERATE: set that provider's own role to
+		// admin, in words, on its own form. It is the third time this rule has had to be written
+		// here, and the first two were bugs — ParseConfig defaulting to admin, and the UI sending
+		// admin from a field it never rendered.
+		//
+		// `POST /api/users` is deliberately NOT clamped: it is admin-gated, so an admin choosing
+		// the level they mint at is an admin exercising their own authority, not a stranger
+		// acquiring it.
+		role = s.settings.DefaultRole()
+		if auth.Role(role).Rank() >= auth.Admin.Rank() {
+			role = string(auth.Maintainer)
+		}
+	}
+	return auth.SsoSignInOpts{
+		DefaultRole:         role,
+		AllowedEmailDomains: cfg.AllowedEmailDomains,
+		AllowedUsernames:    cfg.AllowedUsernames,
+		RequiredGroups:      cfg.RequiredGroups,
+		GroupsErr:           groupsErr,
+	}
 }
 
 // ── gated: me, users, tokens, sso config ────────────────────────────────────────────────────
@@ -533,7 +571,13 @@ func (s *Server) accountRoutes(w http.ResponseWriter, r *http.Request, path stri
 		// an administrator — which, on a route that was itself ungated, meant any authenticated
 		// caller could mint one. Defaulting to viewer is the deliberate breaking change: a script
 		// that relied on the old behaviour must now say `"role": "admin"` and mean it.
-		role := string(auth.Viewer)
+		//
+		// The default is now the host's `default_role` setting, and `viewer` when nobody set one —
+		// so it can be raised, but only by an admin, and only on purpose. It never widens what the
+		// CALLER may do: it decides the role of accounts they create, and creating an account is
+		// admin-only (permissions.go). POST /api/auth/bootstrap is deliberately NOT affected — the
+		// first account on a host is an admin because there is nobody to promote it.
+		role := s.settings.DefaultRole()
 		if raw, ok := getStr(body, "role"); ok && strings.TrimSpace(raw) != "" {
 			role = strings.TrimSpace(raw)
 			// Refused here as well as in CreateUser so the message names the field the caller sent.
@@ -691,7 +735,11 @@ func (s *Server) ssoConfigRoutes(w http.ResponseWriter, r *http.Request) error {
 		// internal/auth (auth imports sso, so the reverse would be a cycle). An unvalidated role
 		// would be stored, rank 0, and lock every account it provisions out of everything — a
 		// silent failure discovered one confused user at a time.
-		if !auth.ValidRole(config.DefaultRole) {
+		//
+		// EMPTY IS NOT UNVALIDATED, it is "inherit the host default", resolved when an account is
+		// provisioned rather than frozen here (sso.ParseConfig no longer fills it). It resolves to
+		// the `default_role` setting, and to viewer when nobody set one — never to admin.
+		if config.DefaultRole != "" && !auth.ValidRole(config.DefaultRole) {
 			writeError(w, 400, "defaultRole must be one of: "+auth.RolesText)
 			return nil
 		}

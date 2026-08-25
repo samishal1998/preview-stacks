@@ -15,7 +15,7 @@
  *                     so picking one leaves a form that is mostly already filled in;
  *   - the form        one provider being added or edited.
  *
- * THREE THINGS THE FORM MUST NOT GET WRONG:
+ * FOUR THINGS THE FORM MUST NOT GET WRONG:
  *
  *   1. The callback URL is READ-ONLY and comes from the server. It has to match what is registered
  *      on the provider's side byte for byte, and a value typed here (or derived from
@@ -27,10 +27,16 @@
  *   3. A template preset's issuer (`https://<your-domain>.okta.com/…`) is not a value — the
  *      placeholder renders as its own required field and the URL is assembled in view, because the
  *      server refuses the template saved verbatim and the operator should never meet that refusal.
+ *   4. The role its accounts are created at is ON SCREEN, and its resting state is INHERIT. This
+ *      field existed on the wire from the start and was never drawn, so the form sent whatever
+ *      `blank()` happened to hold — which was `admin`, explicitly, for every provider anyone added
+ *      here. Inherit is the empty string, resolved against the host's `default_role` when an
+ *      account is provisioned rather than frozen at save time; it can only ever resolve to viewer
+ *      on a host that set nothing, never to admin by omission.
  */
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
-import type { ClaimMap, SsoConfig, SsoConfigResponse, SsoPreset, SsoProviderEntry } from '../api/types';
+import { ROLES, type ClaimMap, type HostSettings, type Role, type SsoConfig, type SsoConfigResponse, type SsoPreset, type SsoProviderEntry } from '../api/types';
 import { sentence } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
@@ -38,6 +44,7 @@ import ErrorNote from '../components/ErrorNote.vue';
 import HelpModal from '../components/HelpModal.vue';
 import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import SsoMark from '../components/SsoMark.vue';
 
@@ -60,8 +67,54 @@ const blank = (): SsoConfig => ({
   allowedEmailDomains: [],
   allowedUsernames: [],
   requiredGroups: [],
-  defaultRole: 'admin',
+  // EMPTY = INHERIT the host's default role, resolved when the account is provisioned rather than
+  // frozen into the provider now — so raising or lowering the host default moves every inheriting
+  // provider with it. It resolves to viewer on a host where nobody set one, and never to admin.
+  //
+  // THE HISTORY, because losing it is how this comes back: this line said 'admin', and since the
+  // form never rendered the field, every provider added here sent `defaultRole: "admin"`
+  // EXPLICITLY — which the server honours. Anyone who completed the OAuth flow against such a
+  // provider became a full administrator, and the viewer default the server grew in 0.32.0 was
+  // defeated through the most common path there is. It then said 'viewer', which was safe but still
+  // a value chosen by a form nobody could see.
+  //
+  // Now the field is on screen with this as its resting state, so granting the most privilege this
+  // product has is something a person picked, in words.
+  defaultRole: '',
 });
+
+/**
+ * The select's stand-in for "inherit". It cannot be `''`: reka's `SelectItem` throws on an
+ * empty-string value (that is how it clears a selection and shows the placeholder), so the empty
+ * string the API wants is mapped at the binding rather than stored in the form.
+ */
+const INHERIT = 'inherit';
+
+/** One line each, in the picker itself — a role name alone does not say what it costs to grant. */
+const ROLE_WHAT: Record<Role, string> = {
+  viewer: 'reads everything',
+  developer: 'deploys and tears down',
+  maintainer: 'host configuration',
+  admin: 'accounts and sign-on',
+};
+
+/**
+ * The host's own default, read only so "inherit" can say what it currently resolves to. Best
+ * effort: an older server has no such route, and the option still reads correctly without it.
+ */
+const hostDefaultRole = ref('');
+void api.get<HostSettings>('/api/settings').then((r) => {
+  if (r.ok) hostDefaultRole.value = String(r.body.settings.find((s) => s.key === 'default_role')?.value ?? '');
+});
+
+const roleOptions = computed(() => [
+  {
+    value: INHERIT,
+    label: 'The host default',
+    hint: hostDefaultRole.value ? `${sentence(hostDefaultRole.value)} today — follows Settings` : 'set in Settings',
+  },
+  ...ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE_WHAT[r] })),
+]);
 
 const providers = ref<SsoProviderEntry[]>([]);
 const presets = ref<SsoPreset[]>([]);
@@ -87,6 +140,15 @@ type Editing = {
   placeholders: Record<string, string>;
 };
 const editing = ref<Editing | null>(null);
+
+/** `''` on the wire, the sentinel in the control. Nothing else in the form needs translating. */
+const roleChoice = computed<string>({
+  get: () => editing.value?.form.defaultRole || INHERIT,
+  set: (v) => {
+    if (editing.value) editing.value.form.defaultRole = v === INHERIT ? '' : v;
+  },
+});
+
 const picking = ref(false);
 const saving = ref(false);
 const formError = ref('');
@@ -291,6 +353,15 @@ function whereLine(c: SsoConfig): string {
   }
   const p = presets.value.find((x) => x.key === c.provider);
   return p ? `OAuth 2.0 · ${p.label}` : 'OAuth 2.0 · custom endpoints';
+}
+
+/**
+ * The card's third fact: what an account this provider mints is created as — visible in the list
+ * because a provider that hands out admin should not need opening to find that out.
+ */
+function roleLine(c: SsoConfig): string {
+  if (c.defaultRole) return `new accounts: ${sentence(c.defaultRole)}`;
+  return `new accounts: the host default${hostDefaultRole.value ? ` (${sentence(hostDefaultRole.value)})` : ''}`;
 }
 
 /** The card's second line, second half: the sign-in rules, or the honest default. */
@@ -514,7 +585,7 @@ function rulesLine(c: SsoConfig): string {
 
       <!-- ============================ who gets in ============================ -->
       <section class="panel">
-        <div class="phead"><h2 class="section">Who gets an account</h2></div>
+        <div class="phead"><h2 class="section">Who gets an account, and as what</h2></div>
         <p class="dim">
           By default, anyone this provider lets authenticate. It already owns that decision; this is
           only here for the case where the application you registered is broader than the people who
@@ -565,6 +636,28 @@ function rulesLine(c: SsoConfig): string {
           2.0 preset (GitHub, GitLab), not a discovered OpenID Connect issuer — so there is none
           here.
         </p>
+
+        <!-- Never rendered before today, while the form quietly sent `admin`. Every account this
+             provider mints is created at this role, so it is the one field on the page that decides
+             what a stranger who completes the OAuth flow can do. -->
+        <div class="field">
+          <label for="sso-role">Role for the accounts it creates</label>
+          <SelectMenu
+            id="sso-role"
+            v-model="roleChoice"
+            label="Role for the accounts this provider creates"
+            :options="roleOptions"
+          />
+          <p class="hint">
+            Applied when an account is created here — on someone's first sign-in — and never after:
+            promoting or demoting a person later is done in Accounts, and this does not reach back
+            and change them.
+            <b>The host default follows Settings</b> rather than being copied in now, so raising or
+            lowering it there moves this provider with it.
+            {{ hostDefaultRole ? `It is ${hostDefaultRole} today.` : '' }}
+            Picking a role here pins this provider to it instead.
+          </p>
+        </div>
       </section>
 
       <ErrorNote v-if="formError" :text="formError" title="Not saved." />
@@ -614,7 +707,7 @@ function rulesLine(c: SsoConfig): string {
                 <span v-if="!p.config.enabled" class="badge off">disabled</span>
               </div>
               <div class="sso-card-sub">
-                {{ whereLine(p.config) }} · {{ rulesLine(p.config) }} ·
+                {{ whereLine(p.config) }} · {{ rulesLine(p.config) }} · {{ roleLine(p.config) }} ·
                 updated <RelativeTime :at="p.updatedAt" />
               </div>
             </div>

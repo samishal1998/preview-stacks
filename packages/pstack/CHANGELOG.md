@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Runtime settings**, stored on the host and changeable from the UI without a restart:
+  - **`max_jobs`** — how many jobs run at once across all stacks. `PSTACK_MAX_JOBS` becomes the
+    *default* rather than the authority: precedence is **database > environment > built-in**, so an
+    operator who never opens the UI keeps today's behaviour and one who does is not overridden on
+    the next restart. The API says which layer a value came from, because "I changed it and it did
+    not stick" is otherwise unanswerable. Raising it dispatches waiting jobs immediately; **lowering
+    it cancels nothing** — jobs already running finish, and the cap applies to the next dispatch.
+    Maintainer and above.
+  - **`default_role`** — the role an account gets when `POST /api/users` names none. `viewer` until
+    somebody sets it. Admin only, because it is user management by another name.
+- **An SSO provider's role is selectable in the UI**, and may be left to **inherit** the host
+  default — resolved when an account is provisioned, not frozen when you save.
+
+### Fixed
+
+- **The Sign-on form hardcoded `defaultRole: "admin"` and never rendered the field**, so every
+  provider created through the UI sent `admin` explicitly — and explicit is honoured, so the viewer
+  default added in 0.32.0 was defeated through the most common path there is. **Check any provider
+  you created through the UI.**
+- **An inheriting SSO provider is now capped below `admin`.** `default_role: admin` is a reasonable
+  choice for `POST /api/users`, and a provider saved from a preset omits its role and carries empty
+  allow-lists — and those two individually-sane settings composed into *"any stranger who completes
+  the OAuth flow is an administrator"*. To have a provider mint admins, choose `admin` on that
+  provider. `POST /api/users` is not capped: it is admin-only, so an admin minting at a level they
+  chose is exercising authority they already have.
+- The settings write no longer holds the server's global write mutex across a bus emission — raising
+  the cap from 1 to 50 would have done fifty SQLite reads under it.
+- A config import's pre-write summary said `giving each new account the role ""` for an inheriting
+  provider. It now names what inherit resolves to, in the last thing an operator reads before
+  accepting a document from somewhere else.
+
 ## 0.32.0 — 2026-08-25
 
 ### ⚠️ Breaking: a busy stack queues instead of refusing

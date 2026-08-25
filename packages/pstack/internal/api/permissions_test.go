@@ -38,8 +38,9 @@ func required(method, path string) auth.Role {
 // negative control: set the deploymentRe write row to auth.Viewer (the viewer/developer boundary) →
 // the five lifecycle POSTs, the PUT and the DELETE all fail; set the POST /api/users row to
 // auth.Viewer → the POST /api/users case fails; drop the `{path: "/api/config"}` row → its two
-// cases still pass (default-deny returns root either way), which is the fallback working. All three
-// were run.
+// cases still pass (default-deny returns root either way), which is the fallback working; give
+// /api/settings/default_role the same maintainer tier as /api/settings/max_jobs → the default_role
+// case fails, which is the per-key half of the settings contract. All four were run.
 func TestPermissionTableIsTheSpecification(t *testing.T) {
 	cases := []struct {
 		method, path string
@@ -86,6 +87,14 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		{"DELETE", "/api/sso/config", auth.Admin},
 		{"PUT", "/api/sso/config/gh", auth.Admin},
 		{"DELETE", "/api/sso/config/gh", auth.Admin},
+
+		// the two runtime host settings: one read for both, one write tier PER KEY
+		{"GET", "/api/settings", auth.Viewer},
+		{"PUT", "/api/settings/max_jobs", auth.Maintainer},
+		{"PUT", "/api/settings/default_role", auth.Admin},
+		// A key nobody listed is root's, like any unlisted route — and the chain 404s it.
+		{"PUT", "/api/settings/shell_command", rootOnly},
+		{"POST", "/api/settings/max_jobs", rootOnly},
 
 		// the swarm
 		{"GET", "/api/swarm", auth.Viewer},
@@ -314,6 +323,10 @@ func TestGateBoundaries(t *testing.T) {
 		{maint, "PUT", "/api/host-vars/DB_URL"},
 		{maint, "GET", "/api/swarm/join"},
 		{maint, "GET", "/api/sso/config"},
+		// The cap is operational, so it stops at maintainer…
+		{viewer, "GET", "/api/settings"},
+		{maint, "PUT", "/api/settings/max_jobs"},
+		{admin, "PUT", "/api/settings/default_role"},
 		{admin, "PUT", "/api/host-vars/DB_URL"},
 		{admin, "POST", "/api/users"},
 		{admin, "PUT", "/api/sso/config"},
@@ -351,6 +364,11 @@ func TestGateBoundaries(t *testing.T) {
 		{maint, "PUT", "/api/sso/config"},
 		{maint, "DELETE", "/api/sso/config/gh"},
 		{maint, "POST", "/api/config/sealed"},
+		// …and the role a new account is created with is user management, so it does not.
+		{maint, "PUT", "/api/settings/default_role"},
+		{dev, "PUT", "/api/settings/max_jobs"},
+		// Not even an admin invents a third setting: an unlisted key is root's.
+		{admin, "PUT", "/api/settings/shell_command"},
 		// and nothing but root moves the whole host's credentials
 		{admin, "GET", "/api/config"},
 		{admin, "POST", "/api/config"},

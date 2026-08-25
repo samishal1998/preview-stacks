@@ -44,7 +44,9 @@
 //     branch an `up` just created is the failure this package exists to prevent.
 //   - Two `queued` jobs for one stack: r.queue is keyed BY stack, so depth-one is structural.
 //   - More than maxRunning running jobs, or two stacks finishing at once and both taking the same
-//     free slot: r.inFlight is incremented in the same critical section that reads it.
+//     free slot: r.inFlight is incremented in the same critical section that reads it. SetMaxRunning
+//     is the ONE exception and it is transient: LOWERING the cap while jobs run leaves the count
+//     above it until they finish, because nothing is killed to make the number fit.
 //   - A terminal job moving again: every mutation re-checks the state under mu.
 //   - A `queued` or `running` job being evicted: evictLocked considers Terminal() jobs only.
 //   - A `queued` job with a StartedAt, or a running/terminal one without: pump assigns it at the
@@ -71,6 +73,10 @@
 // stack must not starve the others, and a stack that is busy cannot use the slot anyway. The cap is
 // global and a preempting `down` does NOT jump ahead of other stacks' older waiting jobs: it
 // preempts its own stack, not the host.
+//
+// The cap is MUTABLE at runtime (SetMaxRunning): the stored `max_jobs` setting outranks
+// PSTACK_MAX_JOBS, and an operator changing it must not have to restart the container. Raising it
+// pumps; lowering it kills nothing and applies to the next dispatch.
 //
 // ── CONCURRENCY ──────────────────────────────────────────────────────────────────────────────────
 //
@@ -218,7 +224,8 @@ func (j Job) Stub() Stub { return Stub{ID: j.ID, Stack: j.Stack, Action: j.Actio
 // to do with concurrency — that is DefaultMaxRunning.
 const MaxJobs = 50
 
-// DefaultMaxRunning is how many jobs RUN at once across every stack. PSTACK_MAX_JOBS overrides it.
+// DefaultMaxRunning is how many jobs RUN at once across every stack — the floor of the precedence
+// internal/settings owns: the stored `max_jobs` setting, else PSTACK_MAX_JOBS, else this.
 // Four because this process also runs docker: each job is a compose invocation plus its hooks, and
 // the host has one docker socket and one set of file descriptors to share among them.
 const DefaultMaxRunning = 4
@@ -292,6 +299,27 @@ func New(bus *events.Bus, maxRunning int) *Registry {
 		subs:       map[string]map[int]func(log.Event){},
 		bus:        bus,
 	}
+}
+
+// SetMaxRunning changes the global cap without a restart. n <= 0 means DefaultMaxRunning, exactly
+// as in New, so a setting that somehow arrives as 0 cannot stop the host from dispatching anything.
+//
+// RAISING PUMPS. There may be jobs waiting for a slot that now exists, and nothing else would
+// dispatch them until some unrelated job happened to finish.
+//
+// LOWERING KILLS NOTHING. Jobs already running run to completion; the new cap applies to the next
+// dispatch, so inFlight can sit ABOVE maxRunning until they finish. An operator who types 1 while
+// four jobs are running has cancelled nothing — say so wherever this is exposed.
+//
+// The usual two rules: the assignment under mu, the pump AFTER unlocking (it emits `job.started`).
+func (r *Registry) SetMaxRunning(n int) {
+	if n <= 0 {
+		n = DefaultMaxRunning
+	}
+	r.mu.Lock()
+	r.maxRunning = n
+	r.mu.Unlock()
+	r.pump()
 }
 
 func (r *Registry) copyLocked(e *entry) Job {

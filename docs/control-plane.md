@@ -1055,14 +1055,33 @@ action, not an `if` in `Start`. A preempted `up` is `cancelled` and its transcri
 the line that matters — *whatever ran before this point was NOT undone* — because a half-built stack
 is a half-built stack whether a person or a teardown stopped it.
 
-**The cap is global, not just per-stack.** At most `PSTACK_MAX_JOBS` jobs (default 4) run at once
-across every stack; over the cap a job **waits**, it is never refused. This process also runs
-`docker`: each job is a compose invocation plus its hooks, against one socket and one set of file
-descriptors, so forty stacks deploying at once is how the control plane becomes the outage. Dispatch
-is FIFO by acceptance order, skipping stacks that are already busy — a busy stack cannot use a free
-slot, so skipping it is not queue-jumping, it is the only thing that stops one stack's backlog
-starving every other. The [notifier dispatcher](#delivery) has the same shape one tier up (8 in
-flight, 1 per notifier), for the same reason.
+**The cap is global, not just per-stack.** At most `max_jobs` jobs (default 4) run at once across
+every stack; over the cap a job **waits**, it is never refused. This process also runs `docker`: each
+job is a compose invocation plus its hooks, against one socket and one set of file descriptors, so
+forty stacks deploying at once is how the control plane becomes the outage. Dispatch is FIFO by
+acceptance order, skipping stacks that are already busy — a busy stack cannot use a free slot, so
+skipping it is not queue-jumping, it is the only thing that stops one stack's backlog starving every
+other. The [notifier dispatcher](#delivery) has the same shape one tier up (8 in flight, 1 per
+notifier), for the same reason.
+
+**The cap is settable at RUNTIME** (0.32.0). It was `PSTACK_MAX_JOBS`, read once at boot, so changing
+it meant restarting the control container — which kills every job in flight to change a number about
+jobs. It is now the `max_jobs` [setting](usage.md#runtime-settings-0320): the stored value outranks
+the environment variable (which becomes its default) and `PUT /api/settings/max_jobs` calls
+`Registry.SetMaxRunning`, so the new cap is in force for the next dispatch on that request.
+
+**Raising it pumps. Lowering it kills nothing.** Raising has to dispatch immediately, because there
+may be jobs sitting in the queue waiting for a slot that now exists and nothing else would start them
+until some unrelated job happened to finish. Lowering is the half worth being explicit about:
+**jobs already running run to completion**, so `inFlight` legitimately sits *above* `maxRunning`
+until they do, and the new cap applies to the next dispatch. Killing the excess to make the number
+fit would mean an operator who typed `1` had silently torn down three deployments half-way — the
+config box would be a destructive control, and the transcripts would say "cancelled" with no person
+attached. The 200 says so in words, and every surface that exposes the box must repeat it, because
+"cancelled" is what an operator would otherwise assume from a number that got smaller.
+
+**It is not a hole in invariant 10 either.** The row is a knob an operator *chose*, like a host
+variable; nothing in the settings table describes what is running.
 
 **Everything outstanding for a stack stops at once.** `POST /api/deployments/:id/cancel` cancels the
 running job and terminates the queued one in **one** registry call, so there is no window in which a

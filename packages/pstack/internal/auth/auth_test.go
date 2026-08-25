@@ -192,7 +192,9 @@ func TestAuth(t *testing.T) {
 		// The stored JSON is the full normalised shape in the TypeScript's key order.
 		var raw string
 		a.store.DB.QueryRow("SELECT config FROM sso_providers WHERE key = 'work'").Scan(&raw)
-		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"viewer","label":"GitHub","discoveryUrl":"","provider":"github",`) {
+		// `defaultRole` is EMPTY because this config named none: the row stores inherit, and the host
+		// default is read when an account is provisioned. See TestSsoDefaultRoleIsLeastPrivilege.
+		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"","label":"GitHub","discoveryUrl":"","provider":"github",`) {
 			t.Fatalf("stored %s", raw)
 		}
 		// A hand-edited row that no longer validates reads as "no provider" — and is skipped by the
@@ -656,23 +658,31 @@ func TestRoles(t *testing.T) {
 // completed the OAuth flow was provisioned a full administrator. Seventeen SSO tests existed and
 // not one asserted the role a provisioned account receives.
 //
+// WHAT EMPTY MEANS CHANGED, AND WHAT IT MAY RESOLVE TO DID NOT. ParseConfig no longer fills the
+// value at all: empty is "inherit the host default", resolved when an account is provisioned rather
+// than frozen into the row when it was saved. So this test now pins the CHAIN — parse, resolve,
+// provision — and its load-bearing half is unchanged: omission never yields admin, at any step.
+//
 // It is pinned from THIS package because internal/sso cannot import internal/auth (auth imports
 // sso, so the reverse is a cycle) — which is also why the string over there is not type-checked
 // against Role. This test is the join.
 //
-// negative control: put "admin" back in sso.ParseConfig's fallback — the first check fails.
+// negative control: put `if cfg.DefaultRole == "" { cfg.DefaultRole = "admin" }` back in
+// sso.ParseConfig → the first two checks fail; put "viewer" back → the first fails (the row would
+// freeze the answer and stop inheriting); make provision's `role == ""` arm use Admin → the
+// provision case fails. All three were run.
 func TestSsoDefaultRoleIsLeastPrivilege(t *testing.T) {
 	parsed, err := sso.ParseConfig(mustParse(t, `{"mode":"oidc","discoveryUrl":"https://idp.example.com","clientId":"c"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.DefaultRole != string(Viewer) {
-		t.Fatalf("an SSO provider that names no role provisions %q; it must be %q", parsed.DefaultRole, Viewer)
+	// A provider that names no role stores NO role: the host default decides, at provision time.
+	if parsed.DefaultRole != "" {
+		t.Fatalf("an SSO provider that names no role stored %q; empty means inherit the host default", parsed.DefaultRole)
 	}
-	// …and whatever it defaults to must be a role this package actually ranks. A default that does
-	// not validate would store fine and then deny its own accounts everything.
-	if !ValidRole(parsed.DefaultRole) {
-		t.Fatalf("the SSO default %q is not one of: %s", parsed.DefaultRole, RolesText)
+	// And the one thing omission may never become.
+	if parsed.DefaultRole == string(Admin) {
+		t.Fatal("an omitted defaultRole resolved to admin")
 	}
 	// An explicit role still wins — the point is that granting privilege must be deliberate.
 	explicit, err := sso.ParseConfig(mustParse(t, `{"mode":"oidc","discoveryUrl":"https://idp.example.com","clientId":"c","defaultRole":"admin"}`))
@@ -681,5 +691,30 @@ func TestSsoDefaultRoleIsLeastPrivilege(t *testing.T) {
 	}
 	if explicit.DefaultRole != string(Admin) {
 		t.Fatalf("an explicit defaultRole was not honoured: %q", explicit.DefaultRole)
+	}
+
+	// THE END OF THE CHAIN. Whatever the caller resolves inherit to, a sign-in that reaches this
+	// package with nothing at all provisions a VIEWER — the last-resort floor in provision, which is
+	// what fires when a caller forgets to resolve. A host that never opened the settings UI is
+	// exactly this case.
+	a := open(t)
+	signed, err := a.SsoSignIn("okta", identity(func(i *sso.Identity) { i.Subject = "inherit-1" }), SsoSignInOpts{DefaultRole: parsed.DefaultRole})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signed.How != Created || signed.User.Role != string(Viewer) {
+		t.Fatalf("an inheriting provider on a host with no default provisioned a %q (%s); it must be a %q", signed.User.Role, signed.How, Viewer)
+	}
+	// …and the resolved default is honoured when the caller DOES pass one — that is the whole point
+	// of inherit — while still being a role this package ranks. An unrankable default would store
+	// fine and then deny its own accounts everything.
+	for _, role := range []Role{Viewer, Developer, Maintainer, Admin} {
+		if !ValidRole(string(role)) {
+			t.Fatalf("%q is not one of: %s", role, RolesText)
+		}
+		signed, err := a.SsoSignIn("okta", identity(func(i *sso.Identity) { i.Subject = "inherit-" + string(role) }), SsoSignInOpts{DefaultRole: string(role)})
+		if err != nil || signed.User.Role != string(role) {
+			t.Fatalf("resolved default %q provisioned %+v (%v)", role, signed.User, err)
+		}
 	}
 }

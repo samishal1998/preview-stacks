@@ -1054,9 +1054,16 @@ partial state, and the job's transcript says so.
 `POST /api/deployments/:id/cancel` stops everything for one stack: the running job and the queued
 one together.
 
-Across stacks, **`PSTACK_MAX_JOBS` (default 4) bounds how many run at once**. Beyond it a job waits
-for a slot rather than being refused — twenty PRs deploying at nine in the morning would otherwise
-put twenty `docker compose up` on one Docker socket.
+Across stacks, **the `max_jobs` setting (default 4) bounds how many run at once**. Beyond it a job
+waits for a slot rather than being refused — twenty PRs deploying at nine in the morning would
+otherwise put twenty `docker compose up` on one Docker socket.
+
+That cap is changeable **while the server runs** — `PUT /api/settings/max_jobs` (maintainer), no
+restart — and `PSTACK_MAX_JOBS` is now its *default* rather than the authority
+([Runtime settings](#runtime-settings-0320)). Raising it dispatches whatever was already waiting, on
+that request. **Lowering it cancels nothing**: jobs already running run to completion, and the new
+cap applies to the next job that starts. An operator who types `1` while four jobs are in flight has
+not stopped three of them.
 
 Jobs are **in-memory, capped at 50** — a restart loses history, not correctness, and it loses the
 queue too. Truth about what exists lives in Docker and in each axis's `assert_*` probe.
@@ -1852,9 +1859,12 @@ expiresAt, by }` says a link was minted — never the token.
 Accounts are created by hand, one at a time, by an admin or by whoever holds `PSTACK_TOKEN`. That
 does not scale past a couple of people. Point this host at the identity provider your organisation
 already runs and anyone who can authenticate against it can sign in — **no per-user setup here at
-all**. Set that provider's `defaultRole` before you do
+all**. Decide what that provider's `defaultRole` is before you do
 ([7e](#7e-who-can-do-what-the-four-roles-0310)): it decides what everyone who walks through the door
-can reach.
+can reach. Leaving it empty inherits the host's `default_role`
+([Runtime settings](#runtime-settings-0320)) — which is `viewer` until somebody raises it, and is
+**capped below `admin`** on the way in, so an inheriting provider can never mint an administrator
+however the host default is set. To have this provider mint admins, choose `admin` here.
 
 You are configuring your *own* OAuth/OIDC application. Nothing is registered with anyone, no
 directory is copied, and nothing is synchronised.
@@ -1991,7 +2001,7 @@ placeholder.
 | `allowedUsernames: []` | Non-empty ⇒ a login whose username matches none of these **glob** patterns is refused. `*`, `?` and character classes (`qa-[0-9]*`), matched case-insensitively; a malformed pattern (`qa-[0-9`) is refused when you save rather than left silently matching nobody. **Fails closed the same way** — see the warning below, because this one has a sharp edge |
 | `requiredGroups: []` | Non-empty ⇒ the provider is asked which groups/orgs this user belongs to, and a login in none of them is refused. **Exact** names, case-insensitive — not globs, because a GitLab group is a path (`acme/backend`) and `*` would not mean what you'd expect across the `/`. Needs a preset and a scope: see below |
 | `groupsUrl` | Where that group list is read from. Filled in by the preset (`https://api.github.com/user/orgs`, `https://gitlab.com/api/v4/groups`); type your own for a self-hosted provider |
-| `defaultRole` | The [role](#7e-who-can-do-what-the-four-roles-0310) an auto-provisioned account is created with — one of `viewer`, `developer`, `maintainer`, `admin`. **Set it explicitly, and set it low.** A provider stored without one provisions **admins**, which on a host where anyone in your GitHub org can sign in is very rarely what you meant |
+| `defaultRole` | The [role](#7e-who-can-do-what-the-four-roles-0310) an auto-provisioned account is created with — one of `viewer`, `developer`, `maintainer`, `admin`, or **empty to inherit the host's `default_role`** ([Runtime settings](#runtime-settings-0320)), which is `viewer` until somebody sets it. Inheriting is resolved when an account is provisioned, not frozen when you save, so changing the host default changes what every inheriting provider mints. It is **never `admin` by omission**, and that is enforced rather than merely intended: an inheriting provider is **capped below `admin`** even if the host default IS `admin`, because otherwise two individually-sane settings compose into "any stranger who completes the OAuth flow is an administrator". In 0.27.0 an omitted value meant `admin` outright, and with all three allow-lists empty (how every preset saves) that is exactly what happened. To have a provider mint admins you must say `admin` **on that provider**, deliberately |
 
 The rules **and** together: each list is any-of, and every rule you set has to pass. They are
 **per provider**: each stored provider carries its own three lists, and a login is checked against
@@ -2274,13 +2284,16 @@ every account until someone puts it in the table.
 | `POST`/`PATCH`/`DELETE /api/notifiers`… (incl. `/test`, `/redeliver`) | `maintainer` |
 | `GET /api/swarm/join` | `maintainer` |
 | `GET /api/sso/config` | `maintainer` |
+| `GET /api/settings` | `viewer` |
+| `PUT /api/settings/max_jobs` | `maintainer` |
+| `PUT /api/settings/default_role` | `admin` |
 | `POST /api/users` · `PATCH`/`DELETE /api/users/:id` | `admin` |
 | `PUT /api/users/:id/password` **for anybody else** | `admin` |
 | `PUT`/`DELETE /api/sso/config` · `/api/sso/config/:key` | `admin` |
 | `POST /api/config/sealed` | `admin` |
 | `GET`/`POST /api/config` | **root token only** |
 
-Three of those rows are decisions rather than deductions, and each looks wrong until you hold it
+Four of those rows are decisions rather than deductions, and each looks wrong until you hold it
 next to the thing beside it:
 
 - **The container shell is a developer's, not an admin's.** A developer can already `up` an
@@ -2295,6 +2308,11 @@ next to the thing beside it:
   maintainer who could point this host at an identity provider they control would be able to sign in
   through it as an admin. That is a promotion path, and promotion paths live with people. Reading
   the configuration stays maintainer — it returns a mask, never the client secret.
+- **The two runtime settings split by KEY, not by route.** `max_jobs` is operational and sits with
+  host configuration at maintainer; `default_role` decides what every account created without an
+  explicit role can reach, which is user management by another name, so it sits with the promotion
+  paths at admin. Reading either is a viewer's — the page that shows the cap is the page everybody
+  sees, and each row carries the role it takes to change it.
 
 A refusal says which role was wanted and which one you hold, because an operator staring at a bare
 `forbidden` cannot tell a wrong role from a wrong URL:
@@ -2346,9 +2364,13 @@ one admin behind.
 
 > **⚠️ Breaking: `POST /api/users` no longer creates an admin.**
 >
-> It takes an optional `role`, and **an absent `role` now means `viewer`** — the least privilege,
-> where it used to silently mean the most. A script or a provisioning step that relied on the old
-> behaviour has to say `"role": "admin"` and mean it.
+> It takes an optional `role`, and **an absent `role` now means the least privilege**, where it used
+> to silently mean the most. A script or a provisioning step that relied on the old behaviour has to
+> say `"role": "admin"` and mean it.
+>
+> Since 0.32.0 an absent `role` means the host's **`default_role`** setting — `viewer` until an admin
+> sets it, and never `admin` by omission ([Runtime settings](#runtime-settings-0320)). So it can be
+> raised, but only on purpose, and only by somebody who could already create the account.
 >
 > The same route is now **admin-only**. Previously it was reachable by *any* authenticated
 > principal and always created an admin, which meant any account on the host could mint itself a
@@ -2713,6 +2735,7 @@ different problems with different owners.
 | `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
+| `PSTACK_MAX_JOBS` | `serve` | `4` | lifecycle jobs running at once, across every stack. **The default for the `max_jobs` setting, not the authority** (0.32.0): a value stored through `PUT /api/settings/max_jobs` outranks it and survives a restart, so setting it here is how a host that never opens the UI is configured — see [Runtime settings](#runtime-settings-0320). |
 | `PSTACK_TRAEFIK_METRICS` | `serve` | — | Traefik's Prometheus endpoint, what `sleep.idle` reads. `http://traefik:8082/metrics` inside the control stack; unset means `idle` never triggers. |
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
 | `PSTACK_READINESS_RESTART_LOOP` | `serve` | `3` | restarts tolerated before the readiness watcher calls a container a crash loop. Unlike the two above, this is operator-facing: raise it on a swarm host — swarm has no `depends_on`, so a dependent service legitimately restarts a few times while its database converges. |
@@ -2722,6 +2745,68 @@ different problems with different owners.
 | `PSTACK_VERSION` · `PSTACK_INSTALL_DIR` | `install.sh` | *the script's release* · `/usr/local/bin` | pin the version the installer fetches; where it puts the binary. `pstack upgrade` sets both. |
 
 `serve` needs **no** spec and no stack variable to start.
+
+### Runtime settings (0.32.0)
+
+Two host knobs are changeable **while the server runs**, without restarting the control container.
+They live in the database, and the list is closed — this is not a general key-value store, and a key
+nobody named is refused rather than stored.
+
+| Key | Value | Read | Write | What it decides |
+|---|---|---|---|---|
+| `max_jobs` | whole number ≥ 1 | `viewer` | `maintainer` | how many lifecycle jobs run at once across every stack. **In force on the request that sets it** — the registry takes the new cap immediately |
+| `default_role` | one of `viewer`, `developer`, `maintainer`, `admin` | `viewer` | `admin` | the role an account created with **no `role` named** gets: `POST /api/users` without one, and any SSO provider whose own `defaultRole` is empty |
+
+**Precedence: database > environment > built-in default.** A stored value wins; without one the
+environment variable is used; without that, what the binary ships with. `PSTACK_MAX_JOBS` is
+therefore the *default* for `max_jobs`, not the authority — a host whose operator never opens the UI
+behaves exactly as it always did, and one who sets the value here is **not overridden on the next
+restart**. `default_role` has no environment variable at all: it is `viewer` until somebody sets it.
+
+**Which layer won is readable**, because a box that says `4` when you typed `8` is otherwise
+unexplainable:
+
+```bash
+curl -s https://api.preview.example.com/api/settings -H "Authorization: Bearer $PSTACK_TOKEN"
+```
+```json
+{
+  "settings": [
+    { "key": "max_jobs",     "value": 4,        "source": "default", "minRole": "maintainer" },
+    { "key": "default_role", "value": "viewer", "source": "default", "minRole": "admin" }
+  ],
+  "env": { "PSTACK_MAX_JOBS": null },
+  "precedence": "database > environment > built-in default"
+}
+```
+
+`source` is `db`, `env` or `default`; `env` reports what this process was started with (`null` when
+nothing usable was set), so an override you cannot see from the UI is still visible in the answer.
+`minRole` comes from the permission table itself, so it cannot drift from what the route enforces.
+
+```bash
+curl -sS -X PUT https://api.preview.example.com/api/settings/max_jobs \
+  -H "Authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' \
+  -d '{"value": 8}'
+```
+
+A write answers with the row it stored, `"stored": true`, and — for `max_jobs` — a note repeating
+what lowering the cap does not do. **Lowering it kills nothing**: jobs already running run to
+completion and the new cap applies to the next dispatch. A refused value is a `400` naming the key.
+
+**Storing a value is a decision to stop following the environment, and there is no API to undo it.**
+`PUT` is the only write these keys have — there is no `DELETE`, and an empty value is refused — so a
+host that has stored a `max_jobs` goes back to obeying `PSTACK_MAX_JOBS` only by removing the row
+itself (`DELETE FROM settings WHERE key = 'max_jobs'` against `<PSTACK_DATA>/db/pstack.db`, with the
+control container stopped). Changing your mind about the *value* is a second `PUT`; changing your
+mind about the *layer* is not something the API does.
+
+The two tiers are different on purpose. `max_jobs` is operational and sits with the rest of the
+host's configuration, at `maintainer`. `default_role` is **user management by another name** — it
+decides what every account created without an explicit role can reach — so it sits with the
+promotion paths, at `admin`. It never widens what the *caller* may do: creating accounts is already
+admin-only, and `POST /api/auth/bootstrap` is deliberately unaffected (the first account on a host is
+an admin because there is nobody to promote it).
 
 ### HTTP API
 
@@ -2747,7 +2832,10 @@ anything it does not list is the root token's alone.
 | POST | `/api/deployments/:id/cancel` | — | **200** `{ cancelled: [job…], by, warning }` — stops the running job AND the queued one. `cancelled` is `[]`, never null. The warning appears only when something had actually started |
 | GET | `/api/config` | — | the whole portable configuration in **plaintext**: password hashes, token hashes, host secrets, notifier secrets, the SSO client secrets, registry logins. **Root token only** — an admin session or personal token is `403`. `cache-control: no-store`. Emits `config.exported` |
 | POST | `/api/config` | that document | applies it create-or-skip → `{ trusts, created, skipped }` · 400 on a document this build does not understand · 403 for anything but the root token · 413 over 8 MiB. Emits `config.imported`, **including when it fails part-way** |
-| POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only**, and an absent `role` means `viewer` — both changed in 0.31.0, see [7e](#7e-who-can-do-what-the-four-roles-0310). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
+| GET | `/api/settings` | — | `{ settings: [{ key, value, source, minRole }…], env, precedence }` — the two runtime settings, resolved, each saying which layer it came from. `viewer`. See [Runtime settings](#runtime-settings-0320) |
+| PUT | `/api/settings/max_jobs` | `{ value }` | the row + `stored` + a `note`. **`maintainer`.** In force immediately — no restart; lowering it cancels nothing already running · 400 on anything but a whole number ≥ 1 |
+| PUT | `/api/settings/default_role` | `{ value }` | the row + `stored`. **`admin`** — it decides the role of accounts created without one · 400 on an unknown role |
+| POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only** (0.31.0), and an absent `role` means the host's `default_role` setting — `viewer` until somebody sets one. This route honours `admin` if that is the host default, unlike an inheriting SSO provider which is capped below it: creating accounts is already admin-only, so an admin minting at a level they chose is exercising authority they have, not a stranger acquiring it. See [7e](#7e-who-can-do-what-the-four-roles-0310). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
 | PATCH | `/api/users/:id` | `{ role }` | `{ updated, role }` · **admin only** · 400 on an unknown role or on demoting the last admin · 404. Takes effect on that account's next request |
 | DELETE | `/api/users/:id` | — | `{ deleted }` · **admin only** · 400 on the last user or the last admin · 404 |
 | PUT | `/api/users/:id/password` | `{ password }` | `{ ok, revokedSessions }` — **your own** at any role, **anybody else's** is admin. Revokes that account's sessions and personal tokens |

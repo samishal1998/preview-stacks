@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
@@ -149,7 +151,9 @@ func ssoTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return &Server{store: st, auth: auth.New(st), ssoClient: sso.NewClient(nil), ssoTTL: 60, opts: Options{Log: func(string) {}}}
+	// `settings` too: the SSO sign-in options resolve an inheriting provider's role through it, and
+	// a nil one is a panic rather than a default.
+	return &Server{store: st, auth: auth.New(st), settings: settings.New(st, 0), ssoClient: sso.NewClient(nil), ssoTTL: 60, opts: Options{Log: func(string) {}}}
 }
 
 func saveSsoProvider(t *testing.T, a *auth.Auth, key, raw string) {
@@ -829,5 +833,412 @@ func TestJobCancelRouteTakesAQueuedJobAndSaysNothingRan(t *testing.T) {
 	// was right.
 	if again := post(t, s, "/api/jobs/"+id+"/cancel"); again.Code != 409 {
 		t.Fatalf("a finished job is still a 409, got %d: %s", again.Code, again.Body.String())
+	}
+}
+
+// ── the two runtime host settings: the read, the two writes, and the cap that applies NOW ────────
+//
+// The failure mode of every one of these is SILENCE: a stored cap that boot ignores, a PUT that
+// stores a number nothing reads until a restart, a `source` that says "env" while the database is
+// what answered. None of them breaks anything visibly, and all of them make an operator's box lie.
+
+// settingsFixture is the smallest Server the settings routes touch: a real store (the table is
+// migration 8), the settings reader over it with `envMaxJobs` as the caller chooses, and a job
+// registry so a write can be observed reaching it.
+func settingsFixture(t *testing.T, envMaxJobs int) *Server {
+	t.Helper()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	bus := events.New()
+	return &Server{
+		store:    st,
+		settings: settings.New(st, envMaxJobs),
+		jobs:     jobs.New(bus, envMaxJobs),
+		bus:      bus,
+		opts:     Options{MaxJobs: envMaxJobs, Log: func(string) {}},
+	}
+}
+
+// callSettings drives one settings route as routes() would, with a root principal (the tiers
+// themselves are permissions_test.go's job).
+func callSettings(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	var r *http.Request
+	if body == "" {
+		r = httptest.NewRequest(method, path, nil)
+	} else {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+	}
+	if err := s.routes(w, r, path, &auth.Principal{Kind: auth.KindRoot}, map[string]string{}); err != nil {
+		s.fail(w, err)
+	}
+	return w
+}
+
+// TestSettingsReadSaysWhereEachValueCameFrom is the whole point of the read: a box saying 4 is
+// unexplainable unless it says whether 4 is the operator's choice, the environment's, or the
+// binary's.
+//
+// negative control: return a constant "db" from settingRow's source (or drop the `s.opts.MaxJobs >=
+// 1` arm) → the env and default cases fail; emit `s.opts.MaxJobs` unconditionally in the `env`
+// block → the null case fails, and a host that never set the variable reads as one that set it to
+// a value this binary ignored. All three run, observed failing, restored.
+func TestSettingsReadSaysWhereEachValueCameFrom(t *testing.T) {
+	// Nothing stored, nothing in the environment: both keys are the shipped default.
+	s := settingsFixture(t, 0)
+	body := callSettings(t, s, "GET", "/api/settings", "").Body.String()
+	for _, want := range []string{`"key": "max_jobs"`, `"value": 4`, `"source": "default"`,
+		`"key": "default_role"`, `"value": "viewer"`, `"minRole": "maintainer"`, `"minRole": "admin"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("a bare host: %s\nmissing %s", body, want)
+		}
+	}
+
+	// …and the environment block says NULL rather than 0, because 0 is how `PSTACK_MAX_JOBS=0` is
+	// read (unset) and a literal 0 here could not be told apart from "never set".
+	if !strings.Contains(body, `"PSTACK_MAX_JOBS": null`) {
+		t.Fatalf("an unset PSTACK_MAX_JOBS must read as null: %s", body)
+	}
+
+	// PSTACK_MAX_JOBS set, nothing stored: the value is the environment's, and it SAYS so.
+	s = settingsFixture(t, 2)
+	body = callSettings(t, s, "GET", "/api/settings", "").Body.String()
+	if !strings.Contains(body, `"value": 2`) || !strings.Contains(body, `"source": "env"`) || !strings.Contains(body, `"PSTACK_MAX_JOBS": 2`) {
+		t.Fatalf("PSTACK_MAX_JOBS=2: %s", body)
+	}
+
+	// Stored: the database outranks the environment, and the source changes with it.
+	if err := s.settings.Set(settings.KeyMaxJobs, "7"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.settings.Set(settings.KeyDefaultRole, "developer"); err != nil {
+		t.Fatal(err)
+	}
+	body = callSettings(t, s, "GET", "/api/settings", "").Body.String()
+	if !strings.Contains(body, `"value": 7`) || !strings.Contains(body, `"source": "db"`) {
+		t.Fatalf("a stored cap must outrank the environment and say db: %s", body)
+	}
+	if !strings.Contains(body, `"value": "developer"`) || strings.Count(body, `"source": "db"`) != 2 {
+		t.Fatalf("both keys stored: %s", body)
+	}
+
+	// A HAND-EDITED ROW resolves down — and must not claim the database answered. This is the case
+	// string-comparing the stored text against the resolved value gets wrong in the other direction
+	// ("008" resolves to 8 and IS the database's answer), which is why the source mirrors the
+	// package's own predicate instead.
+	for _, bad := range []struct{ key, value, wantSource string }{
+		{settings.KeyMaxJobs, "0", "env"},
+		{settings.KeyDefaultRole, "superuser", "default"},
+	} {
+		if _, err := s.store.DB.Exec("UPDATE settings SET value = ? WHERE key = ?", bad.value, bad.key); err != nil {
+			t.Fatal(err)
+		}
+		body = callSettings(t, s, "GET", "/api/settings", "").Body.String()
+		if got := sourceOf(t, body, bad.key); got != bad.wantSource {
+			t.Fatalf("a %s row of %q reads as %q, want %q: %s", bad.key, bad.value, got, bad.wantSource, body)
+		}
+	}
+	if !strings.Contains(body, `"value": "viewer"`) {
+		t.Fatalf("an unrankable stored role must resolve DOWN to viewer, never up: %s", body)
+	}
+	if _, err := s.store.DB.Exec("UPDATE settings SET value = '008' WHERE key = 'max_jobs'"); err != nil {
+		t.Fatal(err)
+	}
+	body = callSettings(t, s, "GET", "/api/settings", "").Body.String()
+	if !strings.Contains(body, `"value": 8`) || !strings.Contains(body, `"source": "db"`) {
+		t.Fatalf(`"008" is what the resolver took, so the source is db: %s`, body)
+	}
+}
+
+// TestStoredMaxJobsBeatsTheEnvironmentAtBoot is the boot half of the contract: an operator who set
+// the cap in the UI is not overridden by the container's environment on the next restart.
+//
+// negative control: restore `jobs.New(o.Bus, o.MaxJobs)` in server.go's New → the second job runs
+// instead of queueing, because the stored 1 was never consulted. Run, observed failing, restored.
+// THE PLUMBING TEST: nothing else in the suite fails if that resolution is dropped.
+func TestStoredMaxJobsBeatsTheEnvironmentAtBoot(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.New(st, 0).Set(settings.KeyMaxJobs, "1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	// PSTACK_MAX_JOBS says 4; the database says 1. The database wins.
+	s, err := New(Options{DataDir: dir, Bus: events.New(), MaxJobs: 4, Log: func(string) {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	done := make(chan struct{})
+	defer close(done)
+	block := func(log.Sink, context.Context) (stack.Outcome, error) { <-done; return stack.Outcome{OK: true}, nil }
+	a, _ := s.jobs.Start("a", jobs.Verify, block, nil)
+	b, _ := s.jobs.Start("b", jobs.Verify, block, nil)
+	if a.State != jobs.Running || b.State != jobs.Queued {
+		t.Fatalf("the stored cap of 1: %q then %q, want running then queued", a.State, b.State)
+	}
+}
+
+// TestPutMaxJobsAppliesWithoutARestart is the other half, and the reason the feature exists: a
+// raised cap starts a job that is ALREADY WAITING, on this request, and a lowered one cancels
+// nothing.
+//
+// negative control: drop `s.jobs.SetMaxRunning(s.settings.MaxJobs())` from putSetting → the queued
+// job is still queued after the PUT and the first check fails; drop the `note` → the "run to
+// completion" check fails, and an operator who typed 1 while four jobs ran is left believing three
+// were cancelled. Both run, observed failing, restored.
+func TestPutMaxJobsAppliesWithoutARestart(t *testing.T) {
+	s := settingsFixture(t, 1)
+	done := make(chan struct{})
+	defer close(done)
+	block := func(log.Sink, context.Context) (stack.Outcome, error) { <-done; return stack.Outcome{OK: true}, nil }
+	running, _ := s.jobs.Start("a", jobs.Verify, block, nil)
+	waiting, _ := s.jobs.Start("b", jobs.Verify, block, nil)
+	if running.State != jobs.Running || waiting.State != jobs.Queued {
+		t.Fatalf("the fixture must start one job waiting for a slot: %q %q", running.State, waiting.State)
+	}
+
+	w := callSettings(t, s, "PUT", "/api/settings/max_jobs", `{"value":2}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"value": 2`) || !strings.Contains(w.Body.String(), `"source": "db"`) {
+		t.Fatalf("PUT max_jobs: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "run to completion") {
+		t.Fatalf("the response must say lowering the cap cancels nothing: %s", w.Body.String())
+	}
+	// The slot that did not exist a moment ago now does, and the pump used it.
+	if j, ok := s.jobs.Get(waiting.ID); !ok || j.State != jobs.Running {
+		t.Fatalf("the waiting job must be running after the cap was raised, got %q", j.State)
+	}
+
+	// Lowering it mid-flight KILLS NOTHING. Two jobs are running and the cap is now 1.
+	if w := callSettings(t, s, "PUT", "/api/settings/max_jobs", `{"value":1}`); w.Code != 200 {
+		t.Fatalf("lowering: %d %s", w.Code, w.Body.String())
+	}
+	for _, id := range []string{running.ID, waiting.ID} {
+		if j, _ := s.jobs.Get(id); j.State != jobs.Running {
+			t.Fatalf("lowering the cap stopped a running job: %q", j.State)
+		}
+	}
+}
+
+// TestPutSettingRefusesWhatItCannotStore: the validator's refusals must reach the wire as 400s, not
+// 500s, and a key the chain never dispatches must 404 rather than reaching a validator at all.
+//
+// negative control: drop `settings.IsError(err)` from fail() in server.go → every refusal below is
+// a 500. Run, observed failing, restored.
+func TestPutSettingRefusesWhatItCannotStore(t *testing.T) {
+	s := settingsFixture(t, 0)
+	for _, c := range []struct{ path, body string }{
+		{"/api/settings/max_jobs", `{"value":0}`},
+		{"/api/settings/max_jobs", `{"value":8.5}`},
+		{"/api/settings/max_jobs", `{"value":"lots"}`},
+		{"/api/settings/max_jobs", `{"value":true}`},
+		{"/api/settings/default_role", `{"value":"superuser"}`},
+		{"/api/settings/default_role", `{"value":""}`},
+	} {
+		if w := callSettings(t, s, "PUT", c.path, c.body); w.Code != 400 {
+			t.Errorf("PUT %s %s = %d %s, want 400", c.path, c.body, w.Code, w.Body.String())
+		}
+	}
+	// A missing `value` names the shape rather than storing "".
+	if w := callSettings(t, s, "PUT", "/api/settings/max_jobs", `{}`); w.Code != 400 {
+		t.Errorf("no value: %d %s", w.Code, w.Body.String())
+	}
+	// `8.0` is 8 — rule 7, a JSON number arrives as a float64.
+	if w := callSettings(t, s, "PUT", "/api/settings/max_jobs", `{"value":8.0}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"value": 8`) {
+		t.Errorf("8.0: %d %s", w.Code, w.Body.String())
+	}
+	// A third key is not a setting: the chain never dispatches it.
+	if w := callSettings(t, s, "PUT", "/api/settings/shell_command", `{"value":"rm -rf /"}`); w.Code != 404 {
+		t.Errorf("an unknown key: %d %s", w.Code, w.Body.String())
+	}
+	// And nothing above wrote anything: both keys still resolve to what the host shipped with.
+	body := callSettings(t, s, "GET", "/api/settings", "").Body.String()
+	if !strings.Contains(body, `"value": 8`) || !strings.Contains(body, `"value": "viewer"`) {
+		t.Errorf("after the refusals: %s", body)
+	}
+}
+
+// TestDefaultRoleSettingDecidesAnAbsentRole covers both consumers of the host default in one place,
+// because they are one decision: an account created with no role named, and an SSO provider that
+// inherits.
+//
+// THE DIRECTION IS THE POINT. Omission may never yield admin — not through the route, not through a
+// provider that names nothing, not on a host where nobody ever opened the settings page.
+//
+// negative control: put `role := string(auth.Viewer)` back in the users POST → the developer case
+// fails; make ssoSignInOpts return cfg.DefaultRole unresolved → an inheriting provider mints "" and
+// the SSO case fails; drop one field from ssoSignInOpts's literal → the allow-rules case fails.
+// All three run, observed failing, restored.
+//
+// What no Go test here reaches is the CALL SITE in ssoCallback: driving it needs a parked state, a
+// provider row and a token exchange against a fake identity provider, which is what
+// packages/conformance/test/api-sso.test.ts exists for. That end-to-end assertion belongs there.
+func TestDefaultRoleSettingDecidesAnAbsentRole(t *testing.T) {
+	s := settingsFixture(t, 0)
+	s.auth = auth.New(s.store)
+
+	create := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/users", strings.NewReader(body))
+		done, err := s.accountRoutes(w, r, "/api/users", &auth.Principal{Kind: auth.KindRoot})
+		if err != nil {
+			s.fail(w, err)
+		}
+		if !done {
+			t.Fatal("the users POST was not dispatched")
+		}
+		return w
+	}
+
+	// Nobody set a default: viewer, exactly as before this feature existed.
+	if w := create(`{"username":"a1","password":"password123"}`); w.Code != 201 || !strings.Contains(w.Body.String(), `"role": "viewer"`) {
+		t.Fatalf("no setting: %d %s", w.Code, w.Body.String())
+	}
+	// Set it, and the next account created with no role named takes it.
+	if err := s.settings.Set(settings.KeyDefaultRole, "developer"); err != nil {
+		t.Fatal(err)
+	}
+	if w := create(`{"username":"a2","password":"password123"}`); w.Code != 201 || !strings.Contains(w.Body.String(), `"role": "developer"`) {
+		t.Fatalf("with the setting: %d %s", w.Code, w.Body.String())
+	}
+	// An explicit role still wins over it, in both directions.
+	if w := create(`{"username":"a3","password":"password123","role":"viewer"}`); !strings.Contains(w.Body.String(), `"role": "viewer"`) {
+		t.Fatalf("an explicit role must win: %s", w.Body.String())
+	}
+
+	// BOOTSTRAP IS NOT A DEFAULT-ROLE CONSUMER and must never become one: the first account on a
+	// host is an admin because there is nobody to promote it. A host whose default is `developer`
+	// still bootstraps an admin, or an operator locks themselves out of their own control plane.
+	first := settingsFixture(t, 0)
+	first.auth = auth.New(first.store)
+	if err := first.settings.Set(settings.KeyDefaultRole, "developer"); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	if !first.preGate(w, httptest.NewRequest("POST", "/api/auth/bootstrap", strings.NewReader(`{"username":"boss","password":"password123"}`)), "/api/auth/bootstrap") {
+		t.Fatal("the bootstrap route was not dispatched")
+	}
+	if w.Code != 201 || !strings.Contains(w.Body.String(), `"role": "admin"`) {
+		t.Fatalf("bootstrap must mint an admin whatever the host default says: %d %s", w.Code, w.Body.String())
+	}
+
+	// THE SSO HALF, through the same function ssoCallback hands to SsoSignIn. A provider whose
+	// defaultRole is EMPTY inherits the host default, resolved at sign-in — never inside SsoSignIn,
+	// which is one transaction on the single pooled connection.
+	inherit, err := sso.ParseConfig(mustParseObject(t, `{"mode":"oauth2","provider":"github","clientId":"c"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inherit.DefaultRole != "" {
+		t.Fatalf("a provider that names no role must store none, got %q", inherit.DefaultRole)
+	}
+	if got := s.ssoSignInOpts(inherit, nil).DefaultRole; got != "developer" {
+		t.Fatalf("an inheriting provider must take the host default, got %q", got)
+	}
+	// And it provisions at that role — the end of the chain, not just the opts.
+	signed, err := s.auth.SsoSignIn("github", &sso.Identity{Subject: "s1", Username: "octo", Groups: []string{}}, s.ssoSignInOpts(inherit, nil))
+	if err != nil || signed.User.Role != "developer" {
+		t.Fatalf("an inheriting provider provisioned %+v %v", signed.User, err)
+	}
+	// A provider that NAMES a role keeps it, whatever the host default is — inherit is opt-in.
+	named, err := sso.ParseConfig(mustParseObject(t, `{"mode":"oauth2","provider":"github","clientId":"c","defaultRole":"viewer"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ssoSignInOpts(named, nil).DefaultRole; got != "viewer" {
+		t.Fatalf("an explicit provider role must survive the host default, got %q", got)
+	}
+	// On a host where nobody ever set a default, inherit is a VIEWER — never an admin by omission,
+	// which is the whole reason this resolution is written down twice.
+	bare := settingsFixture(t, 0)
+	bare.auth = auth.New(bare.store)
+	if got := bare.ssoSignInOpts(inherit, nil).DefaultRole; got != "viewer" {
+		t.Fatalf("inherit on a bare host resolved to %q", got)
+	}
+	signed, err = bare.auth.SsoSignIn("github", &sso.Identity{Subject: "s1", Username: "octo", Groups: []string{}}, bare.ssoSignInOpts(inherit, nil))
+	if err != nil || signed.User.Role != "viewer" {
+		t.Fatalf("inherit on a bare host provisioned %+v %v", signed.User, err)
+	}
+	// The rest of the rules travel with it: assembling these anywhere but ssoSignInOpts is how half
+	// an allow-list goes missing.
+	rules, err := sso.ParseConfig(mustParseObject(t, `{"mode":"oauth2","provider":"github","clientId":"c","allowedEmailDomains":["example.com"],"allowedUsernames":["octo*"],"requiredGroups":["acme"],"scopes":"read:user user:email read:org"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := bare.ssoSignInOpts(rules, context.Canceled)
+	if len(opts.AllowedEmailDomains) != 1 || len(opts.AllowedUsernames) != 1 || len(opts.RequiredGroups) != 1 || opts.GroupsErr == nil {
+		t.Fatalf("the allow-rules did not travel: %+v", opts)
+	}
+}
+
+func mustParseObject(t *testing.T, s string) any {
+	t.Helper()
+	v, err := omap.Parse([]byte(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// sourceOf is one row's `source` out of the read, by key: the rows carry their own key, so this
+// does not depend on the order they are emitted in.
+func sourceOf(t *testing.T, body, key string) string {
+	t.Helper()
+	i := strings.Index(body, `"key": "`+key+`"`)
+	if i < 0 {
+		t.Fatalf("no %s row in %s", key, body)
+	}
+	rest := body[i:]
+	j := strings.Index(rest, `"source": "`)
+	if j < 0 {
+		t.Fatalf("the %s row carries no source: %s", key, body)
+	}
+	rest = rest[j+len(`"source": "`):]
+	return rest[:strings.Index(rest, `"`)]
+}
+
+// An INHERITING SSO provider never mints an administrator, whatever the host default says.
+//
+// The composition that made this necessary, measured against a real IdP before the clamp existed:
+// `default_role: admin` (an admin's legitimate choice for POST /api/users) plus a provider saved
+// straight from a preset — defaultRole omitted, allowedEmailDomains/allowedUsernames/requiredGroups
+// all empty — meant ANY stranger who completed the OAuth flow became a full administrator. Two sane
+// settings, one catastrophic product.
+//
+// Explicit still wins: a provider whose own form says admin gets admin, because that is somebody
+// choosing in words rather than a default composing its way to the top.
+//
+// negative control: delete the `>= auth.Admin.Rank()` clamp in ssoSignInOpts — the first case
+// returns "admin".
+func TestAnInheritingSsoProviderNeverMintsAnAdmin(t *testing.T) {
+	s := ssoTestServer(t)
+	if err := s.settings.Set(settings.KeyDefaultRole, string(auth.Admin)); err != nil {
+		t.Fatal(err)
+	}
+	// Inheriting: the provider names no role of its own.
+	if got := s.ssoSignInOpts(&sso.Config{}, nil).DefaultRole; got == string(auth.Admin) {
+		t.Fatalf("an inheriting provider resolved to admin — a stranger completing OAuth becomes one")
+	} else if !auth.ValidRole(got) {
+		t.Fatalf("the clamped role %q is not a role", got)
+	}
+	// Explicit admin on the provider itself is honoured: deliberate, on its own form.
+	if got := s.ssoSignInOpts(&sso.Config{DefaultRole: string(auth.Admin)}, nil).DefaultRole; got != string(auth.Admin) {
+		t.Fatalf("an explicit admin provider was clamped to %q — explicit must win", got)
+	}
+	// And a host default BELOW admin passes through untouched.
+	if err := s.settings.Set(settings.KeyDefaultRole, string(auth.Developer)); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ssoSignInOpts(&sso.Config{}, nil).DefaultRole; got != string(auth.Developer) {
+		t.Fatalf("inherit = %q, want developer", got)
 	}
 }

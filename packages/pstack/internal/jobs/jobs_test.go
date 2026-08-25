@@ -1096,3 +1096,70 @@ func TestAQueuedDownIsNotSupersededByALaterUp(t *testing.T) {
 		t.Fatal("a down must be able to replace a waiting down")
 	}
 }
+
+// negative control: drop the r.pump() from SetMaxRunning → the raised cap frees a slot nobody
+// claims, the waiting job stays queued and waitState times out with "job … is queued, wanted
+// running".
+func TestSetMaxRunning(t *testing.T) {
+	t.Run("raising the cap dispatches a job that was waiting for a slot", func(t *testing.T) {
+		// negative control: as above.
+		r := New(events.New(), 1)
+		relA, relB := make(chan struct{}), make(chan struct{})
+		a, _ := r.Start("pr-1", Up, blockWork(relA), nil)
+		b, _ := r.Start("pr-2", Up, blockWork(relB), nil)
+		if a.State != Running || b.State != Queued {
+			t.Fatalf("a cap of 1 runs one and queues one: %s %s", a.State, b.State)
+		}
+		// No new Start, and nothing has finished: the raise alone must dispatch b.
+		r.SetMaxRunning(2)
+		waitState(t, r, b.ID, Running)
+		close(relA)
+		close(relB)
+		waitDone(t, r, a.ID)
+		waitDone(t, r, b.ID)
+	})
+
+	t.Run("lowering the cap kills nothing; it applies at the next dispatch", func(t *testing.T) {
+		// negative control: make SetMaxRunning cancel running jobs down to the new cap → the two
+		// jobs that were already running are no longer running and the assertion fires.
+		r := New(events.New(), 2)
+		relA, relB := make(chan struct{}), make(chan struct{})
+		a, _ := r.Start("pr-1", Up, blockWork(relA), nil)
+		b, _ := r.Start("pr-2", Up, blockWork(relB), nil)
+		if a.State != Running || b.State != Running {
+			t.Fatalf("both must be running before the cap moves: %s %s", a.State, b.State)
+		}
+		r.SetMaxRunning(1)
+		if sa, sb := stateOf(t, r, a.ID), stateOf(t, r, b.ID); sa != Running || sb != Running {
+			t.Fatalf("lowering the cap cancelled a running job: %s %s", sa, sb)
+		}
+		// The new cap governs the NEXT dispatch, not the current one.
+		c, _ := r.Start("pr-3", Up, okWork(stack.Outcome{OK: true}), nil)
+		if c.State != Queued {
+			t.Fatalf("the lowered cap did not apply to the next dispatch: %s", c.State)
+		}
+		// Two running against a cap of one: freeing ONE slot still leaves the host over the cap, so
+		// c waits for the second.
+		close(relA)
+		waitDone(t, r, a.ID)
+		if s := stateOf(t, r, c.ID); s != Queued {
+			t.Fatalf("dispatched while inFlight was still at the cap: %s", s)
+		}
+		close(relB)
+		waitDone(t, r, b.ID)
+		waitDone(t, r, c.ID)
+	})
+
+	t.Run("a non-positive cap is the built-in default, as in New", func(t *testing.T) {
+		// negative control: assign n without the `n <= 0` guard → maxRunning is 0, every job on the
+		// host stops dispatching, and the assertion fires.
+		r := New(events.New(), 1)
+		r.SetMaxRunning(0)
+		r.mu.Lock()
+		got := r.maxRunning
+		r.mu.Unlock()
+		if got != DefaultMaxRunning {
+			t.Fatalf("SetMaxRunning(0) left the cap at %d", got)
+		}
+	})
+}
