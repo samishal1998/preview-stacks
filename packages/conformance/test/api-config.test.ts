@@ -42,7 +42,7 @@ const DOC_KEYS = [
   'tokens',
   'vars',
   'notifiers',
-  'sso',
+  'ssoProviders',
   'registries',
   'routing',
   'specs',

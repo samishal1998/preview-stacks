@@ -232,16 +232,22 @@ export function createClient(opts: ClientOptions) {
      * to call — this is the configuration around it.
      */
     sso: {
-      /** `clientSecret` comes back as a mask. There is no route that returns the real one. */
+      /** Every stored provider (secrets never come back — `secretSet` is all a read learns). */
       config: () => get<SsoConfigResponse>('/api/sso/config'),
       /**
-       * Save. Omit `clientSecret` (or send the mask back) to keep the stored one. For `mode: 'oidc'`
-       * the issuer is fetched here, so a bad one is a 400 now rather than a failed login later.
+       * Save one provider under `key`, a lowercase slug. `key` may be omitted on a host with at
+       * most one provider — an empty host derives it from the config, a one-provider host replaces
+       * that one — which is what PUT meant before keys existed; with several it is a 400. Omit
+       * `clientSecret` to keep that key's stored one. For `mode: 'oidc'` the issuer is fetched
+       * here, so a bad one is a 400 now rather than a failed login later.
        */
-      save: (config: Partial<SsoConfig> & { clientSecret?: string }) =>
-        put<{ ok: true; config: SsoConfig; callbackUrl: string }>('/api/sso/config', config),
-      /** Forget the provider. Nobody is deleted — accounts it created keep working. */
-      remove: () => del<{ ok: true }>('/api/sso/config'),
+      save: (config: Partial<SsoConfig> & { key?: string; clientSecret?: string }) =>
+        put<{ ok: true; key: string; config: SsoConfig; callbackUrl: string }>('/api/sso/config', config),
+      /**
+       * Forget one provider — or the only one, when `key` is omitted (a 400 names the keys when
+       * there are several). Nobody is deleted — accounts it created keep working.
+       */
+      remove: (key?: string) => del<{ ok: true }>(key ? `/api/sso/config/${enc(key)}` : '/api/sso/config'),
     },
 
     jobs: {

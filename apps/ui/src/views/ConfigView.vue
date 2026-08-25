@@ -38,7 +38,8 @@ type Preview = {
   registries: number;
   routing: number;
   specs: number;
-  sso: boolean;
+  /** Count since multi-provider SSO; older servers sent a boolean, and truthiness reads both. */
+  sso: number | boolean;
 };
 type Applied = { trusts: string[]; created: string[]; skipped: string[] };
 
@@ -166,7 +167,7 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
       <p class="dim">
         {{ preview.users }} accounts · {{ preview.tokens }} API tokens · {{ preview.vars }} variables ·
         {{ preview.notifiers }} notifiers · {{ preview.registries }} registries ·
-        {{ preview.routing }} routing files · {{ preview.specs }} specs<template v-if="preview.sso"> · a sign-on provider</template>
+        {{ preview.routing }} routing files · {{ preview.specs }} specs<template v-if="preview.sso"> · sign-on ({{ typeof preview.sso === 'number' ? preview.sso : 1 }} provider{{ typeof preview.sso === 'number' && preview.sso > 1 ? 's' : '' }})</template>
       </p>
       <p>Nothing has been written yet.</p>
     </section>

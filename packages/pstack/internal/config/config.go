@@ -5,7 +5,7 @@
 //
 // Portable, host-independent state only: accounts (argon2 hashes, so logins keep working), personal
 // API tokens (sha256 hashes, same reasoning), host vars and secrets, notifier registrations with
-// their signing secrets, the SSO provider and its client secret, registry credentials, Traefik
+// their signing secrets, the SSO providers and their client secrets, registry credentials, Traefik
 // routing files, named specs.
 //
 // OUT, deliberately: deployments, sessions, `sso_state`, terminal audit, delivery history. Those
@@ -16,7 +16,7 @@
 // ── THIS PACKAGE ADDS A ROUTE, NOT A READ PATH ───────────────────────────────────────────────────
 //
 // Every unmasked value here already had an accessor for the deploy path — `hostvars.ResolveMaps`,
-// `webhooks.RawConfigOf`/`SecretOf`, `auth.SsoConfig`, `specs.Source`, `routing.Read`. This package
+// `webhooks.RawConfigOf`/`SecretOf`, `auth.ListSsoProviders`, `specs.Source`, `routing.Read`. This package
 // calls those and writes no second way to read a secret. Two exceptions, both stated rather than
 // hidden:
 //
@@ -104,15 +104,20 @@ type Document struct {
 	// Skipped is what Assemble could NOT carry, with the reason. Informational: apply ignores it.
 	// It is in the document rather than in a second return value so the reason survives the seal
 	// and is visible to whoever opens the file, not only to whoever ran the export.
-	Skipped   []string           `json:"skipped"`
-	Users     []auth.ExportUser  `json:"users"`
-	Tokens    []auth.ExportToken `json:"tokens"`
-	Vars      []Var              `json:"vars"`
-	Notifiers []Notifier         `json:"notifiers"`
-	SSO       *SSO               `json:"sso"`
-	Registry  []Registry         `json:"registries"`
-	Routing   []RoutingFile      `json:"routing"`
-	Specs     []Spec             `json:"specs"`
+	Skipped      []string           `json:"skipped"`
+	Users        []auth.ExportUser  `json:"users"`
+	Tokens       []auth.ExportToken `json:"tokens"`
+	Vars         []Var              `json:"vars"`
+	Notifiers    []Notifier         `json:"notifiers"`
+	SSOProviders []SSOProvider      `json:"ssoProviders"`
+	// SSO is the single-provider shape a pre-multi-provider pstack (≤0.30.0) exported. Accepted on
+	// DECODE only — Parse folds it into SSOProviders under sso.Config.DerivedKey and clears it, so
+	// an old export keeps applying — and never written: Assemble leaves it nil, and omitempty keeps
+	// a nil out of new documents.
+	SSO      *SSO          `json:"sso,omitempty"`
+	Registry []Registry    `json:"registries"`
+	Routing  []RoutingFile `json:"routing"`
+	Specs    []Spec        `json:"specs"`
 }
 
 // String keeps a Document out of a log by accident. Every field on it is a credential or points at
@@ -144,7 +149,15 @@ type Notifier struct {
 	CreatedAt int64     `json:"createdAt"`
 }
 
-// SSO is the provider and the client secret it is paired with.
+// SSOProvider is one stored identity provider: its slug, the config and the client secret it is
+// paired with.
+type SSOProvider struct {
+	Key          string      `json:"key"`
+	Config       *sso.Config `json:"config"`
+	ClientSecret string      `json:"clientSecret"`
+}
+
+// SSO is the legacy single-provider pair — see the Document.SSO comment.
 type SSO struct {
 	Config       *sso.Config `json:"config"`
 	ClientSecret string      `json:"clientSecret"`
@@ -197,6 +210,7 @@ func (s Sources) Assemble() (*Document, error) {
 		Tokens:        []auth.ExportToken{},
 		Vars:          []Var{},
 		Notifiers:     []Notifier{},
+		SSOProviders:  []SSOProvider{},
 		Registry:      []Registry{},
 		Routing:       []RoutingFile{},
 		Specs:         []Spec{},
@@ -214,7 +228,7 @@ func (s Sources) Assemble() (*Document, error) {
 	if d.Notifiers, err = s.notifiers(); err != nil {
 		return nil, err
 	}
-	if d.SSO, err = s.ssoConfig(); err != nil {
+	if d.SSOProviders, err = s.ssoProviders(); err != nil {
 		return nil, err
 	}
 	regs, skipped := s.registryEntries()
@@ -294,12 +308,16 @@ func (s Sources) notifiers() ([]Notifier, error) {
 	return out, nil
 }
 
-func (s Sources) ssoConfig() (*SSO, error) {
-	row, err := s.Auth.SsoConfig()
-	if err != nil || row == nil {
+func (s Sources) ssoProviders() ([]SSOProvider, error) {
+	rows, err := s.Auth.ListSsoProviders()
+	if err != nil {
 		return nil, err
 	}
-	return &SSO{Config: row.Config, ClientSecret: row.ClientSecret}, nil
+	out := []SSOProvider{}
+	for _, r := range rows {
+		out = append(out, SSOProvider{Key: r.Key, Config: r.Config, ClientSecret: r.ClientSecret})
+	}
+	return out, nil
 }
 
 // registryEntries is the `auths` block of the DOCKER_CONFIG config.json, restricted to entries
@@ -451,10 +469,13 @@ func (d *Document) Trusts() []string {
 	for _, t := range d.Tokens {
 		out = append(out, fmt.Sprintf("call this API with the token %q, as %q", t.Name, t.Username))
 	}
-	// The SSO provider is the widest grant of all: it delegates who may sign in — and with what role
-	// — to whoever controls that issuer.
-	if d.SSO != nil && d.SSO.Config != nil {
-		c := d.SSO.Config
+	// The SSO providers are the widest grant of all: each delegates who may sign in — and with what
+	// role — to whoever controls that issuer. EVERY provider is named, not the first.
+	for _, p := range d.SSOProviders {
+		if p.Config == nil {
+			continue
+		}
+		c := p.Config
 		where := c.DiscoveryURL
 		if where == "" {
 			where = c.AuthorizeURL
@@ -509,6 +530,7 @@ func Parse(plaintext []byte) (*Document, error) {
 		return nil, &Error{fmt.Sprintf("this is config document version %d, written by %s; this is pstack %s, which understands version %d. Upgrade pstack to apply it.",
 			d.Version, writer, version.Get(), FormatVersion)}
 	}
+	d.foldLegacySSO()
 	// A role is REQUIRED, and this is the only place that can say so before anything is written.
 	//
 	// `applyUsers` used to read an empty role as "admin", copying the convention `auth` uses for the
@@ -524,12 +546,27 @@ func Parse(plaintext []byte) (*Document, error) {
 	return &d, nil
 }
 
+// foldLegacySSO maps the pre-multi-provider "sso" object into SSOProviders under the derived key —
+// the key store migration 7 gives the same config when it migrates the database instead of a
+// document. Parse calls it, and Apply again (Apply is exported and reachable without Parse — the
+// applyUsers role guard sets the precedent), so a 0.30.0 export lands identically either way.
+func (d *Document) foldLegacySSO() {
+	if d.SSO == nil {
+		return
+	}
+	if d.SSO.Config != nil {
+		d.SSOProviders = append(d.SSOProviders, SSOProvider{Key: d.SSO.Config.DerivedKey(), Config: d.SSO.Config, ClientSecret: d.SSO.ClientSecret})
+	}
+	d.SSO = nil
+}
+
 // Apply creates what is missing and leaves everything that exists alone. See the package header for
 // why there is no transaction and why nothing is ever updated or deleted.
 func (s Sources) Apply(d *Document) (*Summary, error) {
 	if d == nil {
 		return nil, &Error{"no document to apply"}
 	}
+	d.foldLegacySSO()
 	if d.Version != FormatVersion {
 		return nil, &Error{fmt.Sprintf("refusing config document version %d — this pstack understands version %d", d.Version, FormatVersion)}
 	}
@@ -758,48 +795,51 @@ func (s Sources) applyNotifiers(d *Document, sum *Summary) error {
 	return nil
 }
 
-// applySSO re-validates through sso.ParseConfig rather than trusting the decoded struct: that is
-// the same door SetSsoConfig's own read path uses, and it normalizes the allow-lists (a
-// case-mismatched email domain would otherwise fail closed and lock everyone out).
+// applySSO re-validates each provider through sso.ParseConfig rather than trusting the decoded
+// struct: that is the same door the API's save uses, and it normalizes the allow-lists (a
+// case-mismatched email domain would otherwise fail closed and lock everyone out). Creates-never-
+// updates PER KEY: a key that exists here keeps its config and its secret, whatever the file says.
 func (s Sources) applySSO(d *Document, sum *Summary) error {
-	if d.SSO == nil || d.SSO.Config == nil {
-		return nil
-	}
-	what := "sso provider " + d.SSO.Config.Label
-	existing, err := s.Auth.SsoConfig()
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		sum.skip(what, "this host already has an SSO provider configured")
-		return nil
-	}
-	if d.SSO.ClientSecret == "" {
-		sum.skip(what, "it carries no client secret, and SetSsoConfig would keep the stored one — there is none")
-		return nil
-	}
-	body, err := jsonx.Marshal(d.SSO.Config)
-	if err != nil {
-		return err
-	}
-	v, err := omap.Parse(body)
-	if err != nil {
-		sum.skip(what, "its config does not parse")
-		return nil
-	}
-	cfg, err := sso.ParseConfig(v)
-	if err != nil {
-		sum.skip(what, err.Error())
-		return nil
-	}
-	if err := s.Auth.SetSsoConfig(cfg, d.SSO.ClientSecret); err != nil {
-		if auth.IsError(err) || sso.IsError(err) {
-			sum.skip(what, err.Error())
-			return nil
+	for _, p := range d.SSOProviders {
+		if p.Config == nil {
+			continue
 		}
-		return err
+		what := "sso provider " + p.Key
+		existing, err := s.Auth.SsoProvider(p.Key)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			sum.skip(what, "this host already has an SSO provider under that key")
+			continue
+		}
+		if p.ClientSecret == "" {
+			sum.skip(what, "it carries no client secret, and an empty one keeps the stored secret — there is none under that key")
+			continue
+		}
+		body, err := jsonx.Marshal(p.Config)
+		if err != nil {
+			return err
+		}
+		v, err := omap.Parse(body)
+		if err != nil {
+			sum.skip(what, "its config does not parse")
+			continue
+		}
+		cfg, err := sso.ParseConfig(v)
+		if err != nil {
+			sum.skip(what, err.Error())
+			continue
+		}
+		if err := s.Auth.SetSsoProvider(p.Key, cfg, p.ClientSecret); err != nil {
+			if auth.IsError(err) || sso.IsError(err) {
+				sum.skip(what, err.Error())
+				continue
+			}
+			return err
+		}
+		sum.created(what)
 	}
-	sum.created(what)
 	return nil
 }
 

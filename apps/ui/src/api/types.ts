@@ -472,20 +472,39 @@ export type SsoConfig = {
 export type SsoPreset = {
   key: string;
   label: string;
+  /** How the provider is talked to. A config made from the preset inherits it. */
+  mode: 'oidc' | 'oauth2';
+  /** Login-page button text ("Continue with GitHub"). */
+  buttonLabel: string;
+  /** Where the operator registers the OAuth app, and the walkthrough shown beside the form. */
+  setupUrl: string;
+  setupHint: string;
+  /**
+   * The issuer, for an oidc preset (`''` otherwise). One containing `<` is a TEMPLATE — the
+   * provider gives every tenant/domain/realm its own issuer — so the placeholder renders as a
+   * field to fill in; the server refuses the template saved verbatim.
+   */
+  discoveryUrl: string;
   authorizeUrl: string;
   tokenUrl: string;
-  userInfoUrl: string | null;
+  userInfoUrl: string;
   scopes: string;
   claimMap: ClaimMap;
 };
 
+/** One stored provider, under its operator-chosen slug. */
+export type SsoProviderEntry = {
+  key: string;
+  config: SsoConfig;
+  /** All a read learns about the client secret — the value has no read path. */
+  secretSet: boolean;
+  updatedAt: number;
+};
+
 export type SsoConfigResponse = {
-  configured: boolean;
-  /** The exact string to register with the provider — built server-side, never guessed here. */
+  /** Every stored provider, in key order — disabled ones included. */
+  providers: SsoProviderEntry[];
+  /** The exact string to register with EVERY provider — built server-side, never guessed here. */
   callbackUrl: string;
   presets: SsoPreset[];
-  config: SsoConfig | null;
-  /** A mask when something is stored, empty when nothing is. Submitting it back keeps the secret. */
-  clientSecret: string;
-  updatedAt: number | null;
 };

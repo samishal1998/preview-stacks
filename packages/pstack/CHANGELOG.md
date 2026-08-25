@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Multiple simultaneous SSO providers.** `sso_config` (one row, `CHECK (id = 1)`) becomes
+  `sso_providers`, keyed by an operator-chosen slug; the migration carries an existing provider over
+  under a derived key (`github`/`gitlab`/`bitbucket`/`custom`, or `oidc`) and every existing login
+  keeps working — link identities stay keyed by issuer/preset, never the slug, so nobody is
+  re-linked. `GET /api/auth/sso/start?provider=<key>` picks one; with a single enabled provider the
+  parameter stays optional, so old bookmarks hold. The config API is keyed
+  (`PUT /api/sso/config` with `key`, `DELETE /api/sso/config/<key>`); a key-less PUT with at most
+  one provider keeps working for scripts. The login page shows one branded button per provider.
+- **Presets grew up.** Google, Microsoft, Okta, Auth0 and Keycloak join GitHub, GitLab and
+  Bitbucket. Every preset now carries a setup walkthrough — where to create the app, the callback
+  URL to paste (shown with a copy button), which scopes and why. Template presets
+  (`https://login.microsoftonline.com/<tenant-id>/v2.0`) refuse to save with the placeholder intact;
+  Microsoft is tenant-specific on purpose, because the `common` discovery document publishes a
+  literal `{tenantid}` as its issuer, which `iss` validation rightly refuses.
+- Config exports now carry **every** provider (`ssoProviders`); a 0.30.0 export with the old
+  single `sso` object still applies, filed under the derived key.
+
+### Fixed
+
+- **`?timeout=` on `up`/`readiness` no longer silently shortens the watch.** An unusable value
+  (0, negative, not a number) now defers to `PSTACK_READINESS_TIMEOUT_MS` instead of a hardcoded
+  180s, and the deadline is floored at 5s — a 1-second "deadline" used to fire `stack.timedout`
+  at every notifier for a deploy that succeeded.
+- **A one-shot's row in the runtime table carries `"job": true`** and the UI shows a one-shot badge
+  instead of Start/Stop/Shell buttons that could only ever fail — the row is synthesised from the
+  swarm *service*, so container verbs have nothing to act on. When a job's progress column cannot
+  be parsed, a warning finding now quotes the raw text instead of the stack silently never settling.
+- `PSTACK_READINESS_RESTART_LOOP` (the crash-loop threshold, worth raising on swarm hosts where
+  dependents legitimately restart while a database converges) is now in `--help` and the docs.
+
 ## 0.30.0 — 2026-08-25
 
 ### Fixed

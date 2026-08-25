@@ -400,54 +400,92 @@ func (a *Auth) DeleteToken(userID, id int64) (bool, error) {
 	return changed(a.store.DB.Exec("DELETE FROM tokens WHERE id = ? AND user_id = ?", id, userID))
 }
 
-// ── SSO: the operator's identity provider ─────────────────────────────────────────────────────────
+// ── SSO: the operator's identity providers ────────────────────────────────────────────────────────
 //
 // The protocol lives in sso. What lives HERE is the part that touches accounts: the stored
-// configuration, the (provider, subject) → user links, and turning a verified identity into the
-// same session a password login produces.
+// providers (keyed by an operator-chosen slug since migration 7), the (provider, subject) → user
+// links, and turning a verified identity into the same session a password login produces. The slug
+// names a ROW, never an identity — sso_links.provider_key is what the callback derives (the
+// discovery issuer for oidc, the preset key or "custom" for oauth2), so two rows on the same
+// upstream directory share their links, which is correct: the same subject there is the same person.
 
 // Transient is where the PKCE verifier waits out the round trip. SQLite, because that is what this
 // service already wires up; the interface is what makes Redis or Postgres a config change later.
 func (a *Auth) Transient() sso.TransientStore { return a.transient }
 
-// SsoConfigRow is the stored provider: the config and the secret it is paired with.
-type SsoConfigRow struct {
+// SsoProviderRow is one stored provider: its slug, the config and the secret it is paired with.
+type SsoProviderRow struct {
+	Key          string
 	Config       *sso.Config
 	ClientSecret string
 	UpdatedAt    int64
 }
 
-// SsoConfig reads the provider, or nil when there is none or the row does not validate.
-func (a *Auth) SsoConfig() (*SsoConfigRow, error) {
+// ssoKey is the slug rule (store migration 7's DDL states it; the schema cannot enforce it).
+var ssoKey = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// parseSsoRow re-validates a stored config rather than trusting it: a row written by an older
+// version (or edited by hand over SSH, which this project expects) must not put a half-shape into
+// the flow. nil when it does not validate.
+func parseSsoRow(key, raw, secret string, updatedAt int64) *SsoProviderRow {
+	v, err := omap.Parse([]byte(raw))
+	if err != nil {
+		return nil
+	}
+	cfg, err := sso.ParseConfig(v)
+	if err != nil {
+		return nil
+	}
+	return &SsoProviderRow{Key: key, Config: cfg, ClientSecret: secret, UpdatedAt: updatedAt}
+}
+
+// ListSsoProviders is every stored provider, in key order (SQLite BINARY collation). A row that no
+// longer validates is skipped, the way the single-provider read treated it — never a half-shape.
+func (a *Auth) ListSsoProviders() ([]SsoProviderRow, error) {
+	rows, err := a.store.DB.Query("SELECT key, config, client_secret, updated_at FROM sso_providers ORDER BY key")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SsoProviderRow{}
+	for rows.Next() {
+		var key, raw, secret string
+		var updatedAt int64
+		if err := rows.Scan(&key, &raw, &secret, &updatedAt); err != nil {
+			return nil, err
+		}
+		if r := parseSsoRow(key, raw, secret, updatedAt); r != nil {
+			out = append(out, *r)
+		}
+	}
+	return out, rows.Err()
+}
+
+// SsoProvider reads one provider, or nil when there is none or the row does not validate.
+func (a *Auth) SsoProvider(key string) (*SsoProviderRow, error) {
 	var raw, secret string
 	var updatedAt int64
-	err := a.store.DB.QueryRow("SELECT config, client_secret, updated_at FROM sso_config WHERE id = 1").Scan(&raw, &secret, &updatedAt)
+	err := a.store.DB.QueryRow("SELECT config, client_secret, updated_at FROM sso_providers WHERE key = ?", key).Scan(&raw, &secret, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	// Re-validated on read, not trusted: a row written by an older version (or edited by hand
-	// over SSH, which this project expects) must not put a half-shape into the flow.
-	v, err := omap.Parse([]byte(raw))
-	if err != nil {
-		return nil, nil
-	}
-	cfg, err := sso.ParseConfig(v)
-	if err != nil {
-		return nil, nil
-	}
-	return &SsoConfigRow{Config: cfg, ClientSecret: secret, UpdatedAt: updatedAt}, nil
+	return parseSsoRow(key, raw, secret, updatedAt), nil
 }
 
-// SetSsoConfig saves. An EMPTY clientSecret keeps the stored one — the read endpoint returns a
-// mask, so a form that round-trips the mask must not overwrite the real secret with it. There is
-// no stored secret to keep on the first save, so an empty one is refused there.
-func (a *Auth) SetSsoConfig(cfg *sso.Config, clientSecret string) error {
+// SetSsoProvider saves one provider under its slug. An EMPTY clientSecret keeps the one stored for
+// THAT key — the read endpoint returns a mask, so a form that round-trips the mask must not
+// overwrite the real secret with it. There is no stored secret to keep on a key's first save, so an
+// empty one is refused there.
+func (a *Auth) SetSsoProvider(key string, cfg *sso.Config, clientSecret string) error {
+	if !ssoKey.MatchString(key) {
+		return errorf("provider key must match /^[a-z0-9][a-z0-9-]{0,31}$/ — a lowercase slug of letters, digits and dashes")
+	}
 	secret := clientSecret
 	if secret == "" {
-		err := a.store.DB.QueryRow("SELECT client_secret FROM sso_config WHERE id = 1").Scan(&secret)
+		err := a.store.DB.QueryRow("SELECT client_secret FROM sso_providers WHERE key = ?", key).Scan(&secret)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -460,15 +498,16 @@ func (a *Auth) SetSsoConfig(cfg *sso.Config, clientSecret string) error {
 		return err
 	}
 	_, err = a.store.DB.Exec(
-		"INSERT INTO sso_config (id, config, client_secret, updated_at) VALUES (1, ?, ?, ?) "+
-			"ON CONFLICT(id) DO UPDATE SET config = excluded.config, client_secret = excluded.client_secret, updated_at = excluded.updated_at",
-		string(body), secret, now())
+		"INSERT INTO sso_providers (key, config, client_secret, updated_at) VALUES (?, ?, ?, ?) "+
+			"ON CONFLICT(key) DO UPDATE SET config = excluded.config, client_secret = excluded.client_secret, updated_at = excluded.updated_at",
+		key, string(body), secret, now())
 	return err
 }
 
-// ClearSsoConfig forgets the provider. The links stay: those accounts keep their password and their tokens.
-func (a *Auth) ClearSsoConfig() (bool, error) {
-	return changed(a.store.DB.Exec("DELETE FROM sso_config WHERE id = 1"))
+// DeleteSsoProvider forgets one provider. The links stay: those accounts keep their password and
+// their tokens, and a re-added provider on the same upstream directory resolves to the same people.
+func (a *Auth) DeleteSsoProvider(key string) (bool, error) {
+	return changed(a.store.DB.Exec("DELETE FROM sso_providers WHERE key = ?", key))
 }
 
 // SsoLink is one (provider, subject) → user row.

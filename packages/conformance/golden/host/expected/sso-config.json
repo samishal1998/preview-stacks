@@ -3,12 +3,48 @@
   "as": "token",
   "status": 200,
   "body": {
-    "configured": true,
+    "providers": [
+      {
+        "key": "oidc",
+        "config": {
+          "mode": "oidc",
+          "enabled": true,
+          "clientId": "cid",
+          "allowedEmailDomains": [],
+          "allowedUsernames": [],
+          "requiredGroups": [],
+          "defaultRole": "admin",
+          "label": "Fixture IdP",
+          "discoveryUrl": "http://127.0.0.1:<PORT>/",
+          "provider": "",
+          "authorizeUrl": "",
+          "tokenUrl": "",
+          "userInfoUrl": "",
+          "emailsUrl": "",
+          "groupsUrl": "",
+          "scopes": "openid profile email",
+          "claimMap": {
+            "subject": "sub",
+            "username": "preferred_username",
+            "email": "email",
+            "name": "name",
+            "avatar": "picture"
+          }
+        },
+        "secretSet": true,
+        "updatedAt": 1787425041508
+      }
+    ],
     "callbackUrl": "http://127.0.0.1:<PORT>/api/auth/sso/callback",
     "presets": [
       {
         "key": "github",
         "label": "GitHub",
+        "mode": "oauth2",
+        "buttonLabel": "Continue with GitHub",
+        "setupUrl": "https://github.com/settings/developers",
+        "setupHint": "Create an OAuth App under Developer settings (an org-owned app works the same way). Paste this host's callback URL in as the Authorization callback URL. The default scopes cover sign-in; add read:org to use a group (organization) rule.",
+        "discoveryUrl": "",
         "authorizeUrl": "https://github.com/login/oauth/authorize",
         "tokenUrl": "https://github.com/login/oauth/access_token",
         "userInfoUrl": "https://api.github.com/user",
@@ -24,6 +60,11 @@
       {
         "key": "gitlab",
         "label": "GitLab",
+        "mode": "oauth2",
+        "buttonLabel": "Continue with GitLab",
+        "setupUrl": "https://gitlab.com/-/user_settings/applications",
+        "setupHint": "Add an application under your user (or group) settings on GitLab. Paste this host's callback URL in as the Redirect URI. The read_user scope covers sign-in; add read_api to use a group rule, and for a self-hosted GitLab replace the three endpoint URLs with your own host's.",
+        "discoveryUrl": "",
         "authorizeUrl": "https://gitlab.com/oauth/authorize",
         "tokenUrl": "https://gitlab.com/oauth/token",
         "userInfoUrl": "https://gitlab.com/api/v4/user",
@@ -39,6 +80,11 @@
       {
         "key": "bitbucket",
         "label": "Bitbucket",
+        "mode": "oauth2",
+        "buttonLabel": "Continue with Bitbucket",
+        "setupUrl": "https://support.atlassian.com/bitbucket-cloud/docs/use-oauth-on-bitbucket-cloud/",
+        "setupHint": "Add an OAuth consumer in your Bitbucket workspace settings (the linked page walks through it). Paste this host's callback URL in as the Callback URL. The account and email scopes are all sign-in needs.",
+        "discoveryUrl": "",
         "authorizeUrl": "https://bitbucket.org/site/oauth2/authorize",
         "tokenUrl": "https://bitbucket.org/site/oauth2/access_token",
         "userInfoUrl": "https://api.bitbucket.org/2.0/user",
@@ -50,34 +96,107 @@
           "name": "display_name",
           "avatar": "links.avatar.href"
         }
+      },
+      {
+        "key": "google",
+        "label": "Google",
+        "mode": "oidc",
+        "buttonLabel": "Continue with Google",
+        "setupUrl": "https://console.cloud.google.com/apis/credentials",
+        "setupHint": "Create an OAuth client ID of type \"Web application\" on the Google Cloud console's Credentials page (configure the consent screen first if the console asks). Paste this host's callback URL in as an Authorized redirect URI. The default scopes (openid email profile) are all sign-in needs.",
+        "discoveryUrl": "https://accounts.google.com",
+        "authorizeUrl": "",
+        "tokenUrl": "",
+        "userInfoUrl": "",
+        "scopes": "openid email profile",
+        "claimMap": {
+          "subject": "sub",
+          "username": "preferred_username",
+          "email": "email",
+          "name": "name",
+          "avatar": "picture"
+        }
+      },
+      {
+        "key": "microsoft",
+        "label": "Microsoft",
+        "mode": "oidc",
+        "buttonLabel": "Continue with Microsoft",
+        "setupUrl": "https://entra.microsoft.com",
+        "setupHint": "Register an application in Microsoft Entra ID (App registrations) and create a client secret under Certificates & secrets. Paste this host's callback URL in as a Web redirect URI. Replace <tenant-id> below with your Directory (tenant) ID from the app's overview page.",
+        "discoveryUrl": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+        "authorizeUrl": "",
+        "tokenUrl": "",
+        "userInfoUrl": "",
+        "scopes": "openid profile email",
+        "claimMap": {
+          "subject": "sub",
+          "username": "preferred_username",
+          "email": "email",
+          "name": "name",
+          "avatar": "picture"
+        }
+      },
+      {
+        "key": "okta",
+        "label": "Okta",
+        "mode": "oidc",
+        "buttonLabel": "Continue with Okta",
+        "setupUrl": "https://developer.okta.com/docs/guides/sign-into-web-app-redirect/",
+        "setupHint": "Create an OIDC Web Application in the Okta admin console (Applications → Create App Integration; the linked guide walks through it). Paste this host's callback URL in as the Sign-in redirect URI. Replace <your-domain> below with your Okta domain; the /oauth2/default path is the org's default authorization server.",
+        "discoveryUrl": "https://<your-domain>.okta.com/oauth2/default",
+        "authorizeUrl": "",
+        "tokenUrl": "",
+        "userInfoUrl": "",
+        "scopes": "openid profile email",
+        "claimMap": {
+          "subject": "sub",
+          "username": "preferred_username",
+          "email": "email",
+          "name": "name",
+          "avatar": "picture"
+        }
+      },
+      {
+        "key": "auth0",
+        "label": "Auth0",
+        "mode": "oidc",
+        "buttonLabel": "Continue with Auth0",
+        "setupUrl": "https://manage.auth0.com/#/applications",
+        "setupHint": "Create a Regular Web Application in the Auth0 dashboard. Paste this host's callback URL in as an Allowed Callback URL. Replace <your-tenant> below with your tenant name (a region suffix like .eu may be part of your domain — copy the Domain field from the application's settings).",
+        "discoveryUrl": "https://<your-tenant>.auth0.com",
+        "authorizeUrl": "",
+        "tokenUrl": "",
+        "userInfoUrl": "",
+        "scopes": "openid profile email",
+        "claimMap": {
+          "subject": "sub",
+          "username": "preferred_username",
+          "email": "email",
+          "name": "name",
+          "avatar": "picture"
+        }
+      },
+      {
+        "key": "keycloak",
+        "label": "Keycloak",
+        "mode": "oidc",
+        "buttonLabel": "Continue with Keycloak",
+        "setupUrl": "https://www.keycloak.org/docs/latest/server_admin/index.html#_oidc_clients",
+        "setupHint": "Create an OpenID Connect client in your realm's admin console with client authentication on (a confidential client, so it has a secret). Paste this host's callback URL in as a Valid redirect URI. Replace <host> and <realm> below with your Keycloak host and realm name.",
+        "discoveryUrl": "https://<host>/realms/<realm>",
+        "authorizeUrl": "",
+        "tokenUrl": "",
+        "userInfoUrl": "",
+        "scopes": "openid profile email",
+        "claimMap": {
+          "subject": "sub",
+          "username": "preferred_username",
+          "email": "email",
+          "name": "name",
+          "avatar": "picture"
+        }
       }
-    ],
-    "config": {
-      "mode": "oidc",
-      "enabled": true,
-      "clientId": "cid",
-      "allowedEmailDomains": [],
-      "allowedUsernames": [],
-      "requiredGroups": [],
-      "defaultRole": "admin",
-      "label": "Fixture IdP",
-      "discoveryUrl": "http://127.0.0.1:<PORT>/",
-      "provider": "",
-      "authorizeUrl": "",
-      "tokenUrl": "",
-      "userInfoUrl": "",
-      "emailsUrl": "",
-      "groupsUrl": "",
-      "scopes": "openid profile email",
-      "claimMap": {
-        "subject": "sub",
-        "username": "preferred_username",
-        "email": "email",
-        "name": "name",
-        "avatar": "picture"
-      }
-    },
-    "clientSecret": "••••••••",
-    "updatedAt": 1787425041508
+    ]
   }
 }

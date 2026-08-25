@@ -7,6 +7,10 @@
  * the id token really is RSA-signed with a key served from a real JWKS document), and assertions on
  * whole response bodies. Every test here was broken on purpose before it was kept.
  *
+ * The provider became a LIST (operator-chosen slugs, `?provider=` on /start): the last describe
+ * proves the parts that are new, while the single-provider tests above keep pinning that a
+ * one-provider host — every host that existed before keys did — behaves exactly as it always has.
+ *
  * The original's `forgetDiscovery()` seam has no black-box equivalent: every bootServer is a fresh
  * process, and the one test that needs the discovery cache to lapse mid-run boots with a one-second
  * `discoveryTtlS` and waits it out. The `SsoError instanceof Error` test is in-process and stays behind.
@@ -31,8 +35,11 @@ describe('API: the SSO round trip', () => {
     fetch(`${s.base}/api/sso/config`, { method: 'PUT', headers: s.H, body: JSON.stringify(body) });
 
   /** Start the flow and hand back the state + the challenge the provider must now expect. */
-  async function start(base: string, next?: string) {
-    const res = await fetch(`${base}/api/auth/sso/start${next ? `?next=${encodeURIComponent(next)}` : ''}`, { redirect: 'manual' });
+  async function start(base: string, next?: string, provider?: string) {
+    const qs = new URLSearchParams();
+    if (provider) qs.set('provider', provider);
+    if (next) qs.set('next', next);
+    const res = await fetch(`${base}/api/auth/sso/start${qs.size ? `?${qs}` : ''}`, { redirect: 'manual' });
     expect(res.status).toBe(302);
     const to = new URL(res.headers.get('location')!);
     return {
@@ -65,9 +72,10 @@ describe('API: the SSO round trip', () => {
       })).status,
     ).toBe(200);
 
-    // The login page learns the button exists — before authenticating.
-    const health = (await (await fetch(`${base}/api/health`)).json()) as { sso: { enabled: boolean; label: string } | null };
-    expect(health.sso).toEqual({ enabled: true, label: 'Corp' });
+    // The login page learns the button exists — before authenticating. `key` is the slug /start
+    // selects a provider by (derived here, since the PUT named none), `preset` what it was built from.
+    const health = (await (await fetch(`${base}/api/health`)).json()) as { sso: { providers: unknown[] } | null };
+    expect(health.sso).toEqual({ providers: [{ key: 'custom', label: 'Corp', preset: 'custom' }] });
 
     const { to, state, challenge } = await start(base, '/deployments/pr-7');
     expect(to.origin).toBe(p.base);
@@ -258,12 +266,18 @@ describe('API: the SSO round trip', () => {
     const read = await fetch(`${base}/api/sso/config`, { headers: H });
     const seen = await read.text();
     expect(seen).not.toContain('the-real-secret');
-    const cfg = JSON.parse(seen) as { configured: boolean; clientSecret: string; callbackUrl: string; config: { clientId: string }; presets: Array<{ key: string }> };
-    expect(cfg.configured).toBe(true);
-    expect(cfg.clientSecret).toBe('••••••••');
+    const cfg = JSON.parse(seen) as {
+      providers: Array<{ key: string; secretSet: boolean; config: { clientId: string } }>;
+      callbackUrl: string;
+      presets: Array<{ key: string }>;
+    };
+    // Not even a mask comes back out: a read learns `secretSet` and nothing else.
+    expect(cfg.providers.length).toBe(1);
+    expect(cfg.providers[0]!.key).toBe('custom');
+    expect(cfg.providers[0]!.secretSet).toBe(true);
+    expect(cfg.providers[0]!.config.clientId).toBe('cid');
     expect(cfg.callbackUrl).toBe(`${base}/api/auth/sso/callback`);
-    expect(cfg.config.clientId).toBe('cid');
-    expect(cfg.presets.map((x) => x.key)).toEqual(['github', 'gitlab', 'bitbucket']);
+    expect(cfg.presets.map((x) => x.key)).toEqual(['github', 'gitlab', 'bitbucket', 'google', 'microsoft', 'okta', 'auth0', 'keycloak']);
 
     // Submitting the mask back keeps the stored secret rather than storing the bullets.
     expect((await configure(s, { ...body, clientSecret: '••••••••', label: 'Renamed' })).status).toBe(200);
@@ -513,5 +527,229 @@ describe('API: the SSO allow rules', () => {
     );
     expect(where(res)).not.toBe(NOT_A_MEMBER);
     expect(res.headers.get('set-cookie')).toBeNull();
+  });
+});
+
+/**
+ * Several providers at once — the surface that did not exist before the provider became a list.
+ * The describes above prove a one-provider host still behaves exactly as it always has; this one
+ * proves the new parts: keyed selection on /start, the refusal to guess, the keyed DELETE, the
+ * preset enrichment, and a pre-multi-provider config document still applying.
+ *
+ * Two SEPARATE fake providers with different client ids and different secrets: a login that
+ * completes can only have been exchanged against the provider its /start named, because the other
+ * one refuses the credential.
+ */
+describe('API: several sign-in providers', () => {
+  const servers: Array<{ stop: () => void | Promise<void> }> = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) await s.stop();
+  });
+
+  const put = (s: Booted, body: Record<string, unknown>) =>
+    fetch(`${s.base}/api/sso/config`, { method: 'PUT', headers: s.H, body: JSON.stringify(body) });
+  const health = async (s: Booted) =>
+    (((await (await fetch(`${s.base}/api/health`)).json()) as { sso: unknown }).sso as {
+      providers: Array<{ key: string; label: string; preset: string }>;
+    } | null);
+  const startRaw = (s: Booted, qs: string) => fetch(`${s.base}/api/auth/sso/start${qs}`, { redirect: 'manual' });
+  const where = (res: Response) => decodeURIComponent(res.headers.get('location') ?? '');
+
+  /** Finish a started login: hand the provider its challenge, spend the callback, ask who you are. */
+  async function finish(s: Booted, p: FakeProvider, started: Response): Promise<string> {
+    const to = new URL(started.headers.get('location')!);
+    p.expectChallenge = to.searchParams.get('code_challenge')!;
+    const state = encodeURIComponent(to.searchParams.get('state')!);
+    const cb = await fetch(`${s.base}/api/auth/sso/callback?code=abc&state=${state}`, { redirect: 'manual' });
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get('location')).toBe('/');
+    const cookie = cb.headers.get('set-cookie')!.split(';')[0]!;
+    const me = (await (await fetch(`${s.base}/api/auth/me`, { headers: { cookie } })).json()) as { user: { username: string } };
+    return me.user.username;
+  }
+
+  /** A booted host with two rows: an OIDC issuer under `corp`, the github preset under `hub`. */
+  async function twoProviders(): Promise<{ s: Booted; corp: FakeProvider; hub: FakeProvider }> {
+    const corp = await fakeProvider();
+    const hub = await fakeProvider();
+    servers.push(corp, hub);
+    const s = await bootServer({ tag: 'multi', sso: { stateTtlS: 300 } });
+    servers.push(s);
+    corp.expectSecret = 'corp-secret';
+    const { jwk, sign } = await rsaSigner();
+    corp.jwks = { keys: [jwk] };
+    corp.idToken = await sign({
+      iss: corp.base,
+      aud: 'corp-cid',
+      sub: 'corp-sub-1',
+      exp: Math.floor(Date.now() / 1000) + 300,
+      preferred_username: 'alice',
+      email: 'alice@example.com',
+    });
+    hub.expectSecret = 'hub-secret';
+    hub.userInfo = { id: 7, login: 'hubber', email: 'hubber@example.com' };
+    const corpSaved = await put(s, { key: 'corp', mode: 'oidc', issuer: corp.base, clientId: 'corp-cid', clientSecret: 'corp-secret', label: 'Corp' });
+    expect(corpSaved.status).toBe(200);
+    expect(((await corpSaved.json()) as { key: string }).key).toBe('corp');
+    // The slug is the operator's, not the preset's: the github preset lives under `hub` here.
+    const hubSaved = await put(s, {
+      key: 'hub',
+      mode: 'oauth2',
+      provider: 'github',
+      clientId: 'hub-cid',
+      clientSecret: 'hub-secret',
+      authorizeUrl: `${hub.base}/authorize`,
+      tokenUrl: `${hub.base}/token`,
+      userInfoUrl: `${hub.base}/userinfo`,
+    });
+    expect(hubSaved.status).toBe(200);
+    expect(((await hubSaved.json()) as { key: string }).key).toBe('hub');
+    return { s, corp, hub };
+  }
+
+  test('two providers: the login page lists both, each /start round-trips against its own, and keyless /start refuses by name', async () => {
+    // negative control: in internal/api/routes_auth.go ssoStart, force the keyed branch to
+    // `stored = &enabled[0]` after the lookup — ?provider=hub lands on corp's authorize URL, so the
+    // origin assertion fails (and ?provider=nope stops refusing).
+    const { s, corp, hub } = await twoProviders();
+
+    expect(await health(s)).toEqual({
+      providers: [
+        { key: 'corp', label: 'Corp', preset: '' },
+        { key: 'hub', label: 'GitHub', preset: 'github' },
+      ],
+    });
+
+    // No key and two buttons: which directory vouches for you is not this API's guess to make.
+    const undecided = await startRaw(s, '');
+    expect(undecided.status).toBe(302);
+    expect(where(undecided)).toBe('/login?sso_error=this host has several sign-in providers (corp, hub) — pass ?provider= to choose one');
+
+    const toCorp = await startRaw(s, '?provider=corp');
+    expect(toCorp.status).toBe(302);
+    const corpUrl = new URL(toCorp.headers.get('location')!);
+    expect(corpUrl.origin).toBe(corp.base);
+    expect(corpUrl.searchParams.get('client_id')).toBe('corp-cid');
+    expect(await finish(s, corp, toCorp)).toBe('alice');
+
+    const toHub = await startRaw(s, '?provider=hub');
+    expect(toHub.status).toBe(302);
+    const hubUrl = new URL(toHub.headers.get('location')!);
+    expect(hubUrl.origin).toBe(hub.base);
+    expect(hubUrl.searchParams.get('client_id')).toBe('hub-cid');
+    expect(await finish(s, hub, toHub)).toBe('hubber');
+
+    // A key that names nothing: one sentence, because the enabled set IS what the login page offers.
+    expect(where(await startRaw(s, '?provider=nope'))).toBe('/login?sso_error=no sign-in provider "nope" is configured on this host');
+  });
+
+  test('the keyed DELETE removes one provider, and the survivor answers keyless /start again', async () => {
+    // negative control: in internal/api/routes_auth.go deleteSsoProvider, replace the
+    // `s.auth.DeleteSsoProvider(key)` call with `true, error(nil)` — corp survives, the login page
+    // still lists two providers, and keyless /start still refuses to choose.
+    const { s, hub } = await twoProviders();
+
+    // The bare DELETE and the keyless PUT both refuse to guess between two rows, naming them.
+    const bareDelete = await fetch(`${s.base}/api/sso/config`, { method: 'DELETE', headers: s.H });
+    expect(bareDelete.status).toBe(400);
+    expect(((await bareDelete.json()) as { error: string }).error).toBe(
+      'this host has several sign-in providers (corp, hub) — DELETE /api/sso/config/<key> to say which one',
+    );
+    const keylessPut = await put(s, { mode: 'oidc', issuer: 'https://accounts.example.com', clientId: 'c', clientSecret: 's' });
+    expect(keylessPut.status).toBe(400);
+    expect(((await keylessPut.json()) as { error: string }).error).toBe(
+      'this host has several sign-in providers (corp, hub) — pass "key" to say which one to replace',
+    );
+
+    expect((await fetch(`${s.base}/api/sso/config/corp`, { method: 'DELETE', headers: s.H })).status).toBe(200);
+    // Gone from the login page; the other row untouched.
+    expect(await health(s)).toEqual({ providers: [{ key: 'hub', label: 'GitHub', preset: 'github' }] });
+    // Deleting the deleted names the key.
+    const again = await fetch(`${s.base}/api/sso/config/corp`, { method: 'DELETE', headers: s.H });
+    expect(again.status).toBe(404);
+    expect(((await again.json()) as { error: string }).error).toBe('no sign-in provider "corp" is configured');
+
+    // Exactly ONE enabled provider left: the keyless /start of every pre-multi-provider login link
+    // picks it, and the whole round trip still completes.
+    const started = await startRaw(s, '');
+    expect(started.status).toBe(302);
+    expect(new URL(started.headers.get('location')!).origin).toBe(hub.base);
+    expect(await finish(s, hub, started)).toBe('hubber');
+  });
+
+  test('a pre-multi-provider config document carrying the single "sso" object still applies, under the derived key', async () => {
+    // negative control: empty the foldLegacySSO body in internal/config/config.go — nothing is
+    // created, and every assertion below fails.
+    const s = await bootServer({ tag: 'legacy', sso: { stateTtlS: 300 } });
+    servers.push(s);
+    // The 0.30.0 export shape verbatim: version 1, ONE provider under "sso".
+    const oldDoc = {
+      version: 1,
+      pstackVersion: '0.30.0',
+      exportedAt: 1,
+      skipped: [], users: [], tokens: [], vars: [], notifiers: [],
+      sso: {
+        config: {
+          mode: 'oidc', enabled: true, clientId: 'pstack',
+          allowedEmailDomains: ['example.com'], allowedUsernames: [], requiredGroups: [],
+          defaultRole: 'admin', label: 'accounts.example.com',
+          discoveryUrl: 'https://accounts.example.com/',
+          provider: '', authorizeUrl: '', tokenUrl: '', userInfoUrl: '', emailsUrl: '', groupsUrl: '',
+          scopes: 'openid profile email',
+          claimMap: { subject: 'sub', username: 'preferred_username', email: 'email', name: 'name', avatar: 'picture' },
+        },
+        clientSecret: 'the-client-secret',
+      },
+      registries: [], routing: [], specs: [],
+    };
+    const applied = await fetch(`${s.base}/api/config`, { method: 'POST', headers: s.H, body: JSON.stringify(oldDoc) });
+    expect(applied.status).toBe(200);
+    expect(((await applied.json()) as { created: string[] }).created).toContain('sso provider oidc');
+
+    // Landed under the key the config derives when it names no provider — the same key the
+    // database migration gives the same config, so an old export and an old database agree.
+    const cfg = (await (await fetch(`${s.base}/api/sso/config`, { headers: s.H })).json()) as {
+      providers: Array<{ key: string; secretSet: boolean; config: { discoveryUrl: string } }>;
+    };
+    expect(cfg.providers.length).toBe(1);
+    expect(cfg.providers[0]!.key).toBe('oidc');
+    expect(cfg.providers[0]!.secretSet).toBe(true);
+    expect(cfg.providers[0]!.config.discoveryUrl).toBe('https://accounts.example.com/');
+    // Enabled, so the login page draws its button — nobody re-saved anything on the new host.
+    expect(await health(s)).toEqual({ providers: [{ key: 'oidc', label: 'accounts.example.com', preset: '' }] });
+  });
+
+  test('the presets carry their setup walkthrough, and a template issuer is refused at save', async () => {
+    // negative control: in internal/sso/sso.go ParseConfig, drop the
+    // `strings.Contains(discoveryURL, "<")` refusal — the save fails later, at discovery, with a
+    // different sentence, and the assertion on the placeholder sentence fails.
+    const s = await bootServer({ tag: 'presets', sso: { stateTtlS: 300 } });
+    servers.push(s);
+    const cfg = (await (await fetch(`${s.base}/api/sso/config`, { headers: s.H })).json()) as {
+      providers: unknown[];
+      presets: Array<{ key: string; mode: string; buttonLabel: string; setupUrl: string; setupHint: string; discoveryUrl: string; authorizeUrl: string }>;
+    };
+    expect(cfg.providers).toEqual([]);
+    expect(cfg.presets.map((p) => p.key)).toEqual(['github', 'gitlab', 'bitbucket', 'google', 'microsoft', 'okta', 'auth0', 'keycloak']);
+    for (const p of cfg.presets) {
+      // Every preset can say where to create the app and what to expect — that is what one is FOR.
+      expect(['oauth2', 'oidc']).toContain(p.mode);
+      expect(p.buttonLabel).toMatch(/^Continue with /);
+      expect(p.setupUrl).toMatch(/^https:\/\//);
+      expect(p.setupHint.length).toBeGreaterThan(0);
+      if (p.mode === 'oidc') expect(p.discoveryUrl.length).toBeGreaterThan(0);
+      else expect(p.authorizeUrl).toMatch(/^https:\/\//);
+    }
+    expect(cfg.presets.find((p) => p.key === 'google')!.discoveryUrl).toBe('https://accounts.google.com');
+    // Microsoft's discovery URL is a template ON PURPOSE (see the preset's comment in
+    // internal/sso/sso.go for why the tenantless documents cannot be preset). Saving it with the
+    // placeholder still in place is refused with the sentence that says what to replace.
+    expect(cfg.presets.find((p) => p.key === 'microsoft')!.discoveryUrl).toBe('https://login.microsoftonline.com/<tenant-id>/v2.0');
+    const templated = await put(s, { provider: 'microsoft', clientId: 'c', clientSecret: 's' });
+    expect(templated.status).toBe(400);
+    expect(((await templated.json()) as { error: string }).error).toBe(
+      'discoveryUrl "https://login.microsoftonline.com/<tenant-id>/v2.0" still carries a <placeholder> — replace it with your own value (your tenant, domain or realm) before saving',
+    );
+    expect(await health(s)).toBeNull();
   });
 });

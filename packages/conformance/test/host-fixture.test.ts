@@ -66,10 +66,11 @@ describe('the golden host opens unchanged', () => {
   test('boots over the fixture directory', async () => {
     version = IMPL === 'null' ? fixture.version : (await runCli(['--version'])).stdout.trim();
     await boot();
-    const h = (await (await fetch(`${s.base}/api/health`)).json()) as { ok: boolean; hasUsers: boolean; sso: { label: string } | null };
+    const h = (await (await fetch(`${s.base}/api/health`)).json()) as { ok: boolean; hasUsers: boolean; sso: { providers: Array<{ key: string; label: string }> } | null };
     expect(h.ok).toBe(true);
     expect(h.hasUsers).toBe(true);
-    expect(h.sso?.label).toBe('Fixture IdP');
+    // The fixture was written single-provider; migration 7 files it under the derived key "oidc".
+    expect(h.sso?.providers).toEqual([expect.objectContaining({ key: 'oidc', label: 'Fixture IdP' })]);
   }, 20_000);
 
   test('every stored password still verifies — both Bun call shapes, and a non-default cost', async () => {
@@ -118,9 +119,12 @@ describe('the golden host opens unchanged', () => {
     // the stored config still names the fixture issuer.
     const users = (await (await fetch(`${s.base}/api/users`, { headers: s.H })).json()) as { users: Array<{ username: string; email: string | null }> };
     expect(users.users.filter((u) => u.username.startsWith('basil'))).toEqual([{ username: 'basil', email: 'basil@example.com' }].map((u) => expect.objectContaining(u)));
-    const cfg = (await (await fetch(`${s.base}/api/sso/config`, { headers: s.H })).json()) as { config: { discoveryUrl: string }; clientSecret: string };
-    expect(cfg.config.discoveryUrl.replace(/:\d+\/?$/, '')).toBe(fixture.sso.issuer.replace(/:\d+$/, ''));
-    expect(cfg.clientSecret).toBe('••••••••');
+    const cfg = (await (await fetch(`${s.base}/api/sso/config`, { headers: s.H })).json()) as { providers: Array<{ key: string; config: { discoveryUrl: string }; secretSet: boolean }> };
+    // One provider, under the migration's derived key, secret retained but never readable.
+    expect(cfg.providers).toHaveLength(1);
+    expect(cfg.providers[0]!.key).toBe('oidc');
+    expect(cfg.providers[0]!.config.discoveryUrl.replace(/:\d+\/?$/, '')).toBe(fixture.sso.issuer.replace(/:\d+$/, ''));
+    expect(cfg.providers[0]!.secretSet).toBe(true);
   });
 
   test('a delivery row from an older release (NULL payload) lists and refuses redelivery by name', async () => {

@@ -24,14 +24,19 @@ export const authState = reactive({
   /** From /api/health: whether any account exists — decides "sign in" vs "bootstrap first". */
   hasUsers: null as boolean | null,
   /**
-   * From /api/health: the configured identity provider, or null. Read BEFORE authenticating —
-   * the login page needs to know whether to draw the button, and nothing more than its label.
+   * From /api/health: the ENABLED identity providers, or null when there are none. Read BEFORE
+   * authenticating — the login page needs one button per provider and nothing more: what to write
+   * on it (`label`), the key `/api/auth/sso/start?provider=` takes, and `preset` for the brand
+   * mark (`''` for a bare OIDC issuer).
    */
-  sso: null as { enabled: boolean; label: string } | null,
+  sso: null as { providers: Array<{ key: string; label: string; preset: string }> } | null,
 });
 
 export async function checkAuth(): Promise<void> {
-  const health = await api.get<{ hasUsers?: boolean; sso?: { enabled: boolean; label: string } | null }>('/api/health');
+  const health = await api.get<{
+    hasUsers?: boolean;
+    sso?: { providers: Array<{ key: string; label: string; preset: string }> } | null;
+  }>('/api/health');
   if (health.ok) {
     authState.hasUsers = health.body.hasUsers ?? null;
     authState.sso = health.body.sso ?? null;

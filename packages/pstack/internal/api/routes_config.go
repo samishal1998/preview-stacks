@@ -118,13 +118,14 @@ func (s *Server) exportConfig(w http.ResponseWriter, who *auth.Principal) {
 		s.failConfig(w, err)
 		return
 	}
-	// Counts, never contents. `sso` is a boolean for the same reason.
+	// Counts, never contents. `sso` stays the boolean it always was (payload fields are add-only,
+	// invariant 14): were any providers exported, not which.
 	s.bus.Emit("config.exported", jsonx.O(
 		"by", terminal.ActorOf(*who),
 		"users", len(doc.Users), "tokens", len(doc.Tokens), "vars", len(doc.Vars),
 		"notifiers", len(doc.Notifiers), "registries", len(doc.Registry),
 		"routing", len(doc.Routing), "specs", len(doc.Specs),
-		"sso", doc.SSO != nil, "skipped", len(doc.Skipped),
+		"sso", len(doc.SSOProviders) > 0, "skipped", len(doc.Skipped),
 	))
 	writeJSON(w, 200, doc, configNoStore)
 }
@@ -248,7 +249,7 @@ func (s *Server) importSealedConfig(w http.ResponseWriter, r *http.Request, who 
 			"preview", true, "trusts", doc.Trusts(),
 			"users", len(doc.Users), "tokens", len(doc.Tokens), "vars", len(doc.Vars),
 			"notifiers", len(doc.Notifiers), "registries", len(doc.Registry),
-			"routing", len(doc.Routing), "specs", len(doc.Specs), "sso", doc.SSO != nil,
+			"routing", len(doc.Routing), "specs", len(doc.Specs), "sso", len(doc.SSOProviders),
 		), configNoStore)
 		return
 	}

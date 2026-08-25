@@ -7,8 +7,13 @@
     "authEnforced": true,
     "hasUsers": true,
     "sso": {
-      "enabled": true,
-      "label": "Fixture IdP"
+      "providers": [
+        {
+          "key": "oidc",
+          "label": "Fixture IdP",
+          "preset": ""
+        }
+      ]
     },
     "dataDir": "<DATA>",
     "version": "<VERSION>"

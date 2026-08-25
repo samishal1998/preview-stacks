@@ -155,39 +155,67 @@ func TestAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("sso config: empty secret keeps the stored one, first save refuses it, read re-validates", func(t *testing.T) {
-		// negative control: drop the `secret == ""` refusal → the first save with no secret succeeds
+	t.Run("sso providers: empty secret keeps the stored one PER KEY, first save refuses it, read re-validates", func(t *testing.T) {
+		// negative control: drop the `secret == ""` refusal in SetSsoProvider → the first save with no secret succeeds
 		a := open(t)
 		cfg, _ := sso.ParseConfig(mustParse(t, `{"mode":"oauth2","provider":"github","clientId":"cid"}`))
-		if err := a.SetSsoConfig(cfg, ""); err == nil || err.Error() != "clientSecret is required" {
+		if err := a.SetSsoProvider("work", cfg, ""); err == nil || err.Error() != "clientSecret is required" {
 			t.Fatalf("first save: %v", err)
 		}
-		if err := a.SetSsoConfig(cfg, "shh"); err != nil {
+		if err := a.SetSsoProvider("work", cfg, "shh"); err != nil {
 			t.Fatal(err)
 		}
-		if err := a.SetSsoConfig(cfg, ""); err != nil {
+		if err := a.SetSsoProvider("work", cfg, ""); err != nil {
 			t.Fatal(err)
 		}
-		row, err := a.SsoConfig()
-		if err != nil || row == nil || row.ClientSecret != "shh" || row.Config.Label != "GitHub" {
+		row, err := a.SsoProvider("work")
+		if err != nil || row == nil || row.Key != "work" || row.ClientSecret != "shh" || row.Config.Label != "GitHub" {
 			t.Fatalf("read: %+v %v", row, err)
+		}
+		// An empty secret keeps THAT key's secret — a second provider's first save still refuses,
+		// and saving it never leaks the first one's secret across.
+		cfg2, _ := sso.ParseConfig(mustParse(t, `{"mode":"oauth2","provider":"gitlab","clientId":"cid2"}`))
+		if err := a.SetSsoProvider("acme", cfg2, ""); err == nil || err.Error() != "clientSecret is required" {
+			t.Fatalf("second provider first save: %v", err)
+		}
+		if err := a.SetSsoProvider("acme", cfg2, "sst"); err != nil {
+			t.Fatal(err)
+		}
+		list, err := a.ListSsoProviders()
+		if err != nil || len(list) != 2 || list[0].Key != "acme" || list[1].Key != "work" || list[0].ClientSecret != "sst" || list[1].ClientSecret != "shh" {
+			t.Fatalf("list: %+v %v", list, err)
+		}
+		// The key is a slug, refused before anything is written.
+		if err := a.SetSsoProvider("Not A Slug", cfg, "x"); err == nil || !strings.Contains(err.Error(), "provider key must match") {
+			t.Fatalf("bad key: %v", err)
 		}
 		// The stored JSON is the full normalised shape in the TypeScript's key order.
 		var raw string
-		a.store.DB.QueryRow("SELECT config FROM sso_config WHERE id = 1").Scan(&raw)
+		a.store.DB.QueryRow("SELECT config FROM sso_providers WHERE key = 'work'").Scan(&raw)
 		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"admin","label":"GitHub","discoveryUrl":"","provider":"github",`) {
 			t.Fatalf("stored %s", raw)
 		}
-		// A hand-edited row that no longer validates reads as "no provider".
-		a.store.DB.Exec("UPDATE sso_config SET config = '{\"mode\":\"saml\"}' WHERE id = 1")
-		if row, err := a.SsoConfig(); row != nil || err != nil {
+		// A hand-edited row that no longer validates reads as "no provider" — and is skipped by the
+		// list rather than handed out as a half-shape.
+		a.store.DB.Exec("UPDATE sso_providers SET config = '{\"mode\":\"saml\"}' WHERE key = 'work'")
+		if row, err := a.SsoProvider("work"); row != nil || err != nil {
 			t.Fatalf("invalid row: %+v %v", row, err)
 		}
-		if ok, _ := a.ClearSsoConfig(); !ok {
-			t.Fatal("clear")
+		if list, _ := a.ListSsoProviders(); len(list) != 1 || list[0].Key != "acme" {
+			t.Fatalf("list with an invalid row: %+v", list)
 		}
-		if row, _ := a.SsoConfig(); row != nil {
-			t.Fatal("cleared row still read")
+		// Delete is per key.
+		if ok, _ := a.DeleteSsoProvider("work"); !ok {
+			t.Fatal("delete")
+		}
+		if ok, _ := a.DeleteSsoProvider("work"); ok {
+			t.Fatal("deleted twice")
+		}
+		if row, _ := a.SsoProvider("work"); row != nil {
+			t.Fatal("deleted row still read")
+		}
+		if list, _ := a.ListSsoProviders(); len(list) != 1 || list[0].Key != "acme" {
+			t.Fatalf("acme should survive work's delete: %+v", list)
 		}
 	})
 }

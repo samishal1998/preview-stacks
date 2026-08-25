@@ -2,10 +2,11 @@
 //
 // ── WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT ────────────────────────────────────────────────
 //
-// The operator registers ONE OAuth/OIDC app in their own org (Google Workspace, Okta, GitHub, …) and
-// pastes the client id and secret in. We are the relying party and nothing more: their directory
-// stays theirs, and anyone who can authenticate against it can sign in here without an account being
-// created by hand first.
+// The operator registers an OAuth/OIDC app in their own org (Google Workspace, Okta, GitHub, …) and
+// pastes the client id and secret in — several of them, since multi-provider landed; each is a row
+// in auth's sso_providers. We are the relying party and nothing more: their directory stays theirs,
+// and anyone who can authenticate against it can sign in here without an account being created by
+// hand first.
 //
 // It is four steps — authorize URL with a PKCE challenge, callback, token exchange, fetch the user —
 // and this package is all of them. There is no provider registry with lifecycle hooks, no session
@@ -97,8 +98,25 @@ var OIDCClaims = ClaimMap{Subject: "sub", Username: "preferred_username", Email:
 
 // Preset is one row of the provider table.
 type Preset struct {
-	Key          string `json:"key"`
-	Label        string `json:"label"`
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Mode says how this provider is talked to. An oidc preset carries a DiscoveryURL and no
+	// endpoint URLs (discovery serves those); an oauth2 preset is the inverse. ParseConfig defaults
+	// the config's mode from it when the preset is named, and refuses a config that contradicts it.
+	Mode Mode `json:"mode"`
+	// ButtonLabel is the login-page button text ("Continue with GitHub").
+	ButtonLabel string `json:"buttonLabel"`
+	// SetupURL is where the operator registers the OAuth app/client on the provider's side, and
+	// SetupHint is the two-or-three-sentence walkthrough the config form shows beside it: where to
+	// create the app, that this host's callback URL must be pasted in as the redirect URI, and any
+	// scope notes. Both are display-only — nothing in the flow reads them.
+	SetupURL  string `json:"setupUrl"`
+	SetupHint string `json:"setupHint"`
+	// DiscoveryURL is the issuer, for an oidc preset. One containing "<" is a TEMPLATE — the
+	// provider has no single issuer (each tenant/domain/realm gets its own) — and the operator must
+	// replace the placeholder: ParseConfig refuses it verbatim, and the UI renders it as a field to
+	// fill in rather than a value to accept.
+	DiscoveryURL string `json:"discoveryUrl,omitempty"`
 	AuthorizeURL string `json:"authorizeUrl"`
 	TokenURL     string `json:"tokenUrl"`
 	UserInfoURL  string `json:"userInfoUrl"`
@@ -125,8 +143,14 @@ type Preset struct {
 // supplies the three URLs themselves).
 var Presets = []Preset{
 	{
-		Key:          "github",
-		Label:        "GitHub",
+		Key:         "github",
+		Label:       "GitHub",
+		Mode:        OAuth2,
+		ButtonLabel: "Continue with GitHub",
+		SetupURL:    "https://github.com/settings/developers",
+		SetupHint: "Create an OAuth App under Developer settings (an org-owned app works the same way). " +
+			"Paste this host's callback URL in as the Authorization callback URL. " +
+			"The default scopes cover sign-in; add read:org to use a group (organization) rule.",
 		AuthorizeURL: "https://github.com/login/oauth/authorize",
 		TokenURL:     "https://github.com/login/oauth/access_token",
 		UserInfoURL:  "https://api.github.com/user",
@@ -151,8 +175,14 @@ var Presets = []Preset{
 		ClaimMap:     ClaimMap{Subject: "id", Username: "login", Email: "email", Name: "name", Avatar: "avatar_url"},
 	},
 	{
-		Key:          "gitlab",
-		Label:        "GitLab",
+		Key:         "gitlab",
+		Label:       "GitLab",
+		Mode:        OAuth2,
+		ButtonLabel: "Continue with GitLab",
+		SetupURL:    "https://gitlab.com/-/user_settings/applications",
+		SetupHint: "Add an application under your user (or group) settings on GitLab. " +
+			"Paste this host's callback URL in as the Redirect URI. " +
+			"The read_user scope covers sign-in; add read_api to use a group rule, and for a self-hosted GitLab replace the three endpoint URLs with your own host's.",
 		AuthorizeURL: "https://gitlab.com/oauth/authorize",
 		TokenURL:     "https://gitlab.com/oauth/token",
 		UserInfoURL:  "https://gitlab.com/api/v4/user",
@@ -170,8 +200,14 @@ var Presets = []Preset{
 		ClaimMap:     ClaimMap{Subject: "id", Username: "username", Email: "email", Name: "name", Avatar: "avatar_url"},
 	},
 	{
-		Key:          "bitbucket",
-		Label:        "Bitbucket",
+		Key:         "bitbucket",
+		Label:       "Bitbucket",
+		Mode:        OAuth2,
+		ButtonLabel: "Continue with Bitbucket",
+		SetupURL:    "https://support.atlassian.com/bitbucket-cloud/docs/use-oauth-on-bitbucket-cloud/",
+		SetupHint: "Add an OAuth consumer in your Bitbucket workspace settings (the linked page walks through it). " +
+			"Paste this host's callback URL in as the Callback URL. " +
+			"The account and email scopes are all sign-in needs.",
 		AuthorizeURL: "https://bitbucket.org/site/oauth2/authorize",
 		TokenURL:     "https://bitbucket.org/site/oauth2/access_token",
 		UserInfoURL:  "https://api.bitbucket.org/2.0/user",
@@ -179,6 +215,86 @@ var Presets = []Preset{
 		EmailsURL: "https://api.bitbucket.org/2.0/user/emails",
 		Scopes:    "account email",
 		ClaimMap:  ClaimMap{Subject: "uuid", Username: "username", Email: "email", Name: "display_name", Avatar: "links.avatar.href"},
+	},
+	// ── the oidc presets ──────────────────────────────────────────────────────────────────────────
+	//
+	// These carry a DiscoveryURL instead of endpoint URLs: discovery serves the endpoints, and the
+	// id token — not a userinfo scrape — is the identity. A DiscoveryURL with a "<placeholder>" is a
+	// template (see the field comment): the provider gives every tenant its own issuer.
+	{
+		Key:         "google",
+		Label:       "Google",
+		Mode:        OIDC,
+		ButtonLabel: "Continue with Google",
+		SetupURL:    "https://console.cloud.google.com/apis/credentials",
+		SetupHint: "Create an OAuth client ID of type \"Web application\" on the Google Cloud console's Credentials page (configure the consent screen first if the console asks). " +
+			"Paste this host's callback URL in as an Authorized redirect URI. " +
+			"The default scopes (openid email profile) are all sign-in needs.",
+		// The issuer, verified 2026-08-25: https://accounts.google.com/.well-known/openid-configuration
+		// resolves and declares this exact issuer.
+		DiscoveryURL: "https://accounts.google.com",
+		Scopes:       "openid email profile",
+		ClaimMap:     OIDCClaims,
+	},
+	{
+		Key:         "microsoft",
+		Label:       "Microsoft",
+		Mode:        OIDC,
+		ButtonLabel: "Continue with Microsoft",
+		SetupURL:    "https://entra.microsoft.com",
+		SetupHint: "Register an application in Microsoft Entra ID (App registrations) and create a client secret under Certificates & secrets. " +
+			"Paste this host's callback URL in as a Web redirect URI. " +
+			"Replace <tenant-id> below with your Directory (tenant) ID from the app's overview page.",
+		// TENANT-SPECIFIC ON PURPOSE, not the multi-tenant `common`/`organizations` endpoints:
+		// those discovery documents publish the LITERAL string {tenantid} as their issuer (verified
+		// 2026-08-25 against https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration
+		// and .../organizations/v2.0/... — both answer "issuer": "https://login.microsoftonline.com/{tenantid}/v2.0";
+		// https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc documents that
+		// tokens carry the tenant-substituted value instead). iss validation compares the token's
+		// issuer against the document's verbatim, so the placeholder issuer rightly refuses every
+		// login. A single-tenant URL has a real issuer and works.
+		DiscoveryURL: "https://login.microsoftonline.com/<tenant-id>/v2.0",
+		Scopes:       "openid profile email",
+		ClaimMap:     OIDCClaims,
+	},
+	{
+		Key:         "okta",
+		Label:       "Okta",
+		Mode:        OIDC,
+		ButtonLabel: "Continue with Okta",
+		SetupURL:    "https://developer.okta.com/docs/guides/sign-into-web-app-redirect/",
+		SetupHint: "Create an OIDC Web Application in the Okta admin console (Applications → Create App Integration; the linked guide walks through it). " +
+			"Paste this host's callback URL in as the Sign-in redirect URI. " +
+			"Replace <your-domain> below with your Okta domain; the /oauth2/default path is the org's default authorization server.",
+		DiscoveryURL: "https://<your-domain>.okta.com/oauth2/default",
+		Scopes:       "openid profile email",
+		ClaimMap:     OIDCClaims,
+	},
+	{
+		Key:         "auth0",
+		Label:       "Auth0",
+		Mode:        OIDC,
+		ButtonLabel: "Continue with Auth0",
+		SetupURL:    "https://manage.auth0.com/#/applications",
+		SetupHint: "Create a Regular Web Application in the Auth0 dashboard. " +
+			"Paste this host's callback URL in as an Allowed Callback URL. " +
+			"Replace <your-tenant> below with your tenant name (a region suffix like .eu may be part of your domain — copy the Domain field from the application's settings).",
+		DiscoveryURL: "https://<your-tenant>.auth0.com",
+		Scopes:       "openid profile email",
+		ClaimMap:     OIDCClaims,
+	},
+	{
+		Key:         "keycloak",
+		Label:       "Keycloak",
+		Mode:        OIDC,
+		ButtonLabel: "Continue with Keycloak",
+		SetupURL:    "https://www.keycloak.org/docs/latest/server_admin/index.html#_oidc_clients",
+		SetupHint: "Create an OpenID Connect client in your realm's admin console with client authentication on (a confidential client, so it has a secret). " +
+			"Paste this host's callback URL in as a Valid redirect URI. " +
+			"Replace <host> and <realm> below with your Keycloak host and realm name.",
+		DiscoveryURL: "https://<host>/realms/<realm>",
+		Scopes:       "openid profile email",
+		ClaimMap:     OIDCClaims,
 	},
 }
 
@@ -195,7 +311,7 @@ func PresetFor(key string) *Preset {
 // ── configuration ─────────────────────────────────────────────────────────────────────────────────
 
 // Config is the stored shape. Field order is the order `JSON.stringify` wrote it (the base fields
-// first, then the mode-specific ones) — what sso_config.config holds and what the API returns.
+// first, then the mode-specific ones) — what sso_providers.config holds and what the API returns.
 type Config struct {
 	Mode Mode `json:"mode"`
 	// Enabled off keeps the row (and the secret) but hides the button and refuses `/start`.
@@ -224,7 +340,9 @@ type Config struct {
 	Label string `json:"label"`
 	// DiscoveryURL, mode A: an issuer (`https://accounts.google.com`) or a full `.well-known` URL.
 	DiscoveryURL string `json:"discoveryUrl"`
-	// Provider, mode B: a `Presets` key, or `custom`.
+	// Provider: in oauth2 mode, the `Presets` key the endpoints came from, or `custom`. In oidc
+	// mode it is the oidc preset's key when one was named ("google") and "" otherwise — display and
+	// DerivedKey only; identity in oidc mode keys on the discovery issuer, never on this.
 	Provider     string `json:"provider"`
 	AuthorizeURL string `json:"authorizeUrl"`
 	TokenURL     string `json:"tokenUrl"`
@@ -358,12 +476,34 @@ func ParseConfig(input any) (*Config, error) {
 		o = omap.New()
 	}
 	get := func(k string) any { v, _ := o.Get(k); return v }
+	// The provider (a Presets key, "custom", or absent) is resolved FIRST: a preset knows its own
+	// mode, so `{"provider":"google"}` needs no mode typed — and an unknown name is refused the
+	// same way whichever mode was.
+	provider := str(get("provider"))
+	preset := PresetFor(provider)
+	if preset == nil && provider != "" && provider != "custom" {
+		keys := make([]string, len(Presets))
+		for i, p := range Presets {
+			keys[i] = p.Key
+		}
+		return nil, errorf(`unknown provider "` + provider + `" — use one of ` + strings.Join(keys, ", ") + ", or custom")
+	}
 	mode := str(get("mode"))
 	if mode == "" {
-		mode = "oidc"
+		if preset != nil {
+			mode = string(preset.Mode)
+		} else {
+			mode = "oidc"
+		}
 	}
 	if mode != "oidc" && mode != "oauth2" {
 		return nil, errorf("mode must be 'oidc' or 'oauth2'")
+	}
+	// A preset and a contradicting mode is a config that cannot work: an oidc preset carries no
+	// endpoint URLs for the oauth2 branch to use, and github-under-oidc is the documented trap (its
+	// discovery document signs Actions job tokens, not user logins — see the package header).
+	if preset != nil && Mode(mode) != preset.Mode {
+		return nil, errorf(`provider "` + provider + `" is an ` + string(preset.Mode) + ` preset — omit mode or set it to "` + string(preset.Mode) + `"`)
 	}
 	clientID := str(get("clientId"))
 	if clientID == "" {
@@ -412,9 +552,21 @@ func ParseConfig(input any) (*Config, error) {
 		if discoveryURL == "" {
 			discoveryURL = str(get("issuer"))
 		}
+		// An oidc preset's contribution is its issuer; anything the operator typed still wins,
+		// exactly as an oauth2 preset's endpoints do below.
+		if discoveryURL == "" && preset != nil {
+			discoveryURL = preset.DiscoveryURL
+		}
 		if discoveryURL == "" {
 			return nil, errorf("issuer or discoveryUrl is required for OIDC")
 		}
+		if strings.Contains(discoveryURL, "<") {
+			return nil, errorf(`discoveryUrl "` + discoveryURL + `" still carries a <placeholder> — replace it with your own value (your tenant, domain or realm) before saving`)
+		}
+		// "<" marks a template placeholder (okta's "<your-domain>", microsoft's "<tenant-id>" — see
+		// Preset.DiscoveryURL): the provider has no single issuer, and saving the template verbatim
+		// would fail every login at discovery. Checked BEFORE httpsURL, whose "must be an absolute
+		// URL" answer would send the operator to fix the wrong thing.
 		// The TypeScript computed the label (`new URL(discoveryUrl).hostname`) before validating the
 		// URL, so an unparsable issuer with no label surfaced as a TypeError; here it is the *Error
 		// httpsURL produces either way.
@@ -423,12 +575,24 @@ func ParseConfig(input any) (*Config, error) {
 			return nil, err
 		}
 		cfg.Label = str(get("label"))
+		if cfg.Label == "" && preset != nil {
+			cfg.Label = preset.Label
+		}
 		if cfg.Label == "" {
 			u, _ := parseURL(discoveryURL)
 			cfg.Label = whatwgHostname(u)
 		}
 		cfg.DiscoveryURL = normalized
+		// The preset key is KEPT on an oidc config ("google"), so a UI can show which table row it
+		// came from and DerivedKey can name it. Identity never reads it in oidc mode — the callback
+		// keys links on the discovery ISSUER (routes_auth), so two configs on one directory agree.
+		if preset != nil {
+			cfg.Provider = provider
+		}
 		cfg.Scopes = str(get("scopes"))
+		if cfg.Scopes == "" && preset != nil {
+			cfg.Scopes = preset.Scopes
+		}
 		if cfg.Scopes == "" {
 			cfg.Scopes = "openid profile email"
 		}
@@ -438,21 +602,16 @@ func ParseConfig(input any) (*Config, error) {
 		if len(cfg.RequiredGroups) > 0 {
 			return nil, errorf("requiredGroups needs a provider whose groups endpoint this host knows — that is an OAuth 2.0 preset (github, gitlab), not a discovered OIDC issuer")
 		}
-		cfg.ClaimMap = mergeClaims(OIDCClaims, pickClaims(get("claimMap")))
+		cm := OIDCClaims
+		if preset != nil {
+			cm = mergeClaims(cm, preset.ClaimMap)
+		}
+		cfg.ClaimMap = mergeClaims(cm, pickClaims(get("claimMap")))
 		return cfg, nil
 	}
 
-	provider := str(get("provider"))
 	if provider == "" {
 		provider = "custom"
-	}
-	preset := PresetFor(provider)
-	if preset == nil && provider != "custom" {
-		keys := make([]string, len(Presets))
-		for i, p := range Presets {
-			keys[i] = p.Key
-		}
-		return nil, errorf(`unknown provider "` + provider + `" — use one of ` + strings.Join(keys, ", ") + ", or custom")
 	}
 	// A preset fills the endpoints; anything the operator typed still wins, so a self-hosted GitLab
 	// is the gitlab preset with three URLs replaced rather than `custom` with five fields.
@@ -540,6 +699,17 @@ func ParseConfig(input any) (*Config, error) {
 	}
 	cfg.ClaimMap = mergeClaims(cfg.ClaimMap, pickClaims(get("claimMap")))
 	return cfg, nil
+}
+
+// DerivedKey is the sso_providers slug for a config that never chose one: the provider name when
+// set, else "oidc". It exists for the pre-multi-provider shapes — store migration 7 derives the
+// same key in SQL (keep the two in sync), a config-document "sso" object from 0.30.0 lands under
+// it, and a keyless PUT on an empty host uses it so old scripts keep working.
+func (c *Config) DerivedKey() string {
+	if c.Provider != "" {
+		return c.Provider
+	}
+	return "oidc"
 }
 
 // pickClaims keeps the non-empty string entries of a submitted claim map.
