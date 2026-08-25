@@ -1064,9 +1064,9 @@ skipping it is not queue-jumping, it is the only thing that stops one stack's ba
 other. The [notifier dispatcher](#delivery) has the same shape one tier up (8 in flight, 1 per
 notifier), for the same reason.
 
-**The cap is settable at RUNTIME** (0.32.0). It was `PSTACK_MAX_JOBS`, read once at boot, so changing
+**The cap is settable at RUNTIME** (0.33.0). It was `PSTACK_MAX_JOBS`, read once at boot, so changing
 it meant restarting the control container — which kills every job in flight to change a number about
-jobs. It is now the `max_jobs` [setting](usage.md#runtime-settings-0320): the stored value outranks
+jobs. It is now the `max_jobs` [setting](usage.md#runtime-settings-0330): the stored value outranks
 the environment variable (which becomes its default) and `PUT /api/settings/max_jobs` calls
 `Registry.SetMaxRunning`, so the new cap is in force for the next dispatch on that request.
 
