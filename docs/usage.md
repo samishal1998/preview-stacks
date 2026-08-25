@@ -1028,23 +1028,38 @@ deadline (default 180s, or the host's `PSTACK_READINESS_TIMEOUT_MS`; floored at 
 value defers to the host default rather than silently shortening the watch). The same convergence is pushed to notifiers as `healthcheck.*`, `container.*`
 and `stack.*` events — see [webhook-events.md](webhook-events.md).
 
-### One job per stack
+### One job per stack, and a queue of one
 
-A second action on a busy stack is rejected, not queued — a `down` deleting the database branch an
-`up` just created is the kind of corruption that is very hard to diagnose afterwards:
+A stack still runs exactly one job at a time — a `down` deleting the database branch an `up` just
+created is the kind of corruption that is very hard to diagnose afterwards. What changed is what
+happens to the SECOND request: it is queued rather than refused.
 
 ```console
 $ curl -s -w " [%{http_code}]\n" -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
        'https://api.preview.example.com/api/deployments/pr-777/up?PR=777'
 {
-  "error": "stack pr-777 already has a job in flight",
-  "stack": "pr-777"
-} [409]
+  "job": { "id": "up-pr-777-8-a1b2c3", "state": "queued", "stack": "pr-777", … }
+} [202]
 ```
 
-On 409, attach to the running job instead of retrying. Jobs are **in-memory, capped at 50** — a
-restart loses history, not correctness. Truth about what exists lives in Docker and in each axis's
-`assert_*` probe.
+**The queue is one deep, and the newest wins.** A third request replaces the queued one rather than
+stacking behind it, so five pushes in a minute run the first deploy and then exactly one more
+carrying the newest spec. The replaced job is not forgotten: it reaches `superseded` under its own
+id, so a script polling the id it was given always gets an answer.
+
+**`down` does not wait.** A teardown cancels whatever is running, drops anything queued, and starts
+immediately — the one thing you never want stuck behind a deploy. Cancelling mid-flight leaves
+partial state, and the job's transcript says so.
+
+`POST /api/deployments/:id/cancel` stops everything for one stack: the running job and the queued
+one together.
+
+Across stacks, **`PSTACK_MAX_JOBS` (default 4) bounds how many run at once**. Beyond it a job waits
+for a slot rather than being refused — twenty PRs deploying at nine in the morning would otherwise
+put twenty `docker compose up` on one Docker socket.
+
+Jobs are **in-memory, capped at 50** — a restart loses history, not correctness, and it loses the
+queue too. Truth about what exists lives in Docker and in each axis's `assert_*` probe.
 
 ### The UI
 
@@ -2250,6 +2265,7 @@ every account until someone puts it in the table.
 | every `GET` in the `viewer` row above, including `GET /api/users` | `viewer` |
 | `PUT`/`DELETE /api/deployments/:id` | `developer` |
 | `POST /api/deployments/:id/{up,down,verify,sleep,wake}` | `developer` |
+| `POST /api/deployments/:id/cancel` — stop the running and queued jobs for a stack | `developer` |
 | `POST /api/deployments/:id/containers/:name/{start,stop,restart}` | `developer` |
 | `POST /api/deployments/:id/share` · `POST /api/jobs/:id/cancel` | `developer` |
 | `WS /api/deployments/:id/terminal` | `developer` |
@@ -2723,11 +2739,12 @@ anything it does not list is the root token's alone.
 | GET | `/api/deployments/:id` | spec variables as `?K=V`, **required** | `{ id, kind, createdAt, updatedAt, stack, busy, compose, requires, axes[{name,hooks}] }` — hook **names**, never bodies |
 | PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }` · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
 | DELETE | `/api/deployments/:id` | spec variables as `?K=V` | forget it. Refused while containers exist **and** when Docker did not answer |
-| POST | `/api/deployments/:id/up` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
-| POST | `/api/deployments/:id/down` | `{ verify?, force? }` (`verify` defaults true) | **202** `{ job }` · 409 if busy · 409 on `kind: shared` without `force` |
-| POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy |
-| POST | `/api/deployments/:id/sleep` | spec variables as `?K=V` | **202** `{ job }` · 409 if busy or `kind: shared` · 400 without a compose section. Compose project down, volumes and axes kept |
+| POST | `/api/deployments/:id/up` | spec variables as `?K=V` | **202** `{ job }` — `state: "queued"` when the stack is busy |
+| POST | `/api/deployments/:id/down` | `{ verify?, force? }` (`verify` defaults true) | **202** `{ job }` — **preempts**: cancels what is running, drops what is queued · 409 on `kind: shared` without `force` |
+| POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` — `state: "queued"` when the stack is busy |
+| POST | `/api/deployments/:id/sleep` | spec variables as `?K=V` | **202** `{ job }` — queued when busy · 409 on `kind: shared` · 400 without a compose section. Compose project down, volumes and axes kept |
 | POST | `/api/deployments/:id/wake` | spec variables as `?K=V` | **202** `{ job }` — `up`, recorded as a wake |
+| POST | `/api/deployments/:id/cancel` | — | **200** `{ cancelled: [job…], by, warning }` — stops the running job AND the queued one. `cancelled` is `[]`, never null. The warning appears only when something had actually started |
 | GET | `/api/config` | — | the whole portable configuration in **plaintext**: password hashes, token hashes, host secrets, notifier secrets, the SSO client secrets, registry logins. **Root token only** — an admin session or personal token is `403`. `cache-control: no-store`. Emits `config.exported` |
 | POST | `/api/config` | that document | applies it create-or-skip → `{ trusts, created, skipped }` · 400 on a document this build does not understand · 403 for anything but the root token · 413 over 8 MiB. Emits `config.imported`, **including when it fails part-way** |
 | POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only**, and an absent `role` means `viewer` — both changed in 0.31.0, see [7e](#7e-who-can-do-what-the-four-roles-0310). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |

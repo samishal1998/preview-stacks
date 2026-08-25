@@ -282,3 +282,263 @@ describe('one container at a time: start, stop, restart', () => {
     }
   }, 20_000);
 });
+
+describe('the per-stack queue, the global cap, and cancelling a stack', () => {
+  /**
+   * Depth-one queueing replaced the flat refusal a busy stack used to get. Before it, five pushes
+   * to a PR in one minute produced one deploy and four `409`s, and CI reported red for a stack
+   * that was merely busy. What did NOT change is the guarantee the product is built on — one job
+   * per stack at a time — so nothing here ever asserts two jobs running on one stack; it asserts
+   * that the extra ones WAIT.
+   *
+   * These are clock-free where it matters. `Start` dispatches inline when a slot is free, so the
+   * `202` stub already says `running` or `queued` at the instant of acceptance: the stubs are the
+   * proof, and `startedAt`/`endedAt` only confirm the ordering afterwards. The one place a clock
+   * IS the assertion is preemption and cancellation, where a `sleep 20` that really died is the
+   * difference between stopping a job and flipping a field.
+   */
+  type Rec = {
+    id: string;
+    state: string;
+    startedAt: number | null;
+    endedAt?: number;
+    cancelledBy?: string;
+    log: { level: string; message: string }[];
+  };
+  type Stub = { id: string; stack: string; action: string; state: string };
+
+  const spec = (stack: string, hooks: Record<string, string>) =>
+    `version: 1\nstack: ${stack}\naxes:\n  - name: a\n` +
+    Object.entries(hooks)
+      .map(([k, v]) => `    ${k}: ${JSON.stringify(v)}\n`)
+      .join('');
+
+  const boot = (tag: string, env?: Record<string, string>) =>
+    // A short readiness watch: an `up` hands off to one, and a 180s default would outlive the test.
+    bootServer({ tag, env, readiness: { pollMs: 20, timeoutMs: 200 } });
+
+  const put = (s: Booted, id: string, body: string) =>
+    fetch(`${s.base}/api/deployments/${id}`, { method: 'PUT', headers: s.H, body: JSON.stringify({ spec: body }) });
+
+  /** POST a lifecycle action and return the 202's stub — the accepted-at shape, before any polling. */
+  const start = async (s: Booted, id: string, action: string, body?: unknown): Promise<Stub> => {
+    const r = await fetch(`${s.base}/api/deployments/${id}/${action}`, {
+      method: 'POST',
+      headers: s.H,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    expect(`${id}/${action} → ${r.status}`).toBe(`${id}/${action} → 202`);
+    return ((await r.json()) as { job: Stub }).job;
+  };
+
+  const rec = async (s: Booted, id: string) =>
+    ((await (await fetch(`${s.base}/api/jobs/${id}`, { headers: s.H })).json()) as { job: Rec }).job;
+
+  const over = (state: string) => state !== 'queued' && state !== 'running';
+
+  /** The harness's `waitJob` returns the moment a job is not `running` — which a QUEUED job never is. */
+  const settle = async (s: Booted, id: string, ms = 30_000) => {
+    const j = await until(() => rec(s, id), (v) => !!v && over(v.state), ms);
+    if (!j || !over(j.state)) throw new Error(`job ${id} never reached a terminal state (state ${j?.state})`);
+    return j;
+  };
+
+  /** `busy` is running || queued || held, and it clears one beat AFTER the job record goes terminal. */
+  const idle = async (s: Booted, id: string) => {
+    const d = await until(
+      async () => (await (await fetch(`${s.base}/api/deployments/${id}`, { headers: s.H })).json()) as { busy: boolean | null },
+      (v) => v.busy === false,
+      10_000,
+    );
+    expect(d.busy).toBe(false);
+  };
+
+  const said = (j: Rec, fragment: string) => j.log.some((e) => e.message.includes(fragment));
+
+  // negative control: reinstate the old refusal — `if r.held[stackName] {` in jobs.go's Start
+  // becomes `if r.held[stackName] || r.live[stackName] != nil {`. The second POST is a 409 again.
+  test('a second lifecycle POST for a busy stack is queued, not refused — and runs when the first ends', async () => {
+    const s = await boot('queue');
+    try {
+      await put(s, 'd', spec('qdepth', { up: 'sleep 2' }));
+      const first = await start(s, 'd', 'up');
+      const second = await start(s, 'd', 'up');
+      // Both 202. The stub states are the whole claim, read at acceptance time: no poll, no clock.
+      expect(`${first.state} then ${second.state}`).toBe('running then queued');
+
+      // The record exists under the id the caller was handed, from the moment of acceptance — a
+      // client that starts polling immediately must find it, not a 404 that resolves later.
+      const waiting = await rec(s, second.id);
+      expect(waiting.state).toBe('queued');
+      expect(waiting.startedAt).toBe(null); // invariant 11: null, never 0, and never absent
+
+      const a = await settle(s, first.id);
+      const b = await settle(s, second.id);
+      expect(`${a.state} then ${b.state}`).toBe('ok then ok');
+      expect(typeof b.startedAt).toBe('number');
+      // The product guarantee, in one comparison: the second did not begin until the first was over.
+      expect(b.startedAt! >= a.endedAt!).toBe(true);
+    } finally {
+      await s.stop();
+    }
+  }, 60_000);
+
+  // negative control: in jobs.go's Start, disable the supersede branch
+  // (`if old := r.queue[stackName]; old != nil {` → `; false {`) so the newer job merely overwrites
+  // `r.queue[stack]`. The replaced record is exactly the silent vanishing this state exists to
+  // prevent: it stays `queued` forever and its stream never closes.
+  test('a third POST replaces the queued one: it ends `superseded` under its own id, its stream closes, and only two jobs run', async () => {
+    const s = await boot('supersede');
+    // Absolute: a submitted spec's hooks run with cwd set to the deployment's own directory.
+    const marker = `${tmpd('supersede')}-ran`;
+    try {
+      await put(s, 'd', spec('qsuper', { up: `sleep 2; printf 'x\\n' >> ${marker}` }));
+      const first = await start(s, 'd', 'up');
+      const replaced = await start(s, 'd', 'up');
+      // Opened while it is still queued: the stream a client is watching must not be left hanging
+      // when the job behind it is dropped for a newer one — that is a page that spins forever.
+      const stream = await fetch(`${s.base}/api/jobs/${replaced.id}/stream`, { headers: s.H });
+      expect(stream.status).toBe(200);
+      const closed = Promise.race([stream.text(), Bun.sleep(10_000).then(() => 'STREAM NEVER CLOSED')]);
+
+      const third = await start(s, 'd', 'up');
+      expect(`${first.state}/${replaced.state}/${third.state}`).toBe('running/queued/queued');
+
+      const gone = await settle(s, replaced.id);
+      // NOT `cancelled`: nobody stopped it and nothing ran, so there is no partial state to hunt.
+      expect(gone.state).toBe('superseded');
+      expect(gone.startedAt).toBe(null);
+      expect(typeof gone.endedAt).toBe('number'); // terminal, so a client polling this id stops
+      expect(said(gone, `superseded by ${third.id}`)).toBe(true);
+      expect(await closed).toContain('"done":true');
+
+      expect((await settle(s, first.id)).state).toBe('ok');
+      expect((await settle(s, third.id)).state).toBe('ok');
+      // Depth one, corroborated by the host itself: two hooks ran, not three.
+      expect((await Bun.file(marker).text()).trimEnd().split('\n')).toEqual(['x', 'x']);
+    } finally {
+      rmSync(marker, { force: true });
+      await s.stop();
+    }
+  }, 60_000);
+
+  // negative control: empty jobs.go's `preempts` map (drop the `Down: true` row). The teardown
+  // queues behind the `sleep 20` deploy and the `up` is never cancelled.
+  test('`down` preempts: the running `up` is cancelled, the job behind it is dropped, and the teardown runs now', async () => {
+    // A teardown queued behind a deploy is the shape of an incident: the operator asked for the
+    // stack to be gone and watches a build they no longer want finish first.
+    const s = await boot('preempt');
+    try {
+      await put(s, 'd', spec('qpreempt', { up: 'sleep 20', down: 'true' }));
+      const up = await start(s, 'd', 'up');
+      const behind = await start(s, 'd', 'verify');
+      expect(`${up.state}/${behind.state}`).toBe('running/queued');
+
+      const at = Date.now();
+      const down = await start(s, 'd', 'down', { verify: false });
+      // `queued`, and that is correct: the teardown takes the stack the instant the cancelled
+      // `up`'s shell returns and not one moment before. Two jobs on one stack never happens.
+      expect(down.state).toBe('queued');
+
+      const killed = await settle(s, up.id);
+      expect(killed.state).toBe('cancelled');
+      expect(killed.cancelledBy).toBe('a down for this stack');
+      // The line that stops an operator believing a preempted deploy rolled itself back. It reaches
+      // the transcript on THIS path too, where no person typed cancel.
+      expect(said(killed, 'whatever ran before this point was NOT undone')).toBe(true);
+
+      const dropped = await settle(s, behind.id);
+      // Also `cancelled`, but a different fact, and the transcript is where the difference lives:
+      // this one never ran, so sending its operator to look for partial state would be a lie.
+      expect(dropped.state).toBe('cancelled');
+      expect(dropped.startedAt).toBe(null);
+      expect(said(dropped, 'before it started — nothing ran, so there is nothing to undo')).toBe(true);
+      expect(said(dropped, 'NOT undone')).toBe(false);
+
+      expect((await settle(s, down.id)).state).toBe('ok');
+      // `sleep 20` was the hook that was running. Waiting for it is what queueing would look like.
+      expect(Date.now() - at).toBeLessThan(15_000);
+    } finally {
+      await s.stop();
+    }
+  }, 60_000);
+
+  // negative control: in jobs.go's pump, turn the cap guard `if r.inFlight >= r.maxRunning {` into
+  // `if false {`. All four dispatch inline and every stub says `running`.
+  test('PSTACK_MAX_JOBS caps how many run at once across stacks — over it they wait, in acceptance order', async () => {
+    const s = await boot('cap', { PSTACK_MAX_JOBS: '2' });
+    try {
+      const ids = ['c1', 'c2', 'c3', 'c4'];
+      for (const id of ids) await put(s, id, spec(`cap-${id}`, { up: 'sleep 2' }));
+      const stubs: Stub[] = [];
+      for (const id of ids) stubs.push(await start(s, id, 'up'));
+      // FOUR DIFFERENT STACKS, so the per-stack lock cannot explain this — only the global cap can.
+      // And they wait rather than fail: every one of the four was a 202.
+      expect(stubs.map((j) => j.state)).toEqual(['running', 'running', 'queued', 'queued']);
+
+      const recs: Rec[] = [];
+      for (const j of stubs) recs.push(await settle(s, j.id, 40_000));
+      expect(recs.map((j) => j.state)).toEqual(['ok', 'ok', 'ok', 'ok']);
+
+      // Concurrency MEASURED, not sampled: sweep the [startedAt, endedAt] intervals and take the
+      // maximum overlap. `<= 2` would pass with a cap of one, and would pass for a sweep that
+      // happened to observe nothing at all; the cap is two, so exactly two must have overlapped.
+      const edges = recs.flatMap((j) => [
+        { t: j.endedAt!, d: -1 },
+        { t: j.startedAt!, d: +1 },
+      ]);
+      // A job ending at t frees the slot the job starting at t takes: -1 sorts before +1.
+      edges.sort((a, b) => a.t - b.t || a.d - b.d);
+      let live = 0;
+      let peak = 0;
+      for (const e of edges) peak = Math.max(peak, (live += e.d));
+      expect(peak).toBe(2);
+
+      // FIFO across stacks: the third accepted took the first slot to free, and neither waiter
+      // started before a slot existed. One stack cannot starve the others.
+      const [first, second, third, fourth] = recs as [Rec, Rec, Rec, Rec];
+      expect(third.startedAt! <= fourth.startedAt!).toBe(true);
+      expect(Math.min(third.startedAt!, fourth.startedAt!) >= Math.min(first.endedAt!, second.endedAt!)).toBe(true);
+    } finally {
+      await s.stop();
+    }
+  }, 90_000);
+
+  // negative control: in jobs.go's clearStackLocked, disable the queued branch
+  // (`if e := r.queue[stack]; e != nil {` → `; false {`). The cancel reports only the running job
+  // and the waiter dispatches the moment the running one dies.
+  test('cancelling a stack empties both — the running job and the one waiting behind it', async () => {
+    const s = await boot('cancelstack');
+    try {
+      await put(s, 'd', spec('qclear', { up: 'sleep 20' }));
+      const running = await start(s, 'd', 'up');
+      const waiting = await start(s, 'd', 'up');
+      expect(`${running.state}/${waiting.state}`).toBe('running/queued');
+
+      const at = Date.now();
+      const r = await fetch(`${s.base}/api/deployments/d/cancel`, { method: 'POST', headers: s.H });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { stack: string; cancelled: Stub[]; by: string; warning: string };
+      expect(body.stack).toBe('qclear');
+      expect(body.by).toBe('root (PSTACK_TOKEN)');
+      // BOTH, named, in one call — the answer says what it acted on rather than a bare 200, and the
+      // running one comes first because that is the one that leaves something behind. Their states
+      // differ in the same breath and honestly: the queued job is terminal already (nothing to
+      // wind down), the running one is still `running` until its shell actually returns.
+      expect(body.cancelled.map((j) => `${j.id}:${j.state}`)).toEqual([`${running.id}:running`, `${waiting.id}:cancelled`]);
+      expect(body.warning).toContain('Nothing was undone');
+
+      const a = await settle(s, running.id);
+      const b = await settle(s, waiting.id);
+      expect(`${a.state}/${b.state}`).toBe('cancelled/cancelled');
+      expect(b.startedAt).toBe(null); // it never ran — the same distinction preemption draws
+      expect(Date.now() - at).toBeLessThan(15_000); // `sleep 20` really died, the record did not just flip
+
+      // Empty means empty: the stack takes the next job at once, and it DISPATCHES rather than queues.
+      await idle(s, 'd');
+      expect((await start(s, 'd', 'verify')).state).toBe('running');
+    } finally {
+      await s.stop();
+    }
+  }, 60_000);
+});

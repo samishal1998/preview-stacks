@@ -158,7 +158,11 @@ gone or was never up.
 
 ### `job.started`
 
-Fires when a lifecycle action is accepted and its job begins.
+Fires when a job is **dispatched** — the moment its stack is free and a concurrency slot exists,
+which is not always the moment it was accepted. A stack runs one job at a time and the host runs at
+most `PSTACK_MAX_JOBS` (4) at once, so an accepted job may sit `queued` first and emit nothing until
+its turn comes. There is deliberately **no** `job.queued` event: the `202` that accepted it already
+told the one caller holding that id.
 
 | `data.` field | Type | Meaning |
 |---|---|---|
@@ -167,14 +171,23 @@ Fires when a lifecycle action is accepted and its job begins.
 | `action` | `"up"` \| `"down"` \| `"verify"` \| `"sleep"` \| `"wake"` | `sleep` takes the compose project down and keeps its volumes and axes; `wake` is `up` recorded under its own name (0.26.0). |
 | `startedAt` | number | Epoch ms. |
 
-### `job.succeeded` / `job.failed` / `job.cancelled` / `job.leaked`
+### `job.succeeded` / `job.failed` / `job.cancelled` / `job.leaked` / `job.superseded`
 
-Exactly one fires per job, when it reaches a terminal state. All four share one payload shape.
+Exactly one fires per job, when it reaches a terminal state. All five share one payload shape.
 
 **`job.cancelled` is not a failure.** A person stopped the job with `POST /api/jobs/:id/cancel`; the
 shell command in flight was killed and every later one refused. **Nothing was undone** — whatever the
 job had already created or destroyed is still that way, which is why this is its own event and not a
 flavour of `job.failed`. `data.cancelledBy` names who stopped it.
+
+**`job.superseded` means nothing ran.** A stack runs one job at a time and queues at most one more;
+a third replaces the queued one. The replaced job had never started, so nothing was created, nothing
+was half-done, and there is nothing to check — it fires only so a client holding that job id learns
+the id is finished with. It carries no `startedAt` and no duration, because there was none. Do not
+alert on it: pushing twice in a minute produces one, and treating it like a cancellation trains
+people to ignore cancellations, which are not routine at all. Note the consequence for a receiver
+that pairs events by `jobId`: a superseded job emits **no** `job.started`, so an id can reach a
+terminal event having never produced a starting one. That is the contract, not a lost delivery.
 
 **`job.leaked` is the event this product exists for**: a teardown ran and `assert_gone` found
 resources still present. They will not be retried — nothing else will clean them up. If you page
@@ -185,10 +198,11 @@ on one thing, page on this.
 | `jobId` | string | |
 | `stack` | string | |
 | `action` | `"up"` \| `"down"` \| `"verify"` | |
-| `state` | `"ok"` \| `"failed"` \| `"cancelled"` \| `"leaked"` | Matches the event name. |
+| `state` | `"ok"` \| `"failed"` \| `"cancelled"` \| `"leaked"` \| `"superseded"` | Matches the event name. |
 | `cancelledBy` | string? | `job.cancelled` only — the operator who stopped it. |
-| `startedAt`, `endedAt` | number | Epoch ms. |
-| `durationMs` | number | `endedAt - startedAt`. |
+| `startedAt` | number \| **null** | Epoch ms, or `null` for a `superseded` job — it never started, and `0` would be a lie about 1970. |
+| `endedAt` | number | Epoch ms. |
+| `durationMs` | number | `endedAt - startedAt`, and `0` when the job never started. |
 | `leakedAxes` | string[] | The axes whose `assert_gone` failed — the operator-actionable part of a leak. Empty unless `leaked`. |
 | `verified` | boolean \| **null** | Whether teardown was actually **proven**: `true` = at least one `assert_gone` ran; `false` = nobody looked (`verify: false`, or a spec with no `assert_gone`) — so `ok` does **not** mean "proven clean"; `null` = not applicable (`up` runs no `assert_gone` by design). |
 | `unverifiable` | number | Steps that could not check anything (no probe defined). Non-zero means silence, not proof. |

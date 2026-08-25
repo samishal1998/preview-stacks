@@ -22,7 +22,7 @@
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api, problem } from '../../api/client';
-import type { ConflictBody, ShareLink, ShareView } from '../../api/types';
+import type { CancelStackResponse, ConflictBody, ShareLink, ShareView } from '../../api/types';
 import { dep, isShared, varsQuery } from '../../composables/useDeployment';
 import {
   act,
@@ -86,6 +86,34 @@ async function copyShare(): Promise<void> {
   } catch {
     toast('error', 'Could not reach the clipboard — select the link and copy it.');
   }
+}
+
+// ── stop everything ─────────────────────────────────────────────────────────────────────────────
+// Here rather than on the job page because a stack's outstanding work is a property of the STACK,
+// and the job page only knows the one job you happened to open. It is not a teardown: it stops the
+// running job and drops the one queued behind it, and destroys nothing.
+const cancelPending = ref(false);
+
+async function cancelStack(): Promise<void> {
+  cancelPending.value = true;
+  const r = await api.post<CancelStackResponse>(
+    `/api/deployments/${encodeURIComponent(dep.id)}/cancel${varsQuery.value}`,
+  );
+  cancelPending.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, 'stop this stack'));
+    return;
+  }
+  // "Nothing was outstanding" is an ANSWER, not a failure — the operator asked whether anything was
+  // running and the reply is no. Saying "stopped 0 jobs" would read as a bug.
+  const n = r.body.cancelled.length;
+  toast(
+    n ? 'ok' : 'info',
+    n
+      ? `Stopped ${n} job${n > 1 ? 's' : ''} on ${r.body.stack}. ${r.body.warning}`
+      : `Nothing was running or queued on ${r.body.stack}.`,
+  );
+  void loadDeployments();
 }
 
 const downVerify = ref(true);
@@ -244,7 +272,7 @@ async function forget(): Promise<void> {
           <ActionButton
             variant="danger"
             :pending="pending === 'down'"
-            :disabled="!!pending || busy || (isShared && !forceArmed)"
+            :disabled="!!pending || (isShared && !forceArmed)"
             :title="whyDisabled('down', forceArmed)"
             @click="act('down', { verify: downVerify, force: isShared && forceArmed })"
           >
@@ -257,10 +285,14 @@ async function forget(): Promise<void> {
         </div>
 
         <p v-if="busy" class="hint">
-          Something is already running on <b>{{ dep.detail.stack }}</b>.
-          <InfoHint label="why actions wait">
-            One action at a time per stack, and they are not queued. A teardown racing a deploy over
-            the same database would corrupt it, so the second request is refused rather than delayed.
+          Something is already running on <b>{{ dep.detail.stack }}</b> — tearing down
+          <b>cancels it first</b>.
+          <InfoHint label="what happens to the job that is running">
+            One job runs per stack at a time; a teardown racing a deploy over the same database
+            would corrupt it. A second <em>deploy</em> therefore waits its turn (and a third
+            replaces the one waiting). A teardown does not wait: it stops the running job, drops
+            anything queued behind it, and runs. Whatever the stopped job had already done is
+            <b>not</b> undone — which is what tearing down is about to deal with anyway.
           </InfoHint>
         </p>
         <p v-if="!downVerify" class="hint">
@@ -300,6 +332,28 @@ async function forget(): Promise<void> {
           <p v-if="forceTyped && !forceArmed" class="s-failed">
             That does not match, so tearing down stays disabled.
           </p>
+        </div>
+
+        <!--
+          Stopping is not tearing down, so it sits below the teardown control rather than beside it:
+          nothing is destroyed, nothing already done is undone, and a stack left half-deployed is
+          the point — you stop a wrong deploy so you can start the right one.
+        -->
+        <div class="row" style="margin-top: var(--s4)">
+          <ActionButton
+            variant="danger"
+            :pending="cancelPending"
+            :disabled="cancelPending"
+            confirm="Stop everything? Nothing is undone."
+            title="Cancels the job running on this stack and drops the one queued behind it. Destroys nothing."
+            @run="cancelStack"
+          >
+            Stop everything on this stack
+          </ActionButton>
+          <span class="mute">
+            The running job and the one waiting behind it, in one call — nothing is torn down, and
+            whatever the running job already did stays done.
+          </span>
         </div>
 
         <ErrorNote v-if="actionError" :text="actionError" title="The action was refused." />

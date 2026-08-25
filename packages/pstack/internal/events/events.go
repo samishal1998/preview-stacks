@@ -87,6 +87,15 @@ var Names = []string{
 	// password, a hash or a notifier URL. See internal/api/routes_config.go.
 	"config.exported",
 	"config.imported",
+	// APPENDED, not filed beside the other job events, because this list is add-only and its ORDER
+	// is the contract (events_test.go pins it, and `config.*` above were appended the same way).
+	// Grouping would read better and would be a breaking change to a wire-visible list.
+	//
+	// A queued job that a NEWER one replaced before it ever ran. Distinct from `job.cancelled`,
+	// which a person did and which may have left half a deploy behind: a superseded job did
+	// nothing at all, so there is nothing to check and nobody to tell off. It fires only so a
+	// client holding that job id learns the id is finished with.
+	"job.superseded",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a

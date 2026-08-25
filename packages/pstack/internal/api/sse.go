@@ -96,7 +96,12 @@ func (s *Server) jobStream(w http.ResponseWriter, r *http.Request, job jobs.Job)
 	for _, e := range replay {
 		out.send(e)
 	}
-	if state != jobs.Running {
+	// Terminal(), not `!= Running`: a QUEUED job is not over, it has not begun. Closing its stream
+	// with `done` the moment it opens is worse than a blank page — the caller was handed a job id
+	// and a 202, and the one channel that tells it the job started would be gone before it did.
+	// The subscription is keyed by job id and outlives the queued → running move, so every line the
+	// work later emits reaches this stream (TestJobStreamStaysOpenForAQueuedJobAndDeliversItsLog).
+	if state.Terminal() {
 		out.send(jsonx.O("done", true, "state", state))
 		return
 	}

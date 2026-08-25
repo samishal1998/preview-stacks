@@ -92,8 +92,30 @@ export type SwarmInfo = {
 
 /** `POST /api/deployments/:id/share` → 201, unwrapped. The token appears here and nowhere else. */
 export type ShareLink = { url: string; token: string; views: ShareView[]; expiresAt: number };
-/** `cancelled` is a person stopping it part-way — not a failure, and nothing it did was undone. */
-export type JobState = 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled';
+/**
+ * A job's state.
+ *
+ * THREE of these are not "finished", and two of them never ran at all — which is why this app never
+ * asks `state !== 'running'`:
+ *
+ *  - `queued` — accepted, with an id and a record, waiting its turn. A stack runs one job at a
+ *    time, and the host runs at most `PSTACK_MAX_JOBS` across every stack; over either limit a job
+ *    WAITS rather than being refused. It has no `startedAt` yet.
+ *  - `superseded` — it was queued and a newer job for the same stack replaced it. The queue is one
+ *    deep, so five rapid pushes run the first deploy and then exactly one more carrying the newest
+ *    spec, and the ones in between end here. Nothing ran, so — unlike `cancelled` — there is no
+ *    partial state to go looking for. Rendering it as `cancelled` would send someone hunting.
+ *  - `cancelled` — a person stopped it. If it had started, whatever it had already done was NOT
+ *    undone.
+ */
+export type JobState =
+  | 'queued'
+  | 'running'
+  | 'ok'
+  | 'failed'
+  | 'leaked'
+  | 'cancelled'
+  | 'superseded';
 export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
 export type Visibility = 'shown' | 'masked';
 
@@ -225,7 +247,11 @@ export type Job = {
   stack: string;
   action: JobAction;
   state: JobState;
-  startedAt: number;
+  /**
+   * `null` while `queued`, and forever on a `superseded` one — it never started. A tri-state, so
+   * null and not absent, and never `0`: a zero renders as 1970 and reads as a fact.
+   */
+  startedAt: number | null;
   endedAt?: number;
   outcome?: Outcome;
   error?: string;
@@ -444,6 +470,18 @@ export type LogsResponse = {
   text: string;
 };
 export type ActionResponse = { job: JobStub };
+
+/**
+ * `POST /api/deployments/:id/cancel` — stop everything outstanding for a stack: the running job and
+ * the one waiting behind it, in one call. NOT a teardown; it destroys nothing and undoes nothing.
+ * `cancelled` is `[]`, never null, when there was nothing to act on.
+ */
+export type CancelStackResponse = {
+  stack: string;
+  cancelled: JobStub[];
+  by: string;
+  warning: string;
+};
 export type SubmitResponse = {
   id: string;
   kind: Kind;
@@ -468,8 +506,9 @@ export type SubmitResponse = {
  *   `kind`        → the `kind: shared` down refusal. Fix: the typed confirmation.
  *   `containers`  → DELETE refused, containers still exist. Fix: run `down` first.
  *   `deployments` → DELETE of a spec still referenced by deployments.
- *   otherwise     → a job in flight, or "docker did not answer". Shape-identical, so do not
- *                   classify them — print the server's message and never retry.
+ *   otherwise     → a HOLD on the stack (a spec edit or a delete in progress), or "docker did not
+ *                   answer". Shape-identical, so do not classify them — print the server's message
+ *                   and never retry. A merely BUSY stack is no longer a 409: a second job queues.
  */
 export type ConflictBody = {
   error?: string;

@@ -69,6 +69,11 @@ type Options struct {
 	// ReadinessRestartLoop is the crash-loop threshold. Raise it on a SWARM host: without
 	// `depends_on`, a dependent legitimately restarts while its database converges.
 	ReadinessRestartLoop int64
+	// MaxJobs is how many lifecycle jobs RUN AT ONCE across every stack (PSTACK_MAX_JOBS); zero
+	// means jobs.DefaultMaxRunning. Over the cap an accepted job WAITS for a slot — it is never
+	// refused. Not to be confused with jobs.MaxJobs, which bounds retained transcripts and is not
+	// tunable; the env name is the one the operator-facing contract fixed.
+	MaxJobs int
 	// Domain is the preview domain (PSTACK_DOMAIN): share links and the SSO callback are built on
 	// control.<domain>; without it the request's own origin is used.
 	Domain string
@@ -188,7 +193,7 @@ func New(o Options) (*Server, error) {
 	s := &Server{
 		opts:       o,
 		env:        env,
-		jobs:       jobs.New(o.Bus),
+		jobs:       jobs.New(o.Bus, o.MaxJobs),
 		registry:   registry.New(o.DataDir),
 		specs:      specs.New(o.DataDir),
 		routing:    routing.New(routingDir),
@@ -254,7 +259,7 @@ func New(o Options) (*Server, error) {
 		Sleep: func(id string, st *spec.Stack, reason string) {
 			dep, err := s.registry.Get(id)
 			if err == nil && dep != nil {
-				s.startLifecycle(id, dep, st, jobs.Sleep, lifecycleOptions{By: "scheduler", Reason: reason})
+				s.startLifecycle(id, dep, st, jobs.Sleep, lifecycleOptions{By: "scheduler", Reason: reason, OnlyIfIdle: true})
 			}
 		},
 		Meter:  s.meter,
@@ -478,6 +483,14 @@ type lifecycleOptions struct {
 	// watcher default. Set from `?timeout=` by the POST route only — the scheduler and the wake path
 	// deliberately keep the default.
 	ReadinessTimeoutMs int64
+	// OnlyIfIdle refuses instead of queueing when the stack already has a job running or waiting.
+	//
+	// The two MACHINE callers set it; the operator's POST does not. A person asking twice means the
+	// second one, which is what the queue is for. A browser fetching a sleeping page and its
+	// subresources issues eight simultaneous GETs that all mean the SAME wake, and the scheduler's
+	// sweep means "sleep this if it is still idle" — neither wants a second job accepted just
+	// because the first has not dispatched yet.
+	OnlyIfIdle bool
 }
 
 // startLifecycle starts a lifecycle job. ONE place, because three callers start them — the POST
@@ -569,6 +582,9 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 		s.clearSleep(id, st.Stack, false)
 		return outcome, nil
 	}
+	if o.OnlyIfIdle {
+		return s.jobs.StartIfIdle(st.Stack, action, work, scrub)
+	}
 	return s.jobs.Start(st.Stack, action, work, scrub)
 }
 
@@ -635,6 +651,10 @@ func (s *Server) wakeFor(w http.ResponseWriter, hostname string) bool {
 	if err != nil {
 		return page(scheduler.Failed, id, "the deployment cannot be resolved: "+err.Error())
 	}
+	// LOAD-BEARING, and more so now that a second job for a busy stack QUEUES instead of being
+	// refused: every request to a waking hostname arrives here, and without this guard each one
+	// would accept another wake that supersedes the last. IsBusy covers queued as well as running,
+	// which is exactly the window between acceptance and dispatch.
 	if s.jobs.IsBusy(st.Stack) {
 		return page(scheduler.Busy, st.Stack, "")
 	}
@@ -665,15 +685,17 @@ func (s *Server) wakeFor(w http.ResponseWriter, hostname string) bool {
 		return ""
 	}
 	if last != nil && last.State == jobs.Failed {
-		ended := last.StartedAt
-		if last.EndedAt != nil {
-			ended = *last.EndedAt
+		// StartedAt is a tri-state now (null while a job is queued). A FAILED job always ran, so
+		// both are set here — the nil arm is what keeps the retry window from reading as 1970.
+		ended := last.EndedAt
+		if ended == nil {
+			ended = last.StartedAt
 		}
-		if time.Now().UnixMilli()-ended < WakeRetryMs {
+		if ended != nil && time.Now().UnixMilli()-*ended < WakeRetryMs {
 			return page(scheduler.Failed, st.Stack, failedWhy(last))
 		}
 	}
-	if _, ok := s.startLifecycle(id, dep, st, jobs.Wake, lifecycleOptions{By: "request:" + hostname, Reason: "request to " + hostname}); !ok {
+	if _, ok := s.startLifecycle(id, dep, st, jobs.Wake, lifecycleOptions{By: "request:" + hostname, Reason: "request to " + hostname, OnlyIfIdle: true}); !ok {
 		return page(scheduler.Busy, st.Stack, "")
 	}
 	if last != nil && last.State == jobs.Failed {

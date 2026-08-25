@@ -348,6 +348,7 @@ func Usage(version string) string {
 		"            PSTACK_ORCHESTRATOR (compose) · PSTACK_DOMAIN · PSTACK_TRAEFIK_METRICS (for sleep.idle)",
 		"            PSTACK_READINESS_POLL_MS · PSTACK_READINESS_TIMEOUT_MS · PSTACK_READINESS_RESTART_LOOP",
 		"            PSTACK_SSO_STATE_TTL_S · PSTACK_SSO_DISCOVERY_TTL_S",
+		"            PSTACK_MAX_JOBS (4) — lifecycle jobs running at once, across every stack",
 		"",
 		"healthcheck: GET /api/health on PSTACK_PORT, exit 0 or 1 — the container HEALTHCHECK.",
 		"",

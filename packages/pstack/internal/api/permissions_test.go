@@ -74,6 +74,10 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		{"POST", "/api/deployments/pr-1/verify", auth.Developer},
 		{"POST", "/api/deployments/pr-1/sleep", auth.Developer},
 		{"POST", "/api/deployments/pr-1/wake", auth.Developer},
+		// Stopping this stack's work is the same tier as starting it: a developer who may run `up`
+		// may cancel it. Its OWN pattern, not deploymentRe's verb group — welding it to the
+		// lifecycle regex would make it permanently unable to hold a different tier from up/down.
+		{"POST", "/api/deployments/pr-1/cancel", auth.Developer},
 		{"POST", "/api/deployments/pr-1/share", auth.Developer},
 
 		// single sign-on: the read is host configuration, the write mints accounts
@@ -202,6 +206,7 @@ var matchers = map[string]*regexp.Regexp{
 	"cancelRe":       cancelRe,
 	"jobRe":          jobRe,
 	"deploymentRe":   deploymentRe,
+	"deployCancelRe": deployCancelRe,
 	"shareRe":        shareRe,
 	"logsRe":         logsRe,
 	"logStreamRe":    logStreamRe,

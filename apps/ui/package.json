@@ -14,6 +14,7 @@
     "dev": "vite",
     "build": "vue-tsc --build && vite build",
     "typecheck": "vue-tsc --build",
+    "test": "bun test",
     "preview": "vite preview",
     "prepublishOnly": "bun run build"
   },

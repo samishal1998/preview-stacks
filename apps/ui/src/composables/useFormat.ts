@@ -4,8 +4,15 @@
  * same clock and mixing a rendered zone into one of them is how two timestamps stop comparing.
  */
 
-/** ISO 8601 shaped and sortable: `2026-07-28 05:17:00`. `sv` is the locale that renders it. */
-export function stamp(ms: number | undefined): string {
+/**
+ * ISO 8601 shaped and sortable: `2026-07-28 05:17:00`. `sv` is the locale that renders it.
+ *
+ * `null` is accepted alongside `undefined` because a timestamp on the wire can be a TRI-STATE — a
+ * queued job's `startedAt` is `null`, meaning "it has not started", and the em dash is the honest
+ * rendering of that. Widened here rather than coerced at each call site: one guard in the shared
+ * helper beats `?? undefined` sprinkled through five views.
+ */
+export function stamp(ms: number | null | undefined): string {
   return ms ? new Date(ms).toLocaleString('sv') : '—';
 }
 
@@ -15,7 +22,7 @@ export function hhmmss(ms: number | undefined): string {
 }
 
 /** `12s` / `3m07s`. A running job gets an ellipsis so a stale number cannot read as a final one. */
-export function took(startedAt: number | undefined, endedAt?: number): string {
+export function took(startedAt: number | null | undefined, endedAt?: number): string {
   if (!startedAt) return '—';
   const s = Math.max(0, Math.round(((endedAt ?? Date.now()) - startedAt) / 1000));
   const text = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
@@ -23,7 +30,7 @@ export function took(startedAt: number | undefined, endedAt?: number): string {
 }
 
 /** `2 minutes ago`, for an activity feed where the exact second is noise. */
-export function ago(ms: number | undefined): string {
+export function ago(ms: number | null | undefined): string {
   if (!ms) return '—';
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 45) return 'just now';

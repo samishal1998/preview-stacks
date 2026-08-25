@@ -123,6 +123,9 @@ var permissions = []perm{
 	{path: "/api/deployments", methods: mGet, min: auth.Viewer},
 	{re: deploymentRe, methods: mGet, min: auth.Viewer},
 	{re: deploymentRe, methods: mWrite, min: auth.Developer},
+	// Stopping this stack's jobs is the same tier as starting them, and the same tier as cancelling
+	// one by id (cancelRe, below): whoever may run a deploy may stop the one they ran.
+	{re: deployCancelRe, methods: mPost, min: auth.Developer},
 	{re: shareRe, methods: mPost, min: auth.Developer},
 
 	// ── single sign-on ──────────────────────────────────────────────────────────────────────────

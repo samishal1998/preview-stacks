@@ -28,8 +28,29 @@ export type SleepRecord = {
   /** `HostRegexp` patterns (wildcard subdomains), Go syntax. */
   rules: string[];
 };
-/** `cancelled` = a person stopped it; nothing it had done was undone. */
-export type JobState = 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled';
+/**
+ * A job's state.
+ *
+ * Two of these mean it has NOT run yet, and both are easy to mistake for an answer:
+ *
+ *  - `queued` — accepted, with an id, waiting its turn. A stack runs one job at a time, and the
+ *    host runs at most `PSTACK_MAX_JOBS` across every stack; over either limit a job waits rather
+ *    than being refused. It has no `startedAt`.
+ *  - `superseded` — it was queued and a newer job for the same stack replaced it. The queue is one
+ *    deep, so five rapid pushes run the first deploy and then exactly one more carrying the newest
+ *    spec; the three in between end here. Nothing ran, so unlike `cancelled` there is no partial
+ *    state to clean up.
+ *
+ * `cancelled` = a person stopped it. If it had started, whatever it had already done was NOT undone.
+ */
+export type JobState = 'queued' | 'running' | 'ok' | 'failed' | 'leaked' | 'cancelled' | 'superseded';
+
+/**
+ * The states a job never leaves. Exported because "is this over?" is the question every caller of
+ * this SDK asks, and `state !== 'running'` — the obvious way to ask it — answers YES for a queued
+ * job that has not started. `waitForJob` uses this list.
+ */
+export const TERMINAL_JOB_STATES: readonly JobState[] = ['ok', 'failed', 'leaked', 'cancelled', 'superseded'];
 export type ReadinessState = 'watching' | 'ready' | 'failed' | 'timedout';
 
 export type Health = {
@@ -125,12 +146,31 @@ export type Job = {
   stack: string;
   action: JobAction;
   state: JobState;
-  startedAt: number;
+  /** `null` while the job is `queued`, and on a `superseded` one — it never started. */
+  startedAt: number | null;
   endedAt?: number;
   outcome?: { ok: boolean; steps: StepResult[]; outputs: Record<string, string> };
   error?: string;
   log?: Array<{ seq: number; at: number; level: string; message: string }>;
   cancelledBy?: string;
+};
+
+/** The four fields a 202 carries — `state` is `running` when it dispatched, `queued` when it waits. */
+export type JobStub = { id: string; stack: string; action: JobAction; state: JobState };
+
+/**
+ * `POST /api/deployments/:id/cancel` — stop everything this deployment's stack has outstanding: the
+ * running job AND the one queued behind it, in one call.
+ *
+ * NOT a teardown. It stops work and destroys nothing; it also undoes nothing a running job had
+ * already done. `cancelled` is `[]`, never null, when there was nothing outstanding, and `warning`
+ * differs by whether anything had actually started — a queued job leaves no partial state behind.
+ */
+export type CancelStack = {
+  stack: string;
+  cancelled: JobStub[];
+  by: string;
+  warning: string;
 };
 
 export type ContainerReadiness = {

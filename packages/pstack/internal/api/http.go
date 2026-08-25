@@ -41,16 +41,20 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorBody{Error: msg})
 }
 
-// Tuning is what `serve` reads from the environment: the same four knobs a test passes as options,
-// so a black-box harness driving the real CLI can reach the expiry paths. `??` semantics — unset
-// means the default, and a value that is not a positive number is ignored rather than turning a
-// timeout into NaN.
+// Tuning is what `serve` reads from the environment: the same knobs a test passes as options, so a
+// black-box harness driving the real CLI can reach the expiry paths. `??` semantics — unset means
+// the default, and a value that is not a positive number is ignored rather than turning a timeout
+// into NaN.
 type Tuning struct {
 	ReadinessPollMs      float64
 	ReadinessTimeoutMs   float64
 	ReadinessRestartLoop float64
 	SSOStateTTLS         float64
 	SSODiscoveryTTLS     float64
+	// MaxJobs is PSTACK_MAX_JOBS: how many lifecycle jobs RUN AT ONCE across every stack, zero
+	// meaning jobs.DefaultMaxRunning. It is NOT jobs.MaxJobs — that one bounds how many finished
+	// transcripts are kept and is not tunable. One letter apart in name, nothing in common.
+	MaxJobs float64
 }
 
 // TuningFromEnv reads the knobs.
@@ -72,6 +76,7 @@ func TuningFromEnv(env func(string) (string, bool)) Tuning {
 		ReadinessRestartLoop: num("PSTACK_READINESS_RESTART_LOOP"),
 		SSOStateTTLS:         num("PSTACK_SSO_STATE_TTL_S"),
 		SSODiscoveryTTLS:     num("PSTACK_SSO_DISCOVERY_TTL_S"),
+		MaxJobs:              num("PSTACK_MAX_JOBS"),
 	}
 }
 

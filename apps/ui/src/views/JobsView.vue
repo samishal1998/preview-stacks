@@ -8,11 +8,31 @@ import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
 import InfoHint from '../components/InfoHint.vue';
-import type { JobState } from '../api/types';
+import type { Job, JobState } from '../api/types';
+import { supersededBy, waitReason } from '../composables/useJobQueue';
 import RefreshButton from '../components/RefreshButton.vue';
 
 const q = ref('');
 const only = ref<'all' | JobState>('all');
+
+/**
+ * Why a queued row is not moving, in the width of a table cell.
+ *
+ * The two waits are different problems: behind its own stack is the one-job-per-stack guarantee
+ * doing its job, and the fix is to wait or stop the job ahead; at the host cap is a machine-wide
+ * capacity fact, and the fix is PSTACK_MAX_JOBS. The job page spells both out.
+ */
+function waitText(j: Job): string {
+  const w = waitReason(j, state.jobs);
+  if (w.kind === 'stack') return 'behind this stack\u2019s own job';
+  if (w.kind === 'slot') return `at the host cap \u00b7 ${w.running} running`;
+  return 'waiting its turn';
+}
+
+/** The newer job that took a superseded one's place, when it is still in the kept 50. */
+function replacement(j: Job): Job | null {
+  return supersededBy(j, state.jobs);
+}
 
 const rows = computed(() => {
   const needle = q.value.trim().toLowerCase();
@@ -68,10 +88,13 @@ const rows = computed(() => {
           label="Filter by state"
           :options="[
             { value: 'all', label: 'All states' },
+            { value: 'queued', label: 'Queued' },
             { value: 'running', label: 'Running' },
             { value: 'ok', label: 'Ok' },
             { value: 'leaked', label: 'Leaked' },
             { value: 'failed', label: 'Failed' },
+            { value: 'cancelled', label: 'Cancelled' },
+            { value: 'superseded', label: 'Superseded' },
           ]"
         />
       </div>
@@ -96,6 +119,18 @@ const rows = computed(() => {
               <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
                 <StateBadge :state="j.state" />
               </RouterLink>
+              <!-- A badge says "queued"; it cannot say WHY, and why is the whole question when a
+                   deploy looks stuck. Same for superseded: the useful fact is which job won. -->
+              <div v-if="j.state === 'queued'" class="mute nowrap wait-why">{{ waitText(j) }}</div>
+              <div v-else-if="j.state === 'superseded'" class="mute nowrap wait-why">
+                <template v-if="replacement(j)">
+                  replaced by
+                  <RouterLink :to="`/jobs/${encodeURIComponent(replacement(j)!.id)}`">
+                    a newer {{ actionLabel(replacement(j)!.action).toLowerCase() }}
+                  </RouterLink>
+                </template>
+                <template v-else>never ran</template>
+              </div>
             </td>
             <td data-label="action">{{ actionLabel(j.action) }}</td>
             <td class="name" data-label="stack">
@@ -116,3 +151,12 @@ const rows = computed(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+/* The one line under a badge. Same size as the badge itself so the cell reads as one unit, and
+   scoped here rather than in app.css because nothing else has a second line under a state. */
+.wait-why {
+  font-size: var(--t-xs);
+  margin-top: var(--s1);
+}
+</style>
