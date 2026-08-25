@@ -177,10 +177,21 @@ jobs:
     if: always()
     needs: [go, web, conformance, image, lint]
     steps:
+      # Through an env var, and the QUOTES are the reason — this workflow's first run failed before
+      # a single job started, with no logs and no line number, only "a workflow file issue".
+      #
+      # GitHub Actions expressions accept only SINGLE-quoted string literals. `join(x, " ")` is
+      # rejected outright by its parser. Nothing local catches this: the YAML is valid, and
+      # `action-validator` passes with exit 0, because schema validation does not evaluate
+      # expression syntax. Only a real run finds it.
+      #
+      # Passing the result through `env:` fixes the quoting and also avoids nesting an expression
+      # inside a shell quote, which is how the double quote got there in the first place.
       - name: Every gate passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          results='${{ join(needs.*.result, " ") }}'
-          echo "gates: $results"
-          for r in $results; do
+          echo "gates: $RESULTS"
+          for r in $RESULTS; do
             [ "$r" = "success" ] || { echo "::error::a gate did not succeed: $r"; exit 1; }
           done
