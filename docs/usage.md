@@ -1073,6 +1073,50 @@ It does what the CLI does, with a live log: enter a deployment id, **Load**, the
 
 [`../ui/README.md`](../ui/README.md) documents the UI's internals and the exact routes it consumes.
 
+### Copy a variable list out, paste one back
+
+Three places in the **advanced UI** hold a list of `NAME` / `value` pairs: the **Variables & secrets**
+page (host-level `${vars.NAME}` and `${secrets.NAME}`), the submit form, and a deployment's **Config**
+tab. All of them carry the same two controls — copy the list out, paste one back — in `.env`, CSV or
+TSV.
+
+- **Copying** renders the list in the format you pick. `.env` quotes only what needs it (a space, a
+  `#`, a quote, a newline); CSV and TSV always write a `name,value` header row, so a variable really
+  called `name` survives the round trip rather than being eaten as a label.
+- **Pasting** parses as you type and shows what it read **before** any button that changes anything
+  appears: the pairs, and every line it could not read, with the line number, the text and the
+  reason. A paste that half-worked in silence is how a deployment loses the one variable its stack
+  name is built from. The format is detected — `.env` shape first, then a quote-aware split on comma
+  and tab — and there is a manual override for the input that reads as the wrong one.
+- **Merge** adds and overwrites by name. **Replace all** is offered only in the deployment's variable
+  editor, which owns its whole list; on the Variables page a replace would have to *delete* every
+  name the paste happened to omit, and that is not a thing to put behind a two-word button.
+- A name a spec cannot reference comes back as a problem instead of a row: `foo-bar` is a legal
+  thing to type into the editor, but `${foo-bar}` is not something the interpolator can resolve, so
+  importing it would add a variable that could never do anything.
+
+**What an export does with a secret: it writes the name, an empty value, and never the mask.**
+
+```
+# Secret VALUES are not included: this server has no route that returns one.
+# Each name is listed with an empty value for you to fill in.
+DB_PASSWORD=
+STRIPE_KEY=
+```
+
+There is no other honest option. A secret's value has no read path at all — `GET /api/host-vars`
+returns names and timestamps — so there is nothing to copy. Omitting the names would make the file
+quietly incomplete wherever it lands. And writing `••••••••` would produce a file that *deploys*,
+with the mask as the password. An empty value is not a value: pstack treats an empty variable as
+**undefined** and refuses to resolve a spec that needs it, so a pasted secret line that was never
+filled in fails loudly at deploy time instead of running against a wrong credential.
+
+That leaves one loop, and it is closed on the way back in: on the Variables page an entry with **no
+value is skipped**. Copy this page's secrets, paste them straight back, and nothing changes — the
+preview counts them, names them, and refuses to apply if that is all there was. CSV and TSV have
+nowhere to put a comment, so the warning about withheld values is on the page itself and not only
+inside the copied text.
+
 ---
 
 ## 7. The control plane
@@ -1689,16 +1733,54 @@ asks for, `asleep` is the record written when it happened:
 `hosts` and `rules` are what the catch-all router recognises as this deployment's: they are captured
 from its live Traefik labels the moment before teardown, so a router you wrote by hand is recognised
 exactly like a generated one, and a wildcard subdomain (`*.app-pr-123.…`) still wakes it. A deploy
-or a teardown clears the record; replacing the spec keeps it.
+or a teardown clears the record; replacing the spec keeps it. Clearing the record does **not** hand
+the hostname back — read the next paragraph before assuming it does.
 
 How a request finds its way back: `init` renders a **catch-all router** on the pstack container
 (priority 1, `HostRegexp` over the whole `*.<domain>`). While a preview's containers run, its own
-router wins; when they do not, the request lands on the API with the original `Host`, and if that
-hostname belongs to a sleeping deployment a wake starts and the page answers `503` with
+router wins; when they do not, the request lands on the API with the original `Host`. If that
+hostname is one this control plane is still holding, **every** stage below answers `503` with
 `Retry-After: 5` and an `x-pstack-wake: 1` header — so a script sees "not yet" rather than a
-misleading 200. The page polls itself and reloads the moment Traefik routes the hostname to the app
-again. If the last wake **failed** (an image that no longer pulls), the page says so instead of
-spinning forever; reloading retries.
+misleading 200 — and the page polls itself, reloading the moment that header stops coming.
+
+What the visitor reads changes with the stage, and there are three:
+
+| Stage | The page says | It ends when |
+|---|---|---|
+| **asleep** | *"`pr-123` was asleep. It is being brought back now"* | `up` returns — the containers now exist |
+| **starting** | *"`pr-123` is awake and its containers are starting — it has not answered a request yet"* | readiness settles, either way |
+| **failed** | *"Your preview could not start"*, quoting the reason (`app: exited with code 1`) | not on its own |
+
+**The hostname stays this control plane's for all three, not just the first.** The sleep record is
+cleared the moment `up` reports success — which is when the containers are *created*, not when the
+app answers — and a control plane that let go of the hostname there had nothing left mapping it to a
+deployment, so the request fell through to "any non-`/api/` path is the UI" and the visitor got the
+**pstack dashboard on their preview's own URL**. That is why `starting` is its own stage and not a
+longer `asleep`: it is the true sentence, and it keeps the hostname.
+
+What ends `starting` is the **readiness watch** ([§6](#wait-for-it-to-actually-be-serving)), not a
+timer of its own — `ready` hands the hostname back to Traefik, `failed` or `timedout` turns the page
+into the failure row. So the spinner's bound is readiness's own deadline
+(`PSTACK_READINESS_TIMEOUT_MS`, 180 s), and what replaces it names the failure and then **keeps**
+answering: a preview that cannot start must say so on every reload, not fall through to the
+dashboard on the second one.
+
+Two failures, and they retry differently, because one of them is not really a failure of the wake:
+
+- **The wake job failed** — an image that no longer pulls, an axis hook that threw. The stack is
+  still asleep, the page quotes the failing step, and a reload retries it after a minute.
+- **The wake job succeeded and the containers died.** `docker compose up` returns when containers
+  are *created*, so this is an `ok` job and a crashed app. The page quotes the container's own
+  reason, and reloading does **not** try again — there is no sleep record left for a request to act
+  on. `POST …/wake`, or a deploy, is what tries again.
+
+Two things this page cannot do, and both are worth knowing before you go looking:
+
+- **It cannot replace the `502`.** Once Traefik has the container's route, the request reaches the
+  container and never reaches pstack at all. The window this page covers is the one *before* that.
+- **A script cannot tell the stages apart from the headers.** All three are `503` +
+  `x-pstack-wake: 1`; only the body differs. Poll for the header to disappear, which is what the
+  page's own script does.
 
 Under HTTP-01, Traefik serves the certificate it already issued for the hostname while the stack
 was live. Under DNS-01 the wildcard covers it. A hostname that was never live has no certificate
@@ -2661,7 +2743,7 @@ anything it does not list is the root token's alone.
 | GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
 | GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **maintainer and up** (it was admin before 0.31.0); 409 when this daemon is not a manager |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
-| ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the spinning-up page, and a wake job |
+| ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping **or waking** stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the wake page. A sleeping one also starts a wake job; a waking one is held until readiness settles ([7b](#sleep-and-wake-on-call)) |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |
 | GET | `/api/jobs/:jobId` | — | `{ job }` · 404 |
 | GET | `/api/jobs/:jobId/stream` | — | SSE: buffered log replay, then live, then `{done:true,state}` |

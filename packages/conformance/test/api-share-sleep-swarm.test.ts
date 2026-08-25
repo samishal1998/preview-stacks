@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { bootServer, until, waitJob } from '../harness/server.ts';
+import { type Booted, bootServer, until, waitJob } from '../harness/server.ts';
 import { dockerShim } from '../harness/docker-shim.ts';
 import { eventTap } from '../harness/receiver.ts';
 
@@ -265,6 +265,131 @@ describe('API: sleep, wake-on-call', () => {
       docker.remove();
     }
   }, 20_000);
+
+  /**
+   * The same one container as `shim()`, with its State chosen by the caller — the only thing the
+   * readiness watch behind the waking page reads. Steering it is what makes the window below
+   * deterministic instead of a race against a 2-second poll: a healthcheck that says `starting`
+   * cannot settle, so the page cannot stop on its own while the assertions run.
+   */
+  const STATE = {
+    starting: '"State":{"Status":"running","StartedAt":"2026-08-20T10:00:00Z","Health":{"Status":"starting"}}',
+    healthy: '"State":{"Status":"running","StartedAt":"2026-08-20T10:00:00Z","Health":{"Status":"healthy"}}',
+    exited: '"State":{"Status":"exited","StartedAt":"2026-08-20T10:00:00Z","ExitCode":1}',
+  };
+  const armsIn = (state: string) => `
+  "ps -aq --filter label=com.docker.compose.project=wk") printf '%s\\n' 'c0ffee123456' ;;
+  "inspect c0ffee123456") printf '%s\\n' '[{"Id":"c0ffee123456","Name":"/wk-app-1","Config":{"Image":"nginx","Labels":{"com.docker.compose.service":"app","com.docker.compose.project":"wk","traefik.enable":"true","traefik.http.routers.app-wk.rule":"Host(\`app-wk.example.com\`)","traefik.http.services.app-wk.loadbalancer.server.port":"80"}},${state},"NetworkSettings":{"Networks":{"preview-ingress":{"IPAddress":"172.20.0.5"}},"Ports":{}}}]' ;;
+  "compose ls --all --format json") printf '%s\\n' '[{"Name":"wk"}]' ;;`;
+
+  /** Sleep `wk`, and fail loudly here rather than three assertions later if it did not. */
+  const putToSleep = async (srv: Booted) => {
+    expect((await submit(srv.base, srv.H)).status).toBe(201);
+    const j = ((await (await fetch(`${srv.base}/api/deployments/wk/sleep`, { method: 'POST', headers: srv.H })).json()) as { job: { id: string } }).job;
+    expect((await waitJob(srv, j.id)).state).toBe('ok');
+  };
+  /** The one wake job the hostname started, once it has finished. */
+  const wakeJob = async (srv: Booted) => {
+    const wakes = await until(
+      async () => ((await (await fetch(`${srv.base}/api/jobs`, { headers: srv.H })).json()) as { jobs: Array<{ id: string; action: string }> }).jobs.filter((j) => j.action === 'wake'),
+      (v) => v.length >= 1,
+    );
+    expect(wakes).toHaveLength(1);
+    return await waitJob(srv, wakes[0]!.id);
+  };
+  /** A request as Traefik's catch-all makes it: the preview's Host, no auth, any path. */
+  const asVisitor = async (base: string, path = '/') => {
+    const r = await fetch(`${base}${path}`, { headers: { host: 'app-wk.example.com' } });
+    return { status: r.status, wake: r.headers.get('x-pstack-wake'), retry: r.headers.get('retry-after'), html: await r.text() };
+  };
+
+  test('the waking page outlives the sleep record, and stops the moment the stack serves', async () => {
+    const docker = dockerShim(armsIn(STATE.starting));
+    const srv = await bootServer({ tag: 'wake', pathPrefix: docker.dir, readiness: { pollMs: 100 } });
+    const { base, dataDir } = srv;
+    try {
+      await putToSleep(srv);
+
+      // ── 1. ASLEEP. The sleep record holds the hostname, and the request starts the wake.
+      const asleep = await asVisitor(base);
+      expect(asleep.status).toBe(503);
+      expect(asleep.wake).toBe('1');
+      expect(asleep.html).toContain('was asleep');
+
+      // The wake clears that record the moment `up` returns OK — which is when the containers are
+      // CREATED. Nothing is serving yet, and Traefik has no route to hand the hostname to.
+      expect((await wakeJob(srv)).state).toBe('ok');
+      const metaPath = join(dataDir, 'deployments', 'wk', 'meta.json');
+      await until(async () => JSON.parse(readFileSync(metaPath, 'utf8')).sleep, (s) => s === undefined);
+      expect(JSON.parse(readFileSync(metaPath, 'utf8')).sleep).toBeUndefined();
+
+      // ── 2. WAKING, and the record is gone. THIS is the bug the owner hit: the hostname stopped
+      // being anybody's the instant the record went, so the request fell through to the generic
+      // non-/api/ rule and the visitor got the control plane's own dashboard on their preview's URL.
+      // Asserted twice because a page that survives one reload and not the next is the same defect.
+      for (const path of ['/', '/some/deep/link?x=1']) {
+        const starting = await asVisitor(base, path);
+        expect(starting.status).toBe(503);
+        expect(starting.wake).toBe('1');
+        expect(starting.retry).toBe('5');
+        expect(starting.html).toContain('is awake and its containers are starting');
+        expect(starting.html).not.toContain('was asleep'); // it is awake — the page must not lie
+        expect(starting.html).not.toContain('<div id="app">'); // the control UI
+      }
+
+      // ── 3. SERVING. The healthcheck passes, the readiness watch settles, and the catch-all stops
+      // answering for this hostname — the next request is Traefik's to route at the app. Only the
+      // ABSENCE of the wake page is asserted: what the control plane serves on a hostname that is
+      // no longer a preview's is a separate question this test does not settle.
+      docker.rewrite(armsIn(STATE.healthy));
+      const served = await until(async () => await asVisitor(base), (v) => v.wake === null, 10_000, 50);
+      expect(served.wake).toBeNull();
+      expect(served.status).toBe(200);
+    } finally {
+      await srv.stop();
+      docker.remove();
+    }
+  }, 30_000);
+
+  test('a wake whose containers die ends at the failure page, not an eternal spinner', async () => {
+    const docker = dockerShim(armsIn(STATE.starting));
+    const srv = await bootServer({ tag: 'wake', pathPrefix: docker.dir, readiness: { pollMs: 100 } });
+    const { base } = srv;
+    try {
+      await putToSleep(srv);
+      // The container the wake creates exits 1. `docker compose up` still SUCCEEDS — it returns when
+      // the containers are created, not when they survive — so the wake JOB is ok and the old
+      // "the last wake failed" branch is not what answers here. The assertion below pins that.
+      docker.rewrite(armsIn(STATE.exited));
+
+      expect((await asVisitor(base)).status).toBe(503);
+      expect((await wakeJob(srv)).state).toBe('ok');
+
+      const failed = await until(async () => await asVisitor(base), (v) => v.html.includes('could not start'), 10_000, 50);
+      expect(failed.status).toBe(503);
+      expect(failed.wake).toBe('1');
+      expect(failed.html).toContain('Your preview could not start');
+      expect(failed.html).toContain('app: exited with code 1'); // the container's own reason, named
+      expect(failed.html).toContain('<body class="failed"'); // the class that hides the spinner
+      expect(failed.html).not.toContain('<div id="app">');
+
+      // And it STAYS the failure page. Falling through on the reload after the one that reported the
+      // failure is the same bug wearing a slower clock.
+      const again = await asVisitor(base, '/reload');
+      expect(again.status).toBe(503);
+      expect(again.wake).toBe('1');
+      expect(again.html).toContain('Your preview could not start');
+
+      // Reloading does NOT try again here, whatever the page's text says: the wake SUCCEEDED and it
+      // is the containers that died, so there is no sleep record left for a request to act on. One
+      // wake job, still. Bringing it back is `POST …/wake` or a fresh deploy.
+      const jobs = (await (await fetch(`${base}/api/jobs`, { headers: srv.H })).json()) as { jobs: Array<{ action: string }> };
+      expect(jobs.jobs.filter((j) => j.action === 'wake')).toHaveLength(1);
+    } finally {
+      await srv.stop();
+      docker.remove();
+    }
+  }, 30_000);
 });
 
 describe('swarm discovery and the swarm routes', () => {
@@ -310,6 +435,83 @@ describe('swarm discovery and the swarm routes', () => {
       // Everyone is an admin today, so the 403 is exercised through a share principal instead.
       const link = (await (await fetch(`${base}/api/deployments/x/share`, { method: 'POST', headers: H, body: '{}' })).json()) as { error?: string };
       expect(link.error).toMatch(/no such deployment/);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  }, 20_000);
+
+  /**
+   * The stack `sw` as the ROUTE pages read it — a different `docker service ls` from the panel's
+   * (`--format '{{json .}}'`, not `-q`), so this is its own shim rather than a knob on the one
+   * above. Three knobs, because "where does this router forward to" has three honest answers:
+   * `vip` is the service's address on preview-ingress, `net` is what its task template is attached
+   * to, and `localTask` is whether a task container of it happens to run on THIS node.
+   */
+  const routeArms = (o: { vip?: boolean; net?: string; localTask?: boolean } = {}) => {
+    const endpoint = o.vip ? ',"Endpoint":{"VirtualIPs":[{"NetworkID":"net1","Addr":"10.0.9.2/24"}]}' : '';
+    const labels =
+      '"com.docker.stack.namespace":"sw","traefik.enable":"true","traefik.swarm.network":"preview-ingress","traefik.http.routers.app-sw.rule":"Host(`app-sw.example.com`)","traefik.http.services.app-sw.loadbalancer.server.port":"80"';
+    const local = o.localTask
+      ? `
+  "ps -aq --filter label=com.docker.stack.namespace=sw") printf '%s\\n' 'aaa111aaa111' ;;
+  "inspect aaa111aaa111") printf '%s\\n' '[{"Id":"aaa111aaa111","Name":"/sw_app.1.task1","Config":{"Image":"nginx","Labels":{"com.docker.stack.namespace":"sw","com.docker.swarm.service.name":"sw_app","com.docker.swarm.task.id":"task1","com.docker.swarm.node.id":"n1"}},"State":{"Status":"running","StartedAt":"2026-08-20T10:01:00Z"},"NetworkSettings":{"Networks":{"preview-ingress":{"IPAddress":"10.0.1.5"}},"Ports":{}}}]' ;;`
+      : '';
+    return `
+  "service ls --format {{json .}} --filter label=com.docker.stack.namespace=sw") printf '%s\\n' '{"ID":"svc1","Name":"sw_app","Mode":"replicated","Replicas":"1/1"}' ;;
+  "service ls -q --filter label=traefik.enable=true") printf '%s\\n' 'svc1' ;;
+  "service inspect svc1") printf '%s\\n' '[{"ID":"svc1xxxxxxxxxxxx","UpdatedAt":"2026-08-20T10:00:00Z","Spec":{"Name":"sw_app","Labels":{${labels}},"TaskTemplate":{"ContainerSpec":{"Image":"nginx"},"Networks":[{"Target":"${o.net ?? 'net1'}"}]}}${endpoint}}]' ;;
+  "network ls --format {{.ID}} {{.Name}}") printf '%s\\n' 'net1 preview-ingress' 'net2 sw_default' ;;
+  "stack ps sw --no-trunc --filter desired-state=running --format {{json .}}") printf '%s\\n' '{"ID":"task2","Name":"sw_app.1","Image":"nginx","Node":"wrk","DesiredState":"Running","CurrentState":"Running 1 minute ago"}' ;;${local}`;
+  };
+
+  test('a swarm router says where it forwards, or which of the three reasons it cannot', async () => {
+    // The service's VIP on preview-ingress: the address Traefik's swarm provider dials, and the one
+    // a manager knows wherever the tasks actually run.
+    const docker = dockerShim(routeArms({ vip: true }));
+    const s = await bootServer({ tag: 'swarm-target', pathPrefix: docker.dir });
+    const { base, H } = s;
+    const routesOf = async (path: string) => ((await (await fetch(`${base}${path}`, { headers: H })).json()) as { routes: Array<{ router: string; port: number | null; target: string | null; targetReason: string }> }).routes;
+    try {
+      const put = await fetch(`${base}/api/deployments/sw`, {
+        method: 'PUT',
+        headers: H,
+        body: JSON.stringify({ spec: 'version: 1\nstack: sw\ncompose:\n  file: compose.yml\n  orchestrator: swarm\naxes: []\n', compose: 'services:\n  app:\n    image: nginx\n' }),
+      });
+      expect(put.status).toBe(201);
+
+      // The deployment page and the host-wide page agree, because the answer is a property of the
+      // SERVICE and neither page has to guess it from a container.
+      for (const path of ['/api/deployments/sw/runtime', '/api/routing/live']) {
+        const routes = await routesOf(path);
+        expect(routes).toHaveLength(1);
+        expect(routes[0]!.router).toBe('app-sw');
+        expect(routes[0]!.port).toBe(80);
+        expect(routes[0]!.target).toBe('10.0.9.2:80'); // the /24 is the network's, not part of an address
+        expect(routes[0]!.targetReason).toBe('');
+      }
+
+      // No VIP (endpoint_mode: dnsrr) and its only task on another node. Nothing on this manager can
+      // know the address — which is NOT the same fact as the service being off the ingress network,
+      // and reporting it as that was the bug: every swarm row read "not on the ingress network".
+      docker.rewrite(routeArms({}));
+      const unknown = await routesOf('/api/deployments/sw/runtime');
+      expect(unknown[0]!.target).toBeNull();
+      expect(unknown[0]!.targetReason).toBe('unknown-node');
+      expect(unknown[0]!.targetReason).not.toBe('not-on-ingress');
+
+      // Attached to sw_default instead: now it IS measured, and the diagnosis is the true one.
+      docker.rewrite(routeArms({ net: 'net2' }));
+      const off = await routesOf('/api/deployments/sw/runtime');
+      expect(off[0]!.target).toBeNull();
+      expect(off[0]!.targetReason).toBe('not-on-ingress');
+
+      // And the third reason: a router with no loadbalancer.server.port is the author's to fix.
+      docker.rewrite(routeArms({ vip: true }).replace(',"traefik.http.services.app-sw.loadbalancer.server.port":"80"', ''));
+      const noPort = await routesOf('/api/deployments/sw/runtime');
+      expect(noPort[0]!.port).toBeNull();
+      expect(noPort[0]!.target).toBeNull();
+      expect(noPort[0]!.targetReason).toBe('no-port');
     } finally {
       await s.stop();
       docker.remove();
