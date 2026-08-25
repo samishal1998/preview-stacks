@@ -1,6 +1,12 @@
-// Package scheduler is sleep and wake-on-call: the SleepIndex (hostname → sleeping deployment, for
-// the catch-all router), the TrafficMeter (Traefik's per-router counters → "last request"), the tick
-// that applies a spec's `sleep:` policy, and the "spinning up" page.
+// Package scheduler is sleep and wake-on-call: the SleepIndex (hostname → the deployment the
+// catch-all router's request belongs to), the TrafficMeter (Traefik's per-router counters → "last
+// request"), the tick that applies a spec's `sleep:` policy, and the "spinning up" page.
+//
+// The index holds two kinds of deployment, and the second is not this package's to decide: one that
+// is ASLEEP, and one that has been WOKEN but is not serving yet. The api package keeps the latter
+// indexed until its readiness watch settles, because the sleep record is cleared the moment `up`
+// returns and the hostname would otherwise fall through to the control plane's own UI. Everything
+// here is the same either way — a hostname lookup does not care why it is listed.
 //
 // SLEEP is the middle between tearing a preview down on a timer (losing the state that made it
 // useful) and leaving it up for days: the compose project goes down, volumes and axes stay, and the
@@ -412,7 +418,13 @@ type WakeState string
 const (
 	Waking WakeState = "waking"
 	Busy   WakeState = "busy"
-	Failed WakeState = "failed"
+	// Starting is AFTER the wake succeeded and before the stack answers: the containers exist and
+	// are converging. Its own state because the sleep record is gone by then, so the visitor cannot
+	// truthfully be told a sleeping stack is being brought back — and because the alternative, once
+	// the record went, was falling through to the control plane's own UI on a preview's hostname.
+	// See the api package's wakeVerdict, which is the only thing that ends this state.
+	Starting WakeState = "starting"
+	Failed   WakeState = "failed"
 )
 
 // WakePage is what a visitor sees while the stack wakes. Self-contained (served on the PREVIEW's
@@ -424,12 +436,19 @@ func WakePage(host, stack string, state WakeState, errText string) string {
 		title = "Your preview could not start"
 	}
 	var detail string
-	if state == Failed {
+	switch state {
+	case Failed:
 		if errText == "" {
 			errText = "unknown error"
 		}
 		detail = "The last attempt to wake <b>" + js.Esc(stack) + "</b> failed: <code>" + js.Esc(errText) + "</code>. Reload to try again."
-	} else {
+	case Starting:
+		// Deliberately not "was asleep": it is awake. This is the window that used to serve the
+		// control plane's own UI here. It is NOT the 502 the same visitor may also see — once
+		// Traefik has the container's route, the request goes to the container and never reaches
+		// this process at all, so nothing on this page can replace that one.
+		detail = "<b>" + js.Esc(stack) + "</b> is awake and its containers are starting — it has not answered a request yet. This page reloads by itself when it does."
+	default:
 		detail = "<b>" + js.Esc(stack) + "</b> was asleep. It is being brought back now — this page reloads by itself when it answers."
 	}
 	return `<!doctype html>

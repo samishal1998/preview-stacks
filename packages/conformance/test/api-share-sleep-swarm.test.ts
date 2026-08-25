@@ -195,16 +195,25 @@ describe('API: sleep, wake-on-call', () => {
       expect((w.outcome as { steps: Array<{ phase: string }> }).steps.map((st) => st.phase)).toEqual(['up', 'assert_live', 'compose'].filter((p) => p !== 'assert_live'));
       expect(seen().find((e) => e.event === 'stack.woken')!.data.by).toBe('request:app-wk.example.com');
 
-      // Awake again: the record is gone and the hostname is nobody's to wake.
+      // The record clears EARLY — long before anything is serving. That gap is the bug this
+      // assertion used to encode: it expected 200 here, and a 200 on a preview hostname is the
+      // embedded CONTROL UI, served because "no longer asleep" fell through to the generic
+      // non-/api/ rule. An operator watching a preview come up saw the pstack dashboard appear on
+      // their app's URL.
       for (let i = 0; i < 100; i++) {
         const m = JSON.parse(readFileSync(join(dataDir, 'deployments', 'wk', 'meta.json'), 'utf8')) as { sleep?: unknown };
         if (!m.sleep) break;
         await Bun.sleep(10);
       }
       expect(JSON.parse(readFileSync(join(dataDir, 'deployments', 'wk', 'meta.json'), 'utf8')).sleep).toBeUndefined();
+
+      // negative control: in wakeFor, return false once `dep.Sleep == nil` (the pre-fix behaviour)
+      // — this becomes 200 and serves the control UI on a preview hostname.
       const after = await fetch(`${base}/`, { headers: { host: 'app-wk.example.com' } });
-      expect(after.status).toBe(200);
-      expect(after.headers.get('x-pstack-wake')).toBeNull();
+      expect(after.status).toBe(503);
+      expect(after.headers.get('x-pstack-wake')).toBe('1');
+      // And it is the waking page, not the app and not the dashboard.
+      expect(await after.text()).not.toContain('<div id="app">');
     } finally {
       tap.stop();
       await srv.stop();

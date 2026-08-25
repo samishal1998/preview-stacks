@@ -9,9 +9,22 @@
  *
  * Specs reference these as `${vars.NAME}` and `${secrets.NAME}` — spelled differently from plain
  * `${NAME}` on purpose, so a spec that reads host state says so on its face.
+ *
+ * THE TWO CONTRACTS DECIDE WHAT `VarIO` MAY DO HERE, and each panel mounts its own:
+ *   - A copied secret list carries NAMES ONLY. There is no value to copy — the API never returns
+ *     one — and copying the mask would put `••••••••` in a `.env` someone then deploys with,
+ *     which is a real value that fails somewhere far away from here. Empty is honest, and pstack
+ *     treats an empty variable as undefined (invariant 7), so a paste of one fails loudly at
+ *     resolve time instead of quietly running with a wrong value.
+ *   - An import therefore SKIPS an entry with no value rather than storing `""` over a live
+ *     secret. Copy this page's secrets and paste them straight back and nothing changes — which is
+ *     the only safe answer for an export that cannot contain what it lists.
+ *   - Only merge is offered. A "replace" would have to delete the names a paste omits, and this
+ *     page's deletes are one confirmed click each for a reason.
  */
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
+import type { VarPair } from '../api/types';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
@@ -20,6 +33,7 @@ import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RefreshButton from '../components/RefreshButton.vue';
+import VarIO from '../components/VarIO.vue';
 
 type Entry = { name: string; value: string | null; secret: boolean; updatedAt: number };
 
@@ -31,8 +45,15 @@ const unsupported = ref(false);
 const vars = computed(() => entries.value.filter((e) => !e.secret));
 const secrets = computed(() => entries.value.filter((e) => e.secret));
 
+const varPairs = computed<VarPair[]>(() => vars.value.map((e) => ({ k: e.name, v: e.value ?? '' })));
+/** Names with no values — see the header. The comment travels with the `.env` export. */
+const secretPairs = computed<VarPair[]>(() => secrets.value.map((e) => ({ k: e.name, v: '' })));
+const WITHHELD =
+  'Secret VALUES are not included: this server has no route that returns one.\nEach name is listed with an empty value for you to fill in.';
+
 const form = ref({ name: '', value: '', secret: false });
 const saving = ref(false);
+const importing = ref(false);
 /** Editing state: the row being replaced. For a secret this means re-entering the value. */
 const editing = ref<Entry | null>(null);
 
@@ -83,6 +104,33 @@ async function save(): Promise<void> {
   cancelEdit();
   void load();
 }
+
+/**
+ * One PUT per entry: there is no bulk route, and inventing one so a paste box can be one request
+ * is a route this feature does not need. Sequential, and every failure is named — "3 of 5 stored,
+ * these 2 failed" is something an operator can act on; a single red toast is not.
+ */
+async function importEntries(secret: boolean, pairs: VarPair[]): Promise<void> {
+  importing.value = true;
+  const failed: string[] = [];
+  for (const e of pairs) {
+    const r = await api.put(`/api/host-vars/${encodeURIComponent(e.k)}`, { value: e.v, secret });
+    if (!r.ok) failed.push(e.k);
+  }
+  importing.value = false;
+  const noun = secret ? 'secret' : 'variable';
+  const stored = pairs.length - failed.length;
+  if (failed.length) {
+    listError.value = `Stored ${stored} of ${pairs.length} ${noun}s — ${failed.join(', ')} could not be stored.`;
+  } else {
+    listError.value = '';
+    toast('ok', `Stored ${stored} ${noun}${stored === 1 ? '' : 's'}.`);
+  }
+  void load();
+}
+
+const importVars = (pairs: VarPair[]): Promise<void> => importEntries(false, pairs);
+const importSecrets = (pairs: VarPair[]): Promise<void> => importEntries(true, pairs);
 
 async function remove(e: Entry): Promise<void> {
   const r = await api.del(`/api/host-vars/${e.name}`);
@@ -162,6 +210,13 @@ async function remove(e: Entry): Promise<void> {
             </tbody>
           </table>
           <p v-else class="hint">No variables yet.</p>
+
+          <VarIO :pairs="varPairs" :busy="importing" skip-empty @apply="importVars">
+            <p class="hint" style="margin-top: 0">
+              Each name is stored on this host as a variable. A name already here is overwritten;
+              names this paste does not mention are left alone, and nothing is deleted.
+            </p>
+          </VarIO>
         </section>
 
         <section class="panel">
@@ -200,6 +255,29 @@ async function remove(e: Entry): Promise<void> {
             </tbody>
           </table>
           <p v-else class="hint">No secrets yet.</p>
+
+          <!--
+            Said on the page, not only in the copied file: an export that cannot contain the thing
+            it lists has to admit that where the button is.
+          -->
+          <p class="hint">
+            A copied secret list contains <b>names only</b> — no page and no route can read a value
+            back, so each line is exported empty for you to fill in. Pasting one back therefore
+            changes nothing until you type the values in.
+          </p>
+          <VarIO
+            :pairs="secretPairs"
+            :note="WITHHELD"
+            :busy="importing"
+            skip-empty
+            @apply="importSecrets"
+          >
+            <p class="hint" style="margin-top: 0">
+              Each name is stored as a <b>secret</b>: write-only from the moment it lands. A name
+              already here is replaced; a line with no value is skipped, so a round-trip of this
+              page's own export leaves every secret as it was.
+            </p>
+          </VarIO>
         </section>
       </div>
 

@@ -856,6 +856,15 @@ td.name {
   table.cards thead {
     display: none;
   }
+  /*
+   * And the colgroup with it. This rule list was written before any table here had one, and a
+   * `table-column-group` whose table is `display: block` sits outside a table formatting context —
+   * what it generates there is implementation-defined rather than guaranteed-nothing. One line
+   * settles a question that otherwise needs four browsers to answer.
+   */
+  table.cards colgroup {
+    display: none;
+  }
   table.cards tr {
     border: 1px solid var(--line);
     border-radius: var(--r2);
@@ -902,6 +911,19 @@ td.name {
  * beside it — the Variables/Secrets pair being the visible case. Card mode above handles genuinely
  * narrow panels; this is the belt for the range in between, where the table is only slightly too
  * wide and cards would be overkill.
+ *
+ * THE `.panel > table` HALF SPLITS THE COLUMN MODEL, AND THAT IS THE HEADER-DRIFT BUG. `display:
+ * block` on a table collapses column sizing, so the sections are restored to `display: table` —
+ * which makes thead and tbody two SEPARATE table boxes. Two table boxes each size their own columns
+ * from their own content; there is no mechanism by which they can agree, so a header lines up with
+ * the cells under it only by coincidence. No amount of per-cell width tuning can fix that, which is
+ * why every previous attempt failed.
+ *
+ * `.table-scroll` is the way out, and it costs one element: a DIV that scrolls leaves the table a
+ * table, with one column model. `.panel > table` is a CHILD selector, so wrapping opts a table out
+ * of the split above with no effect on any table that is still a direct child. New tables should
+ * wrap. The tables still relying on the rule above are every one that is a direct child of a panel;
+ * they drift the same way and the same wrapper fixes them, one element each.
  */
 @container (min-width: 461px) {
   .panel > table,
@@ -917,6 +939,105 @@ td.name {
     width: 100%;
     table-layout: auto;
   }
+}
+
+/*
+ * ------------------------------------------------------------- deterministic column widths
+ *
+ * `table-layout: auto` sizes each column from its content, so one long image name or one long URL
+ * takes width away from every other column on the row, and a column's width is a property of
+ * today's data rather than a decision anyone made. `.tbl-fixed` moves that decision into a
+ * `<colgroup>` in the template, beside the `<thead>` it has to agree with.
+ *
+ * It comes with an obligation. Fixed layout never grows a column to fit, so anything that can be
+ * long has to say what it does about it — `.cell-clip` (one line, ellipsis, whole value in `title`)
+ * or `.cell-wrap` (break anywhere, every character stays on screen). A cell that says neither
+ * overflows its column silently.
+ *
+ * Use it WITH `.table-scroll`, never with `.panel > table`: the wrapper is what lets the table keep
+ * a `min-width` and scroll instead of squeezing seven columns into 460px.
+ */
+.tbl-fixed {
+  table-layout: fixed;
+}
+/*
+ * Headers wrap here. `th { white-space: nowrap }` exists so a header sets its column's intrinsic
+ * width under auto layout; under fixed layout the colgroup sets the width and nowrap only lets a
+ * long header paint over its neighbour.
+ */
+.tbl-fixed th {
+  white-space: normal;
+}
+
+/*
+ * THE FLOORS. Fixed layout never grows a column, but it does SHRINK one: hand the table less width
+ * than its colgroup asks for and every column scales down together, so a table that is merely narrow
+ * looks exactly like a table that is broken. `min-width` is what turns that squeeze into a scroll —
+ * `.table-scroll` is already there to do the scrolling, and without a floor it never has to. Until
+ * these existed the swarm table scrolled only by accident, because `.row-actions { white-space:
+ * nowrap }` overflowed the actions cell.
+ *
+ * THESE NUMBERS ARE DERIVED FROM THE COLGROUPS, NOT MEASURED AGAINST A RENDER. Each is that table's
+ * `<col>` widths added up, kept in the colgroup's own unit so they track the font instead of
+ * assuming a pixel size for `ch`. Nobody has held a ruler to them; if a column looks wrong on a real
+ * screen, the ruler wins. Change a `<col>` and change the line here.
+ *
+ * Inside the same query as the wrapper, and that is not tidiness. Below 461px `table.cards` is a
+ * block and there is no scroll container: a floor that survived down there would be a 1000px card
+ * list hanging off the side of a phone-width panel, which is the layout card mode exists to prevent.
+ */
+@container (min-width: 461px) {
+  /*
+   * URL is 34% of the table and needs ~28ch for a hostname like `app-pr-1.preview.example.com`, so
+   * the table needs 28 / 0.34 ≈ 82ch before that column stops being readable.
+   */
+  .t-routes,
+  .t-live {
+    min-width: 82ch;
+  }
+  /*
+   * The declared columns summed — 22 + 12 + 13 + 20 = 67ch — plus a 20ch floor for Image, the one
+   * column with no declared width, plus the actions cell. Actions is px because it holds five
+   * buttons at their widest (Stop, Restart, Logs, Shell, Open) and `.row-actions` forbids them to
+   * wrap: it is measured from the buttons, not from text.
+   */
+  .t-containers {
+    min-width: calc(87ch + 288px);
+  }
+  /* Node adds its 14ch. This is the case the whole change exists for. */
+  .t-containers.swarm {
+    min-width: calc(101ch + 288px);
+  }
+}
+
+/*
+ * One line, ellipsis, the whole value in `title`. For identifiers you MATCH rather than read —
+ * image references, swarm task names, router names: the eye checks the start against something it
+ * already knows, and a wrapped 90-character image tag costs three rows of table to say what the
+ * first twenty characters already said.
+ *
+ * In card mode it is a plain wrapping element instead: the cell has the panel's full width there,
+ * and clipping a value that had room to be shown is how a card ends up saying `myregistry.exam…`.
+ */
+.cell-clip {
+  overflow-wrap: anywhere;
+}
+@container (min-width: 461px) {
+  .cell-clip {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+}
+
+/*
+ * Wraps, never clips. For the values people READ character by character — a URL's tail is which PR
+ * it is, and a hostname with its end hidden is worse than one on two lines.
+ */
+.cell-wrap {
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------ row actions */

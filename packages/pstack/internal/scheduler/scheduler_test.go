@@ -130,3 +130,35 @@ func TestTickDecidesAfterFromNewestContainerIdleFromMeterNeverTwice(t *testing.T
 		t.Fatalf("got %v", slept)
 	}
 }
+
+func TestWakePageSaysWhichOfTheThreeThingsIsTrue(t *testing.T) {
+	// negative control: delete the `case Starting` arm so it falls into the default — a visitor
+	// whose preview is already awake and merely still booting is told it "was asleep", which is the
+	// class of untrue-but-plausible message this state exists to stop.
+	page := func(state WakeState, err string) string { return WakePage("app-pr-9.example.com", "pr-9", state, err) }
+
+	waking := page(Waking, "")
+	if !strings.Contains(waking, "was asleep") || !strings.Contains(waking, `class="waking"`) {
+		t.Errorf("waking: %s", waking)
+	}
+	// Starting is the window the report is about: awake, not answering. It must not claim sleep,
+	// and it must keep the spinner (only .failed hides it).
+	starting := page(Starting, "")
+	if strings.Contains(starting, "was asleep") {
+		t.Error("a woken stack was never asleep by then")
+	}
+	if !strings.Contains(starting, "is awake and its containers are starting") || !strings.Contains(starting, `class="starting"`) {
+		t.Errorf("starting: %s", starting)
+	}
+	if !strings.Contains(starting, "spinning up") || !strings.Contains(starting, `class="spin"`) {
+		t.Error("starting is still converging: it keeps the title and the spinner")
+	}
+	// A failure is a different page, and it quotes the reason rather than spinning.
+	failed := page(Failed, "app: exited with code 1")
+	if !strings.Contains(failed, "could not start") || !strings.Contains(failed, "app: exited with code 1") {
+		t.Errorf("failed: %s", failed)
+	}
+	if !strings.Contains(failed, `class="failed"`) {
+		t.Error("the failed class is what hides the spinner")
+	}
+}

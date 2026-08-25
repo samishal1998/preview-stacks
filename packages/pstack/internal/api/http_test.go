@@ -3,11 +3,17 @@ package api
 import (
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
@@ -239,5 +245,217 @@ func TestSsoCallbackBindsTheStateToItsProvider(t *testing.T) {
 	park("s3", `{"verifier":"v","next":"/"}`)
 	if msg := callback("s3"); !strings.Contains(msg, "expired") {
 		t.Fatalf("keyless parked state: %q", msg)
+	}
+}
+
+// ── wake-on-call: the page is served until the stack SERVES, not until the sleep record goes ─────
+
+// wakingServer is the smallest Server wakeFor's woken branch touches: a registry directory holding
+// one deployment with NO sleep record, the index, the waking map and a readiness watcher. It
+// resolves no spec and starts no job, which is the point — by then the wake has already run.
+func wakingServer(t *testing.T, stack string) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	dep := filepath.Join(dir, "deployments", "pr-9")
+	if err := os.MkdirAll(dep, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dep, "spec.yml"), []byte("version: 1\nstack: "+stack+"\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dep, "meta.json"), []byte(`{"id":"pr-9","kind":"isolated","createdAt":1,"updatedAt":1}`), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		registry:   registry.New(dir),
+		sleepIndex: scheduler.NewSleepIndex(),
+		waking:     map[string]wakingUp{},
+		readiness:  readiness.New(readiness.Options{PollMs: 20, TimeoutMs: 60_000}),
+		opts:       Options{Domain: "preview.example.com", Log: func(string) {}},
+	}
+	t.Cleanup(s.readiness.StopAll)
+	// Exactly what startLifecycle leaves behind after a successful wake: the record cleared, the
+	// hostnames kept, the stack name kept so no re-resolve is needed.
+	s.waking["pr-9"] = wakingUp{stack: stack, entry: scheduler.SleepEntry{ID: "pr-9", Hosts: []string{"app-pr-9.preview.example.com"}}}
+	s.reindex()
+	return s
+}
+
+func get(s *Server, host string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	if !s.wakeFor(w, host) {
+		w.Code = 0 // fell through — the caller would serve the control UI here
+	}
+	return w
+}
+
+func TestWakeForHoldsTheHostnameUntilReadinessSettles(t *testing.T) {
+	// negative control: restore `dep.Sleep == nil → return false` (drop the waking branch) — every
+	// assertion below that expects 503 gets the fall-through instead, which is the reported bug:
+	// the embedded control UI served on a preview's hostname.
+	s := wakingServer(t, "pr-9")
+
+	// Docker that never answers: the watch stays `watching`, which is the whole window between
+	// `up` returning and the app listening — the one the visitor spent on a 502 or the control UI.
+	s.readiness.Start("pr-9", exec.NewFake(func(string) bool { return true }, ""), readiness.StartOptions{TimeoutMs: 60_000, Restart: true})
+	w := get(s, "app-pr-9.preview.example.com")
+	if w.Code != 503 || w.Header().Get("x-pstack-wake") != "1" {
+		t.Fatalf("status %d, x-pstack-wake %q — the hostname must still be the visitor's", w.Code, w.Header().Get("x-pstack-wake"))
+	}
+	if body := w.Body.String(); !strings.Contains(body, "is awake and its containers are starting") {
+		t.Errorf("body: %s", body)
+	}
+	// It is not one answer that gets it right: the page is served for as long as it takes.
+	if get(s, "app-pr-9.preview.example.com").Code != 503 {
+		t.Error("a second request must not fall through either")
+	}
+	// The control plane's own hostnames are still nobody's to wake.
+	if get(s, "control.preview.example.com").Code != 0 || get(s, "api.preview.example.com").Code != 0 {
+		t.Error("control./api. must never be answered by the wake page")
+	}
+
+	// Settling ENDS it, in either direction. Nothing watching any more (a teardown cancels the
+	// watch) is the same answer: this process knows nothing Traefik does not.
+	s.readiness.Cancel("pr-9")
+	if got := get(s, "app-pr-9.preview.example.com"); got.Code != 0 {
+		t.Errorf("with no watch the hostname is not ours: %d", got.Code)
+	}
+	if s.sleepIndex.Size() != 0 {
+		t.Errorf("the entry must be forgotten, not leaked: size %d", s.sleepIndex.Size())
+	}
+}
+
+func TestWakeForShowsTheFAILUREOfAPreviewThatNeverServes(t *testing.T) {
+	// negative control: return keep=false for the failed/timedout arm of wakeVerdict — the broken
+	// preview falls through to the control UI instead of saying what died, and both 503s below fail.
+	s := wakingServer(t, "pr-9")
+	// A container that exits 1 on boot: `up` succeeded, so the sleep record is already gone, and
+	// readiness is the only thing that knows this preview is never going to answer.
+	f := exec.NewFake(nil, "")
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.HasPrefix(cmd, "docker ps -aq"):
+			return exec.Result{OK: true, Stdout: "aaa111aaa111\n"}, true
+		case strings.HasPrefix(cmd, "docker inspect"):
+			return exec.Result{OK: true, Stdout: `[{"Id":"aaa111aaa111","Name":"/pr-9-app-1","Config":{"Image":"app:1","Labels":{"com.docker.compose.service":"app"}},"State":{"Status":"exited","ExitCode":1},"NetworkSettings":{"Networks":{},"Ports":{}}}]`}, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	s.readiness.Start("pr-9", f, readiness.StartOptions{TimeoutMs: 60_000, Restart: true})
+	if rd, _ := s.readiness.Wait("pr-9", 5_000); rd.State != readiness.Failed {
+		t.Fatalf("the watch must settle failed, got %q", rd.State)
+	}
+	w := get(s, "app-pr-9.preview.example.com")
+	if w.Code != 503 {
+		t.Fatalf("status %d — a broken preview must show its failure, never the control UI", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "could not start") || !strings.Contains(body, "app: exited with code 1") {
+		t.Errorf("the page must name what failed: %s", body)
+	}
+	// And it keeps saying so: an eternal spinner is what this replaces, not an eternal 200.
+	if get(s, "app-pr-9.preview.example.com").Code != 503 {
+		t.Error("the failure is the answer for every later request too")
+	}
+}
+
+func TestWakeVerdict(t *testing.T) {
+	// negative control: return `keep` true for the !watching arm — a stack nothing is watching keeps
+	// the page forever, and the first case fails. (Also run: make readinessWhy prefer the container
+	// name over the service — "app: exited" becomes "pr-9-app-1: exited".)
+	reason := func(s string) *string { return &s }
+	svc := "app"
+	failed := readiness.StackReadiness{State: readiness.Failed, Containers: []readiness.ContainerReadiness{
+		{Name: "pr-9-app-1", Service: &svc, Failed: true, Reason: reason("exited with code 1")},
+	}}
+	cases := []struct {
+		name  string
+		rd    readiness.StackReadiness
+		watch bool
+		state scheduler.WakeState
+		why   string
+		keep  bool
+	}{
+		{"nothing is watching", readiness.StackReadiness{}, false, "", "", false},
+		{"still converging", readiness.StackReadiness{State: readiness.Watching}, true, scheduler.Starting, "", true},
+		{"serving", readiness.StackReadiness{State: readiness.Ready}, true, "", "", false},
+		{"a container died", failed, true, scheduler.Failed, "app: exited with code 1", true},
+		// The bound: a stack that never converges is timed out by readiness, and the visitor is told
+		// the deadline rather than watching a spinner that means nothing.
+		{"deadline", readiness.StackReadiness{State: readiness.TimedOut, TimeoutMs: 180_000}, true, scheduler.Failed, "it did not start answering within 3m", true},
+		// Settled without a reason: still a failure, never a spinner.
+		{"failed, no reason given", readiness.StackReadiness{State: readiness.Failed}, true, scheduler.Failed, "it started, then stopped before it served anything", true},
+	}
+	for _, c := range cases {
+		state, why, keep := wakeVerdict(c.rd, c.watch)
+		if state != c.state || why != c.why || keep != c.keep {
+			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", c.name, state, why, keep, c.state, c.why, c.keep)
+		}
+	}
+}
+
+func TestWakeForForgetsAWakingDeploymentThatIsGone(t *testing.T) {
+	// negative control: drop the `s.forgetWaking(id)` from wakeFor's deleted-deployment branch — the
+	// entry survives every rebuild, so the index keeps answering for a hostname whose deployment no
+	// longer exists, and both checks below fail. (Run, observed failing, restored.)
+	//
+	// The OTHER end of the waking state, and the one a readiness verdict can never reach: DELETE
+	// removes the record while a wake is in flight, so nothing is coming back and the hostname is
+	// nobody's again.
+	s := wakingServer(t, "pr-9")
+	if err := s.registry.Remove("pr-9"); err != nil {
+		t.Fatal(err)
+	}
+	if get(s, "app-pr-9.preview.example.com").Code != 0 {
+		t.Fatal("a deleted deployment must not go on being served the waking page")
+	}
+	if _, still := s.wakingOf("pr-9"); still || s.sleepIndex.Size() != 0 {
+		t.Errorf("the entry must be forgotten, not re-added by the next rebuild (waking=%v size=%d)", still, s.sleepIndex.Size())
+	}
+}
+
+func TestClearSleepHandsTheHostnamesToTheWakingEntry(t *testing.T) {
+	// negative control: drop the `s.waking[id] = wakingUp{...}` assignment in clearSleep — the
+	// hostname goes out of the index with the record and Find returns "", which is the fall-through
+	// to the control UI. (Also run: drop the `else if !waking { delete }` arm — a torn-down
+	// deployment keeps waking its own hostname forever.)
+	host := "app-pr-9.preview.example.com"
+	s := wakingServer(t, "pr-9")
+	asleep := func() {
+		t.Helper()
+		if err := s.registry.SetSleep("pr-9", &registry.SleepRecord{Since: 1, Reason: "operator", Hosts: []string{host}, Rules: []string{}}); err != nil {
+			t.Fatal(err)
+		}
+		s.wakeMu.Lock()
+		delete(s.waking, "pr-9")
+		s.wakeMu.Unlock()
+		s.reindex()
+		if s.sleepIndex.Find(host) != "pr-9" {
+			t.Fatal("asleep: the record's hostname must be indexed")
+		}
+	}
+
+	// A wake: the record goes, the hostname does NOT. That swap is the fix.
+	asleep()
+	s.clearSleep("pr-9", "pr-9", true)
+	dep, err := s.registry.Get("pr-9")
+	if err != nil || dep == nil || dep.Sleep != nil {
+		t.Fatalf("the sleep record must be cleared: %+v (%v)", dep, err)
+	}
+	if _, ok := s.wakingOf("pr-9"); !ok {
+		t.Fatal("a woken deployment must be held as waking")
+	}
+	if s.sleepIndex.Find(host) != "pr-9" {
+		t.Fatal("the hostname must outlive the record it came from")
+	}
+
+	// A teardown of what that wake brought back — no sleep record left to clear, only the waking
+	// entry, and it has to go: nothing should wake what was deliberately torn down.
+	s.clearSleep("pr-9", "pr-9", false)
+	if _, ok := s.wakingOf("pr-9"); ok {
+		t.Fatal("a torn-down deployment is not waking")
+	}
+	if s.sleepIndex.Find(host) != "" {
+		t.Fatal("its hostname is nobody's")
 	}
 }
