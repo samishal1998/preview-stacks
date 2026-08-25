@@ -243,6 +243,69 @@ describe('0.27.0: single sign-on', () => {
   });
 });
 
+describe('roles: an account carries one, and the client can read and set it', () => {
+  const PASSWORD = 'a-long-enough-password';
+
+  // negative control: in src/index.ts — drop `role` from users.create's body → the `developer`
+  // assertion fails (the server then defaults it to viewer); swap `request('PATCH', …)` in
+  // users.setRole for `post(…)` → setRole 404s; return `[]` instead of `r.users` in users.list →
+  // the roster assertion fails; point `me()` at another route → `root` reads undefined.
+  test('a created account defaults to VIEWER, and its role is readable, listable and changeable', async () => {
+    // The machine credential sits above every role and holds no account — there is no role to read.
+    const root = await client.me();
+    expect(root.root).toBe(true);
+    expect(root.user).toBeUndefined();
+
+    // AN ABSENT ROLE IS THE LEAST PRIVILEGE. This route used to mint an administrator every time;
+    // that it now mints a viewer is the breaking change, and this is where the client pins it.
+    const viewer = await client.users.create({ username: 'role-probe-viewer', password: PASSWORD });
+    expect(viewer.role).toBe('viewer');
+    expect(viewer.email).toBeNull();
+
+    const dev = await client.users.create({ username: 'role-probe-dev', password: PASSWORD, role: 'developer' });
+    expect(dev.role).toBe('developer');
+
+    const roster = await client.users.list();
+    expect(roster.filter((u) => u.username.startsWith('role-probe-')).map((u) => `${u.username}=${u.role}`)).toEqual([
+      'role-probe-dev=developer',
+      'role-probe-viewer=viewer',
+    ]);
+
+    expect(await client.users.setRole(viewer.id, 'maintainer')).toEqual({ updated: viewer.id, role: 'maintainer' });
+    expect((await client.users.list()).find((u) => u.id === viewer.id)?.role).toBe('maintainer');
+
+    // What a script actually branches on is its OWN role. A session is a cookie, so this client is
+    // handed a `fetch` that carries one — the same seam a proxy or a custom TLS agent uses.
+    const login = await fetch(`${server.base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'role-probe-dev', password: PASSWORD }),
+    });
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const asDev = createClient({
+      baseUrl: server.base,
+      fetch: (input, init) => fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string>), cookie } }),
+    });
+    const mine = await asDev.me();
+    expect(mine.root).toBe(false);
+    expect(mine.user?.username).toBe('role-probe-dev');
+    expect(mine.user?.role).toBe('developer');
+    // …and the roster is a read a developer may do, while minting people is not.
+    expect((await asDev.users.list()).some((u) => u.username === 'role-probe-dev')).toBe(true);
+    await expect(
+      asDev.users.create({ username: 'role-probe-sneak', password: PASSWORD, role: 'admin' }),
+    ).rejects.toMatchObject({ status: 403 });
+
+    expect(await client.users.remove(dev.id)).toEqual({ deleted: dev.id });
+    // …and the roster cannot be emptied — a host with no accounts is one nobody can sign in to.
+    // The reason is the server's to give; this asserts the sentence it actually gave.
+    const refused = await client.users.remove(viewer.id).catch((e: PstackError) => e);
+    expect((refused as PstackError).status).toBe(400);
+    expect((refused as PstackError).message).toContain('last user');
+    expect((await client.users.list()).map((u) => u.username)).toEqual(['role-probe-viewer']);
+  }, 20_000);
+});
+
 describe('verifyWebhook — the half that lives in the receiver', () => {
   const secret = 'shhh-a-long-signing-secret';
   const body = JSON.stringify({ id: 'evt_1', event: 'job.leaked', at: 1, data: { stack: 's' } });

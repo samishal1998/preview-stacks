@@ -20,6 +20,7 @@ real domain), and the abridged JSON in section 6.
 | **stand up the control stack on a host** | [7 → `pstack init`](#stand-up-the-host-pstack-init) |
 | **choose a TLS mode (HTTP-01 or DNS-01)** | [7 → Choose a TLS mode](#choose-a-tls-mode) |
 | shared vs isolated, `requires`, `--force`, submitting deployments | [7. The control plane](#7-the-control-plane) |
+| **give my team accounts that cannot do everything** | [7e. The four roles](#7e-who-can-do-what-the-four-roles-0310) |
 | deploy from GitHub Actions | [8. Wire it into CI](#8-wire-it-into-ci) |
 | a nightly leak sweep, orphan hunting | [9. Day-2 operations](#9-day-2-operations) |
 | every flag, route, env var, exit code | [10. Reference](#10-reference) |
@@ -749,10 +750,18 @@ pstack api  http://0.0.0.0:7878
 `pstack init` generates this token for you and stores it `0600` in the control stack's `.env`; it is
 a **different secret** from the DNS-01 credential, with a different blast radius.
 
-The token gates **POST/DELETE only**; GETs are always open (that is also what lets the log stream use
-`EventSource`, which cannot send headers). It is **not multi-tenant** — one spec, one Docker socket,
-every caller equal. Put it behind your ingress' auth or an SSH tunnel
-(`ssh -L 7878:127.0.0.1:7878 preview-host`) before anyone but you can reach it.
+The token gates **every route, reads included** — since 0.10.0 the only things you can reach without
+a credential are `/api/health` and the login page. A browser gets in with a session cookie instead,
+which is also what lets the log stream use `EventSource` (it cannot send headers).
+
+The token itself is **`root`** and passes everything. Accounts are weaker than it and differ from
+each other: each carries a **role**, and what each role may reach is
+[7e](#7e-who-can-do-what-the-four-roles-0310).
+
+It is still **not multi-tenant** — one spec set, one Docker socket, one host. Roles narrow what a
+colleague can do to that host; they are not an isolation boundary and do not pretend to be. Put the
+API behind your ingress' auth or an SSH tunnel (`ssh -L 7878:127.0.0.1:7878 preview-host`) before
+anyone but you can reach it.
 
 ### Drive it with curl
 
@@ -1743,9 +1752,12 @@ expiresAt, by }` says a link was minted — never the token.
 
 ## 7c. Sign in with your identity provider (0.27.0)
 
-Accounts are created by hand, one at a time, by someone holding `PSTACK_TOKEN`. That does not scale
-past a couple of people. Point this host at the identity provider your organisation already runs and
-anyone who can authenticate against it can sign in — **no per-user setup here at all**.
+Accounts are created by hand, one at a time, by an admin or by whoever holds `PSTACK_TOKEN`. That
+does not scale past a couple of people. Point this host at the identity provider your organisation
+already runs and anyone who can authenticate against it can sign in — **no per-user setup here at
+all**. Set that provider's `defaultRole` before you do
+([7e](#7e-who-can-do-what-the-four-roles-0310)): it decides what everyone who walks through the door
+can reach.
 
 You are configuring your *own* OAuth/OIDC application. Nothing is registered with anyone, no
 directory is copied, and nothing is synchronised.
@@ -1882,7 +1894,7 @@ placeholder.
 | `allowedUsernames: []` | Non-empty ⇒ a login whose username matches none of these **glob** patterns is refused. `*`, `?` and character classes (`qa-[0-9]*`), matched case-insensitively; a malformed pattern (`qa-[0-9`) is refused when you save rather than left silently matching nobody. **Fails closed the same way** — see the warning below, because this one has a sharp edge |
 | `requiredGroups: []` | Non-empty ⇒ the provider is asked which groups/orgs this user belongs to, and a login in none of them is refused. **Exact** names, case-insensitive — not globs, because a GitLab group is a path (`acme/backend`) and `*` would not mean what you'd expect across the `/`. Needs a preset and a scope: see below |
 | `groupsUrl` | Where that group list is read from. Filled in by the preset (`https://api.github.com/user/orgs`, `https://gitlab.com/api/v4/groups`); type your own for a self-hosted provider |
-| `defaultRole` | Role for auto-provisioned accounts. Only `admin` exists today, so this is a placeholder for when roles land |
+| `defaultRole` | The [role](#7e-who-can-do-what-the-four-roles-0310) an auto-provisioned account is created with — one of `viewer`, `developer`, `maintainer`, `admin`. **Set it explicitly, and set it low.** A provider stored without one provisions **admins**, which on a host where anyone in your GitHub org can sign in is very rarely what you meant |
 
 The rules **and** together: each list is any-of, and every rule you set has to pass. They are
 **per provider**: each stored provider carries its own three lists, and a login is checked against
@@ -2119,6 +2131,149 @@ Two risks come with the feature itself. Neither is a bug, and neither goes away.
    its images from — and its notifiers decide where that host's events are sent. A file you did not
    produce yourself can repoint both. That is what the pre-write summary above is for; read it, and
    do not pipe `-y` at a file whose origin you cannot name.
+
+## 7e. Who can do what: the four roles (0.31.0)
+
+Until 0.31.0 every account on a host could do everything every other account could do. Roles fix
+that. There are four, they are **ordered**, and each one includes everything below it:
+
+| Role | What it adds |
+|---|---|
+| `viewer` | **Reads.** Deployments, runtime, logs and log streams, source, readiness, jobs, specs, routing, registries, host variables (never a secret's *value*), notifiers and their deliveries, the control stack, the swarm, terminal-session history, and the list of accounts |
+| `developer` | **Stacks.** Submit and delete deployments, `up` / `down` / `verify` / `sleep` / `wake`, start / stop / restart a container, cancel a job, mint a share link, open a container shell, write and delete named specs |
+| `maintainer` | **The host's configuration.** Host variables and secrets, private-registry logins, Traefik dynamic files, notifiers (create, edit, test, redeliver), the swarm join token, and *reading* the SSO configuration |
+| `admin` | **People.** Create, delete and re-role accounts, set someone else's password, *write* the SSO configuration, and apply a sealed config |
+
+Two things sit outside that ladder:
+
+- **`root` — whoever holds `PSTACK_TOKEN`.** Not a role, not an account, and above all four. It is
+  also the only principal that may `GET`/`POST /api/config`, the plaintext export of every
+  credential on the host ([7d](#7d-move-a-hosts-configuration-to-another-host)); an admin session is
+  `403` there, deliberately.
+- **A share link is not a weak role.** It reaches exactly the views it was minted with, on exactly
+  its own deployment, `GET` only ([share links](#share-links)). Roles changed nothing about it.
+
+### The matrix
+
+The table below is the whole of it. Anything not listed — a route that does not exist, a method a
+route does not answer — is **root's alone**: the gate is default-deny, so a new route is closed to
+every account until someone puts it in the table.
+
+| Route | Least role |
+|---|---|
+| `GET /api/health` | none — it is how `init` waits for the container |
+| `GET /api/auth/me` · `POST /api/auth/logout` | any account |
+| `GET`/`POST /api/tokens` · `DELETE /api/tokens/:id` | any account (they are already scoped to the caller) |
+| `PUT /api/users/:id/password` **for yourself** | any account |
+| every `GET` in the `viewer` row above, including `GET /api/users` | `viewer` |
+| `PUT`/`DELETE /api/deployments/:id` | `developer` |
+| `POST /api/deployments/:id/{up,down,verify,sleep,wake}` | `developer` |
+| `POST /api/deployments/:id/containers/:name/{start,stop,restart}` | `developer` |
+| `POST /api/deployments/:id/share` · `POST /api/jobs/:id/cancel` | `developer` |
+| `WS /api/deployments/:id/terminal` | `developer` |
+| `PUT`/`DELETE /api/specs/:name` | `developer` |
+| `PUT`/`DELETE /api/host-vars/:name` · `/api/registries/:host` · `/api/routing/:file` | `maintainer` |
+| `POST`/`PATCH`/`DELETE /api/notifiers`… (incl. `/test`, `/redeliver`) | `maintainer` |
+| `GET /api/swarm/join` | `maintainer` |
+| `GET /api/sso/config` | `maintainer` |
+| `POST /api/users` · `PATCH`/`DELETE /api/users/:id` | `admin` |
+| `PUT /api/users/:id/password` **for anybody else** | `admin` |
+| `PUT`/`DELETE /api/sso/config` · `/api/sso/config/:key` | `admin` |
+| `POST /api/config/sealed` | `admin` |
+| `GET`/`POST /api/config` | **root token only** |
+
+Three of those rows are decisions rather than deductions, and each looks wrong until you hold it
+next to the thing beside it:
+
+- **The container shell is a developer's, not an admin's.** A developer can already `up` an
+  arbitrary compose file on this host — including a service that mounts the Docker socket — so
+  refusing them a shell would be theatre while the larger door stands open. If that bothers you, the
+  door to close first is `up`.
+- **`GET /api/swarm/join` dropped from admin to maintainer.** It is a host-configuration read and it
+  belongs with the others. It is still a real credential — the token joins a machine to your
+  cluster — so it stops at maintainer and goes no lower.
+- **Writing the SSO configuration is admin, though every other host-configuration write is
+  maintainer.** A provider's `defaultRole` *mints accounts* at whatever role it names, so a
+  maintainer who could point this host at an identity provider they control would be able to sign in
+  through it as an admin. That is a promotion path, and promotion paths live with people. Reading
+  the configuration stays maintainer — it returns a mask, never the client secret.
+
+A refusal says which role was wanted and which one you hold, because an operator staring at a bare
+`forbidden` cannot tell a wrong role from a wrong URL:
+
+```console
+$ curl -s -X PUT https://api.preview.example.com/api/host-vars/DSN \
+    -H "cookie: $SESSION" -d '{"value":"…","secret":true}'
+{
+  "error": "this route requires the maintainer role or higher — you are a developer"
+}
+```
+
+### Giving somebody a role
+
+A role is set when the account is created and changed with `PATCH`. Both are admin's (or root's):
+
+```console
+$ curl -s -X POST https://api.preview.example.com/api/users \
+    -H "authorization: Bearer $PSTACK_TOKEN" \
+    -d '{"username":"dana","password":"…","email":"dana@example.com","role":"developer"}'
+{ "user": { "id": 7, "username": "dana", "role": "developer", … } }
+
+$ curl -s -X PATCH https://api.preview.example.com/api/users/7 \
+    -H "authorization: Bearer $PSTACK_TOKEN" -d '{"role":"maintainer"}'
+{ "updated": 7, "role": "maintainer" }
+```
+
+- A **personal access token inherits its owner's role** and can never exceed it. The CI job holding
+  one is that person, with that person's permissions — so a `viewer`'s token cannot deploy.
+- A promotion or demotion **takes effect on that account's next request**. Sessions and tokens are
+  deliberately not revoked: every request reads the role fresh, and logging somebody out is a worse
+  signal, not a stronger one.
+- **The last admin cannot be deleted or demoted** — not by another admin, and not by the root token
+  either. `PSTACK_TOKEN` may live only in a CI secret store or have been rotated away from every
+  human on the team, and a host with zero admin accounts cannot create one through the API; the
+  repair is a hand-edited database over SSH. Promote a replacement first:
+  `cannot demote the last admin — promote another account first`.
+
+### Upgrading a host that already has accounts
+
+**Nothing breaks and nobody is locked out.** The `role` column has carried a default of `admin`
+since it was added, so every account that exists on your host today is already an `admin` and keeps
+doing exactly what it did before. There is no migration to run and no window in which somebody
+cannot log in. Roles only start to matter for the accounts you create *after* the upgrade — and for
+the ones you deliberately demote.
+
+Demote deliberately, on your own schedule. `PATCH /api/users/:id` one at a time, leaving at least
+one admin behind.
+
+> **⚠️ Breaking: `POST /api/users` no longer creates an admin.**
+>
+> It takes an optional `role`, and **an absent `role` now means `viewer`** — the least privilege,
+> where it used to silently mean the most. A script or a provisioning step that relied on the old
+> behaviour has to say `"role": "admin"` and mean it.
+>
+> The same route is now **admin-only**. Previously it was reachable by *any* authenticated
+> principal and always created an admin, which meant any account on the host could mint itself a
+> second, fully privileged one. That was the hole this release closes.
+>
+> An unknown role is a `400` naming the four, rather than a stored value that quietly reaches
+> nothing.
+
+### What this is, and what it is not
+
+This is **coarse, role-based access control**: four fixed tiers, one ordered comparison, one table.
+It is deliberately the smallest thing that removes "every account can do everything", and it buys
+you the ordinary team shape — a contractor who can look, a developer who can deploy, an operator who
+holds the host's secrets.
+
+It is **not** a policy engine and not multi-tenancy. There is no "developer, but only on `pr-*`", no
+"maintainer of these three registries", no per-deployment ownership. Those are attribute-based
+questions, and answering them properly means a real isolation boundary underneath — separate VMs or
+namespaces, a credential boundary, a per-tenant Docker — not more rows in this table.
+[ABAC](https://en.wikipedia.org/wiki/Attribute-based_access_control) is the direction this would
+grow in if it grows; adding attributes to *these* four tiers without the boundary underneath would
+buy the appearance of isolation and none of it. Until then: one host, one trust level per tier, and
+a developer who can `up` an arbitrary compose file is trusted with the host.
 
 ## 8. Wire it into CI
 
@@ -2475,7 +2630,9 @@ different problems with different owners.
 `:id` is a **registry id** (e.g. `pr-123`), never the resolved stack name. **Every route requires a
 principal** — reads included, since 0.10.0 — except `/api/health`, the login/bootstrap routes and the
 two SSO legs, which are how you become one. A session cookie is what lets the log stream use
-`EventSource`, which cannot send headers.
+`EventSource`, which cannot send headers. Since 0.31.0 a principal is not enough on its own: each
+route also names a **least role** — [7e](#7e-who-can-do-what-the-four-roles-0310) is the matrix, and
+anything it does not list is the root token's alone.
 
 | Method | Route | Body / query | Returns |
 |---|---|---|---|
@@ -2491,7 +2648,10 @@ two SSO legs, which are how you become one. A session cookie is what lets the lo
 | POST | `/api/deployments/:id/wake` | spec variables as `?K=V` | **202** `{ job }` — `up`, recorded as a wake |
 | GET | `/api/config` | — | the whole portable configuration in **plaintext**: password hashes, token hashes, host secrets, notifier secrets, the SSO client secrets, registry logins. **Root token only** — an admin session or personal token is `403`. `cache-control: no-store`. Emits `config.exported` |
 | POST | `/api/config` | that document | applies it create-or-skip → `{ trusts, created, skipped }` · 400 on a document this build does not understand · 403 for anything but the root token · 413 over 8 MiB. Emits `config.imported`, **including when it fails part-way** |
-| POST | `/api/users` | `{ username, password, email? }` | **201** `{ user }`. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
+| POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only**, and an absent `role` means `viewer` — both changed in 0.31.0, see [7e](#7e-who-can-do-what-the-four-roles-0310). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
+| PATCH | `/api/users/:id` | `{ role }` | `{ updated, role }` · **admin only** · 400 on an unknown role or on demoting the last admin · 404. Takes effect on that account's next request |
+| DELETE | `/api/users/:id` | — | `{ deleted }` · **admin only** · 400 on the last user or the last admin · 404 |
+| PUT | `/api/users/:id/password` | `{ password }` | `{ ok, revokedSessions }` — **your own** at any role, **anybody else's** is admin. Revokes that account's sessions and personal tokens |
 | POST | `/api/deployments/:id/share` | `{ views?: ["details","logs"], ttl?: "7d" }` | **201** `{ url, token, views, expiresAt }` — a read-only link; 400 with no `PSTACK_TOKEN` to sign with, or a ttl over `30d` |
 | GET | `/api/auth/sso/start` | `?provider=<key>&next=<same-origin path>` | **302** to that provider, with PKCE. Keyless: one enabled provider is picked, several land on `/login?sso_error=…` naming the keys, none says so too. No auth — this *is* how you sign in |
 | GET | `/api/auth/sso/callback` | `?code=&state=` (the provider's redirect) | **302** with a session cookie, or **302** to `/login?sso_error=…` — completed against the provider the state was minted for. No auth |
@@ -2499,7 +2659,7 @@ two SSO legs, which are how you become one. A session cookie is what lets the lo
 | PUT | `/api/sso/config` | `{ key, …config, clientSecret }` | `{ ok, key, config, callbackUrl }` · 400 on a bad field, an unreachable issuer, or a keyless body when several providers exist. Submitting the mask keeps that key's stored secret |
 | DELETE | `/api/sso/config` · `/api/sso/config/<key>` | — | forget that provider; the accounts it created stay · bare with several providers is 400 naming the keys · 404 if none |
 | GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
-| GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **admin only**; 409 when this daemon is not a manager |
+| GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **maintainer and up** (it was admin before 0.31.0); 409 when this daemon is not a manager |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
 | ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the spinning-up page, and a wake job |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |
@@ -2508,7 +2668,9 @@ two SSO legs, which are how you become one. A session cookie is what lets the lo
 | GET | `/` and **any** non-`/api/` path | — | the embedded single-page UI. No filesystem lookup, so a deep link renders rather than 404s |
 
 Status codes: **202** accepted · **400** bad spec or missing variable · **401** unauthorized ·
-**403** a credential the route admits, doing something it may not (`/api/config`) · **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
+**403** a credential the route admits, doing something it may not — a role below the route's least
+one (the body names both), a share link outside its views, or an admin at `/api/config` ·
+**404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 
 Job `state`: `running` · `ok` · `failed` · `leaked` · `cancelled`. Job `action`: `up` · `down` ·

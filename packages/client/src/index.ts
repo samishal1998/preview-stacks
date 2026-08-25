@@ -34,8 +34,10 @@ import type {
   Job,
   Kind,
   Logs,
+  Me,
   NotifierRow,
   Readiness,
+  Role,
   Runtime,
   ShareLink,
   ShareView,
@@ -43,6 +45,7 @@ import type {
   SsoConfig,
   SsoConfigResponse,
   SwarmInfo,
+  User,
 } from './types.ts';
 
 export * from './types.ts';
@@ -74,8 +77,14 @@ export type ClientOptions = {
    * else, every route needs it.
    */
   token?: string;
-  /** Swap in for tests, a proxy, or an agent with custom TLS. Defaults to global `fetch`. */
-  fetch?: typeof fetch;
+  /**
+   * Swap in for tests, a proxy, or an agent with custom TLS. Defaults to global `fetch`.
+   *
+   * The SIGNATURE, not `typeof fetch`: the global carries a `preconnect` property in both Bun's and
+   * Node's lib types, so `typeof fetch` rejects every plain arrow function — which is the only
+   * shape anyone actually passes here. This is what the client calls, and the global still fits it.
+   */
+  fetch?: (input: string, init?: RequestInit) => Promise<Response>;
   /** Per request, in ms. Deploys are started, never awaited, so this bounds the HTTP call only. */
   timeoutMs?: number;
 };
@@ -135,6 +144,12 @@ export function createClient(opts: ClientOptions) {
     request,
 
     health: () => get<Health>('/api/health'),
+
+    /**
+     * Who this token is. `{ root: true }` for `PSTACK_TOKEN` — which is above every role and has no
+     * account — otherwise `user.role`, which is what a script branching on its own privileges reads.
+     */
+    me: () => get<Me>('/api/auth/me'),
 
     deployments: {
       list: (vars?: Vars) => get<{ deployments: DeploymentRow[] }>(`/api/deployments${qs(vars)}`).then((r) => r.deployments),
@@ -224,6 +239,30 @@ export function createClient(opts: ClientOptions) {
        */
       join: (o: { format: 'token' | 'command' | 'script' | 'cloud-config'; distro?: string } = { format: 'command' }) =>
         get<string>(`/api/swarm/join${qs(undefined, { format: o.format, distro: o.distro })}`),
+    },
+
+    /**
+     * Accounts and the role each holds.
+     *
+     * Reading the roster is ordinary team information (viewer); creating, deleting and re-roling
+     * people is ADMIN, because anything that can set a role can set its own to `admin`.
+     */
+    users: {
+      list: () => get<{ users: User[] }>('/api/users').then((r) => r.users),
+      /**
+       * An ABSENT `role` means VIEWER — the least privilege, not the most. This route used to create
+       * an administrator every time; a script that relied on that must now say `role: 'admin'` and
+       * mean it. A role outside the four is a 400 rather than a silently powerless account.
+       */
+      create: (body: { username: string; password: string; email?: string; role?: Role }) =>
+        post<{ user: User }>('/api/users', body).then((r) => r.user),
+      /**
+       * Promote or demote. Takes effect on that account's NEXT request — the role is read fresh per
+       * request, so there is no session to revoke. Demoting the last admin is refused (400).
+       */
+      setRole: (id: number, role: Role) => request<{ updated: number; role: Role }>('PATCH', `/api/users/${id}`, { role }),
+      /** Deleting the last admin is refused: a host nobody can administer cannot be repaired over HTTP. */
+      remove: (id: number) => del<{ deleted: number }>(`/api/users/${id}`),
     },
 
     /**

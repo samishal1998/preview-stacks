@@ -15,8 +15,9 @@ import { useShortcuts } from './composables/useShortcuts';
 import { usePolling } from './composables/usePolling';
 import { loadDeployments, loadHealth, loadJobs, state } from './composables/useControlPlane';
 import { settings } from './composables/useSettings';
-import { authState, logout } from './composables/useAuth';
+import { authState, can, logout } from './composables/useAuth';
 import { useRoute, useRouter } from 'vue-router';
+import { sentence } from './composables/useFormat';
 import InfoHint from './components/InfoHint.vue';
 // Named imports, so the bundler ships only these glyphs — not the whole set.
 import {
@@ -93,6 +94,17 @@ void settings;
         pstack
       </RouterLink>
 
+      <!--
+        WHICH ENTRIES SHOW: an entry is visible at the least role that can get SOMETHING out of the
+        page it opens, which for almost every page is its READ — and every read in the permission
+        table is a viewer's. So the rail is nearly whole for a viewer, and the two write-only pages
+        are the exceptions: Submit creates and updates deployments (developer) and Sign-on cannot
+        even load its config below maintainer. Apply config only ever calls
+        `POST /api/config/sealed` (admin); the root-only `/api/config` pair has no page here.
+
+        This HIDES, it does not enforce — `can()` renders, the server decides. A page reached by
+        typing its URL still loads and still shows the 403 its panels get back.
+      -->
       <nav aria-label="Sections">
         <RouterLink to="/" class="navlink" title="g h">
           <LayoutDashboard :size="17" aria-hidden="true" />
@@ -136,7 +148,7 @@ void settings;
           <span class="count">{{ runningJobs ? `${runningJobs}\u25B8` : state.jobs.length }}</span>
         </RouterLink>
 
-        <RouterLink to="/submit" class="navlink" title="g n">
+        <RouterLink v-if="can('developer')" to="/submit" class="navlink" title="g n">
           <Plus :size="17" aria-hidden="true" />
           <span>Submit</span>
         </RouterLink>
@@ -150,12 +162,12 @@ void settings;
           <Users :size="17" aria-hidden="true" />
           <span>Users</span>
         </RouterLink>
-        <RouterLink to="/sso" class="navlink">
+        <RouterLink v-if="can('maintainer')" to="/sso" class="navlink">
           <ShieldCheck :size="17" aria-hidden="true" />
           <span>Sign-on</span>
         </RouterLink>
 
-        <RouterLink to="/config" class="navlink">
+        <RouterLink v-if="can('admin')" to="/config" class="navlink">
           <Upload :size="17" aria-hidden="true" />
           <span>Apply config</span>
         </RouterLink>
@@ -176,6 +188,9 @@ void settings;
         <div v-else-if="state.health" class="row" style="gap: 4px">
           <span v-if="authState.user" class="foot-who">{{ authState.user.username }}</span>
           <span v-else-if="authState.root && authState.checked" class="foot-who">token access</span>
+          <!-- The role, permanently, next to who you are: it is the reason half this rail is or is
+               not there. Root holds no role — "token access" already says it outranks all four. -->
+          <span v-if="authState.user" class="mute">· {{ sentence(authState.user.role) }}</span>
           <span class="mute">· v{{ state.health.version }}</span>
           <InfoHint label="server details" side="top">
             Data is stored in <code>{{ state.health.dataDir }}</code> on the host.

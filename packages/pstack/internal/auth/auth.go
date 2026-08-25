@@ -15,6 +15,10 @@
 //     attaches cookies to both automatically on the same origin. Session auth is what makes those
 //     surfaces authenticable at all.
 //
+// A user additionally holds one of four ordered ROLES — viewer < developer < maintainer < admin.
+// The type and its ranking live below (see "roles"); WHAT each rank may reach is one table in
+// internal/api/permissions.go, never a check scattered through the handlers.
+//
 // ── STORAGE DISCIPLINE ───────────────────────────────────────────────────────────────────────────
 //
 // Passwords: argon2id (phc.go). Sessions and tokens: the database stores the SHA-256 of the secret,
@@ -106,6 +110,74 @@ const (
 	KindShare Kind = "share"
 )
 
+// ── roles ───────────────────────────────────────────────────────────────────────────────────────
+//
+// FOUR ORDERED ROLES, and the order IS the model: viewer < developer < maintainer < admin, each
+// including everything below it. `root` — the PSTACK_TOKEN bearer — sits above all four. A `share`
+// is not a role at any rank; see Allows.
+//
+// AN UNKNOWN ROLE RANKS LOWEST, NOT HIGHEST. `users.role` is a plain TEXT column with no CHECK, and
+// this project expects an operator to repair a database over SSH — so a row hand-edited to
+// "superuser" must LOSE access, never gain it. Rank answers 0 for anything but the four, and Allows
+// additionally refuses a minimum that is itself unrankable, so an unknown role passes no gate.
+//
+// Nobody is locked out by roles arriving: migration 1's DDL is `role TEXT NOT NULL DEFAULT 'admin'`
+// and createUser inserts `COALESCE(?, 'admin')`, so every row written before this change is an
+// admin — verified by reading store/migrations.go, entry 1.
+type Role string
+
+// The four.
+const (
+	Viewer     Role = "viewer"
+	Developer  Role = "developer"
+	Maintainer Role = "maintainer"
+	Admin      Role = "admin"
+)
+
+// RolesText is the four as one comma list, for a validation message.
+const RolesText = "viewer, developer, maintainer, admin"
+
+// Rank orders the roles, weakest first. ZERO means "not one of the four", which is below every one
+// of them — see the note above.
+func (r Role) Rank() int {
+	switch r {
+	case Viewer:
+		return 1
+	case Developer:
+		return 2
+	case Maintainer:
+		return 3
+	case Admin:
+		return 4
+	}
+	return 0
+}
+
+// ValidRole reports whether s names one of the four.
+func ValidRole(s string) bool { return Role(s).Rank() > 0 }
+
+// Allows reports whether this principal meets a minimum role.
+//
+//   - ROOT always may. It is the machine credential and sits above every role.
+//   - A SHARE NEVER may, whatever the minimum. A share is not a role: it is a signed read-only link
+//     to ONE deployment, and internal/api's shareAllows has already decided what it may reach
+//     before any route runs (invariant 16). Ranking it here would be a second, weaker copy of that
+//     gate, and the two would drift.
+//   - A USER compares rank, and an unrankable MINIMUM is met by nobody — the same fail-closed
+//     direction as an unrankable role on the row.
+func (p *Principal) Allows(min Role) bool {
+	if p == nil || p.Kind == KindShare {
+		return false
+	}
+	if p.Kind == KindRoot {
+		return true
+	}
+	if p.Kind != KindUser || p.User == nil {
+		return false
+	}
+	return min.Rank() > 0 && Role(p.User.Role).Rank() >= min.Rank()
+}
+
 func sha256Hex(input string) string {
 	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:])
@@ -171,8 +243,12 @@ func userCount(q store.Querier) (int64, error) {
 	return n, err
 }
 
-// CreateOpts are the optional fields of a new account. An empty Role is 'admin'; an empty Email is
-// stored as NULL.
+// CreateOpts are the optional fields of a new account. An empty Email is stored as NULL.
+//
+// AN EMPTY ROLE IS STILL 'admin', and that is deliberate at THIS layer: Bootstrap — the first
+// account on a host, and the only one that can then create others — comes through here with no
+// role, and a viewer first account is an unusable host. Callers that must not mint an admin pass
+// the role they mean; POST /api/users defaults to viewer in the route, not here.
 type CreateOpts struct {
 	Role  string
 	Email string
@@ -189,6 +265,12 @@ func createUser(q store.Querier, name, password string, opts CreateOpts) (*UserR
 	}
 	if js.Len(password) < 8 {
 		return nil, errorf("password must be at least 8 characters")
+	}
+	// The ONE choke point every account passes through — the route, the SSO provisioner and PATCH
+	// all land here — so an unrankable role is refused once, loudly, instead of silently becoming
+	// an account that can reach nothing and nobody can explain.
+	if opts.Role != "" && !ValidRole(opts.Role) {
+		return nil, errorf("role must be one of: " + RolesText)
 	}
 	hash := HashPassword(password)
 	var role, email sql.NullString
@@ -232,18 +314,91 @@ func collectUsers(rows *sql.Rows) ([]UserRow, error) {
 	return out, rows.Err()
 }
 
-// DeleteUser refuses to delete the last user: an instance with accounts and no way to log in is
-// only recoverable by editing the database over SSH, and nothing in the UI can explain that state.
-func (a *Auth) DeleteUser(id int64) (bool, error) {
-	n, err := a.UserCount()
-	if err != nil {
+// adminCount is how many accounts hold the admin role.
+func adminCount(q store.Querier) (int64, error) {
+	var n int64
+	err := q.QueryRow("SELECT COUNT(*) AS n FROM users WHERE role = ?", string(Admin)).Scan(&n)
+	return n, err
+}
+
+// lastAdmin reports whether deleting or demoting id would leave the host with NO admin at all.
+// A missing row is false: the caller answers 404 for that, not a lockout message.
+func lastAdmin(q store.Querier, id int64) (bool, error) {
+	var role string
+	err := q.QueryRow("SELECT role FROM users WHERE id = ?", id).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil || Role(role) != Admin {
 		return false, err
 	}
-	if n <= 1 {
-		return false, errorf("cannot delete the last user — create another account first")
+	n, err := adminCount(q)
+	return n <= 1, err
+}
+
+// DeleteUser refuses to delete the last user: an instance with accounts and no way to log in is
+// only recoverable by editing the database over SSH, and nothing in the UI can explain that state.
+//
+// ── AND IT REFUSES TO DELETE THE LAST ADMIN ─────────────────────────────────────────────────────
+//
+// "Last" counts ROWS, and WHO IS ASKING IS IRRELEVANT — root included. Root cannot be counted as an
+// admin: PSTACK_TOKEN is a machine credential that may live only in a CI secret store, or have been
+// rotated away from every human on the team. Once a host has zero admin accounts, nothing in the
+// API can create one (POST /api/users is admin-only), so the recovery is a hand-edited database
+// over SSH. Root that genuinely wants this account gone promotes a replacement first.
+//
+// The count and the write share one transaction: two concurrent deletes each reading "2 admins" is
+// exactly how a host reaches zero.
+func (a *Auth) DeleteUser(id int64) (bool, error) {
+	var did bool
+	err := a.store.Tx(func(q store.Querier) error {
+		n, err := userCount(q)
+		if err != nil {
+			return err
+		}
+		if n <= 1 {
+			return errorf("cannot delete the last user — create another account first")
+		}
+		last, err := lastAdmin(q, id)
+		if err != nil {
+			return err
+		}
+		if last {
+			return errorf("cannot delete the last admin — promote another account first")
+		}
+		// Sessions and tokens go with the row (ON DELETE CASCADE).
+		did, err = changed(q.Exec("DELETE FROM users WHERE id = ?", id))
+		return err
+	})
+	return did, err
+}
+
+// SetRole changes an account's role, and refuses to demote the last admin for the reason
+// DeleteUser gives. False (with no error) means there is no such account.
+//
+// Sessions and tokens are deliberately NOT revoked: SessionUser and TokenUser join `users` and read
+// the role on every request, so a demotion takes effect on the demoted caller's very next request.
+// Revoking would only log them out, which is a worse signal, not a stronger one.
+func (a *Auth) SetRole(id int64, role Role) (bool, error) {
+	if !ValidRole(string(role)) {
+		return false, errorf("role must be one of: " + RolesText)
 	}
-	// Sessions and tokens go with the row (ON DELETE CASCADE).
-	return changed(a.store.DB.Exec("DELETE FROM users WHERE id = ?", id))
+	var did bool
+	err := a.store.Tx(func(q store.Querier) error {
+		if role != Admin {
+			last, err := lastAdmin(q, id)
+			if err != nil {
+				return err
+			}
+			if last {
+				return errorf("cannot demote the last admin — promote another account first")
+			}
+		}
+		var err error
+		did, err = changed(q.Exec("UPDATE users SET role = ? WHERE id = ?", string(role), id))
+		return err
+	})
+	return did, err
 }
 
 func changed(res sql.Result, err error) (bool, error) {
@@ -711,9 +866,17 @@ func provision(q store.Querier, identity *sso.Identity, defaultRole string) (*Us
 		raw, _, _ = strings.Cut(identity.Email, "@")
 	}
 	base := sso.SanitizeUsername(raw, identity.Subject)
+	// LEAST PRIVILEGE when the provider names no role. An identity provider is an outside system
+	// deciding who gets an account here; if its stored config says nothing about what that account
+	// may do, the answer is "read" and an admin promotes from there.
+	//
+	// This fallback is not the whole story and must not be read as one: sso.ParseConfig fills an
+	// empty `defaultRole` with "admin" before the config is ever stored, so every provider that went
+	// through it still mints admins and this line never fires for them. Fixing that default belongs
+	// in internal/sso.
 	role := defaultRole
 	if role == "" {
-		role = "admin"
+		role = string(Viewer)
 	}
 	for attempt := 0; attempt < 50; attempt++ {
 		suffix := ""

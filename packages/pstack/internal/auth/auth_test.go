@@ -192,7 +192,7 @@ func TestAuth(t *testing.T) {
 		// The stored JSON is the full normalised shape in the TypeScript's key order.
 		var raw string
 		a.store.DB.QueryRow("SELECT config FROM sso_providers WHERE key = 'work'").Scan(&raw)
-		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"admin","label":"GitHub","discoveryUrl":"","provider":"github",`) {
+		if !strings.HasPrefix(raw, `{"mode":"oauth2","enabled":true,"clientId":"cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"viewer","label":"GitHub","discoveryUrl":"","provider":"github",`) {
 			t.Fatalf("stored %s", raw)
 		}
 		// A hand-edited row that no longer validates reads as "no provider" — and is skipped by the
@@ -489,4 +489,197 @@ func TestGolden(t *testing.T) {
 			t.Fatalf("own hash %s", h)
 		}
 	})
+}
+
+// TestRoles is the role type and the two lockout guards: the ordering (unknown lowest), what a
+// principal may reach, and the fact that a host can never be left with no administrator.
+func TestRoles(t *testing.T) {
+	t.Run("an unknown role ranks BELOW viewer, never above admin", func(t *testing.T) {
+		// negative control: return 4 instead of 0 from Rank's default → every line below fails.
+		// users.role is a plain TEXT column with no CHECK, and this project expects a database to be
+		// repaired over SSH — so a row hand-edited to "superuser" must lose access, not gain it.
+		if Viewer.Rank() >= Developer.Rank() || Developer.Rank() >= Maintainer.Rank() || Maintainer.Rank() >= Admin.Rank() {
+			t.Fatal("the four are not ordered")
+		}
+		for _, weird := range []Role{"superuser", "root", "ADMIN", "", " admin"} {
+			if weird.Rank() != 0 || weird.Rank() >= Viewer.Rank() {
+				t.Fatalf("%q ranks %d", weird, weird.Rank())
+			}
+			if ValidRole(string(weird)) {
+				t.Fatalf("%q must not validate", weird)
+			}
+		}
+		for _, ok := range []Role{Viewer, Developer, Maintainer, Admin} {
+			if !ValidRole(string(ok)) {
+				t.Fatalf("%q must validate", ok)
+			}
+		}
+	})
+
+	t.Run("Allows: root always, share never, a user by rank, an unrankable minimum by nobody", func(t *testing.T) {
+		// negative control: drop `min.Rank() > 0` from Allows → the "superuser" minimum admits the
+		// admin, so a caller naming a role this build does not know would widen the gate instead of
+		// closing it.
+		root := &Principal{Kind: KindRoot}
+		sh := &Principal{Kind: KindShare, Deployment: "pr-1"}
+		user := func(role string) *Principal {
+			return &Principal{Kind: KindUser, User: &UserRow{ID: 1, Username: "u", Role: role}}
+		}
+		for _, min := range []Role{Viewer, Developer, Maintainer, Admin} {
+			if !root.Allows(min) {
+				t.Fatalf("root must meet %s", min)
+			}
+			if sh.Allows(min) {
+				t.Fatalf("a share must never meet %s", min)
+			}
+		}
+		if user("admin").Allows("superuser") || root.Allows("superuser") == false {
+			t.Fatal("an unrankable minimum is met by no user, and root still passes everything")
+		}
+		if !user("developer").Allows(Viewer) || !user("developer").Allows(Developer) {
+			t.Fatal("a role must include everything below it")
+		}
+		if user("developer").Allows(Maintainer) || user("developer").Allows(Admin) {
+			t.Fatal("a role must not reach above itself")
+		}
+		if user("superuser").Allows(Viewer) {
+			t.Fatal("an unknown role must reach nothing")
+		}
+		var nilp *Principal
+		if nilp.Allows(Viewer) {
+			t.Fatal("no principal is not a principal")
+		}
+	})
+
+	t.Run("createUser refuses a role that is not one of the four", func(t *testing.T) {
+		// negative control: delete the ValidRole check in createUser → "superuser" is stored, and the
+		// account is a mystery nobody can explain. It is the ONE choke point: the route, PATCH and
+		// the SSO provisioner all insert through it.
+		a := open(t)
+		if _, err := a.CreateUser("mallory", "correct-horse", CreateOpts{Role: "superuser"}); !IsError(err) || err.Error() != "role must be one of: "+RolesText {
+			t.Fatalf("role: %v", err)
+		}
+		u, err := a.CreateUser("dev", "correct-horse", CreateOpts{Role: "developer"})
+		if err != nil || u.Role != "developer" {
+			t.Fatalf("%+v %v", u, err)
+		}
+		// An EMPTY role is still admin at this layer: Bootstrap comes through here, and a viewer
+		// first account is an unusable host. The route defaults to viewer, not this function.
+		u, err = a.CreateUser("first", "correct-horse", CreateOpts{})
+		if err != nil || u.Role != "admin" {
+			t.Fatalf("%+v %v", u, err)
+		}
+	})
+
+	t.Run("the last admin cannot be deleted or demoted", func(t *testing.T) {
+		// negative control: drop the lastAdmin check from DeleteUser → the delete succeeds and the
+		// host has zero admins; drop it from SetRole → the demotion succeeds. Both leave a host where
+		// no account can create an admin and only PSTACK_TOKEN (or SSH) can repair it — and the token
+		// may live nowhere a human can reach.
+		a := open(t)
+		boss, err := a.CreateUser("boss", "correct-horse", CreateOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hand, err := a.CreateUser("hand", "correct-horse", CreateOpts{Role: string(Viewer)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Two users, one admin: neither the delete nor the demotion may go through.
+		if _, err := a.DeleteUser(boss.ID); !IsError(err) || err.Error() != "cannot delete the last admin — promote another account first" {
+			t.Fatalf("delete: %v", err)
+		}
+		for _, to := range []Role{Viewer, Developer, Maintainer} {
+			if _, err := a.SetRole(boss.ID, to); !IsError(err) || err.Error() != "cannot demote the last admin — promote another account first" {
+				t.Fatalf("demote to %s: %v", to, err)
+			}
+		}
+		// Admin → admin is not a demotion, and the viewer is nobody's last anything.
+		if ok, err := a.SetRole(boss.ID, Admin); !ok || err != nil {
+			t.Fatalf("re-setting admin: %v %v", ok, err)
+		}
+		if ok, err := a.SetRole(hand.ID, Developer); !ok || err != nil {
+			t.Fatalf("promoting the viewer: %v %v", ok, err)
+		}
+		// Promote a second admin and the guard steps aside.
+		if ok, err := a.SetRole(hand.ID, Admin); !ok || err != nil {
+			t.Fatalf("promoting: %v %v", ok, err)
+		}
+		if ok, err := a.DeleteUser(boss.ID); !ok || err != nil {
+			t.Fatalf("delete with two admins: %v %v", ok, err)
+		}
+		// …and now `hand` is the last one, whoever is asking. Root is not a user and is not counted:
+		// PSTACK_TOKEN may live only in a CI secret store, or have been rotated away entirely.
+		if _, err := a.DeleteUser(hand.ID); !IsError(err) {
+			t.Fatalf("the new last admin: %v", err)
+		}
+	})
+
+	t.Run("SetRole validates, 404s an unknown id, and takes effect on the next request", func(t *testing.T) {
+		// negative control: drop the ValidRole check in SetRole → "superuser" is written over a real
+		// role, which is a silent DEMOTION to rank zero.
+		a := open(t)
+		if _, err := a.CreateUser("boss", "correct-horse", CreateOpts{}); err != nil {
+			t.Fatal(err)
+		}
+		u, err := a.CreateUser("dev", "correct-horse", CreateOpts{Role: string(Developer)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.SetRole(u.ID, "superuser"); !IsError(err) {
+			t.Fatalf("bad role: %v", err)
+		}
+		if ok, err := a.SetRole(999, Viewer); ok || err != nil {
+			t.Fatalf("unknown id: %v %v", ok, err)
+		}
+		session, _, err := a.Login("dev", "correct-horse")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := a.SetRole(u.ID, Viewer); !ok || err != nil {
+			t.Fatalf("demote: %v %v", ok, err)
+		}
+		// The session is deliberately NOT revoked — the principal lookup reads the role fresh, so the
+		// demotion is already in force on the very next request.
+		got, err := a.SessionUser(session)
+		if err != nil || got == nil || got.Role != string(Viewer) {
+			t.Fatalf("session sees %+v %v", got, err)
+		}
+	})
+}
+
+// The SSO default is the LEAST privilege, and this is the test whose absence let the opposite ship.
+//
+// `sso.ParseConfig` filled an empty `defaultRole` with "admin" — written when admin was the only
+// role, and left alone when the other three arrived. Every preset saves with empty
+// allowedEmailDomains / allowedUsernames / requiredGroups, so on such a host ANY stranger who
+// completed the OAuth flow was provisioned a full administrator. Seventeen SSO tests existed and
+// not one asserted the role a provisioned account receives.
+//
+// It is pinned from THIS package because internal/sso cannot import internal/auth (auth imports
+// sso, so the reverse is a cycle) — which is also why the string over there is not type-checked
+// against Role. This test is the join.
+//
+// negative control: put "admin" back in sso.ParseConfig's fallback — the first check fails.
+func TestSsoDefaultRoleIsLeastPrivilege(t *testing.T) {
+	parsed, err := sso.ParseConfig(mustParse(t, `{"mode":"oidc","discoveryUrl":"https://idp.example.com","clientId":"c"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.DefaultRole != string(Viewer) {
+		t.Fatalf("an SSO provider that names no role provisions %q; it must be %q", parsed.DefaultRole, Viewer)
+	}
+	// …and whatever it defaults to must be a role this package actually ranks. A default that does
+	// not validate would store fine and then deny its own accounts everything.
+	if !ValidRole(parsed.DefaultRole) {
+		t.Fatalf("the SSO default %q is not one of: %s", parsed.DefaultRole, RolesText)
+	}
+	// An explicit role still wins — the point is that granting privilege must be deliberate.
+	explicit, err := sso.ParseConfig(mustParse(t, `{"mode":"oidc","discoveryUrl":"https://idp.example.com","clientId":"c","defaultRole":"admin"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.DefaultRole != string(Admin) {
+		t.Fatalf("an explicit defaultRole was not honoured: %q", explicit.DefaultRole)
+	}
 }

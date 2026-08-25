@@ -10,9 +10,16 @@
  *   - a user session (cookie)      → `user` is set
  *   - a bearer token in Settings   → `root` (PSTACK_TOKEN) or `user` (a personal token)
  *   - loopback dev mode, no token  → `root`
+ *
+ * A signed-in user carries a ROLE, and `can()` below reads it. `can()` is for RENDERING — it decides
+ * what to show, never what is allowed. The server's permission table
+ * (`packages/pstack/internal/api/permissions.go`) is the only authority; every hidden control is
+ * still refused with a 403 if the request is made anyway, and every view keeps its error path for
+ * exactly that. Hiding is courtesy, not enforcement.
  */
 import { reactive } from 'vue';
 import { api, onUnauthorized } from '../api/client';
+import { ROLES, type Role, type User } from '../api/types';
 import { router } from '../router';
 
 export const authState = reactive({
@@ -20,7 +27,7 @@ export const authState = reactive({
   checked: false,
   authed: false,
   root: false,
-  user: null as { id: number; username: string; role: string; email?: string | null } | null,
+  user: null as User | null,
   /** From /api/health: whether any account exists — decides "sign in" vs "bootstrap first". */
   hasUsers: null as boolean | null,
   /**
@@ -32,6 +39,33 @@ export const authState = reactive({
   sso: null as { providers: Array<{ key: string; label: string; preset: string }> } | null,
 });
 
+/**
+ * Rank of a role name, mirroring the server: 1…4 for the four known roles, and 0 for anything else.
+ *
+ * A role this build has never heard of ranks BELOW viewer rather than being guessed at — the same
+ * fail-closed reading `auth.Role.Rank` does in Go. It cannot be a permission decision (only the
+ * server makes those), but it must not accidentally SHOW an unknown role the admin controls.
+ */
+function rank(role: string | null | undefined): number {
+  return ROLES.indexOf((role ?? '') as Role) + 1;
+}
+
+/**
+ * Is the signed-in principal AT LEAST this role — for rendering only.
+ *
+ * Root (PSTACK_TOKEN) holds no role and passes everything, exactly as the server's table has it.
+ * A share visitor has no `user` and reaches nothing here; the pages a share link opens are public
+ * routes that never ask.
+ *
+ * Use it to hide what the caller cannot do — a button that can only 403 is a promise the app breaks
+ * on click. Do NOT use it in place of handling the refusal: the answer still comes from the server.
+ */
+export function can(min: Role): boolean {
+  if (authState.root) return true;
+  const have = rank(authState.user?.role);
+  return have > 0 && have >= rank(min);
+}
+
 export async function checkAuth(): Promise<void> {
   const health = await api.get<{
     hasUsers?: boolean;
@@ -42,9 +76,7 @@ export async function checkAuth(): Promise<void> {
     authState.sso = health.body.sso ?? null;
   }
 
-  const me = await api.getAuthed<{ root: boolean; user?: { id: number; username: string; role: string; email?: string | null } }>(
-    '/api/auth/me',
-  );
+  const me = await api.getAuthed<{ root: boolean; user?: User }>('/api/auth/me');
   /*
    * Status 0 is "the server did not answer", not "you are signed out" — a control plane restarting
    * for two seconds must not bounce a valid session to the login page. Leaving `checked` false
@@ -64,10 +96,7 @@ export async function checkAuth(): Promise<void> {
 }
 
 export async function login(username: string, password: string): Promise<string | null> {
-  const r = await api.post<{ user: { id: number; username: string; role: string; email?: string | null } }>(
-    '/api/auth/login',
-    { username, password },
-  );
+  const r = await api.post<{ user: User }>('/api/auth/login', { username, password });
   if (!r.ok) return r.body.error ?? 'login failed';
   authState.authed = true;
   authState.root = false;

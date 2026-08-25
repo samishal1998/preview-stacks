@@ -528,12 +528,22 @@ func ParseConfig(input any) (*Config, error) {
 		// empty slice — a refusal that never fires and a test that proves nothing.
 		AllowedUsernames: lowerList(get("allowedUsernames")),
 		RequiredGroups:   lowerList(get("requiredGroups")),
-		// Only 'admin' exists today (store migration 1 defaults the column to it and there is no
-		// role UI). The field is here so granting less than admin is a data change when roles land.
+		// The role every account this provider auto-provisions is created with.
 		DefaultRole: str(get("defaultRole")),
 	}
+	// VIEWER, not admin. This defaulted to "admin" back when admin was the only role, and the line
+	// outlived that: with allowedEmailDomains, allowedUsernames and requiredGroups all empty — the
+	// shape every preset saves with — any stranger who completed the OAuth flow was minted a full
+	// administrator, able to create and delete accounts and rewrite this very config.
+	//
+	// A host that wants SSO logins to arrive as admins must now SAY so. Granting the most privilege
+	// this product has is not a thing to do by omission.
+	//
+	// The string is not validated here: internal/auth imports this package, so this package cannot
+	// import it back to reach auth.ValidRole. The API layer validates before storing (routes_auth),
+	// and an auth-side test pins this default equal to auth.Viewer so the two cannot drift.
 	if cfg.DefaultRole == "" {
-		cfg.DefaultRole = "admin"
+		cfg.DefaultRole = "viewer"
 	}
 	if v, ok := o.Get("enabled"); ok {
 		cfg.Enabled = truthy(v)
