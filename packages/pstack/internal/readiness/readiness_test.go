@@ -293,3 +293,34 @@ func TestDockerNotAnsweringIsReportedAndTheWatchKeepsGoing(t *testing.T) {
 		t.Errorf("the deadline is what ends it: %+v", s)
 	}
 }
+
+func TestRestartLoopThresholdIsConfigurable(t *testing.T) {
+	// negative control: drop RestartLoop back to the default 3 — the three-restart container below is
+	// then a crash loop and the first assertion fails. This is the knob a SWARM host turns up: with no
+	// `depends_on`, a dependent restarts a few times while its database converges, and calling that a
+	// crash loop fails the deploy.
+	bus := events.New()
+	loose := func(restarts int64) StackReadiness {
+		d := newDocker()
+		d.set("running", "", 0, restarts)
+		ws := New(Options{PollMs: 20, TimeoutMs: 5000, RestartLoop: 6, Bus: bus})
+		ws.Start("probe", d.runner(), StartOptions{Emit: true})
+		s, _ := ws.Wait("probe", 3000)
+		return s
+	}
+	if s := loose(3); s.State != Ready {
+		t.Fatalf("3 restarts is under a threshold of 6: %+v", s)
+	}
+	if s := loose(6); s.State != Failed || !strings.Contains(*s.Containers[0].Reason, "crash loop") {
+		t.Fatalf("6 restarts reaches a threshold of 6: %+v", s)
+	}
+	// A non-positive value is the default, not "never a crash loop".
+	d := newDocker()
+	d.set("running", "", 0, 3)
+	ws := New(Options{PollMs: 20, TimeoutMs: 5000, RestartLoop: 0, Bus: bus})
+	ws.Start("probe", d.runner(), StartOptions{Emit: true})
+	s, _ := ws.Wait("probe", 3000)
+	if s.State != Failed {
+		t.Fatalf("RestartLoop 0 falls back to the default of %d: %+v", RestartLoop, s)
+	}
+}

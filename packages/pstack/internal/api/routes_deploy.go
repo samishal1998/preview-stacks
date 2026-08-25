@@ -436,6 +436,18 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, dep *registry
 		return nil
 	}
 	o := lifecycleOptions{By: terminal.ActorOf(*who), Reason: "operator: " + terminal.ActorOf(*who)}
+	// `?timeout=<seconds>` sets the deadline of the watch this job hands off to. Without it the
+	// watcher default (180s) applies, which is far too short for a stack whose one-shot seed runs for
+	// ten minutes — and under SWARM that seed is the whole wait, because `docker stack deploy
+	// --detach=true` returns in seconds and the job goes `ok` long before anything is serving.
+	// `jobs.Up` only. A wake is triggered by an inbound request to a sleeping
+	// hostname, which passes nothing and wants the default; offering the parameter
+	// on a manual wake would only let someone park an hour-long watch nobody polls.
+	if action == jobs.Up {
+		if _, has := query(r.URL.RawQuery, "timeout"); has {
+			o.ReadinessTimeoutMs = int64(boundedSeconds(r.URL.RawQuery, "timeout", ReadinessTimeoutDefaultS, ReadinessTimeoutMaxS) * 1000)
+		}
+	}
 	if v, present := body.Get("verify"); present && v != nil {
 		b := truthy(v)
 		o.Verify = &b
@@ -729,6 +741,13 @@ func (s *Server) deploymentRuntime(w http.ResponseWriter, dep *registry.Deployme
 	return nil
 }
 
+// Bounds of the `?timeout=` watch deadline, shared by `POST …/up` and `GET …/readiness`. The max is
+// the job cap: a watch that could outlive every job would report on a stack nothing is driving.
+const (
+	ReadinessTimeoutDefaultS = 180
+	ReadinessTimeoutMaxS     = 3600
+)
+
 // deploymentReadiness is GET …/readiness: is it SERVING yet — poll, or ?wait=<seconds>.
 func (s *Server) deploymentReadiness(w http.ResponseWriter, r *http.Request, dep *registry.Deployment, vars map[string]string) error {
 	st, err := s.resolveDep(dep.ID, vars)
@@ -736,20 +755,10 @@ func (s *Server) deploymentReadiness(w http.ResponseWriter, r *http.Request, dep
 		return err
 	}
 	q := r.URL.RawQuery
-	num := func(key string, fallback, max float64) float64 {
-		raw := numParam(q, key, 0)
-		if js.IsFinite(raw) && raw > 0 {
-			if raw < max {
-				return raw
-			}
-			return max
-		}
-		return fallback
-	}
-	waitMs := int64(num("wait", 0, 60) * 1000)
+	waitMs := int64(boundedSeconds(q, "wait", 0, 60) * 1000)
 	var timeoutMs int64
 	if _, has := query(q, "timeout"); has {
-		timeoutMs = int64(num("timeout", 180, 3600) * 1000)
+		timeoutMs = int64(boundedSeconds(q, "timeout", ReadinessTimeoutDefaultS, ReadinessTimeoutMaxS) * 1000)
 	}
 	refresh, _ := query(q, "refresh")
 	existing, found := s.readiness.Get(st.Stack)

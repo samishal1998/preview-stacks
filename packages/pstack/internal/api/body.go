@@ -120,6 +120,21 @@ func numParam(rawQuery, key string, fallback float64) float64 {
 	return js.ParseNumber(v)
 }
 
+// boundedSeconds is a `?key=<seconds>` parameter: a positive value capped at max, anything else the
+// fallback. ONE definition because `up?timeout=`, `readiness?timeout=` and `readiness?wait=` must
+// agree on the ceiling — a watch deadline the deploy route would accept and the read route would
+// clamp is a watch nobody can poll to completion.
+func boundedSeconds(rawQuery, key string, fallback, max float64) float64 {
+	raw := numParam(rawQuery, key, 0)
+	if js.IsFinite(raw) && raw > 0 {
+		if raw < max {
+			return raw
+		}
+		return max
+	}
+	return fallback
+}
+
 // clamp is Math.min(Math.max(n, lo), hi) with NaN falling back.
 func clamp(n, lo, hi, fallback float64) float64 {
 	if !js.IsFinite(n) {

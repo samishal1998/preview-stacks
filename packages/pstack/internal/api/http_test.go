@@ -79,3 +79,30 @@ func TestTuningFromEnv(t *testing.T) {
 		t.Errorf("got %+v", tu)
 	}
 }
+
+func TestBoundedSeconds(t *testing.T) {
+	// negative control: return `raw` unclamped — the 99999 case then yields a watch deadline that
+	// outlives every job, and `up?timeout=99999` parks a watcher nothing will ever drive.
+	cases := []struct {
+		query string
+		want  float64
+	}{
+		{"timeout=600", 600},                      // in range
+		{"timeout=99999", ReadinessTimeoutMaxS},   // capped, never rejected
+		{"timeout=0", ReadinessTimeoutDefaultS},   // 0 is "unset", not "no deadline"
+		{"timeout=-5", ReadinessTimeoutDefaultS},  // negative likewise
+		{"timeout=abc", ReadinessTimeoutDefaultS}, // NaN likewise
+		{"", ReadinessTimeoutDefaultS},            // absent
+		{"timeout=3600", ReadinessTimeoutMaxS},    // exactly max
+	}
+	for _, c := range cases {
+		if got := boundedSeconds(c.query, "timeout", ReadinessTimeoutDefaultS, ReadinessTimeoutMaxS); got != c.want {
+			t.Fatalf("boundedSeconds(%q) = %v, want %v", c.query, got, c.want)
+		}
+	}
+	// The `wait` bound is a different ceiling on the same helper — a long poll must not outlast the
+	// client's own read timeout.
+	if got := boundedSeconds("wait=300", "wait", 0, 60); got != 60 {
+		t.Fatalf("wait clamps to 60, got %v", got)
+	}
+}
