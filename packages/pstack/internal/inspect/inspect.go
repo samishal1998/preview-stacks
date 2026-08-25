@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -331,6 +332,33 @@ type SwarmService struct {
 	Networks      []string
 	TraefikLabels map[string]string
 	UpdatedAt     *int64
+}
+
+// swarmJob is a ONE-SHOT service's progress: `docker stack deploy` has accepted
+// `deploy.mode: replicated-job` since docker/cli#2907 (merged 2022-05-17), which maps
+// `deploy.replicas` to both MaxConcurrent and TotalCompletions.
+//
+// The completed count lives in ServiceStatus, which the daemon populates on the service LIST only —
+// `docker service inspect` leaves it nil (cli/command/service/formatter.go guards on exactly that),
+// so `docker service ls` is the one call that can answer "did the seed succeed". We were already
+// making it for the ids.
+type swarmJob struct {
+	Completed int64
+	Total     int64
+}
+
+// jobReplicas parses the `R/D (C/T completed)` column docker renders for a job — the format string
+// is `"%d/%d (%d/%d completed)"` in the CLI's formatter.
+var jobReplicas = regexp.MustCompile(`\((\d+)/(\d+) completed\)`)
+
+// rawServiceLs is `docker service ls --format '{{json .}}'`. Mode is rendered `replicated job` /
+// `global job` (with a space) — a display string, so job-ness is matched on the suffix rather than
+// on either literal.
+type rawServiceLs struct {
+	ID       string `json:"ID"`
+	Name     string `json:"Name"`
+	Mode     string `json:"Mode"`
+	Replicas string `json:"Replicas"`
 }
 
 type rawTask struct {
@@ -700,11 +728,33 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 	var subjects []subject
 
 	if swarm {
-		sres := r.Run("docker service ls -q --filter "+shq("label="+StackLabel+"="+stack), exec.RunOptions{Label: "docker service ls"})
+		sres := r.Run("docker service ls --format '{{json .}}' --filter "+shq("label="+StackLabel+"="+stack), exec.RunOptions{Label: "docker service ls"})
 		if !sres.OK {
 			return empty()
 		}
-		sids := lines(sres.Stdout)
+		sids := []string{}
+		// Keyed by NAME: `docker service ls` truncates ids and `docker service inspect` does not, so
+		// an id-keyed lookup silently never matches. `<stack>_<service>` is unique within a stack.
+		jobsByName := map[string]swarmJob{}
+		for _, line := range lines(sres.Stdout) {
+			var ls rawServiceLs
+			if err := json.Unmarshal([]byte(line), &ls); err != nil || ls.ID == "" {
+				continue
+			}
+			sids = append(sids, ls.ID)
+			if !strings.HasSuffix(ls.Mode, "job") {
+				continue
+			}
+			// A job whose progress column does not parse stays a job with Total 0, which reads as
+			// NOT DONE below. Fail closed: an unrecognised format must not certify a seed that may
+			// never have run.
+			j := swarmJob{}
+			if m := jobReplicas.FindStringSubmatch(ls.Replicas); m != nil {
+				j.Completed, _ = strconv.ParseInt(m[1], 10, 64)
+				j.Total, _ = strconv.ParseInt(m[2], 10, 64)
+			}
+			jobsByName[ls.Name] = j
+		}
 		var services []SwarmService
 		tasks := []rawTask{}
 		if len(sids) > 0 {
@@ -802,6 +852,49 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 				node = &n
 			}
 			containers = append(containers, ContainerInfo{ID: id, Name: name, Service: service, Image: image, State: TaskState(t.CurrentState), Health: nil, ExitCode: exit, RestartCount: 0, Networks: networks, IngressIP: nil, Ports: []PortMap{}, TraefikLabels: labels, StartedAt: started, Node: node, Remote: true})
+		}
+		// A one-shot service's verdict belongs to the SERVICE, not to its tasks. Two reasons its
+		// task containers cannot answer it: a finished job's task is not desired-running, so
+		// `docker stack ps --filter desired-state=running` never returns it and the corpse skip
+		// above drops its container — the seed simply vanishes, and a stack whose seed FAILED then
+		// reads as ready over the remaining services. And a task that is mid-run is `running` with
+		// no healthcheck, which readiness calls ready — green while the database is still empty.
+		if len(jobsByName) > 0 {
+			jobByService := map[string]swarmJob{}
+			for _, svc := range services {
+				if j, ok := jobsByName[svc.Name]; ok {
+					jobByService[svc.Service] = j
+				}
+			}
+			kept := make([]ContainerInfo, 0, len(containers))
+			for _, c := range containers {
+				if c.Service != nil {
+					if _, isJob := jobByService[*c.Service]; isJob {
+						continue
+					}
+				}
+				kept = append(kept, c)
+			}
+			for _, svc := range services {
+				j, isJob := jobByService[svc.Service]
+				if !isJob {
+					continue
+				}
+				service := svc.Service
+				info := ContainerInfo{ID: svc.ID, Name: svc.Name, Service: &service, Image: svc.Image, Networks: svc.Networks, Ports: []PortMap{}, TraefikLabels: svc.TraefikLabels, StartedAt: svc.UpdatedAt}
+				if j.Total > 0 && j.Completed >= j.Total {
+					zero := int64(0)
+					// Exactly what a compose one-shot looks like when it succeeds, so readiness needs
+					// no new rule: `exited` + code 0 is already "a one-shot that finished".
+					info.State, info.ExitCode = "exited", &zero
+				} else {
+					// `created`, deliberately — readiness treats it as still converging. NOT
+					// `running`, which with no healthcheck is READY there.
+					info.State = "created"
+				}
+				kept = append(kept, info)
+			}
+			containers = kept
 		}
 		for _, svc := range services {
 			routes = append(routes, RoutesFromLabels(svc.Service, svc.TraefikLabels, nil)...)
