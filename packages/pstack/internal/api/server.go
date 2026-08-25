@@ -125,6 +125,16 @@ type Server struct {
 
 	writeMu sync.Mutex
 
+	// waking is deployment id → what a request to its hostnames needs while it comes back: the
+	// stack name (to read the readiness verdict) and the hostnames the sleep record carried. See
+	// the sleep/wake section — the mapping has to outlive the record it came from.
+	//
+	// Its OWN mutex, deliberately not writeMu: reindex reads this map, and reindex is already
+	// called with writeMu held (the DELETE route), so taking writeMu here would self-deadlock.
+	// Lock order where both are held: writeMu, then wakeMu, never the reverse.
+	wakeMu sync.Mutex
+	waking map[string]wakingUp
+
 	// followers are the live `compose logs --follow` children, so stopping the server stops them.
 	followMu  sync.Mutex
 	followers map[int]func()
@@ -189,6 +199,7 @@ func New(o Options) (*Server, error) {
 		hostVars:   hostvars.New(st),
 		readiness:  readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, RestartLoop: o.ReadinessRestartLoop, Bus: o.Bus}),
 		sleepIndex: scheduler.NewSleepIndex(),
+		waking:     map[string]wakingUp{},
 		ssoClient:  sso.NewClient(nil),
 		bus:        o.Bus,
 		followers:  map[int]func(){},
@@ -375,6 +386,14 @@ func (s *Server) containersFor(stackName string) []string {
 }
 
 // ── sleep / wake ────────────────────────────────────────────────────────────────────────────
+//
+// THE HOSTNAME MAPPING OUTLIVES THE SLEEP RECORD. A wake clears the record the moment `up` returns
+// OK — which is when the containers are CREATED, not when the app answers. If the index forgot the
+// hostname there, every request in the window between the two fell through wakeFor to the generic
+// non-/api/ rule and served the CONTROL UI on a preview's hostname (the visitor's own report: a
+// 502, then the control plane). So a woken deployment moves from `sleeping` to `waking` in the same
+// index instead of leaving it, and only the READINESS watch — the one that already knows whether
+// this stack came up — ends that state, in either direction.
 
 func (s *Server) reindex() {
 	metas, err := s.registry.List()
@@ -387,20 +406,64 @@ func (s *Server) reindex() {
 			entries = append(entries, scheduler.SleepEntry{ID: m.ID, Hosts: m.Sleep.Hosts, Rules: m.Sleep.Rules})
 		}
 	}
+	s.wakeMu.Lock()
+	for _, w := range s.waking {
+		entries = append(entries, w.entry)
+	}
+	s.wakeMu.Unlock()
 	s.sleepIndex.Rebuild(entries)
 }
 
+// wakingUp is a deployment whose sleep record is gone but which is not answering yet.
+type wakingUp struct {
+	// stack is the resolved stack name, kept because the readiness watch is keyed by it and a spec
+	// that stopped resolving mid-wake must not turn the waking page into "cannot be resolved".
+	stack string
+	entry scheduler.SleepEntry
+}
+
 // clearSleep forgets the sleep record, reading the current one rather than the copy a request
-// resolved earlier.
-func (s *Server) clearSleep(id string) {
+// resolved earlier. `waking` keeps the hostnames it carried in the index — for a wake or an `up`,
+// where the stack is coming back and its visitors must keep the waking page; a teardown passes
+// false and the hostnames go, because nothing should wake what was deliberately removed.
+func (s *Server) clearSleep(id, stack string, waking bool) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	now, err := s.registry.Get(id)
-	if err != nil || now == nil || now.Sleep == nil {
+	asleep := err == nil && now != nil && now.Sleep != nil
+	s.wakeMu.Lock()
+	_, wasWaking := s.waking[id]
+	if waking && asleep {
+		s.waking[id] = wakingUp{stack: stack, entry: scheduler.SleepEntry{ID: id, Hosts: now.Sleep.Hosts, Rules: now.Sleep.Rules}}
+	} else if !waking {
+		delete(s.waking, id)
+	}
+	s.wakeMu.Unlock()
+	if !asleep && !wasWaking {
 		return
 	}
-	_ = s.registry.SetSleep(id, nil)
+	if asleep {
+		_ = s.registry.SetSleep(id, nil)
+	}
 	s.reindex()
+}
+
+// forgetWaking drops a waking entry and rebuilds — the deployment is answering, is gone, or nothing
+// is watching it any more. The rebuild is unconditional because it is also how a STALE index (a
+// deployment deleted by hand) stops being consulted. Never holds wakeMu across reindex, which
+// takes it.
+func (s *Server) forgetWaking(id string) {
+	s.wakeMu.Lock()
+	delete(s.waking, id)
+	s.wakeMu.Unlock()
+	s.reindex()
+}
+
+func (s *Server) wakingOf(id string) (wakingUp, bool) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	w, ok := s.waking[id]
+	return w, ok
 }
 
 // WakeRetryMs: after a failed wake, how long a request to the hostname waits before trying again.
@@ -443,7 +506,10 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 			// outlives the deploy that started it.
 			if outcome.OK {
 				s.readiness.Start(st.Stack, s.runnerFor(st, dep.Dir, s.ctx), readiness.StartOptions{TimeoutMs: o.ReadinessTimeoutMs, Restart: true, Emit: true, Orchestrator: orchestrator})
-				s.clearSleep(id)
+				// The watch is started FIRST and the record cleared second, so the hostname is never
+				// in neither state: wakeFor reads the sleep record, then the waking entry, then that
+				// watch, and each hand-off is already in place when the next request asks.
+				s.clearSleep(id, st.Stack, true)
 			}
 			return outcome, nil
 		case jobs.Verify:
@@ -470,6 +536,10 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 				record := &registry.SleepRecord{Since: time.Now().UnixMilli(), Reason: o.Reason, Hosts: dedupe(hosts), Rules: dedupe(rules)}
 				s.writeMu.Lock()
 				_ = s.registry.SetSleep(id, record)
+				// Asleep supersedes waking: the record is the mapping again.
+				s.wakeMu.Lock()
+				delete(s.waking, id)
+				s.wakeMu.Unlock()
 				s.reindex()
 				s.writeMu.Unlock()
 				if len(record.Hosts) > 0 || len(record.Rules) > 0 {
@@ -495,8 +565,8 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 			force = *o.Force
 		}
 		outcome := stack.Down(st, runner, stack.DownOptions{NoVerify: !verify, Force: force}, sink)
-		// Torn down is not asleep: nothing should wake it.
-		s.clearSleep(id)
+		// Torn down is not asleep, and not waking either: nothing should wake it.
+		s.clearSleep(id, st.Stack, false)
 		return outcome, nil
 	}
 	return s.jobs.Start(st.Stack, action, work, scrub)
@@ -526,11 +596,6 @@ func (s *Server) wakeFor(w http.ResponseWriter, hostname string) bool {
 	if id == "" {
 		return false
 	}
-	dep, err := s.registry.Get(id)
-	if err != nil || dep == nil || dep.Sleep == nil {
-		s.reindex() // the index was stale — a hand edit is not a change it sees
-		return false
-	}
 	page := func(state scheduler.WakeState, stackName, errText string) bool {
 		h := w.Header()
 		h.Set("content-type", "text/html; charset=utf-8")
@@ -540,6 +605,31 @@ func (s *Server) wakeFor(w http.ResponseWriter, hostname string) bool {
 		w.WriteHeader(503)
 		_, _ = w.Write([]byte(scheduler.WakePage(hostname, stackName, state, errText)))
 		return true
+	}
+	dep, err := s.registry.Get(id)
+	if err == nil && dep == nil {
+		// Deleted. A read ERROR is NOT this: dropping a waking entry because one stat failed puts
+		// the control UI back on the preview's hostname, which is the whole bug.
+		s.forgetWaking(id)
+		return false
+	}
+	if err != nil || dep.Sleep == nil {
+		// Not asleep — but possibly WAKING. The sleep record goes the moment `up` reports OK, which
+		// is when the containers are created; the app is not answering yet, Traefik has no route to
+		// it yet, and the request is still this visitor's. Falling through here is what served them
+		// the control plane's own UI on their preview's hostname.
+		wk, ok := s.wakingOf(id)
+		if !ok {
+			s.reindex() // the index was stale — a hand edit is not a change it sees
+			return false
+		}
+		rd, watching := s.readiness.Get(wk.stack)
+		state, why, keep := wakeVerdict(rd, watching)
+		if !keep {
+			s.forgetWaking(id)
+			return false
+		}
+		return page(state, wk.stack, why)
 	}
 	st, err := s.resolveDep(id, nil)
 	if err != nil {
@@ -590,6 +680,49 @@ func (s *Server) wakeFor(w http.ResponseWriter, hostname string) bool {
 		return page(scheduler.Failed, st.Stack, failedWhy(last))
 	}
 	return page(scheduler.Waking, st.Stack, "")
+}
+
+// wakeVerdict is what a visitor to a WOKEN — not sleeping, not yet serving — hostname sees, decided
+// by the readiness watch the wake handed off to. Pure, so the state machine is testable without a
+// host: `watching` is readiness.Get's second return.
+//
+// keep=false means stop answering for this hostname and forget it: the stack is serving (Traefik
+// has had the route since the container came up, so the next request lands on the app), or nothing
+// is watching it any more and this process knows nothing Traefik does not.
+//
+// THE BOUND IS READINESS'S OWN DEADLINE. A deployment that never converges times out — 180s by
+// default, PSTACK_READINESS_TIMEOUT_MS on the host — so the spinner cannot run forever. What
+// replaces it is the FAILURE, and that one is kept: a broken preview's hostname must say what broke
+// on every reload. Falling through instead would hand the visitor the control UI, which is the bug.
+func wakeVerdict(rd readiness.StackReadiness, watching bool) (scheduler.WakeState, string, bool) {
+	switch {
+	case !watching:
+		return "", "", false
+	case rd.State == readiness.Watching:
+		return scheduler.Starting, "", true
+	case rd.State == readiness.Ready:
+		return "", "", false
+	}
+	return scheduler.Failed, readinessWhy(rd), true
+}
+
+// readinessWhy is the sentence the failure page quotes: the first container readiness called failed
+// — with its reason, which already names the exit code or the crash loop — else the deadline.
+func readinessWhy(rd readiness.StackReadiness) string {
+	for _, c := range rd.Containers {
+		if !c.Failed || c.Reason == nil {
+			continue
+		}
+		name := c.Name
+		if c.Service != nil && *c.Service != "" {
+			name = *c.Service
+		}
+		return name + ": " + *c.Reason
+	}
+	if rd.State == readiness.TimedOut {
+		return "it did not start answering within " + scheduler.FormatDuration(rd.TimeoutMs)
+	}
+	return "it started, then stopped before it served anything"
 }
 
 // ── listening ───────────────────────────────────────────────────────────────────────────────

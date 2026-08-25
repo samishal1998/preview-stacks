@@ -314,6 +314,19 @@ export type RuntimeRoute = {
   priority: string | null;
   /** `<ingress-ip>:<container-port>` — null when either half is missing. */
   target: string | null;
+  /**
+   * WHY `target` is null, because the three reasons are different facts and only one of them is a
+   * misconfiguration. `''` when target is set.
+   *
+   *   `no-port`        the router declares no `loadbalancer.server.port`
+   *   `not-on-ingress` the container is genuinely not attached to `preview-ingress`
+   *   `unknown-node`   a swarm task on ANOTHER node — it is almost certainly fine, this host
+   *                    simply cannot see its address
+   *
+   * The UI said "not on the ingress network" for all three, which under swarm was every route and
+   * was untrue. Treat an absent value defensively: an older server sends none.
+   */
+  targetReason: '' | 'no-port' | 'not-on-ingress' | 'unknown-node';
   /** Only on the host-wide list. */
   project?: string | null;
 };

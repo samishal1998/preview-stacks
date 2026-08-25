@@ -39,6 +39,7 @@ import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import HelpModal from '../components/HelpModal.vue';
 import RefreshButton from '../components/RefreshButton.vue';
+import RouteTarget from '../components/RouteTarget.vue';
 
 /**
  * The live routes, from container labels.
@@ -47,6 +48,11 @@ import RefreshButton from '../components/RefreshButton.vue';
  * deployment goes up, its hostname appears, and nothing here changes — because per-PR routers are
  * DOCKER labels and the files below are Traefik's *other* provider. Showing both is what makes the
  * page match what "routing" means to whoever opened it.
+ *
+ * The table is fixed-layout inside `.table-scroll`, like the deployment's own: host-wide, every
+ * router and project name carries a stack name, and under auto layout the longest one on the host
+ * set the width for all of them. `RouteTarget` is shared with that table so the two cannot come to
+ * describe the same missing address differently.
  */
 const live = ref<RuntimeRoute[]>([]);
 const liveReachable = ref<boolean | null>(null);
@@ -277,42 +283,59 @@ async function remove(): Promise<void> {
         <p>Routes could not be listed — which is not the same as there being none.</p>
       </div>
 
-      <table v-else-if="live.length" class="cards">
-        <thead>
-          <tr>
-            <th>URL</th>
-            <th>Forwards to</th>
-            <th>Deployment</th>
-            <th>Router</th>
-          </tr>
-        </thead>
-        <tbody class="stagger">
-          <tr v-for="(r, i) in live" :key="`${r.container}-${r.router}`" :style="{ '--i': i }">
-            <td data-label="url">
-              <div v-for="h in r.hosts" :key="h">
-                <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
-                  {{ h }}
-                </a>
-                <span v-else class="mono mute">{{ h }}</span>
-              </div>
-              <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
-            </td>
-            <td data-label="forwards to">
-              <span v-if="r.target" class="mono">{{ r.target }}</span>
-              <span v-else class="s-failed">
-                {{ r.port === null ? 'no port declared' : 'not on the ingress network' }}
-              </span>
-            </td>
-            <td data-label="deployment">
-              <RouterLink v-if="r.project" :to="`/deployments/${encodeURIComponent(r.project)}/runtime`">
-                {{ r.project }}
-              </RouterLink>
-              <span v-else class="mute">—</span>
-            </td>
-            <td class="dim" data-label="router">{{ r.router }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else-if="live.length" class="table-scroll">
+        <table class="cards tbl-fixed t-live">
+          <!--
+            Host-wide, so every identifier here is longer than its per-deployment equivalent: routers
+            and projects both carry the stack name. URL still wraps rather than clips — it is the one
+            value on the row anyone reads to the end.
+          -->
+          <colgroup>
+            <col style="width: 34%" />
+            <col style="width: 24%" />
+            <col style="width: 20%" />
+            <col style="width: 22%" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>URL</th>
+              <th>Forwards to</th>
+              <th>Deployment</th>
+              <th>Router</th>
+            </tr>
+          </thead>
+          <tbody class="stagger">
+            <tr v-for="(r, i) in live" :key="`${r.container}-${r.router}`" :style="{ '--i': i }">
+              <td class="cell-wrap" data-label="url">
+                <div v-for="h in r.hosts" :key="h">
+                  <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
+                    {{ h }}
+                  </a>
+                  <span v-else class="mono mute">{{ h }}</span>
+                </div>
+                <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
+              </td>
+              <td data-label="forwards to">
+                <RouteTarget :route="r" />
+              </td>
+              <td data-label="deployment">
+                <RouterLink
+                  v-if="r.project"
+                  class="cell-clip"
+                  :title="r.project"
+                  :to="`/deployments/${encodeURIComponent(r.project)}/runtime`"
+                >
+                  {{ r.project }}
+                </RouterLink>
+                <span v-else class="mute">—</span>
+              </td>
+              <td class="dim" data-label="router">
+                <span class="cell-clip" :title="r.router">{{ r.router }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <p v-else class="mute">
         No container on this host declares a Traefik router. A deployment's routes come from labels in
@@ -448,3 +471,10 @@ async function remove(): Promise<void> {
     </section>
   </div>
 </template>
+
+<style scoped>
+/*
+ * `.t-live`'s floor is in `app.css` with the other two, beside the `.tbl-fixed` comment that
+ * promises it. It is derived from the `<colgroup>` above.
+ */
+</style>

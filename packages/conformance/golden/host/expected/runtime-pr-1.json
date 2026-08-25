@@ -43,7 +43,8 @@
         "tls": true,
         "certresolver": null,
         "priority": null,
-        "target": null
+        "target": "10.0.1.5:80",
+        "targetReason": ""
       }
     ],
     "findings": [],

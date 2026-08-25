@@ -58,7 +58,8 @@
         "tls": true,
         "certresolver": null,
         "priority": null,
-        "target": null
+        "target": null,
+        "targetReason": "unknown-node"
       }
     ],
     "findings": [

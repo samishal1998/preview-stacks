@@ -11,9 +11,22 @@
  * dials that, on the port from the `loadbalancer.server.port` label. That is why a service must be
  * attached to `preview-ingress`, why the port is the *container-internal* one, and why publishing a
  * host port is unnecessary. The `target` column shows the address Traefik assembled, so a missing
- * half is visible rather than inferred.
+ * half is visible rather than inferred — and when there is no address, `RouteTarget` says which of
+ * three reasons it is. "Not on the ingress network" was being printed over swarm services whose
+ * network was fine, because the address is simply not knowable from a manager.
  *
- * Findings come first because they are the reason anyone opened this tab.
+ * FINDINGS ARE A BUTTON, NOT BANNERS. They used to lead the tab as a stack of banners: fine at one
+ * finding, and at nine they pushed both tables off the screen — on the page whose whole job is those
+ * tables. The count and the worst level ride on the trigger so a warning still announces itself
+ * unopened (see `FindingsModal`). State that changes what you can do — "Docker did not answer",
+ * "nothing looks wrong" — stays on the page, because it is one line and cannot grow.
+ *
+ * BOTH TABLES ARE FIXED-LAYOUT, INSIDE A SCROLLER. Under auto layout a single long image or task
+ * name took width from every other column on the row, and `.panel > table` splits thead and tbody
+ * into two table boxes that size their columns independently — which is why the headers never lined
+ * up with the cells under them. The `<colgroup>`s below are those widths, stated once, beside the
+ * headers they have to agree with; wrapping the table in `.table-scroll` is what opts it out of the
+ * split and lets it scroll instead of squeezing.
  */
 import { computed, ref, watch } from 'vue';
 import { sentence } from '../../composables/useFormat';
@@ -24,7 +37,9 @@ import { usePolling } from '../../composables/usePolling';
 import SkeletonList from '../../components/SkeletonList.vue';
 import ActionButton from '../../components/ActionButton.vue';
 import ErrorNote from '../../components/ErrorNote.vue';
+import FindingsModal from '../../components/FindingsModal.vue';
 import InfoHint from '../../components/InfoHint.vue';
+import RouteTarget from '../../components/RouteTarget.vue';
 import { toast } from '../../composables/useToasts';
 import RefreshButton from '../../components/RefreshButton.vue';
 
@@ -49,9 +64,6 @@ watch(() => dep.id, () => { loading.value = true; void load(); }, { immediate: t
 // Containers change state during a deploy; the poll pauses itself when the tab is hidden.
 usePolling(() => void load(), 8000);
 
-const errors = computed(() => rt.value?.findings.filter((f) => f.level === 'error') ?? []);
-const warns = computed(() => rt.value?.findings.filter((f) => f.level === 'warn') ?? []);
-const infos = computed(() => rt.value?.findings.filter((f) => f.level === 'info') ?? []);
 const running = computed(() => rt.value?.containers.filter((c) => c.state === 'running').length ?? 0);
 
 /**
@@ -146,17 +158,12 @@ function urlFor(c: RuntimeContainer): string | null {
       </div>
 
       <template v-else>
-        <!-- Findings first: this tab exists because something is not working. -->
-        <div v-for="(f, i) in errors" :key="`e${i}`" class="banner failed">
-          <b>Blocking</b>
-          <p>{{ f.message }}</p>
-        </div>
-        <div v-for="(f, i) in warns" :key="`w${i}`" class="banner warn">
-          <b>Worth checking</b>
-          <p>{{ f.message }}</p>
-        </div>
-        <div v-for="(f, i) in infos" :key="`i${i}`" class="banner plain">
-          <p>{{ f.message }}</p>
+        <!--
+          Findings first — as one control, not as their own page. The button is absent when there is
+          nothing to say, so the row disappears with it rather than leaving an empty gap.
+        -->
+        <div v-if="rt.findings.length" class="row" style="margin: var(--s3) 0">
+          <FindingsModal :findings="rt.findings" />
         </div>
         <div v-if="!rt.findings.length && rt.containers.length" class="banner ok">
           <b>Nothing looks wrong.</b>
@@ -182,55 +189,67 @@ function urlFor(c: RuntimeContainer): string | null {
             </span>
           </div>
 
-          <table v-if="rt.routes.length" class="cards">
-            <thead>
-              <tr>
-                <th>URL</th>
-                <th>
-                  Forwards to
-                  <InfoHint label="how a URL reaches a port">
-                    Traefik's docker provider resolves the container's IP on
-                    <code>preview-ingress</code> and dials it on the port from
-                    <code>loadbalancer.server.port</code> — it does <em>not</em> use
-                    <code>service:port</code> DNS. So the port here is the one inside the container,
-                    and publishing a host port is unnecessary.
-                  </InfoHint>
-                </th>
-                <th>Router</th>
-                <th>TLS</th>
-              </tr>
-            </thead>
-            <tbody class="stagger">
-              <tr v-for="(r, i) in rt.routes" :key="r.router" :style="{ '--i': i }">
-                <td data-label="url">
-                  <div v-for="h in r.hosts" :key="h">
-                    <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
-                      {{ h }}
-                    </a>
-                    <span v-else class="mono mute">{{ h }}</span>
-                  </div>
-                  <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
-                </td>
-                <td data-label="forwards to">
-                  <span v-if="r.target" class="mono">{{ r.target }}</span>
-                  <span v-else class="s-failed">
-                    {{ r.port === null ? 'no port declared' : 'not on the ingress network' }}
-                  </span>
-                  <div class="mute" style="font-size: var(--t-sm)">{{ r.container }}</div>
-                </td>
-                <td data-label="router">
-                  {{ r.router }}
-                  <div v-if="r.priority" class="mute" style="font-size: var(--t-sm)">
-                    priority {{ r.priority }}
-                  </div>
-                </td>
-                <td data-label="tls">
-                  <span v-if="r.tls" class="badge ok">{{ r.certresolver || 'inherited' }}</span>
-                  <span v-else class="badge off">off</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-if="rt.routes.length" class="table-scroll">
+            <table class="cards tbl-fixed t-routes">
+              <!--
+                The widths, as percentages of whatever the panel gives us. URL is the widest because
+                it is the value people read, and it WRAPS: a hostname's tail is which PR it is.
+              -->
+              <colgroup>
+                <col style="width: 34%" />
+                <col style="width: 26%" />
+                <col style="width: 26%" />
+                <col style="width: 14%" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>URL</th>
+                  <th>
+                    Forwards to
+                    <InfoHint label="how a URL reaches a port">
+                      Traefik's docker provider resolves the container's IP on
+                      <code>preview-ingress</code> and dials it on the port from
+                      <code>loadbalancer.server.port</code> — it does <em>not</em> use
+                      <code>service:port</code> DNS. So the port here is the one inside the container,
+                      and publishing a host port is unnecessary.
+                    </InfoHint>
+                  </th>
+                  <th>Router</th>
+                  <th>TLS</th>
+                </tr>
+              </thead>
+              <tbody class="stagger">
+                <tr v-for="(r, i) in rt.routes" :key="r.router" :style="{ '--i': i }">
+                  <td class="cell-wrap" data-label="url">
+                    <div v-for="h in r.hosts" :key="h">
+                      <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
+                        {{ h }}
+                      </a>
+                      <span v-else class="mono mute">{{ h }}</span>
+                    </div>
+                    <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
+                  </td>
+                  <td data-label="forwards to">
+                    <RouteTarget :route="r" />
+                    <!-- Under swarm this is the SERVICE name; either way it is matched, not read. -->
+                    <div class="mute cell-clip" style="font-size: var(--t-sm)" :title="r.container">
+                      {{ r.container }}
+                    </div>
+                  </td>
+                  <td data-label="router">
+                    <div class="cell-clip" :title="r.router">{{ r.router }}</div>
+                    <div v-if="r.priority" class="mute" style="font-size: var(--t-sm)">
+                      priority {{ r.priority }}
+                    </div>
+                  </td>
+                  <td data-label="tls">
+                    <span v-if="r.tls" class="badge ok">{{ r.certresolver || 'inherited' }}</span>
+                    <span v-else class="badge off">off</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
           <!--
             The reported failure, stated where it will be looked for. pstack does not write these
@@ -267,145 +286,172 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
             <RefreshButton :run="load" :busy="loading" />
           </div>
 
-          <table v-if="rt.containers.length" class="cards">
-            <thead>
-              <tr>
-                <th>Service</th>
-                <!-- Where, then how it is doing — the order the cells are in. They disagreed, so
-                     under swarm (the only time this column exists) every state read as a node. -->
-                <th v-if="hasNode">Node</th>
-                <th>State</th>
-                <th>Ports</th>
-                <th>Networks</th>
-                <th>Image</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody class="stagger">
-              <tr v-for="(c, i) in rt.containers" :key="c.id" :style="{ '--i': i }">
-                <td class="name" data-label="service">
-                  {{ c.service ?? c.name }}
-                  <div class="mute task" :title="c.name">{{ taskOf(c.name) }}</div>
-                </td>
-                <td v-if="hasNode" data-label="node">
-                  {{ c.node ?? '—' }}
-                  <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
-                  <span v-if="c.remote" class="badge" title="runs on another swarm node — logs reach it through the manager; a shell and stop/start do not">remote</span>
-                </td>
-                <td data-label="state">
-                  <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
+          <div v-if="rt.containers.length" class="table-scroll">
+            <table class="cards tbl-fixed t-containers" :class="{ swarm: hasNode }">
+              <!--
+                THE NODE `<col>` CARRIES THE SAME `v-if` AS ITS `<th>`, and has to: one without the
+                other shifts every column after it by one, which is the header-drift bug rebuilt by
+                hand, in the swarm case that is already the worst one.
+
+                Image takes no width — under fixed layout the unsized column absorbs what is left,
+                so adding Node narrows the image rather than pushing the table wider. Actions is in
+                px because it holds buttons, not text: five of them at their widest (Stop, Restart,
+                Logs, Shell, Open), which `.row-actions` forbids to wrap, so the column is measured
+                from the buttons rather than guessed. The table's floor in `app.css` is this
+                colgroup added up; change one and change the other.
+              -->
+              <colgroup>
+                <col style="width: 22ch" />
+                <col v-if="hasNode" style="width: 14ch" />
+                <col style="width: 12ch" />
+                <col style="width: 13ch" />
+                <col style="width: 20ch" />
+                <col />
+                <col style="width: 288px" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Service</th>
+                  <!-- Where, then how it is doing — the order the cells are in. They disagreed, so
+                       under swarm (the only time this column exists) every state read as a node. -->
+                  <th v-if="hasNode">Node</th>
+                  <th>State</th>
+                  <th>Ports</th>
+                  <th>Networks</th>
+                  <th>Image</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody class="stagger">
+                <tr v-for="(c, i) in rt.containers" :key="c.id" :style="{ '--i': i }">
+                  <td class="name" data-label="service">
+                    <div class="cell-clip" :title="c.service ?? c.name">{{ c.service ?? c.name }}</div>
+                    <div class="mute task cell-clip" :title="c.name">{{ taskOf(c.name) }}</div>
+                  </td>
+                  <td v-if="hasNode" data-label="node">
+                    <div class="cell-clip" :title="c.node ?? undefined">{{ c.node ?? '—' }}</div>
+                    <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
+                    <span v-if="c.remote" class="badge" title="runs on another swarm node — logs reach it through the manager; a shell and stop/start do not">remote</span>
+                  </td>
+                  <td data-label="state">
+                    <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
+                    <!--
+                      Health is only reported while it is RUNNING. Docker keeps the last probe result on
+                      a stopped container, so an exited one rendered "Exited / Healthy" — a stale reading
+                      presented beside the fact that contradicts it.
+                    -->
+                    <div
+                      v-if="c.health && c.state === 'running'"
+                      class="mute"
+                      style="font-size: var(--t-sm)"
+                      :class="c.health === 'healthy' ? 's-ok' : 's-failed'"
+                    >
+                      {{ sentence(c.health) }}
+                    </div>
+                  </td>
+                  <td data-label="ports">
+                    <div v-for="p in c.ports" :key="`${p.containerPort}/${p.protocol}`">
+                      <span class="mono">{{ p.containerPort }}</span>
+                      <span v-if="p.hostPort" class="mute"> ← host {{ p.hostPort }}</span>
+                    </div>
+                    <span v-if="!c.ports.length" class="mute">none exposed</span>
+                  </td>
+                  <td data-label="networks">
+                    <div v-for="n in c.networks" :key="n" class="cell-clip" :title="n">
+                      <span :class="n === 'preview-ingress' ? 's-ok' : ''">{{ n }}</span>
+                    </div>
+                    <div v-if="c.ingressIp" class="mute mono cell-clip" style="font-size: var(--t-sm)" :title="c.ingressIp">
+                      {{ c.ingressIp }}
+                    </div>
+                  </td>
+                  <!-- Clipped, not wrapped: an image reference is matched against one you know, and
+                       `registry.example.com/team/app@sha256:…` costs three rows to say nothing new. -->
+                  <td class="dim" data-label="image">
+                    <span class="cell-clip" :title="c.image">{{ c.image }}</span>
+                  </td>
                   <!--
-                    Health is only reported while it is RUNNING. Docker keeps the last probe result on
-                    a stopped container, so an exited one rendered "Exited / Healthy" — a stale reading
-                    presented beside the fact that contradicts it.
+                    The three things anyone wants from a container row, without hunting for the tab
+                    that does it. Open goes to the URL Traefik actually assembled for THIS container
+                    (see `urlFor`), so it is absent rather than wrong when no router points here.
                   -->
-                  <div
-                    v-if="c.health && c.state === 'running'"
-                    class="mute"
-                    style="font-size: var(--t-sm)"
-                    :class="c.health === 'healthy' ? 's-ok' : 's-failed'"
-                  >
-                    {{ sentence(c.health) }}
-                  </div>
-                </td>
-                <td data-label="ports">
-                  <div v-for="p in c.ports" :key="`${p.containerPort}/${p.protocol}`">
-                    <span class="mono">{{ p.containerPort }}</span>
-                    <span v-if="p.hostPort" class="mute"> ← host {{ p.hostPort }}</span>
-                  </div>
-                  <span v-if="!c.ports.length" class="mute">none exposed</span>
-                </td>
-                <td data-label="networks">
-                  <div v-for="n in c.networks" :key="n">
-                    <span :class="n === 'preview-ingress' ? 's-ok' : ''">{{ n }}</span>
-                  </div>
-                  <div v-if="c.ingressIp" class="mute mono" style="font-size: var(--t-sm)">
-                    {{ c.ingressIp }}
-                  </div>
-                </td>
-                <td class="dim" data-label="image">{{ c.image }}</td>
-                <!--
-                  The three things anyone wants from a container row, without hunting for the tab
-                  that does it. Open goes to the URL Traefik actually assembled for THIS container
-                  (see `urlFor`), so it is absent rather than wrong when no router points here.
-                -->
-                <td class="row-actions" data-label="">
-                  <!--
-                    One container, not the service and not the stack. Start appears only when it is
-                    not running and Stop only when it is, so the control on screen is the one that
-                    would do something. Both destructive ones confirm in place.
-                  -->
-                  <!-- None of these reach a task on another node; docker's verbs are node-local. -->
-                  <!-- And none of them reach a one-shot job's row, which stands for the SERVICE:
-                       there is no container behind its name, so the verbs could only fail. -->
-                  <span v-if="c.job" class="badge" title="a one-shot job — it runs to completion; there is no long-lived container to start, stop, or open a shell in">one-shot</span>
-                  <span v-else-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="runs on another swarm node — redeploy the stack, or act on the worker itself">
-                    on {{ c.node }}
-                  </span>
-                  <ActionButton
-                    v-else-if="c.state !== 'running'"
-                    class="sm"
-                    variant="ghost"
-                    :pending="busy === `start:${c.name}`"
-                    :disabled="!!busy"
-                    confirm="Start it?"
-                    @run="act(c, 'start')"
-                  >
-                    Start
-                  </ActionButton>
-                  <ActionButton
-                    v-else
-                    class="sm"
-                    variant="ghost"
-                    :pending="busy === `stop:${c.name}`"
-                    :disabled="!!busy"
-                    confirm="Stop it?"
-                    title="Stops this container only. It stays stopped until something starts it."
-                    @run="act(c, 'stop')"
-                  >
-                    Stop
-                  </ActionButton>
-                  <ActionButton
-                    v-if="!c.remote && !c.job"
-                    class="sm"
-                    variant="ghost"
-                    :pending="busy === `restart:${c.name}`"
-                    :disabled="!!busy"
-                    confirm="Restart it?"
-                    @run="act(c, 'restart')"
-                  >
-                    Restart
-                  </ActionButton>
-                  <RouterLink
-                    class="btn sm ghost"
-                    :to="`/deployments/${encodeURIComponent(dep.id)}/logs?container=${encodeURIComponent(c.name)}`"
-                  >
-                    Logs
-                  </RouterLink>
-                  <RouterLink
-                    v-if="c.state === 'running' && !c.remote && !c.job"
-                    class="btn sm ghost"
-                    :to="`/deployments/${encodeURIComponent(dep.id)}/terminal?container=${encodeURIComponent(c.name)}`"
-                  >
-                    Shell
-                  </RouterLink>
-                  <!--
-                    Only while running: the router label survives a stopped container, so the URL
-                    still exists and answers 502. A link that is certain to fail is worse than no link.
-                  -->
-                  <a
-                    v-if="c.state === 'running' && urlFor(c)"
-                    class="btn sm ghost"
-                    :href="urlFor(c)!"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open
-                  </a>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                  <td class="row-actions" data-label="">
+                    <!--
+                      One container, not the service and not the stack. Start appears only when it is
+                      not running and Stop only when it is, so the control on screen is the one that
+                      would do something. Both destructive ones confirm in place.
+                    -->
+                    <!-- None of these reach a task on another node; docker's verbs are node-local. -->
+                    <!-- And none of them reach a one-shot job's row, which stands for the SERVICE:
+                         there is no container behind its name, so the verbs could only fail. -->
+                    <span v-if="c.job" class="badge" title="a one-shot job — it runs to completion; there is no long-lived container to start, stop, or open a shell in">one-shot</span>
+                    <span v-else-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="runs on another swarm node — redeploy the stack, or act on the worker itself">
+                      on {{ c.node }}
+                    </span>
+                    <ActionButton
+                      v-else-if="c.state !== 'running'"
+                      class="sm"
+                      variant="ghost"
+                      :pending="busy === `start:${c.name}`"
+                      :disabled="!!busy"
+                      confirm="Start it?"
+                      @run="act(c, 'start')"
+                    >
+                      Start
+                    </ActionButton>
+                    <ActionButton
+                      v-else
+                      class="sm"
+                      variant="ghost"
+                      :pending="busy === `stop:${c.name}`"
+                      :disabled="!!busy"
+                      confirm="Stop it?"
+                      title="Stops this container only. It stays stopped until something starts it."
+                      @run="act(c, 'stop')"
+                    >
+                      Stop
+                    </ActionButton>
+                    <ActionButton
+                      v-if="!c.remote && !c.job"
+                      class="sm"
+                      variant="ghost"
+                      :pending="busy === `restart:${c.name}`"
+                      :disabled="!!busy"
+                      confirm="Restart it?"
+                      @run="act(c, 'restart')"
+                    >
+                      Restart
+                    </ActionButton>
+                    <RouterLink
+                      class="btn sm ghost"
+                      :to="`/deployments/${encodeURIComponent(dep.id)}/logs?container=${encodeURIComponent(c.name)}`"
+                    >
+                      Logs
+                    </RouterLink>
+                    <RouterLink
+                      v-if="c.state === 'running' && !c.remote && !c.job"
+                      class="btn sm ghost"
+                      :to="`/deployments/${encodeURIComponent(dep.id)}/terminal?container=${encodeURIComponent(c.name)}`"
+                    >
+                      Shell
+                    </RouterLink>
+                    <!--
+                      Only while running: the router label survives a stopped container, so the URL
+                      still exists and answers 502. A link that is certain to fail is worse than no link.
+                    -->
+                    <a
+                      v-if="c.state === 'running' && urlFor(c)"
+                      class="btn sm ghost"
+                      :href="urlFor(c)!"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open
+                    </a>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <p v-else class="mute">
             No containers for this stack. If you expected some, check that their profile is one the
             spec selects — a service behind a profile that is not enabled is never started.
@@ -420,14 +466,19 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
 /*
  * The second line of the service cell: the task, under the service it belongs to.
  *
- * The cap is a declared ceiling on what this line may bid for in the auto table layout, not a fix
- * for an overflow — `td.name` already breaks. Under swarm this column shares the row with the node
- * column and the row actions: `taskOf` makes the line's length independent of the stack and service
- * names, and this bounds what is left of it. Past the ceiling it wraps rather than widening the
- * column.
+ * The `max-width` cap is GONE. It was a ceiling on what this line could bid for under auto layout —
+ * a bid is what auto layout runs on, and there is no bidding any more: the `<colgroup>` sets the
+ * column and `.cell-clip` on the line keeps it inside. Two mechanisms for one width is how they
+ * drift apart. `taskOf` still shortens what is shown; `title` still holds the whole name.
  */
 .task {
   font-size: var(--t-sm);
-  max-width: 30ch;
 }
+
+/*
+ * The floors that make `.table-scroll` a scroller rather than decoration live in `app.css`, beside
+ * the `.tbl-fixed` comment that promises them — one place, so a floor and the rule it belongs to
+ * cannot be changed apart. They are derived from the `<colgroup>`s above: change a `<col>` and go
+ * change the matching `min-width` there.
+ */
 </style>

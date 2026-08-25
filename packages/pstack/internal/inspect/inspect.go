@@ -13,6 +13,13 @@
 // SERVICE labels; a task may run on another node, listed from `docker stack ps` with remote:true.
 // Only tasks whose desired state is `running` count — swarm replaces a failed task rather than
 // restarting the container, so `docker ps -a` on a manager accumulates corpses.
+//
+// AND A SWARM ROUTE'S TARGET IS THE SERVICE'S VIP. `docker inspect` gives a task container's own
+// ingress IP, but only for a task on THIS node — and with the default (vip) endpoint mode that is
+// not the address Traefik dials anyway. The manager knows the one that is: Endpoint.VirtualIPs on
+// the `docker service inspect` we already make, node-independent. Every fallback below degrades to
+// a NAMED reason (RouteInfo.TargetReason) rather than to a guess: this page's whole job is to stop
+// saying "not on the ingress network" about a container nobody looked at.
 package inspect
 
 import (
@@ -84,6 +91,13 @@ type RouteInfo struct {
 	Certresolver *string  `json:"certresolver"`
 	Priority     *string  `json:"priority"`
 	Target       *string  `json:"target"`
+	// TargetReason says WHY Target is nil, so the page can state a fact instead of the single guess
+	// it used to make about every one of these. "" when Target is set; otherwise exactly one of
+	// "no-port" (the router declares no loadbalancer.server.port), "not-on-ingress" (the subject is
+	// POSITIVELY not attached to preview-ingress) and "unknown-node" (nothing here can know the
+	// address: a swarm task on another node, or network names docker would not resolve). Plain
+	// string without omitempty (Go rule 2) — "" must serialize.
+	TargetReason string `json:"targetReason"`
 }
 
 // Finding is one diagnosis. Short, specific, names the fix.
@@ -324,6 +338,15 @@ type rawService struct {
 			Networks      []struct{ Target string } `json:"Networks"`
 		} `json:"TaskTemplate"`
 	} `json:"Spec"`
+	// Endpoint.VirtualIPs is the service's address on each network it is attached to — what the
+	// swarm provider dials, and the only ingress address a manager can know for a task on another
+	// node. Empty under endpoint_mode: dnsrr, where there IS no VIP; the task fallback covers that.
+	Endpoint *struct {
+		VirtualIPs []struct {
+			NetworkID string `json:"NetworkID"`
+			Addr      string `json:"Addr"`
+		} `json:"VirtualIPs"`
+	} `json:"Endpoint"`
 }
 
 // SwarmService is a swarm service with its routing labels.
@@ -336,6 +359,28 @@ type SwarmService struct {
 	Networks      []string
 	TraefikLabels map[string]string
 	UpdatedAt     *int64
+	// IngressIP is the service's VIP on preview-ingress, nil when it has none (dnsrr) or the
+	// network list could not be read.
+	IngressIP *string
+	// NetworksKnown is false when a network id did not resolve to a name, so Networks holds a raw
+	// id and "this is not the ingress network" is NOT established.
+	NetworksKnown bool
+}
+
+// OnIngress is whether the service is attached to preview-ingress — nil for "could not determine"
+// (invariant 11). "Not attached" is a diagnosis with a fix attached to it; it has to be measured.
+func (s SwarmService) OnIngress() *bool {
+	if !s.NetworksKnown {
+		return nil
+	}
+	on := containsStr(s.Networks, Ingress)
+	return &on
+}
+
+// onIngress is the same answer for a CONTAINER, whose network names docker reported directly.
+func onIngress(networks []string) *bool {
+	on := containsStr(networks, Ingress)
+	return &on
 }
 
 // swarmJob is a ONE-SHOT service's progress: `docker stack deploy` has accepted
@@ -401,6 +446,7 @@ func inspectServices(r exec.Runner, ids []string, networkNames map[string]string
 		name := ""
 		image := ""
 		networks := []string{}
+		known := true
 		if raw.Spec != nil {
 			if raw.Spec.Labels != nil {
 				labels = raw.Spec.Labels
@@ -414,12 +460,9 @@ func inspectServices(r exec.Runner, ids []string, networkNames map[string]string
 					if n.Target == "" {
 						continue
 					}
-					nm := networkNames[n.Target]
-					if nm == "" && len(n.Target) > 12 {
-						nm = networkNames[n.Target[:12]]
-					}
-					if nm == "" {
-						nm = n.Target
+					nm, ok := netName(networkNames, n.Target)
+					if !ok {
+						known = false
 					}
 					networks = append(networks, nm)
 				}
@@ -441,9 +484,39 @@ func inspectServices(r exec.Runner, ids []string, networkNames map[string]string
 		if updated == "" {
 			updated = raw.CreatedAt
 		}
-		svcs = append(svcs, SwarmService{ID: id, Name: name, Service: service, Stack: stack, Image: image, Networks: networks, TraefikLabels: traefikLabelsOf(labels), UpdatedAt: epochMs(updated)})
+		var vip *string
+		if raw.Endpoint != nil {
+			for _, v := range raw.Endpoint.VirtualIPs {
+				if nm, ok := netName(networkNames, v.NetworkID); !ok || nm != Ingress {
+					continue
+				}
+				// `10.0.9.2/24` → `10.0.9.2`. The mask is the network's; it is not part of an
+				// address anyone can dial, and printed it would be a confidently wrong answer.
+				if addr, _, _ := strings.Cut(v.Addr, "/"); addr != "" {
+					vip = &addr
+				}
+				break
+			}
+		}
+		svcs = append(svcs, SwarmService{ID: id, Name: name, Service: service, Stack: stack, Image: image, Networks: networks, TraefikLabels: traefikLabelsOf(labels), UpdatedAt: epochMs(updated), IngressIP: vip, NetworksKnown: known})
 	}
 	return svcs
+}
+
+// netName resolves a network id to its name; ok=false when the list does not hold it (a
+// `docker network ls` that did not answer, a network this daemon cannot see). The caller gets the
+// raw id back so output still says something, and the false so it does not draw a conclusion from
+// it. `docker network ls` prints 12-char ids; a service's Networks[].Target is the full one.
+func netName(names map[string]string, id string) (string, bool) {
+	if nm := names[id]; nm != "" {
+		return nm, true
+	}
+	if len(id) > 12 {
+		if nm := names[id[:12]]; nm != "" {
+			return nm, true
+		}
+	}
+	return id, false
 }
 
 // networkNames is network id → name.
@@ -581,7 +654,12 @@ var (
 // RoutesFromLabels turns one container's Traefik labels into routers joined to their service ports.
 // A router with no explicit .service is left nil rather than guessed. Routers are returned in the
 // order their first label was seen — labels are iterated in sorted order, so the result is stable.
-func RoutesFromLabels(container string, labels map[string]string, ingressIP *string) []RouteInfo {
+//
+// `onIngress` is whether the subject is attached to preview-ingress, and NIL means the caller could
+// not determine it. That nil is the whole point of this parameter: a missing target used to be
+// rendered as "not on the ingress network" whether or not anyone had looked, which under swarm was
+// false on every row. TargetReason separates the three facts.
+func RoutesFromLabels(container string, labels map[string]string, ingressIP *string, onIngress *bool) []RouteInfo {
 	type partial struct {
 		rule, service, entrypoints, certresolver, priority *string
 		tls                                                bool
@@ -659,7 +737,19 @@ func RoutesFromLabels(container string, labels map[string]string, ingressIP *str
 			t := *ingressIP + ":" + js.ToString(*port)
 			target = &t
 		}
-		out = append(out, RouteInfo{Router: router, Container: container, Rule: rule, Hosts: hosts, Service: service, Port: port, Entrypoints: r.entrypoints, TLS: r.tls, Certresolver: r.certresolver, Priority: r.priority, Target: target})
+		// Port first: it is the half the author controls, and it was the one case the UI already got
+		// right. "not-on-ingress" only where attachment was actually measured and came back false.
+		reason := ""
+		switch {
+		case target != nil:
+		case port == nil:
+			reason = "no-port"
+		case onIngress != nil && !*onIngress:
+			reason = "not-on-ingress"
+		default:
+			reason = "unknown-node"
+		}
+		out = append(out, RouteInfo{Router: router, Container: container, Rule: rule, Hosts: hosts, Service: service, Port: port, Entrypoints: r.entrypoints, TLS: r.tls, Certresolver: r.certresolver, Priority: r.priority, Target: target, TargetReason: reason})
 	}
 	return out
 }
@@ -904,8 +994,20 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 			}
 			containers = kept
 		}
+		// The address Traefik dials is the service's VIP, which the manager knows wherever the tasks
+		// run. Only when there is none (dnsrr) does a task container that happens to be on THIS node
+		// answer — its own ingress IP, from the same `docker inspect` the compose path uses.
 		for _, svc := range services {
-			routes = append(routes, RoutesFromLabels(svc.Service, svc.TraefikLabels, nil)...)
+			ip := svc.IngressIP
+			if ip == nil {
+				for _, c := range containers {
+					if !c.Remote && c.Service != nil && *c.Service == svc.Service && c.IngressIP != nil {
+						ip = c.IngressIP
+						break
+					}
+				}
+			}
+			routes = append(routes, RoutesFromLabels(svc.Service, svc.TraefikLabels, ip, svc.OnIngress())...)
 		}
 		for _, svc := range services {
 			var mine []ContainerInfo
@@ -945,7 +1047,7 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 		}
 	} else {
 		for _, c := range containers {
-			routes = append(routes, RoutesFromLabels(c.Name, c.TraefikLabels, c.IngressIP)...)
+			routes = append(routes, RoutesFromLabels(c.Name, c.TraefikLabels, c.IngressIP, onIngress(c.Networks))...)
 			name := c.Name
 			if c.Service != nil {
 				name = *c.Service
@@ -1078,7 +1180,7 @@ func AllTraefikRouters(r exec.Runner) AllRouters {
 				project = &p
 			}
 		}
-		for _, rt := range RoutesFromLabels(c.Name, c.TraefikLabels, c.IngressIP) {
+		for _, rt := range RoutesFromLabels(c.Name, c.TraefikLabels, c.IngressIP, onIngress(c.Networks)) {
 			routes = append(routes, HostRoute{RouteInfo: rt, Project: project})
 			byName[rt.Router] = append(byName[rt.Router], c.Name)
 		}
@@ -1089,7 +1191,7 @@ func AllTraefikRouters(r exec.Runner) AllRouters {
 	if svc.OK {
 		if sids := lines(svc.Stdout); len(sids) > 0 {
 			for _, s := range inspectServices(r, sids, networkNames(r)) {
-				for _, rt := range RoutesFromLabels(s.Name, s.TraefikLabels, nil) {
+				for _, rt := range RoutesFromLabels(s.Name, s.TraefikLabels, s.IngressIP, s.OnIngress()) {
 					routes = append(routes, HostRoute{RouteInfo: rt, Project: s.Stack})
 					byName[rt.Router] = append(byName[rt.Router], s.Name)
 				}

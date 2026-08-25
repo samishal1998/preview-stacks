@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Under swarm, every route claimed "not on the ingress network".** The route target was built
+  with a hard-coded `nil` address, so it was empty on every row — and the UI rendered that as a
+  confident misconfiguration message about containers that were on the network all along. The
+  address now comes from the service's `Endpoint.VirtualIPs`, which is what the Traefik swarm
+  provider actually dials and which the manager knows for tasks on any node. Where it genuinely
+  cannot be determined, the API says which of three things is true — no port declared, not on the
+  ingress network, or address not known from this node — instead of guessing.
+- **A waking preview served the pstack dashboard on its own hostname.** The sleep record clears the
+  moment `up` reports OK, but nothing is listening yet; from that moment the request stopped looking
+  "asleep" and fell through to the rule that serves the embedded UI for any non-`/api/` path. The
+  waking page now persists until the deployment is actually serving, and a wake that fails ends at
+  its failure page rather than spinning.
+- **Tables no longer drift or overflow.** The cause was never cell widths: `.panel > table` used
+  `display: block` for overflow, which collapses column sizing, so `thead` and `tbody` were each
+  restored to `display: table` — two separate table boxes, each sizing columns from its own content,
+  with no mechanism to agree. Tables now scroll inside a wrapper and keep one column model, with
+  declared column widths, a minimum width per table, and long values clipped or wrapped by
+  intention rather than by accident.
+
+### Added
+
+- **Findings are a button, not a wall.** The "worth checking" list opens in a modal, with the count
+  and worst severity on the trigger so a warning still announces itself.
+- **Variable lists import and export `.env`, CSV and TSV.** Round-trips values containing `=`, `#`,
+  quotes, newlines and leading spaces. An export never emits a masked secret as though it were a
+  value.
+
 ### ⚠️ Breaking: accounts have roles
 
 Four of them, and every route is gated: **viewer** reads, **developer** owns stacks and

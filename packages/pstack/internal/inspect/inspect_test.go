@@ -32,31 +32,57 @@ func TestHostsFromRule(t *testing.T) {
 
 func TestRoutesJoinServicePortAndTarget(t *testing.T) {
 	// negative control: build target when only the port is known — "no ingress IP" yields ":80".
+	// negative control (reason): make the missing-target switch fall through to "not-on-ingress"
+	// instead of "unknown-node" — the on-ingress-but-no-address case asserts a network fault that
+	// nobody measured, which is the bug this field exists to end.
+	yes, no := true, false
 	ip := "172.20.0.5"
 	r := RoutesFromLabels("pr-1-app-1", map[string]string{
 		"traefik.enable":                                         "true",
 		"traefik.http.routers.app-pr1.rule":                      "Host(`app-pr-1.example.com`)",
 		"traefik.http.routers.app-pr1.service":                   "app-pr1",
 		"traefik.http.services.app-pr1.loadbalancer.server.port": "80",
-	}, &ip)
+	}, &ip, &yes)
 	if len(r) != 1 || strings.Join(r[0].Hosts, ",") != "app-pr-1.example.com" || r[0].Port == nil || *r[0].Port != 80 || r[0].Target == nil || *r[0].Target != "172.20.0.5:80" {
 		t.Errorf("got %+v", r)
 	}
+	// A target that IS known carries no reason at all.
+	if r[0].TargetReason != "" {
+		t.Errorf("a resolved target needs no reason: %q", r[0].TargetReason)
+	}
 	// A service label named after the router is picked up without an explicit .service.
 	ip2 := "10.0.0.2"
-	r = RoutesFromLabels("c", map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)", "traefik.http.services.app.loadbalancer.server.port": "3000"}, &ip2)
+	r = RoutesFromLabels("c", map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)", "traefik.http.services.app.loadbalancer.server.port": "3000"}, &ip2, &yes)
 	if *r[0].Port != 3000 || *r[0].Target != "10.0.0.2:3000" {
 		t.Errorf("got %+v", r[0])
 	}
 	// An empty .service label does not become a port of "".
-	r = RoutesFromLabels("c", map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)", "traefik.http.routers.app.service": "", "traefik.http.services.app.loadbalancer.server.port": "8080"}, &ip2)
+	r = RoutesFromLabels("c", map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)", "traefik.http.routers.app.service": "", "traefik.http.services.app.loadbalancer.server.port": "8080"}, &ip2, &yes)
 	if r[0].Service != nil || *r[0].Port != 8080 || *r[0].Target != "10.0.0.2:8080" {
 		t.Errorf("got %+v", r[0])
 	}
-	// No ingress IP means no target, rather than a half-built one.
-	r = RoutesFromLabels("c", map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)", "traefik.http.services.app.loadbalancer.server.port": "80"}, nil)
-	if *r[0].Port != 80 || r[0].Target != nil {
-		t.Errorf("got %+v", r[0])
+	// No ingress IP means no target, rather than a half-built one — and the three ways that happens
+	// are three different facts, because the page says which one out loud.
+	routed := map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)", "traefik.http.services.app.loadbalancer.server.port": "80"}
+	for _, c := range []struct {
+		name      string
+		ip        *string
+		onIngress *bool
+		want      string
+	}{
+		{"attached, address not knowable from here", nil, &yes, "unknown-node"},
+		{"attachment could not be determined", nil, nil, "unknown-node"},
+		{"measured, and genuinely off the network", nil, &no, "not-on-ingress"},
+	} {
+		r = RoutesFromLabels("c", routed, c.ip, c.onIngress)
+		if *r[0].Port != 80 || r[0].Target != nil || r[0].TargetReason != c.want {
+			t.Errorf("%s: target %v reason %q, want reason %q", c.name, r[0].Target, r[0].TargetReason, c.want)
+		}
+	}
+	// No port is no port whatever the network says — the half the spec author controls comes first.
+	r = RoutesFromLabels("c", map[string]string{"traefik.http.routers.app.rule": "Host(`a.example.com`)"}, &ip2, &no)
+	if r[0].Target != nil || r[0].TargetReason != "no-port" {
+		t.Errorf("no port: %+v", r[0])
 	}
 }
 
@@ -311,6 +337,94 @@ func TestReplicatedJobVerdictComesFromTheServiceNotItsTasks(t *testing.T) {
 			}
 		} else if f != nil {
 			t.Fatalf("%s: a parseable column must not warn: %+v", c.name, f)
+		}
+	}
+}
+
+// swarmRouteRunner is ONE swarm service (`sw_app`, one router, port 80) whose ingress address is
+// discoverable in different ways: `vip` is what `docker service inspect` reports on
+// Endpoint.VirtualIPs (empty for none — endpoint_mode: dnsrr, or an older daemon), `localTask` puts
+// a running task of it ON THIS NODE with its own ingress IP, `netLs` is what `docker network ls`
+// answers, and `svcNet` is the network id the service declares.
+func swarmRouteRunner(vip string, localTask bool, netLs, svcNet string) exec.Runner {
+	f := exec.NewFake(nil, "")
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.HasPrefix(cmd, "docker ps -aq"):
+			if localTask {
+				return exec.Result{OK: true, Stdout: "aaa111aaa111\n"}, true
+			}
+			return exec.Result{OK: true, Stdout: ""}, true
+		case strings.HasPrefix(cmd, "docker inspect"):
+			return exec.Result{OK: true, Stdout: `[{"Id":"aaa111aaa111","Name":"/sw_app.1.task1","Config":{"Image":"nginx","Labels":{"com.docker.stack.namespace":"sw","com.docker.swarm.service.name":"sw_app","com.docker.swarm.task.id":"task1"}},"State":{"Status":"running"},"NetworkSettings":{"Networks":{"preview-ingress":{"IPAddress":"10.0.1.5"}},"Ports":{}}}]`}, true
+		case strings.HasPrefix(cmd, "docker service ls"):
+			return exec.Result{OK: true, Stdout: `{"ID":"svc1","Name":"sw_app","Mode":"replicated","Replicas":"1/1"}` + "\n"}, true
+		case strings.HasPrefix(cmd, "docker service inspect"):
+			endpoint := ""
+			if vip != "" {
+				endpoint = `,"Endpoint":{"VirtualIPs":[{"NetworkID":"` + svcNet + `","Addr":"` + vip + `"}]}`
+			}
+			return exec.Result{OK: true, Stdout: "[{\"ID\":\"svc1xxxxxxxxxxxx\",\"UpdatedAt\":\"2026-08-20T10:00:00Z\",\"Spec\":{\"Name\":\"sw_app\",\"Labels\":{\"com.docker.stack.namespace\":\"sw\",\"traefik.enable\":\"true\",\"traefik.swarm.network\":\"preview-ingress\",\"traefik.http.routers.app-sw.rule\":\"Host(`app-sw.example.com`)\",\"traefik.http.services.app-sw.loadbalancer.server.port\":\"80\"},\"TaskTemplate\":{\"ContainerSpec\":{\"Image\":\"nginx\"},\"Networks\":[{\"Target\":\"" + svcNet + "\"}]}}" + endpoint + "}]"}, true
+		case strings.HasPrefix(cmd, "docker network ls"):
+			return exec.Result{OK: true, Stdout: netLs}, true
+		case strings.HasPrefix(cmd, "docker stack ps"):
+			if localTask {
+				return exec.Result{OK: true, Stdout: `{"ID":"task1","Name":"sw_app.1","Image":"nginx","Node":"mgr","DesiredState":"Running","CurrentState":"Running 2 minutes ago"}` + "\n"}, true
+			}
+			return exec.Result{OK: true, Stdout: `{"ID":"task9","Name":"sw_app.1","Image":"nginx","Node":"wrk","DesiredState":"Running","CurrentState":"Running 2 minutes ago"}` + "\n"}, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	return f
+}
+
+func TestSwarmRouteTargetIsTheServiceVIPThenALocalTask(t *testing.T) {
+	// negative control: pass nil for the ingress IP at the swarm routes call site (what it did
+	// before) — every case below loses its target and the first two fail. Second mutation, run
+	// separately: drop the `strings.Cut(v.Addr, "/")` and use v.Addr — the VIP case forwards to
+	// "10.0.9.2/24:80", an address that dials nowhere. Third: make OnIngress return &false when
+	// NetworksKnown is false — the unresolved-network case claims "not-on-ingress" about a service
+	// that is on it, which is the original bug wearing the new field's name.
+	const ingressID, otherID = "net1full0000abcd", "net2full0000abcd"
+	ingressLs := "net1full0000 preview-ingress\nnet2full0000 sw_default\n"
+	cases := []struct {
+		name       string
+		vip        string
+		localTask  bool
+		netLs      string
+		svcNet     string
+		wantTarget string
+		wantReason string
+	}{
+		// The VIP is what the swarm provider dials, and the manager knows it wherever tasks run —
+		// so it wins even when a task of this service is sitting on this node.
+		{"the service VIP, mask stripped", "10.0.9.2/24", true, ingressLs, ingressID, "10.0.9.2:80", ""},
+		// No VIP (dnsrr): a task on THIS node has an address, and it is the same `docker inspect`
+		// the compose path reads.
+		{"a task on this node", "", true, ingressLs, ingressID, "10.0.1.5:80", ""},
+		// Nothing here can know it: no VIP, every task elsewhere. NOT a network diagnosis.
+		{"no VIP and every task remote", "", false, ingressLs, ingressID, "", "unknown-node"},
+		// `docker network ls` did not answer, so the service's network is a raw id — "this is not
+		// preview-ingress" is exactly the conclusion that must not be drawn from that.
+		{"network names unresolved", "", false, "", ingressID, "", "unknown-node"},
+		// Measured, and it really is off the ingress network.
+		{"genuinely off the ingress network", "", false, ingressLs, otherID, "", "not-on-ingress"},
+	}
+	for _, c := range cases {
+		rt := DeploymentRuntime(RuntimeArgs{Stack: "sw", Runner: swarmRouteRunner(c.vip, c.localTask, c.netLs, c.svcNet), Challenge: DNS01, Orchestrator: spec.Swarm})
+		if len(rt.Routes) != 1 {
+			t.Fatalf("%s: want one route, got %+v", c.name, rt.Routes)
+		}
+		got := rt.Routes[0]
+		target := ""
+		if got.Target != nil {
+			target = *got.Target
+		}
+		if target != c.wantTarget || got.TargetReason != c.wantReason {
+			t.Errorf("%s: target %q reason %q, want %q / %q", c.name, target, got.TargetReason, c.wantTarget, c.wantReason)
+		}
+		if strings.Contains(target, "/") {
+			t.Errorf("%s: %q is a CIDR, not an address Traefik dials", c.name, target)
 		}
 	}
 }
