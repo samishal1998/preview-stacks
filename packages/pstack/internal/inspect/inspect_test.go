@@ -200,7 +200,7 @@ func TestTaskStateAndSwarmDiscovery(t *testing.T) {
 		case strings.HasPrefix(cmd, "docker inspect"):
 			return exec.Result{OK: true, Stdout: `[{"Id":"aaa111aaa111","Name":"/sw_app.1.task1","Config":{"Image":"nginx","Labels":{"com.docker.stack.namespace":"sw","com.docker.swarm.service.name":"sw_app","com.docker.swarm.task.id":"task1","com.docker.swarm.node.id":"n1"}},"State":{"Status":"running","StartedAt":"2026-08-20T10:01:00Z"},"NetworkSettings":{"Networks":{"preview-ingress":{"IPAddress":"10.0.1.5"}},"Ports":{}}},{"Id":"bbb222bbb222","Name":"/sw_app.1.oldtask","Config":{"Image":"nginx","Labels":{"com.docker.stack.namespace":"sw","com.docker.swarm.service.name":"sw_app","com.docker.swarm.task.id":"dead0","com.docker.swarm.node.id":"n1"}},"State":{"Status":"exited","ExitCode":1},"NetworkSettings":{"Networks":{},"Ports":{}}}]`}, true
 		case strings.HasPrefix(cmd, "docker service ls"):
-			return exec.Result{OK: true, Stdout: "svc1\n"}, true
+			return exec.Result{OK: true, Stdout: `{"ID":"svc1","Name":"sw_app","Mode":"replicated","Replicas":"2/2"}` + "\n"}, true
 		case strings.HasPrefix(cmd, "docker service inspect"):
 			return exec.Result{OK: true, Stdout: "[{\"ID\":\"svc1xxxxxxxxxxxx\",\"UpdatedAt\":\"2026-08-20T10:00:00Z\",\"Spec\":{\"Name\":\"sw_app\",\"Labels\":{\"com.docker.stack.namespace\":\"sw\",\"traefik.enable\":\"true\",\"traefik.swarm.network\":\"preview-ingress\",\"traefik.http.routers.app-sw.rule\":\"Host(`app-sw.example.com`)\",\"traefik.http.services.app-sw.loadbalancer.server.port\":\"80\"},\"TaskTemplate\":{\"ContainerSpec\":{\"Image\":\"nginx\"},\"Networks\":[{\"Target\":\"net1\"}]}}}]"}, true
 		case strings.HasPrefix(cmd, "docker network ls"):
@@ -229,5 +229,69 @@ func TestTaskStateAndSwarmDiscovery(t *testing.T) {
 	}
 	if find(rt, "exposedbydefault") != nil || find(rt, "not attached") != nil {
 		t.Errorf("the service is enabled and on the ingress: %v", rt.Findings)
+	}
+}
+
+// jobRunner fakes a swarm stack holding ONE replicated-job service (the seed) and nothing else.
+// `replicas` is the progress column docker renders; `staleTask` adds a Complete task from a PREVIOUS
+// job iteration, which is the case a task-counting implementation gets wrong.
+func jobRunner(replicas string, staleTask bool) exec.Runner {
+	f := exec.NewFake(nil, "")
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.HasPrefix(cmd, "docker ps -aq"):
+			return exec.Result{OK: true, Stdout: ""}, true
+		case strings.HasPrefix(cmd, "docker service ls"):
+			return exec.Result{OK: true, Stdout: `{"ID":"seed1","Name":"sw_seed","Mode":"replicated job","Replicas":"` + replicas + `"}` + "\n"}, true
+		case strings.HasPrefix(cmd, "docker service inspect"):
+			return exec.Result{OK: true, Stdout: `[{"ID":"seed1full0000","Spec":{"Name":"sw_seed","Labels":{"com.docker.stack.namespace":"sw"},"TaskTemplate":{"ContainerSpec":{"Image":"seed:1"},"Networks":[]}}}]`}, true
+		case strings.HasPrefix(cmd, "docker network ls"):
+			return exec.Result{OK: true, Stdout: ""}, true
+		case strings.HasPrefix(cmd, "docker stack ps"):
+			if staleTask {
+				return exec.Result{OK: true, Stdout: `{"ID":"old1","Name":"sw_seed.1","Image":"seed:1","Node":"mgr","DesiredState":"Running","CurrentState":"Complete 9 minutes ago"}` + "\n"}, true
+			}
+			return exec.Result{OK: true, Stdout: ""}, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	return f
+}
+
+func TestReplicatedJobVerdictComesFromTheServiceNotItsTasks(t *testing.T) {
+	// negative control: drop the `len(jobsByName) > 0` block — every case below yields 0 containers
+	// (a finished job's task is never desired-running, so nothing survives the corpse skip), and a
+	// stack whose seed FAILED then reads as ready over whatever else is in it.
+	cases := []struct {
+		name      string
+		replicas  string
+		staleTask bool
+		wantState string
+		wantExit  bool // exit code 0 present ⇒ readiness calls it ready
+	}{
+		{"completed", "0/0 (1/1 completed)", false, "exited", true},
+		{"mid-run", "1/1 (0/1 completed)", false, "created", false},
+		{"retries exhausted, nothing completed", "0/1 (0/1 completed)", false, "created", false},
+		// The case task-counting gets wrong: a Complete task from the PREVIOUS iteration is present,
+		// but THIS iteration has completed nothing. Must not read as done.
+		{"stale prior-iteration task", "0/1 (0/1 completed)", true, "created", false},
+		// Fail closed: a progress column we cannot parse is NOT evidence the seed ran.
+		{"unparseable progress", "something else", false, "created", false},
+	}
+	for _, c := range cases {
+		rt := DeploymentRuntime(RuntimeArgs{Stack: "sw", Runner: jobRunner(c.replicas, c.staleTask), Challenge: DNS01, Orchestrator: spec.Swarm})
+		if len(rt.Containers) != 1 {
+			t.Fatalf("%s: want exactly one entry for the job service, got %d: %+v", c.name, len(rt.Containers), rt.Containers)
+		}
+		got := rt.Containers[0]
+		if got.State != c.wantState {
+			t.Fatalf("%s: state = %q, want %q", c.name, got.State, c.wantState)
+		}
+		if hasExit := got.ExitCode != nil && *got.ExitCode == 0; hasExit != c.wantExit {
+			t.Fatalf("%s: exit-0 = %v, want %v", c.name, hasExit, c.wantExit)
+		}
+		if got.Service == nil || *got.Service != "seed" {
+			t.Fatalf("%s: service name not carried: %+v", c.name, got.Service)
+		}
 	}
 }
