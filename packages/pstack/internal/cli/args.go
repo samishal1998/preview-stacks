@@ -317,6 +317,8 @@ func Usage(version string) string {
 		"                                         AND its passphrase both land in instance metadata.",
 		"            --config-url <https://…>     fetch it at boot instead — only the passphrase is",
 		"                                         embedded, so the payload stays off metadata.",
+		"            Either way the passphrase comes from PSTACK_CONFIG_KEY, or a no-echo prompt when",
+		"            it is unset and you are on a tty. There is no flag for it (see pull/push below).",
 		"",
 		"upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]",
 		"            [--ui basic|advanced to override what it detects]  [--orchestrator swarm|compose to switch — previews must be down]",
