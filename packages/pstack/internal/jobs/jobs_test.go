@@ -21,12 +21,23 @@ func okWork(o stack.Outcome) Work {
 	}
 }
 
+// waitDone blocks until the job has finished AND the registry has let go of its stack.
+//
+// The state alone is the wrong signal, and this is not theoretical — it is a CI failure. `finish`
+// runs in FOUR critical sections: section 1 assigns the terminal state and unlocks, and section 3
+// deletes the per-stack lock. Between them `r.Get` reports the job done while `r.Start` on the same
+// stack still refuses. A loop that starts a job, waits for it, and starts the next one — which is
+// exactly what the eviction test does — then fails with "fill refused" on a loaded runner and never
+// on an unloaded laptop.
+//
+// So this waits for both. The bus event is later still (section 5): assertions about events use
+// waitEvents, never this.
 func waitDone(t *testing.T, r *Registry, id string) Job {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		j, ok := r.Get(id)
-		if ok && j.State != Running {
+		if ok && j.State != Running && !r.IsBusy(j.Stack) {
 			return j
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -50,6 +61,42 @@ func (c *captured) names() []string {
 	}
 	return out
 }
+
+// waitEvents blocks until n events have been captured.
+//
+// `waitDone` is NOT enough on its own, and the difference is the source of a real CI failure.
+// `finish` publishes the job's terminal state to the registry, RELEASES the mutex, and only then
+// builds the payload and emits — deliberately, because no registry method may call the bus while
+// holding the lock. So there is a window in which `r.Get` already reports the job finished and the
+// terminal event has not been dispatched yet. On an unloaded laptop it never opens; on a loaded
+// runner it does, and the test failed with `events [job.started]`.
+//
+// Every assertion about an event therefore waits for the EVENT, never for the state.
+func waitEvents(t *testing.T, c *captured, n int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		got := len(c.ev)
+		c.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("only %v arrived; wanted %d events", c.names(), n)
+}
+
+// data is one captured payload, read under the lock — the listener appends from the job's goroutine.
+func (c *captured) data(i int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if i >= len(c.ev) {
+		return ""
+	}
+	return string(c.ev[i].Data)
+}
+
 func (c *captured) last() map[string]any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -145,11 +192,12 @@ func TestStateFromOutcomeAndEventPayload(t *testing.T) {
 		if done.Outcome == nil || done.Outcome.Steps == nil || done.Outcome.Outputs == nil || done.Log == nil {
 			t.Fatalf("case %d: nil collections in %+v", i, done)
 		}
+		waitEvents(t, c, 2)
 		names := c.names()
 		if len(names) != 2 || names[0] != "job.started" || names[1] != tc.event {
 			t.Fatalf("case %d: events %v", i, names)
 		}
-		raw := string(c.ev[1].Data)
+		raw := c.data(1)
 		want := `{"jobId":"` + j.ID + `","stack":"s","action":"` + string(tc.action) + `","state":"` + string(tc.state) + `","startedAt":`
 		if !strings.HasPrefix(raw, want) {
 			t.Fatalf("case %d: payload order %s", i, raw)
@@ -201,6 +249,7 @@ func TestCrashAndScrub(t *testing.T) {
 	if len(done.Log) != 1 || done.Log[0].Message != "job crashed: boom ***\nsecond line" || done.Log[0].Level != log.Error {
 		t.Fatalf("crash log %+v", done.Log)
 	}
+	waitEvents(t, c, 4) // two jobs × (started, terminal)
 	p := c.last()
 	if p["error"] != "boom ***" || p["state"] != "failed" {
 		t.Fatalf("crash event %v", p)
@@ -266,9 +315,7 @@ ended:
 		t.Fatalf("subscriber missed the cancel line: %v", seen)
 	}
 	// The bus event is step 5 of finish, after the __end__ fan-out: wait for it.
-	for i := 0; i < 200 && len(c.names()) < 2; i++ {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitEvents(t, c, 2)
 	if names := c.names(); names[len(names)-1] != "job.cancelled" || c.last()["cancelledBy"] != "alice" {
 		t.Fatalf("events %v %v", names, c.last())
 	}
