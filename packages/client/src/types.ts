@@ -352,6 +352,51 @@ export type Me = {
   share?: { deployment: string; views: ShareView[]; expiresAt?: number | null };
 };
 
+// ── host settings ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The two settings that can be changed at RUNTIME, without restarting the container. The server
+ * refuses any other key rather than storing it, so this union is the whole surface.
+ */
+export type SettingKey = 'max_jobs' | 'default_role';
+
+/**
+ * One setting, as read and as returned by a write.
+ *
+ * `source` says where the value came from: `db` (someone set it through the API), `env`
+ * (`PSTACK_MAX_JOBS`), or `default` (what the binary ships with). Precedence is **database >
+ * environment > built-in default** — the environment variable is the DEFAULT, not the authority, so
+ * a stored value survives the next restart and a host that never sets one behaves exactly as it did
+ * before this existed.
+ *
+ * `minRole` is the least role that may WRITE this key, served from the server's own permission
+ * table: `max_jobs` is maintainer's, `default_role` is admin's. Reading is viewer's. Treat a name
+ * this build does not recognise as the most privileged, never the least.
+ */
+export type SettingRow = {
+  key: SettingKey;
+  /** A number for `max_jobs`; a role name for `default_role`. */
+  value: number | string;
+  source: 'db' | 'env' | 'default';
+  minRole: string;
+};
+
+export type HostSettings = {
+  settings: SettingRow[];
+  /** `null` when `PSTACK_MAX_JOBS` is unset — never `0`, which the server reads as unset. */
+  env: { PSTACK_MAX_JOBS: number | null };
+  precedence: string;
+};
+
+/**
+ * What a write answers: the fresh row (`source` is now `db`), and for `max_jobs` a `note`.
+ *
+ * The new cap is in force immediately — no restart — but LOWERING IT CANCELS NOTHING. Jobs already
+ * running run to completion; the cap applies to the next job that starts. A script that drops the
+ * cap to 1 has not stopped the four jobs in flight.
+ */
+export type SettingWritten = SettingRow & { stored: true; note?: string };
+
 // ── single sign-on ────────────────────────────────────────────────────────────────────────────────
 
 export type SsoClaimMap = { subject: string; username: string; email: string; name: string; avatar: string };
@@ -395,9 +440,15 @@ export type SsoConfig = {
    */
   requiredGroups: string[];
   /**
-   * The role an account this provider MINTS is created at. Deliberately not narrowed to `Role`: the
-   * server stores this string without validating it, and one it does not recognise ranks below
-   * viewer. Whatever it says is the floor every person who signs in through this provider gets.
+   * The role an account this provider MINTS is created at, and **empty means INHERIT** — the host's
+   * `default_role` setting, resolved when the account is provisioned rather than frozen when the
+   * provider was saved. Inherit falls back to `viewer` when the host default is unset, and never to
+   * admin by omission.
+   *
+   * Deliberately not narrowed to `Role`: the server stores this string without validating it, and
+   * one it does not recognise ranks below viewer. A provider stored before 0.33.0 carries a literal
+   * `"viewer"` (the server used to fill an empty value in), and keeps it until it is saved again
+   * with `''`.
    */
   defaultRole: string;
 };

@@ -6,6 +6,7 @@
     "test/api-jobs-and-containers.test.ts": 12,
     "test/api-rbac.test.ts": 7,
     "test/api-routing-and-registries.test.ts": 8,
+    "test/api-settings.test.ts": 7,
     "test/api-share-sleep-swarm.test.ts": 9,
     "test/api-source-and-logs.test.ts": 12,
     "test/api-sso.test.ts": 17,

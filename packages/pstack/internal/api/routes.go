@@ -19,6 +19,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/notify"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/specs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/terminal"
@@ -129,6 +130,20 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	// ---- single sign-on: the configuration ----
 	if path == "/api/sso/config" {
 		return s.ssoConfigRoutes(w, r)
+	}
+
+	// ---- the two runtime host settings ----
+	// One literal per key, not a pattern: the permission is PER KEY (maintainer for the cap, admin
+	// for the role a new account gets), and a key nobody listed 404s here rather than reaching a
+	// validator it would fail anyway. routes_settings.go's header has the rest.
+	if path == "/api/settings" && r.Method == http.MethodGet {
+		return s.getSettings(w)
+	}
+	if path == "/api/settings/max_jobs" {
+		return s.putSetting(w, r, settings.KeyMaxJobs)
+	}
+	if path == "/api/settings/default_role" {
+		return s.putSetting(w, r, settings.KeyDefaultRole)
 	}
 
 	// ---- the swarm ----

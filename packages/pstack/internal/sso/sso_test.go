@@ -626,8 +626,15 @@ func TestConfiguration(t *testing.T) {
 	t.Run("the stored JSON is the full normalised shape, WHATWG-serialised, in the TypeScript key order", func(t *testing.T) {
 		// negative control: return u.String() instead of whatwgString → the issuer loses its trailing '/'
 		// This is the `config` the golden fixture's GET /api/sso/config carries (FIXTURE.json googleExpected).
+		//
+		// `defaultRole` IS EMPTY AND MUST STAY EMPTY: this config names no role, and empty means
+		// "inherit the host default", resolved when an account is provisioned. This package must not
+		// fill it — not with "admin" (which it once did, minting a full administrator for any
+		// stranger who completed the flow) and not with "viewer" (safe, but it froze the answer into
+		// the stored row so the provider stopped inheriting). Second negative control: restore
+		// either fill in ParseConfig → this comparison fails. Both were run.
 		cfg := mustConfig(t, `{"mode":"oidc","clientId":"google-cid","issuer":"https://accounts.google.com","label":"Google"}`)
-		want := `{"mode":"oidc","enabled":true,"clientId":"google-cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"viewer","label":"Google","discoveryUrl":"https://accounts.google.com/","provider":"","authorizeUrl":"","tokenUrl":"","userInfoUrl":"","emailsUrl":"","groupsUrl":"","scopes":"openid profile email","claimMap":{"subject":"sub","username":"preferred_username","email":"email","name":"name","avatar":"picture"}}`
+		want := `{"mode":"oidc","enabled":true,"clientId":"google-cid","allowedEmailDomains":[],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"","label":"Google","discoveryUrl":"https://accounts.google.com/","provider":"","authorizeUrl":"","tokenUrl":"","userInfoUrl":"","emailsUrl":"","groupsUrl":"","scopes":"openid profile email","claimMap":{"subject":"sub","username":"preferred_username","email":"email","name":"name","avatar":"picture"}}`
 		if got := string(jsonx.Must(cfg)); got != want {
 			t.Fatalf("\n got %s\nwant %s", got, want)
 		}

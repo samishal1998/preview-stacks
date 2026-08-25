@@ -483,7 +483,14 @@ func (d *Document) Trusts() []string {
 		if where == "" {
 			where = c.Provider
 		}
-		out = append(out, fmt.Sprintf("let %s sign people in (%q), giving each new account the role %q", where, c.Label, c.DefaultRole))
+		// An EMPTY role means "inherit this host's default", and printing `""` here said nothing at
+		// all about a grant that could be substantial. This summary is the last thing an operator
+		// reads before accepting a document from somewhere else; it does not get to be coy.
+		role := fmt.Sprintf("%q", c.DefaultRole)
+		if c.DefaultRole == "" {
+			role = "whatever this host's default role is (never admin — an inheriting provider is capped below it)"
+		}
+		out = append(out, fmt.Sprintf("let %s sign people in (%q), giving each new account %s", where, c.Label, role))
 	}
 	for _, r := range d.Registry {
 		out = append(out, fmt.Sprintf("pull images from %s as %s", r.Registry, r.Username))

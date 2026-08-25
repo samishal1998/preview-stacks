@@ -206,4 +206,29 @@ var Migrations = []string{
     FROM sso_config;
   DROP TABLE sso_config;
   `,
+	// 8 — host settings: the few knobs an operator may change WITHOUT restarting the container.
+	`
+  -- NOT a general dumping ground, and not a hole in invariant 10. Every row is CONFIGURATION an
+  -- operator chose; nothing here describes what is RUNNING — that stays in Docker and in each
+  -- axis's assert_gone probe. The keys are a CLOSED SET validated by internal/settings on write:
+  -- an unknown key is refused rather than stored. SQLite cannot express that check (a CHECK
+  -- constraint would have to be edited by a migration for every new key), so the table is plain and
+  -- the guard lives one layer up — the same division as users.role, which is TEXT with no CHECK.
+  --
+  -- PRECEDENCE IS PER KEY, and the environment is a DEFAULT rather than the authority — an operator
+  -- who never opens the UI keeps exactly the pre-0.33 behaviour, and one who sets a value in the UI
+  -- is not overridden by the container's environment on the next restart:
+  --
+  --   max_jobs      integer >= 1      database > PSTACK_MAX_JOBS > jobs.DefaultMaxRunning (4)
+  --   default_role  one of the four   database > 'viewer'   (there is no environment variable)
+  --
+  -- An EMPTY table therefore behaves exactly like every version before it.
+  CREATE TABLE settings (
+    key        TEXT PRIMARY KEY,
+    -- TEXT for every key; internal/settings owns the parse and the canonical form ("008" is stored
+    -- as "8"). One column type means adding a key is a validator, not a migration.
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 }

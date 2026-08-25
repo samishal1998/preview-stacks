@@ -37,6 +37,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/specs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
@@ -73,6 +74,11 @@ type Options struct {
 	// means jobs.DefaultMaxRunning. Over the cap an accepted job WAITS for a slot — it is never
 	// refused. Not to be confused with jobs.MaxJobs, which bounds retained transcripts and is not
 	// tunable; the env name is the one the operator-facing contract fixed.
+	//
+	// It is now the DEFAULT rather than the authority: a `max_jobs` row in the settings table
+	// outranks it (internal/settings), so an operator who set the cap in the UI is not overridden
+	// by the container's environment on the next restart, and one who never opened the UI keeps
+	// exactly this value. PUT /api/settings/max_jobs applies without a restart.
 	MaxJobs int
 	// Domain is the preview domain (PSTACK_DOMAIN): share links and the SSO callback are built on
 	// control.<domain>; without it the request's own origin is used.
@@ -114,6 +120,7 @@ type Server struct {
 	registries *registries.RegistryAuthStore
 	store      *store.Store
 	auth       *auth.Auth
+	settings   *settings.Settings
 	hooks      *webhooks.Webhooks
 	terminals  *terminal.Audit
 	hostVars   *hostvars.HostVars
@@ -190,16 +197,22 @@ func New(o Options) (*Server, error) {
 		o.TerminalArgv = terminal.ExecArgv
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	// The cap the registry starts with is RESOLVED, not the raw option: database > PSTACK_MAX_JOBS
+	// > jobs.DefaultMaxRunning. Handing o.MaxJobs straight to jobs.New would silently ignore a
+	// stored value until someone PUT it again, which is the half of the contract that says an
+	// operator's choice survives a restart.
+	set := settings.New(st, o.MaxJobs)
 	s := &Server{
 		opts:       o,
 		env:        env,
-		jobs:       jobs.New(o.Bus, o.MaxJobs),
+		jobs:       jobs.New(o.Bus, set.MaxJobs()),
 		registry:   registry.New(o.DataDir),
 		specs:      specs.New(o.DataDir),
 		routing:    routing.New(routingDir),
 		registries: registries.New(registryDir),
 		store:      st,
 		auth:       auth.New(st),
+		settings:   set,
 		terminals:  terminal.NewAudit(st),
 		hostVars:   hostvars.New(st),
 		readiness:  readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, RestartLoop: o.ReadinessRestartLoop, Bus: o.Bus}),
@@ -889,7 +902,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	}
 	switch {
 	case registry.IsError(err), routing.IsError(err), registries.IsError(err), sso.IsError(err),
-		hostvars.IsError(err), auth.IsError(err), specs.IsError(err), webhooks.IsError(err), notify.IsError(err):
+		hostvars.IsError(err), auth.IsError(err), specs.IsError(err), webhooks.IsError(err), notify.IsError(err),
+		settings.IsError(err):
 		writeError(w, 400, err.Error())
 	default:
 		writeError(w, 500, err.Error())

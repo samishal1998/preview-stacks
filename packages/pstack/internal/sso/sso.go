@@ -334,7 +334,9 @@ type Config struct {
 	// group is a path (`acme/backend`) and `path.Match` gives `/` a meaning that would surprise
 	// whoever typed `*`. GitHub org logins are case-preserving but case-insensitive, hence the fold.
 	RequiredGroups []string `json:"requiredGroups"`
-	// DefaultRole is the role for auto-provisioned users.
+	// DefaultRole is the role for auto-provisioned users — and EMPTY MEANS INHERIT THE HOST
+	// DEFAULT, resolved when an account is actually provisioned rather than frozen into this row
+	// when it was saved. See ParseConfig, which used to fill it in.
 	DefaultRole string `json:"defaultRole"`
 	// Label is the button text and the `providerKey` half of a link's identity.
 	Label string `json:"label"`
@@ -528,22 +530,27 @@ func ParseConfig(input any) (*Config, error) {
 		// empty slice — a refusal that never fires and a test that proves nothing.
 		AllowedUsernames: lowerList(get("allowedUsernames")),
 		RequiredGroups:   lowerList(get("requiredGroups")),
-		// The role every account this provider auto-provisions is created with.
+		// The role every account this provider auto-provisions is created with — KEPT EXACTLY AS
+		// TYPED, empty included.
+		//
+		// EMPTY MEANS INHERIT THE HOST DEFAULT (the `default_role` setting, `viewer` when nobody
+		// set one), resolved at provision time by whoever calls auth.SsoSignIn. It has NEVER meant
+		// admin and must never mean admin again: this line filled an empty value with "admin" back
+		// when admin was the only role, and with allowedEmailDomains, allowedUsernames and
+		// requiredGroups all empty — the shape every preset saves with — any stranger who completed
+		// the OAuth flow was minted a full administrator, able to create and delete accounts and
+		// rewrite this very config. It then filled it with "viewer", which was safe but froze the
+		// answer into the stored row: an operator who later changed the host default found their
+		// providers still minting viewers.
+		//
+		// So the fill is gone, in BOTH directions. A host that wants SSO logins to arrive as
+		// anything in particular says so — here, or once for the whole host. Granting privilege is
+		// not a thing to do by omission, and neither is refusing to follow the host's own default.
+		//
+		// The string is not validated here: internal/auth imports this package, so this package
+		// cannot import it back to reach auth.ValidRole. The API validates a NON-EMPTY value before
+		// storing (routes_auth), and auth-side tests pin what empty resolves to at every step.
 		DefaultRole: str(get("defaultRole")),
-	}
-	// VIEWER, not admin. This defaulted to "admin" back when admin was the only role, and the line
-	// outlived that: with allowedEmailDomains, allowedUsernames and requiredGroups all empty — the
-	// shape every preset saves with — any stranger who completed the OAuth flow was minted a full
-	// administrator, able to create and delete accounts and rewrite this very config.
-	//
-	// A host that wants SSO logins to arrive as admins must now SAY so. Granting the most privilege
-	// this product has is not a thing to do by omission.
-	//
-	// The string is not validated here: internal/auth imports this package, so this package cannot
-	// import it back to reach auth.ValidRole. The API layer validates before storing (routes_auth),
-	// and an auth-side test pins this default equal to auth.Viewer so the two cannot drift.
-	if cfg.DefaultRole == "" {
-		cfg.DefaultRole = "viewer"
 	}
 	if v, ok := o.Get("enabled"); ok {
 		cfg.Enabled = truthy(v)

@@ -866,14 +866,17 @@ func provision(q store.Querier, identity *sso.Identity, defaultRole string) (*Us
 		raw, _, _ = strings.Cut(identity.Email, "@")
 	}
 	base := sso.SanitizeUsername(raw, identity.Subject)
-	// LEAST PRIVILEGE when the provider names no role. An identity provider is an outside system
-	// deciding who gets an account here; if its stored config says nothing about what that account
-	// may do, the answer is "read" and an admin promotes from there.
+	// LEAST PRIVILEGE when nobody named a role. An identity provider is an outside system deciding
+	// who gets an account here; if neither its config nor this host says what that account may do,
+	// the answer is "read" and an admin promotes from there.
 	//
-	// This fallback is not the whole story and must not be read as one: sso.ParseConfig fills an
-	// empty `defaultRole` with "admin" before the config is ever stored, so every provider that went
-	// through it still mints admins and this line never fires for them. Fixing that default belongs
-	// in internal/sso.
+	// THE LAST RESORT, not the whole story. A provider's empty `defaultRole` means "inherit the
+	// host default" (sso.ParseConfig no longer fills it in either direction), and that default is
+	// resolved by the CALLER — the API reads the `default_role` setting and passes it in
+	// SsoSignInOpts. It cannot be read here: this runs on the transaction's Querier, and the
+	// settings reader goes to the one pooled connection that transaction is holding. So this line
+	// fires only when the caller passed nothing at all, and what it must never do — on any path,
+	// through any omission — is resolve upward.
 	role := defaultRole
 	if role == "" {
 		role = string(Viewer)

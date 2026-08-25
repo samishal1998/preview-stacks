@@ -31,6 +31,7 @@ import type {
   DeliveryRow,
   DeploymentRow,
   Health,
+  HostSettings,
   HostVar,
   Job,
   Kind,
@@ -40,6 +41,8 @@ import type {
   Readiness,
   Role,
   Runtime,
+  SettingKey,
+  SettingWritten,
   ShareLink,
   ShareView,
   SpecMeta,
@@ -258,9 +261,13 @@ export function createClient(opts: ClientOptions) {
     users: {
       list: () => get<{ users: User[] }>('/api/users').then((r) => r.users),
       /**
-       * An ABSENT `role` means VIEWER — the least privilege, not the most. This route used to create
-       * an administrator every time; a script that relied on that must now say `role: 'admin'` and
-       * mean it. A role outside the four is a 400 rather than a silently powerless account.
+       * An ABSENT `role` means the host's `default_role` setting — `viewer` on a host where nobody
+       * has changed it, which is what this used to mean unconditionally. It is still the least
+       * privilege by default and never admin by omission, but it is now an OPERATOR'S choice
+       * (`settings.set('default_role', …)`), so a script that wants a specific role must name it
+       * rather than rely on the host's. This route used to create an administrator every time; a
+       * script that relied on THAT must say `role: 'admin'` and mean it. A role outside the four is
+       * a 400 rather than a silently powerless account.
        */
       create: (body: { username: string; password: string; email?: string; role?: Role }) =>
         post<{ user: User }>('/api/users', body).then((r) => r.user),
@@ -336,6 +343,29 @@ export function createClient(opts: ClientOptions) {
       put: (name: string, value: string, secret = false) =>
         put<{ name: string; secret: boolean }>(`/api/host-vars/${enc(name)}`, { value, secret }),
       remove: (name: string) => del<{ deleted: string }>(`/api/host-vars/${enc(name)}`),
+    },
+
+    /**
+     * The two host settings that change at RUNTIME: the running-job cap and the role an account
+     * created with no role named gets.
+     *
+     * Reading is viewer's; writing is per KEY, not per route — `max_jobs` is maintainer's and
+     * `default_role` is admin's, and each row says which in `minRole`. The read also says where
+     * each value came from (`source`), which is the only way to tell a value you set from one your
+     * environment is supplying.
+     */
+    settings: {
+      get: () => get<HostSettings>('/api/settings'),
+      /**
+       * Store one. Refused (400) for an unknown key or a value the server will not take —
+       * `max_jobs` is an integer ≥ 1, `default_role` one of the four roles.
+       *
+       * `max_jobs` takes effect on the NEXT dispatch, with no restart: raising it starts a job that
+       * was waiting for a slot, and LOWERING IT CANCELS NOTHING — the jobs already running run to
+       * completion. The `note` in the response says so; print it rather than paraphrasing.
+       */
+      set: (key: SettingKey, value: number | Role) =>
+        put<SettingWritten>(`/api/settings/${enc(key)}`, { value }),
     },
 
     /**
