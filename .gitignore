@@ -22,3 +22,11 @@ hetzner*.yml
 
 # CI writes one at the workspace root to authenticate `bun publish`; never commit a token.
 .npmrc
+
+# `pstack pull config` exports. Sealed, but a sealed file plus a passphrase that leaks later is
+# still every credential of a host — and unlike the cloud-configs above, this one is NOT harmless
+# without its key: it is offline-crackable at leisure. The docs name it `host.sealed`; the other
+# shapes are what people actually type. A credential in git history cannot be un-committed.
+*.sealed
+config.yaml
+.config.yaml
