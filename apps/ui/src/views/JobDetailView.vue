@@ -6,10 +6,19 @@
  * sends live events, so attaching late still shows the beginning — no polling, no gap to reconcile.
  * A final `{done:true,state}` ends the stream; we close the source then and fetch the job once more
  * to pick up `outcome`, which only exists after the job finishes.
+ *
+ * A QUEUED JOB HAS A STREAM TOO, and it is open and silent until the job dispatches. That is the
+ * one case where "no events yet" is not a broken connection, so the page says what it is waiting
+ * for instead of showing an empty log: the panel reads "waiting to start", and a banner above it
+ * says WHY — behind its own stack, or behind the host's job cap. The first line to arrive IS the
+ * dispatch, and nothing else would re-fetch, so it triggers one `load()`; without that the badge
+ * would still read "Queued" while output scrolled past underneath it.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
 import type { Job, LogEvent } from '../api/types';
+import { state } from '../composables/useControlPlane';
+import { isTerminal, supersededBy, waitReason } from '../composables/useJobQueue';
 import { leakedAxes, countUnverifiable } from '../composables/useSteps';
 import { actionLabel, stamp, took } from '../composables/useFormat';
 import LogViewer from '../components/LogViewer.vue';
@@ -53,6 +62,18 @@ const logRows = computed<LogRow[]>(() => {
 
 let source: EventSource | null = null;
 
+/** Terminal is forever. NEVER `state !== 'running'` — that is true of a job that has not started. */
+const terminal = computed(() => !!job.value && isTerminal(job.value.state));
+const queued = computed(() => job.value?.state === 'queued');
+
+/**
+ * Why this job is still waiting, and which job replaced it — both read the shell's polled job list,
+ * which is loaded on every route. On a deep link before the first poll the list is empty and both
+ * fall back to saying nothing rather than guessing.
+ */
+const wait = computed(() => (job.value ? waitReason(job.value, state.jobs) : null));
+const replacement = computed(() => (job.value ? supersededBy(job.value, state.jobs) : null));
+
 const leaks = computed(() => (job.value?.outcome ? leakedAxes(job.value.outcome.steps) : []));
 const unverifiable = computed(() =>
   job.value?.outcome ? countUnverifiable(job.value.outcome.steps) : 0,
@@ -90,6 +111,9 @@ function stream(): void {
    * empty.
    */
   lines.value = [];
+  // A queued job's stream carries nothing until it dispatches, and the first line to arrive is that
+  // dispatch. Re-read the job once when it does, or the header keeps saying "Queued".
+  let awaitingDispatch = queued.value;
   source = new EventSource(api.url(`/api/jobs/${encodeURIComponent(props.jobId)}/stream`));
   streaming.value = true;
 
@@ -105,6 +129,10 @@ function stream(): void {
       closeStream();
       void load(); // `outcome` only exists once the job has ended
       return;
+    }
+    if (awaitingDispatch) {
+      awaitingDispatch = false;
+      void load(); // it started: pick up `running` and the `startedAt` it now has
     }
     lines.value.push(payload as LogEvent);
   };
@@ -128,7 +156,8 @@ watch(
     // `job.value` narrowed to the `null` assigned above, because it cannot see that an awaited
     // call reassigned it.
     const loaded = await load();
-    if (loaded && loaded.state === 'running') stream();
+    // Queued as well as running: the stream is what tells this page the job began.
+    if (loaded && !isTerminal(loaded.state)) stream();
   },
   { immediate: true },
 );
@@ -172,8 +201,13 @@ onBeforeUnmount(closeStream);
         </h1>
         <div class="sub">
           <template v-if="job">
-            <code>{{ job.stack }}</code> · started {{ stamp(job.startedAt) }}
-            <template v-if="job.endedAt"> · took {{ took(job.startedAt, job.endedAt) }}</template>
+            <code>{{ job.stack }}</code>
+            <template v-if="job.startedAt"> · started {{ stamp(job.startedAt) }}</template>
+            <template v-else-if="queued"> · not started yet</template>
+            <template v-else> · never started</template>
+            <template v-if="job.startedAt && job.endedAt">
+              · took {{ took(job.startedAt, job.endedAt) }}
+            </template>
           </template>
           <template v-else>{{ jobId }}</template>
         </div>
@@ -185,16 +219,72 @@ onBeforeUnmount(closeStream);
         says what will be left behind rather than asking "are you sure".
       -->
       <ActionButton
-        v-if="job?.state === 'running'"
+        v-if="job && !terminal"
         variant="danger"
         :pending="cancelling"
-        confirm="Stop it? Nothing is undone."
-        title="Kills the command in flight. Anything already created or destroyed stays that way."
+        :confirm="queued ? 'Drop it? It never ran.' : 'Stop it? Nothing is undone.'"
+        :title="
+          queued
+            ? 'It has not started, so there is nothing left behind to clean up.'
+            : 'Kills the command in flight. Anything already created or destroyed stays that way.'
+        "
         @run="cancel"
       >
-        Stop
+        {{ queued ? 'Drop' : 'Stop' }}
       </ActionButton>
     </div>
+
+    <!--
+      A queued job and a broken page look identical — an open connection, an empty log, nothing
+      moving. So this says which it is, and WHY it waits, because the two waits have different
+      fixes: behind its own stack, wait or stop the job ahead; behind the host's cap, raise
+      PSTACK_MAX_JOBS or deploy fewer things at once. Neutral chrome on purpose — waiting is the
+      system working, not an alarm.
+    -->
+    <section v-if="queued" class="panel">
+      <b>Waiting to start — nothing has run yet.</b>
+      <p v-if="wait?.kind === 'stack'" class="mute">
+        <RouterLink :to="`/jobs/${encodeURIComponent(wait.blocker.id)}`">{{
+          actionLabel(wait.blocker.action)
+        }}</RouterLink>
+        is already running on <code>{{ job?.stack }}</code
+        >. One job runs per stack at a time — a teardown racing a deploy over the same database is
+        the failure that rule exists to prevent — so this one starts when that one ends.
+      </p>
+      <p v-else-if="wait?.kind === 'slot'" class="mute">
+        Nothing is running on <code>{{ job?.stack }}</code
+        >, so the wait is host-wide: {{ wait.running }} jobs hold a slot across every stack, and the
+        host runs at most <code>PSTACK_MAX_JOBS</code> at once (4 unless this server was told
+        otherwise). This one starts as soon as a slot frees.
+      </p>
+      <p v-else class="mute">
+        It starts once its own stack is free and the host has a spare job slot.
+      </p>
+      <p class="mute">Dropping it now costs nothing — it has not touched anything yet.</p>
+    </section>
+
+    <!--
+      The mirror image of the cancelled banner below, and the reason `superseded` is its own state:
+      a stopped job leaves partial state to hunt for, a superseded one cannot, because it never ran.
+    -->
+    <section v-if="job?.state === 'superseded'" class="panel">
+      <b>Superseded — this job never ran.</b>
+      <p class="mute">
+        <template v-if="replacement">
+          A newer
+          <RouterLink :to="`/jobs/${encodeURIComponent(replacement.id)}`">{{
+            actionLabel(replacement.action).toLowerCase()
+          }}</RouterLink>
+          for <code>{{ job.stack }}</code> replaced it while it was queued.
+        </template>
+        <template v-else>
+          A newer job for <code>{{ job.stack }}</code> replaced it while it was queued.
+        </template>
+        The queue is one deep, so a burst of pushes runs the first deploy and then exactly one more
+        carrying the newest spec. Nothing was created or destroyed here — there is no partial state
+        to go looking for, and nothing to verify.
+      </p>
+    </section>
 
     <!--
       Not a badge's worth of information. A cancelled job is the one state where the record is
@@ -237,10 +327,16 @@ onBeforeUnmount(closeStream);
       <LogViewer
         :rows="logRows"
         :live="streaming"
-        :empty-text="loading ? 'Loading…' : 'No output.'"
+        :empty-text="
+          loading
+            ? 'Loading…'
+            : queued
+              ? 'Waiting to start — there is no output until it does.'
+              : 'No output.'
+        "
       >
         <template #actions>
-          <button v-if="!streaming && job?.state === 'running'" class="ghost sm" @click="stream">
+          <button v-if="!streaming && job && !terminal" class="ghost sm" @click="stream">
             Reconnect
           </button>
         </template>

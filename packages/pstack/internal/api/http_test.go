@@ -1,20 +1,28 @@
 package api
 
 import (
+	"context"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/hostvars"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
 
@@ -457,5 +465,369 @@ func TestClearSleepHandsTheHostnamesToTheWakingEntry(t *testing.T) {
 	}
 	if s.sleepIndex.Find(host) != "" {
 		t.Fatal("its hostname is nobody's")
+	}
+}
+
+// ── PSTACK_MAX_JOBS: the global concurrency cap, from the environment to the registry ─────────
+//
+// The queue's HTTP behaviour is covered further down; these two are the KNOB, whose failure mode is
+// silence — a cap that is never read still runs jobs, just not the number the operator asked for.
+
+func TestTuningReadsMaxJobs(t *testing.T) {
+	// negative control: drop MaxJobs from TuningFromEnv's returned literal — the 2 below reads 0.
+	// (Run, observed failing, restored.) The `0` cases are what makes jobs.DefaultMaxRunning apply:
+	// any concrete fallback here would silently override it.
+	env := map[string]string{"PSTACK_MAX_JOBS": "2"}
+	if tu := TuningFromEnv(func(k string) (string, bool) { v, ok := env[k]; return v, ok }); tu.MaxJobs != 2 {
+		t.Fatalf("MaxJobs = %v, want 2", tu.MaxJobs)
+	}
+	for _, bad := range []string{"0", "-1", "nope", ""} {
+		env["PSTACK_MAX_JOBS"] = bad
+		if tu := TuningFromEnv(func(k string) (string, bool) { v, ok := env[k]; return v, ok }); tu.MaxJobs != 0 {
+			t.Fatalf("%q must read as unset, got %v", bad, tu.MaxJobs)
+		}
+	}
+}
+
+func TestMaxJobsOptionReachesTheRegistry(t *testing.T) {
+	// negative control: pass o.ReadinessPollMs (or nothing) to jobs.New in server.go — the second
+	// stack runs instead of queueing, because the cap silently stays at the default 4. (Run,
+	// observed failing, restored.) THE PLUMBING TEST: nothing else fails if this option is dropped.
+	s, err := New(Options{DataDir: t.TempDir(), Bus: events.New(), MaxJobs: 1, Log: func(string) {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	done := make(chan struct{})
+	defer close(done)
+	block := func(log.Sink, context.Context) (stack.Outcome, error) { <-done; return stack.Outcome{OK: true}, nil }
+	a, _ := s.jobs.Start("a", jobs.Verify, block, nil)
+	b, _ := s.jobs.Start("b", jobs.Verify, block, nil)
+	if a.State != jobs.Running || b.State != jobs.Queued {
+		t.Fatalf("one slot: %q then %q, want running then queued", a.State, b.State)
+	}
+}
+
+// ── the per-stack queue, as the HTTP surface shows it (0.30.0) ────────────────────────────────────
+//
+// A busy stack no longer refuses a lifecycle POST — it queues one, depth one. These drive the
+// routes directly (no listener, no docker): the point is the STATUS and the BODY, which is what a
+// CI script and the UI read.
+
+// jobsFixture is the smallest Server the lifecycle and cancel routes touch: a registry directory
+// with two deployments, the host-variable store resolveDep needs, and a job registry whose global
+// cap the caller chooses — cap 1 is how a job can be observed WAITING with nothing else running on
+// its own stack.
+func jobsFixture(t *testing.T, maxRunning int) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	for _, d := range []struct{ id, stack string }{{"pr-1", "app-pr-1"}, {"pr-2", "app-pr-2"}} {
+		p := filepath.Join(dir, "deployments", d.id)
+		if err := os.MkdirAll(p, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "spec.yml"), []byte("version: 1\nstack: "+d.stack+"\n"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "meta.json"), []byte(`{"id":"`+d.id+`","kind":"isolated","createdAt":1,"updatedAt":1}`), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	bus := events.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &Server{
+		registry: registry.New(dir),
+		store:    st,
+		hostVars: hostvars.New(st),
+		jobs:     jobs.New(bus, maxRunning),
+		bus:      bus,
+		// jobStream selects on it: a nil ctx is a nil dereference, not an idle stream.
+		ctx:    ctx,
+		cancel: cancel,
+		opts:   Options{Log: func(string) {}},
+	}
+}
+
+// occupy starts a job that runs until it is released or cancelled, so the stack is genuinely busy.
+// The returned func lets it finish; it is never needed when the test cancels the stack instead.
+func occupy(t *testing.T, s *Server, stackName string) func() {
+	t.Helper()
+	ch := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(ch) }) }
+	t.Cleanup(release)
+	j, ok := s.jobs.Start(stackName, jobs.Verify, func(sink log.Sink, ctx context.Context) (stack.Outcome, error) {
+		sink.Emit(log.Info, "holding "+stackName)
+		select {
+		case <-ch:
+		case <-ctx.Done():
+		}
+		return stack.Outcome{OK: true}, nil
+	}, nil)
+	if !ok || j.State != jobs.Running {
+		t.Fatalf("the occupying job must be running, got %q (ok=%v)", j.State, ok)
+	}
+	return release
+}
+
+// post drives one route the way routes() would, with a developer principal.
+func post(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", path, nil)
+	if err := s.routes(w, r, path, principalOf("developer"), varsFrom("")); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func TestLifecycleQueuesForABusyStackInsteadOf409(t *testing.T) {
+	// negative control: put the old refusal back at the top of lifecycle —
+	// `if s.jobs.IsBusy(st.Stack) { writeJSON(w, 409, …); return nil }` — and the second POST is a
+	// 409 again, which is the contract this test exists to pin. (Run, observed failing, restored.)
+	//
+	// THE CONTRACT CHANGE. Five rapid pushes to a PR used to be one deploy and four 409s a CI script
+	// had to interpret; they are now one deploy and exactly one more carrying the newest spec.
+	s := jobsFixture(t, 4)
+	occupy(t, s, "app-pr-1")
+
+	w := post(t, s, "/api/deployments/pr-1/up")
+	if w.Code != 202 {
+		t.Fatalf("a busy stack must ACCEPT, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"state": "queued"`) {
+		t.Fatalf("the 202 must say the job is waiting: %s", w.Body.String())
+	}
+	// Depth one: a second POST supersedes the first waiting job rather than stacking a third.
+	w2 := post(t, s, "/api/deployments/pr-1/up")
+	if w2.Code != 202 || !strings.Contains(w2.Body.String(), `"state": "queued"`) {
+		t.Fatalf("the replacement must also be accepted: %d %s", w2.Code, w2.Body.String())
+	}
+	queued := 0
+	for _, j := range s.jobs.List() {
+		if j.State == jobs.Queued {
+			queued++
+		}
+		if j.State == jobs.Superseded && j.StartedAt != nil {
+			t.Error("a superseded job never started, so startedAt must stay null")
+		}
+	}
+	if queued != 1 {
+		t.Fatalf("depth is one, got %d queued", queued)
+	}
+	s.jobs.CancelStack("app-pr-1", "test")
+}
+
+func TestLifecycleStill409sWhileTheDeploymentIsHeld(t *testing.T) {
+	// negative control: change lifecycle's `if !ok {` to `if !ok && false {` — the POST answers 202
+	// with an empty job stub while PUT/DELETE is mid-write, which is the race Hold exists to stop.
+	// (Run, observed failing with `a held stack must still refuse: 202`, restored.)
+	//
+	// The ONE refusal left. It is a different fact from "busy" and must not have gone away with it.
+	s := jobsFixture(t, 4)
+	release, ok := s.jobs.Hold("app-pr-1")
+	if !ok {
+		t.Fatal("an idle stack must be holdable")
+	}
+	defer release()
+	w := post(t, s, "/api/deployments/pr-1/up")
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "being reconfigured") {
+		t.Fatalf("a held stack must still refuse: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCancelStackStopsTheRunningJobAndTheQueuedOne(t *testing.T) {
+	// negative control: have cancelStack call `s.jobs.Cancel(running.ID, by)` instead of
+	// CancelStack — the queued job survives and dispatches the moment the running one dies, so the
+	// "nothing outstanding" check at the end fails. (Also run: report `acted` as a plain
+	// `var stubs []jobs.Stub` — the empty case serialises as `null` and its assertion fails. Both
+	// observed failing, restored.)
+	s := jobsFixture(t, 4)
+	occupy(t, s, "app-pr-1")
+	if post(t, s, "/api/deployments/pr-1/up").Code != 202 {
+		t.Fatal("the second job must queue")
+	}
+
+	w := post(t, s, "/api/deployments/pr-1/cancel")
+	body := w.Body.String()
+	if w.Code != 200 {
+		t.Fatalf("cancel answered %d: %s", w.Code, body)
+	}
+	// The running one first, then the one that never started — and the warning is the running
+	// job's, because only a job that RAN can have left anything behind.
+	// The running one still reads `running` — its own goroutine writes the terminal record when the
+	// work returns — while the one that never started is already `cancelled`.
+	if !strings.Contains(body, `"state": "running"`) || !strings.Contains(body, `"state": "cancelled"`) {
+		t.Fatalf("both jobs must be reported: %s", body)
+	}
+	if strings.Index(body, `"state": "running"`) > strings.Index(body, `"state": "cancelled"`) {
+		t.Fatalf("the running job comes first: %s", body)
+	}
+	if !strings.Contains(body, "run verify to see what exists") {
+		t.Fatalf("a cancelled RUNNING job leaves partial state and must say so: %s", body)
+	}
+	// POLLED, not asserted inline. CancelStack closes the running job's context; `r.live` is cleared
+	// on that job's OWN goroutine in finish's third critical section, so "the POST returned" and
+	// "the registry has let go" are different instants. Asserting inline passes on an idle laptop
+	// and fails under the parallel load of `go test ./...`, which is exactly how CI runs it.
+	busyUntil := time.Now().Add(3 * time.Second)
+	for s.jobs.IsBusy("app-pr-1") && time.Now().Before(busyUntil) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.jobs.IsBusy("app-pr-1") {
+		t.Fatal("nothing may be left outstanding for the stack")
+	}
+	// Idempotent: nothing outstanding is a 200 with an EMPTY list, never null and never a 404.
+	again := post(t, s, "/api/deployments/pr-1/cancel").Body.String()
+	if !strings.Contains(again, `"cancelled": []`) {
+		t.Fatalf("an idle stack cancels nothing: %s", again)
+	}
+}
+
+func TestCancelStackOnAJobWaitingForAGlobalSlotSaysNothingRan(t *testing.T) {
+	// negative control: give cancelStack's `warning` the RUNNING job's text as its default, so the
+	// `ran` split stops mattering — this operator is sent hunting for partial state that cannot
+	// exist, the exact reason `superseded` is not a flavour of `cancelled`. (Run, observed failing,
+	// restored.)
+	//
+	// Cap of ONE: pr-2's stack is idle, and the job still waits — the global cap, not its own stack.
+	s := jobsFixture(t, 1)
+	occupy(t, s, "app-pr-1")
+	if w := post(t, s, "/api/deployments/pr-2/up"); w.Code != 202 || !strings.Contains(w.Body.String(), `"state": "queued"`) {
+		t.Fatalf("over the cap a job waits, it is not refused: %d %s", w.Code, w.Body.String())
+	}
+	body := post(t, s, "/api/deployments/pr-2/cancel").Body.String()
+	if !strings.Contains(body, "Nothing had started") || strings.Contains(body, "run verify") {
+		t.Fatalf("a job that never ran left nothing behind: %s", body)
+	}
+}
+
+func TestJobStreamStaysOpenForAQueuedJobAndDeliversItsLog(t *testing.T) {
+	// negative control: restore `if state != jobs.Running` in jobStream — the stream closes with
+	// `done` before the job ever starts and BOTH halves below fail: the early-close check fires,
+	// and the line the job later emits never reaches the stream. (Run, observed failing, restored.)
+	//
+	// The two failures are different. Closing early is the visible one; the other is a stream that
+	// opens, stays silent, and then misses everything once the job runs.
+	s := jobsFixture(t, 1)
+	release := occupy(t, s, "app-pr-1")
+
+	waiting, ok := s.jobs.Start("app-pr-2", jobs.Up, func(sink log.Sink, ctx context.Context) (stack.Outcome, error) {
+		sink.Emit(log.Info, "the queued job ran")
+		return stack.Outcome{OK: true}, nil
+	}, nil)
+	if !ok || waiting.State != jobs.Queued {
+		t.Fatalf("the second stack's job must be waiting for a slot, got %q", waiting.State)
+	}
+
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.jobStream(w, httptest.NewRequest("GET", "/api/jobs/"+waiting.ID+"/stream", nil), waiting)
+	}()
+	select {
+	case <-done:
+		t.Fatal("a queued job's stream must stay open — it has not started, it is not over")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release() // the slot frees, the queued job dispatches
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stream must end when the job does")
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "the queued job ran") {
+		t.Fatalf("every line the job emits after it starts must reach the stream: %s", body)
+	}
+	if !strings.Contains(body, `"done":true`) {
+		t.Fatalf("the stream must end with done: %s", body)
+	}
+}
+
+func TestCancelStackIsADeveloperRouteOfItsOwn(t *testing.T) {
+	// negative control: drop the `{re: deployCancelRe, …}` row from permissions.go — the route falls
+	// through to default-deny and `required` returns rootOnly, so the first check fails. (Run,
+	// observed failing, restored. Also run: fold `cancel` into deploymentRe's verb group — the
+	// deploymentRe check below fails, which is the drift this shape refuses.)
+	if got := required("POST", "/api/deployments/pr-1/cancel"); got != auth.Developer {
+		t.Fatalf("stopping work is the same tier as starting it, got %q", got)
+	}
+	// Its own pattern: the lifecycle regex must NOT swallow it, or the two can never hold
+	// different tiers.
+	if deploymentRe.MatchString("/api/deployments/pr-1/cancel") {
+		t.Fatal("deploymentRe must not match the cancel route")
+	}
+	if deployCancelRe.MatchString("/api/deployments/pr-1/up") {
+		t.Fatal("deployCancelRe must not match a lifecycle action")
+	}
+}
+
+func TestMaxJobsKnobIsReadLikeEveryOtherServeKnob(t *testing.T) {
+	// negative control: drop `MaxJobs: num("PSTACK_MAX_JOBS")` from TuningFromEnv — the knob reads 0
+	// forever, the host silently runs the default 4, and the first assertion fails. (Run, observed
+	// failing, restored.)
+	//
+	// 0 is not "no cap": it is "unset", and jobs.New turns <= 0 into jobs.DefaultMaxRunning. An
+	// operator who writes PSTACK_MAX_JOBS=0 meaning "stop running jobs" gets the default, which is
+	// the same `??` semantics every other knob here has.
+	read := func(v string) float64 {
+		return TuningFromEnv(func(k string) (string, bool) {
+			if k == "PSTACK_MAX_JOBS" {
+				return v, true
+			}
+			return "", false
+		}).MaxJobs
+	}
+	if got := read("2"); got != 2 {
+		t.Fatalf("PSTACK_MAX_JOBS=2 read as %v", got)
+	}
+	for _, bad := range []string{"0", "-1", "many", ""} {
+		if got := read(bad); got != 0 {
+			t.Fatalf("PSTACK_MAX_JOBS=%q must fall back to the default, read as %v", bad, got)
+		}
+	}
+}
+
+func TestJobCancelRouteTakesAQueuedJobAndSaysNothingRan(t *testing.T) {
+	// negative control: restore `if job.State != jobs.Running` in routes.go's cancel block — a
+	// QUEUED job answers `409 already finished (queued)` and the first check fails, which is a
+	// client handed a job id in a 202 and then refused the one thing it can do with it. (Run,
+	// observed failing, restored. Also run: drop the Queued arm of the warning — the "It had not
+	// started" check fails and the operator is sent hunting for partial state that cannot exist.)
+	s := jobsFixture(t, 4)
+	occupy(t, s, "app-pr-1")
+	if w := post(t, s, "/api/deployments/pr-1/up"); w.Code != 202 {
+		t.Fatalf("the second job must queue: %d %s", w.Code, w.Body.String())
+	}
+	id := ""
+	for _, j := range s.jobs.List() {
+		if j.State == jobs.Queued {
+			id = j.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("no queued job to cancel")
+	}
+
+	w := post(t, s, "/api/jobs/"+id+"/cancel")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "It had not started") {
+		t.Fatalf("cancelling a queued job: %d %s", w.Code, w.Body.String())
+	}
+	if j, ok := s.jobs.Get(id); !ok || j.State != jobs.Cancelled {
+		t.Fatalf("it must be terminal under its own id: %+v (ok=%v)", j, ok)
+	}
+	// Terminal is forever: the SAME route now answers 409, which is the half of the old guard that
+	// was right.
+	if again := post(t, s, "/api/jobs/"+id+"/cancel"); again.Code != 409 {
+		t.Fatalf("a finished job is still a 409, got %d: %s", again.Code, again.Body.String())
 	}
 }

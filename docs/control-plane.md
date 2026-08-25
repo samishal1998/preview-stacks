@@ -868,7 +868,11 @@ change) answers in one Map lookup, so the dispatch costs nothing when nothing sl
 **Why wake is `up`.** Axis `up` hooks are idempotent by contract ("re-run on every redeploy") and
 re-capture their outputs, so a wake needs nothing remembered from before the sleep — no persisted
 `outputs`, no second code path. It runs under the same per-stack lock as every other job, so a wake
-racing a `down` over one database branch is refused, not queued.
+racing a `down` over one database branch cannot run beside it. A `down` does not queue behind a
+wake, either: teardown preempts, cancelling what runs and dropping what waits. The wake **trigger**
+is separately suppressed while that stack has anything outstanding, so a burst of requests to a
+sleeping hostname still produces exactly one wake job rather than one per request — the queue is not
+a place to put nine redundant wakes.
 
 ### Share links: a JWT signed with PSTACK_TOKEN, and no table
 
@@ -984,7 +988,8 @@ stored, and the protection is the 0700 directory and the 0600 file, as with ever
 | `GET` | `/api/deployments/:id` | meta + a **field-by-field** spec summary |
 | `PUT` | `/api/deployments/:id` | submit or replace: `{ spec, compose?, env? }` → `201` new / `200` replaced |
 | `DELETE` | `/api/deployments/:id` | forget it — **refused while containers still exist** |
-| `POST` | `/api/deployments/:id/{up,down,verify}` | `202 { job }`; `409` if that stack is busy. `down` body: `{ verify?, force? }` |
+| `POST` | `/api/deployments/:id/{up,down,verify}` | `202 { job }` — the stub's `state` reads `running`, or `queued` behind that stack's current job. **A busy stack is no longer a `409`**; the two that remain are the record being replaced or deleted, and `down` on a `kind: shared` stack without `force` (§3), both decided before any job is started. `down` body: `{ verify?, force? }` |
+| `POST` | `/api/deployments/:id/cancel` | stop everything outstanding for that stack — the running job **and** the one queued behind it → `200 { stack, cancelled[], by, warning }` |
 | `GET` | `/api/jobs` · `/api/jobs/:id` · `/api/jobs/:id/stream` | transcripts, poll, SSE |
 
 ```bash
@@ -1010,9 +1015,12 @@ curl -sS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
   deployment, catastrophic on a *replace*, where a typo would delete a good record while its
   containers keep running, now invisible to the control plane. Parsing the string first avoids that
   entirely.
-- **`PUT` is refused (409) while that stack has a job in flight.** Swapping the spec mid-job means
-  the eventual `down` tears down with different profiles and axes than `up` created — the same
-  orphan class as deleting the record.
+- **`PUT` is refused (409) while that stack has a job in flight *or waiting to start*.** Swapping the
+  spec mid-job means the eventual `down` tears down with different profiles and axes than `up`
+  created — the same orphan class as deleting the record — and a *queued* job would deploy a spec
+  chosen after the decision to run it was already made. `DELETE` refuses on the same rule. The escape
+  hatch is `POST /api/deployments/:id/cancel`, which the 409 body names by route: a `PUT` that
+  cancelled on your behalf would silently kill a teardown somebody else was waiting on.
 - **`DELETE` fails closed.** It refuses while containers exist, *and* refuses when Docker did not
   answer — "could not tell" is not evidence of absence. `Registry.remove` forgets only; it never
   tears anything down, and forgetting a live deployment orphans it beyond the control plane's view,
@@ -1021,6 +1029,54 @@ curl -sS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
   the whole ambient environment, so a resolved `Stack.env` holds every secret this process has —
   `PSTACK_TOKEN` included. The spec summary returns axis **hook names**, never hook bodies: a hook
   is a shell string that routinely carries an API token inline.
+
+### The per-stack queue: depth one, last write wins
+
+**One job per stack at a time** has not changed — it is the guarantee the whole product rests on,
+and a `down` deleting the database branch an `up` just created is the failure it prevents. What
+changed is what happens to the *second* one. It used to be refused with a `409`; it is now accepted
+and **queued**, and a third **replaces** the queued one. Depth is one, always: five rapid pushes to a
+PR run the first deploy and then exactly one more, carrying the newest spec. The middle three are
+stale before they could start, and deploying them in order would spend minutes building things
+nobody will look at while the newest commit waits behind them.
+
+A replaced job reaches **`superseded` under its own id**. Its caller was handed that id in a 202 and
+is polling it or streaming it; a record that silently vanished would leave that client waiting
+forever. `superseded` is its own state rather than a flavour of `cancelled` for the reason
+[webhook-events.md](webhook-events.md) gives: a cancelled job stopped **part-way** and left whatever
+it had already done in place, while a superseded one never ran at all — reporting it as cancelled
+sends an operator hunting for partial state that cannot exist.
+
+**`down` preempts.** A teardown never waits behind a deploy: it cancels the running job, drops the
+queued one, and takes the stack as soon as the cancelled shell returns. The deploy it stops is
+building exactly what the operator just asked to destroy, and every second it keeps running is more
+to clean up. Which actions preempt is a **table** in `internal/jobs` (`preempts`), one row per
+action, not an `if` in `Start`. A preempted `up` is `cancelled` and its transcript still ends with
+the line that matters — *whatever ran before this point was NOT undone* — because a half-built stack
+is a half-built stack whether a person or a teardown stopped it.
+
+**The cap is global, not just per-stack.** At most `PSTACK_MAX_JOBS` jobs (default 4) run at once
+across every stack; over the cap a job **waits**, it is never refused. This process also runs
+`docker`: each job is a compose invocation plus its hooks, against one socket and one set of file
+descriptors, so forty stacks deploying at once is how the control plane becomes the outage. Dispatch
+is FIFO by acceptance order, skipping stacks that are already busy — a busy stack cannot use a free
+slot, so skipping it is not queue-jumping, it is the only thing that stops one stack's backlog
+starving every other. The [notifier dispatcher](#delivery) has the same shape one tier up (8 in
+flight, 1 per notifier), for the same reason.
+
+**Everything outstanding for a stack stops at once.** `POST /api/deployments/:id/cancel` cancels the
+running job and terminates the queued one in **one** registry call, so there is no window in which a
+cancelled job's successor dispatches into the gap. It is what `down`'s preemption uses, so there is
+one implementation rather than two. It is not a teardown: it stops work and touches nothing on the
+host, and it undoes nothing the running job had already done.
+
+**Why this is not the state store invariant 10 refuses.** The queue is in memory, one entry deep per
+stack, and dies with the process exactly as the running job does. The refusal was always about
+*durability* — a backlog written down, surviving a restart, and replaying work against a world that
+moved on while the control plane was down. There is nothing to replay here and nothing to reconcile;
+a restart costs history, not correctness, which is what invariant 10 has always said about job
+records. §4d's refusal to queue *deliveries* is the same line drawn from the other side: what it
+declines to grow is an unbounded per-endpoint backlog during an outage, not one slot.
 
 ### Hooks in a submitted spec cannot use relative paths
 
@@ -1118,8 +1174,10 @@ of the old one. Step 2 and 3 are **two** artifacts that upgrade together: the `p
 reverse, is a supported-but-untested combination — `upgrade` moves both.
 
 Step 4 recreates the `pstack` container. Any in-flight job dies with it — jobs are in-memory —
-hence step 1. There is no queue to preserve, and adding one would be a state store (see the
-no-state-store rule in the README).
+hence step 1. The queue dies with them, and that is the point: it is one job deep and lives in
+memory beside the jobs themselves, so it is not the state store the no-state-store rule is about —
+nothing is promised to survive a restart, and an upgrade drains rather than replays. A queue that
+persisted, or one that grew without bound, would be that state store; depth one in memory is not.
 
 It lives on the host for the reason in §2 and will never be exposed over HTTP. A host still on the
 Bun runtime (≤ 0.28.0) takes the one-time hop in usage.md §9 — the same `--resume` phase, entered

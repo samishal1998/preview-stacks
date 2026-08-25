@@ -55,7 +55,19 @@ export const varsSummary = computed(() => {
 /** A disabled control must say why. This is the text that answers it. */
 export function whyDisabled(action: LifecycleAction, forceArmed = false): string | undefined {
   if (!dep.detail) return 'The spec has not resolved — the server cannot compute the stack name.';
-  if (busy.value) return `A job is already in flight for ${dep.detail.stack}.`;
+  // A teardown is NEVER blocked by a busy stack. `down` PREEMPTS on the server — it cancels the
+  // running job, drops the one queued behind it, and then runs — so disabling the button here
+  // would be this app refusing the one action the server promises will not wait.
+  if (busy.value && action !== 'down') {
+    // Why DISABLED rather than "it would queue": the server WOULD accept it (a second job queues,
+    // a third replaces the second), but a person clicking Deploy twice on one screen means the
+    // first click, not a burst of pushes. The queue exists for CI; offering it here would just be
+    // a way to schedule a duplicate of what is already running. The escape hatch is named.
+    return (
+      `A job is already running or waiting on ${dep.detail.stack}. ` +
+      'Wait for it, or stop everything on the stack from the Danger tab.'
+    );
+  }
   if (action === 'down' && isShared.value && !forceArmed) {
     return `Type the stack name "${dep.detail.stack}" below to confirm a shared teardown.`;
   }
@@ -91,7 +103,11 @@ export async function act(
   if (r.status === 202) {
     const job = r.body.job;
     if (job?.id) {
-      toast('info', `${actionLabel(action)} started on ${job.stack}`, {
+      // The 202 says which it is. "Started" on a job that is only queued is the toast telling an
+      // operator their deploy is running when it has not begun — the exact confusion the queued
+      // state exists to remove.
+      const verb = job.state === 'queued' ? 'queued' : 'started';
+      toast('info', `${actionLabel(action)} ${verb} on ${job.stack}`, {
         to: `/jobs/${encodeURIComponent(job.id)}`,
         toLabel: 'Follow',
       });
@@ -110,8 +126,9 @@ export async function act(
 
 /**
  * Classify on payload SHAPE (in `client.ts`), never on message text — then look for a running job
- * ONLY to offer a link. "A job is in flight" and "docker did not answer" are shape-identical, so
- * neither is claimed; the server's message is printed verbatim either way. Never retry.
+ * ONLY to offer a link. A busy stack is no longer a 409 (a second job queues); what is left in this
+ * branch is a HOLD — a spec edit or a delete in progress — and "docker did not answer", which are
+ * shape-identical, so neither is claimed. The server's message is printed verbatim. Never retry.
  */
 export async function onConflict(body: ConflictBody): Promise<void> {
   const c = classifyConflict(body);

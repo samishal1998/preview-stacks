@@ -89,6 +89,7 @@ func Serve(o ServeOptions) *Exit {
 		ReadinessPollMs:      int64(tuning.ReadinessPollMs),
 		ReadinessTimeoutMs:   int64(tuning.ReadinessTimeoutMs),
 		ReadinessRestartLoop: int64(tuning.ReadinessRestartLoop),
+		MaxJobs:              int(tuning.MaxJobs),
 		SSOStateTTLS:         int64(tuning.SSOStateTTLS),
 		SSODiscoveryTTLS:     int64(tuning.SSODiscoveryTTLS),
 		Version:              version.Get(),

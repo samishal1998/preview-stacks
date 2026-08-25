@@ -14,7 +14,7 @@ import (
 func TestNames(t *testing.T) {
 	t.Run("the EVENTS list, in order, add-only", func(t *testing.T) {
 		// negative control: swap "job.failed" and "job.cancelled" — the order assertion fails.
-		want := "deployment.created,deployment.updated,deployment.deleted,job.started,job.succeeded,job.failed,job.cancelled,job.leaked,spec.stored,spec.deleted,routing.changed,healthcheck.started,healthcheck.updated,healthcheck.finished,healthcheck.timedout,container.ready,container.start-failed,container.started,container.stopped,container.restarted,stack.ready,stack.failed,stack.timedout,stack.slept,stack.woken,share.created,config.exported,config.imported"
+		want := "deployment.created,deployment.updated,deployment.deleted,job.started,job.succeeded,job.failed,job.cancelled,job.leaked,spec.stored,spec.deleted,routing.changed,healthcheck.started,healthcheck.updated,healthcheck.finished,healthcheck.timedout,container.ready,container.start-failed,container.started,container.stopped,container.restarted,stack.ready,stack.failed,stack.timedout,stack.slept,stack.woken,share.created,config.exported,config.imported,job.superseded"
 		if got := strings.Join(Names, ","); got != want {
 			t.Fatalf("Names = %s", got)
 		}

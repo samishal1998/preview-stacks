@@ -18,7 +18,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ago, stamp } from '../composables/useFormat';
 
-const props = defineProps<{ at: number | undefined }>();
+// `null` as well as `undefined`: a queued job's `startedAt` is null, and it renders as an em dash.
+const props = defineProps<{ at: number | null | undefined }>();
 
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | null = null;

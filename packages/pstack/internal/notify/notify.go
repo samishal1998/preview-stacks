@@ -364,6 +364,11 @@ func Summarize(e events.Event) string {
 		return actionWord(d["action"]) + " succeeded on " + stack + took + "."
 	case "job.cancelled":
 		return actionWord(d["action"]) + " on " + stack + " was CANCELLED" + by("cancelledBy") + took + ". Nothing was undone — verify what exists."
+	case "job.superseded":
+		// Deliberately calm. This is the routine outcome of pushing twice in a minute: the queued
+		// run was replaced by a newer one carrying the newer spec, and nothing ran or half-ran.
+		// Wording it like a cancellation would train people to ignore cancellations.
+		return actionWord(d["action"]) + " on " + stack + " was replaced by a newer one before it started."
 	case "job.failed":
 		s := actionWord(d["action"]) + " FAILED on " + stack + took + "."
 		if truthy(d["error"]) {

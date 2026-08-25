@@ -22,11 +22,12 @@
  *
  * `waitForJob`, `waitForReady` and `verifyWebhook` (below). They are the three things every user
  * would otherwise re-write, and the two waiters are the ones that are easy to get subtly wrong —
- * polling a job without a terminal-state list, or treating `readiness.state === 'watching'` as an
- * error rather than "ask again".
+ * polling a job without a terminal-state list (`queued` is not running and not finished either), or
+ * treating `readiness.state === 'watching'` as an error rather than "ask again".
  */
 
 import type {
+  CancelStack,
   DeliveryRow,
   DeploymentRow,
   Health,
@@ -47,6 +48,7 @@ import type {
   SwarmInfo,
   User,
 } from './types.ts';
+import { TERMINAL_JOB_STATES } from './types.ts';
 
 export * from './types.ts';
 
@@ -183,6 +185,12 @@ export function createClient(opts: ClientOptions) {
       sleep: (id: string, vars?: Vars) => post<{ job: Job }>(`/api/deployments/${enc(id)}/sleep${qs(vars)}`).then((r) => r.job),
       /** `up`, recorded as a wake. */
       wake: (id: string, vars?: Vars) => post<{ job: Job }>(`/api/deployments/${enc(id)}/wake${qs(vars)}`).then((r) => r.job),
+      /**
+       * Stop everything outstanding on this deployment's stack — the running job and the one queued
+       * behind it — in one call. Destroys nothing and undoes nothing; a `down` also clears the stack
+       * (it preempts) but then tears the stack down, which this does not.
+       */
+      cancel: (id: string, vars?: Vars) => post<CancelStack>(`/api/deployments/${enc(id)}/cancel${qs(vars)}`),
       /**
        * Mint a read-only link to this deployment: `views` default to both `details` and `logs`,
        * `ttl` to 7 days (30 at most). The token is returned once and stored nowhere; rotating
@@ -331,20 +339,29 @@ export function createClient(opts: ClientOptions) {
     },
 
     /**
-     * Poll a job until it stops running.
+     * Poll a job until it reaches a terminal state.
      *
-     * Returns the finished job rather than throwing on a failed one: `failed`, `leaked` and
-     * `cancelled` are ANSWERS, and a CI step usually wants to branch on which. It throws only when
-     * the wait itself fails — a timeout, or the API being unreachable.
+     * Returns the finished job rather than throwing on a failed one: `failed`, `leaked`,
+     * `cancelled` and `superseded` are ANSWERS, and a CI step usually wants to branch on which. It
+     * throws only when the wait itself fails — a timeout, or the API being unreachable.
+     *
+     * WAITING IS NOT ONLY `running`. A job accepted for a busy stack, or over the host's
+     * concurrency cap, is `queued` — it has an id and a 202 and has not started. Returning on
+     * "not running" reported SUCCESS for a job that never ran, which is the worst possible answer
+     * to give a CI pipeline: it would assert against a deployment the deploy had not touched yet.
+     * The list below is the TERMINAL one, so a state this build has never heard of keeps waiting
+     * rather than being mistaken for an answer.
      */
     async waitForJob(jobId: string, o: { intervalMs?: number; timeoutMs?: number } = {}): Promise<Job> {
       const interval = o.intervalMs ?? 2_000;
       const deadline = Date.now() + (o.timeoutMs ?? 30 * 60_000);
       for (;;) {
         const job = await client.jobs.get(jobId);
-        if (job.state !== 'running') return job;
+        if (TERMINAL_JOB_STATES.includes(job.state)) return job;
         if (Date.now() > deadline) {
-          throw new PstackError(0, jobId, { error: `job ${jobId} still running after the wait timeout` });
+          throw new PstackError(0, jobId, {
+            error: `job ${jobId} still ${job.state} after the wait timeout`,
+          });
         }
         await new Promise((r) => setTimeout(r, interval));
       }

@@ -2,34 +2,37 @@
 
 ## Unreleased
 
-### Fixed
+### ⚠️ Breaking: a busy stack queues instead of refusing
 
-- **Under swarm, every route claimed "not on the ingress network".** The route target was built
-  with a hard-coded `nil` address, so it was empty on every row — and the UI rendered that as a
-  confident misconfiguration message about containers that were on the network all along. The
-  address now comes from the service's `Endpoint.VirtualIPs`, which is what the Traefik swarm
-  provider actually dials and which the manager knows for tasks on any node. Where it genuinely
-  cannot be determined, the API says which of three things is true — no port declared, not on the
-  ingress network, or address not known from this node — instead of guessing.
-- **A waking preview served the pstack dashboard on its own hostname.** The sleep record clears the
-  moment `up` reports OK, but nothing is listening yet; from that moment the request stopped looking
-  "asleep" and fell through to the rule that serves the embedded UI for any non-`/api/` path. The
-  waking page now persists until the deployment is actually serving, and a wake that fails ends at
-  its failure page rather than spinning.
-- **Tables no longer drift or overflow.** The cause was never cell widths: `.panel > table` used
-  `display: block` for overflow, which collapses column sizing, so `thead` and `tbody` were each
-  restored to `display: table` — two separate table boxes, each sizing columns from its own content,
-  with no mechanism to agree. Tables now scroll inside a wrapper and keep one column model, with
-  declared column widths, a minimum width per table, and long values clipped or wrapped by
-  intention rather than by accident.
+A stack still runs **one job at a time** — that guarantee is unchanged, and it is why a `down`
+cannot delete the database branch an `up` just created. What changed is the second request: it is
+now **queued and answered 202**, where it used to be refused with 409.
 
-### Added
+- **The queue is one deep and the newest wins.** A third request replaces the queued one, so five
+  pushes in a minute run the first deploy and then exactly one more carrying the newest spec. The
+  replaced job is not forgotten: it reaches `superseded` under its own id, with `startedAt: null`,
+  so a script polling the id it was handed always gets an answer.
+- **`down` preempts.** It cancels what is running, drops what is queued, and starts immediately —
+  a teardown should never wait behind a deploy. Cancelling mid-flight leaves partial state, and the
+  transcript says so.
+- **`POST /api/deployments/:id/cancel`** stops everything for one stack, running and queued
+  together. `developer` and above.
+- **`PSTACK_MAX_JOBS` (default 4)** bounds how many jobs run at once across all stacks. Beyond it a
+  job waits for a slot rather than failing — twenty PRs deploying at nine in the morning would
+  otherwise put twenty `docker compose up` on one Docker socket. There was no global limit at all
+  before this.
 
-- **Findings are a button, not a wall.** The "worth checking" list opens in a modal, with the count
-  and worst severity on the trigger so a warning still announces itself.
-- **Variable lists import and export `.env`, CSV and TSV.** Round-trips values containing `=`, `#`,
-  quotes, newlines and leading spaces. An export never emits a masked secret as though it were a
-  value.
+**If you script against the API**, the 409 you retried on is gone for lifecycle actions. Attaching
+to the job you are handed is now always correct, because you are handed one either way. The 409 on
+`PUT /api/deployments/:id` stays — replacing a spec mid-job is a different hazard and still refused.
+
+**If you use the SDK, upgrade it.** `waitForJob` decided a job was finished by testing
+`state !== 'running'`, which reports **success for a job that has not started** — a CI pipeline
+would pass while its deploy sat in the queue. It now waits for an actual terminal state, and
+`TERMINAL_JOB_STATES` is exported so callers stop writing that comparison by hand.
+
+New event `job.superseded`, appended to the subscribable list. Do not alert on it: pushing twice in
+a minute produces one, and treating it like a cancellation trains people to ignore cancellations.
 
 ### ⚠️ Breaking: accounts have roles
 
@@ -63,6 +66,35 @@ unrecoverable.
 This is coarse, host-wide RBAC: one role per account, no per-stack scope. A developer can deploy
 every stack, and still runs arbitrary shell through `up` or a hook. It divides what one trusted team
 may do; it does not isolate anyone from anyone.
+
+### Fixed
+
+- **Under swarm, every route claimed "not on the ingress network".** The route target was built
+  with a hard-coded `nil` address, so it was empty on every row — and the UI rendered that as a
+  confident misconfiguration message about containers that were on the network all along. The
+  address now comes from the service's `Endpoint.VirtualIPs`, which is what the Traefik swarm
+  provider actually dials and which the manager knows for tasks on any node. Where it genuinely
+  cannot be determined, the API says which of three things is true — no port declared, not on the
+  ingress network, or address not known from this node — instead of guessing.
+- **A waking preview served the pstack dashboard on its own hostname.** The sleep record clears the
+  moment `up` reports OK, but nothing is listening yet; from that moment the request stopped looking
+  "asleep" and fell through to the rule that serves the embedded UI for any non-`/api/` path. The
+  waking page now persists until the deployment is actually serving, and a wake that fails ends at
+  its failure page rather than spinning.
+- **Tables no longer drift or overflow.** The cause was never cell widths: `.panel > table` used
+  `display: block` for overflow, which collapses column sizing, so `thead` and `tbody` were each
+  restored to `display: table` — two separate table boxes, each sizing columns from its own content,
+  with no mechanism to agree. Tables now scroll inside a wrapper and keep one column model, with
+  declared column widths, a minimum width per table, and long values clipped or wrapped by
+  intention rather than by accident.
+
+### Added
+
+- **Findings are a button, not a wall.** The "worth checking" list opens in a modal, with the count
+  and worst severity on the trigger so a warning still announces itself.
+- **Variable lists import and export `.env`, CSV and TSV.** Round-trips values containing `=`, `#`,
+  quotes, newlines and leading spaces. An export never emits a masked secret as though it were a
+  value.
 
 ## 0.31.0 — 2026-08-25
 

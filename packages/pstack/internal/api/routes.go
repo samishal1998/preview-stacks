@@ -104,6 +104,19 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.lifecycle(w, r, dep, action, who, vars)
 	}
 
+	// ---- stop everything one deployment's stack has outstanding ----
+	if m := deployCancelRe.FindStringSubmatch(path); m != nil {
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "use POST")
+			return nil
+		}
+		dep, err := s.depOr404(w, m[1])
+		if dep == nil || err != nil {
+			return err
+		}
+		return s.cancelStack(w, dep, who, vars)
+	}
+
 	// ---- a read-only link to one deployment ----
 	if m := shareRe.FindStringSubmatch(path); m != nil {
 		id, err := segment(m[1])
@@ -501,16 +514,25 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 			writeError(w, 404, "no such job: "+jobID)
 			return nil
 		}
-		// 409, not 404: the job exists and the caller's request is simply out of date.
-		if job.State != jobs.Running {
+		// 409, not 404: the job exists and the caller's request is simply out of date. TERMINAL, not
+		// `!= Running`: a QUEUED job is cancellable — it is the whole point of handing its id out in
+		// a 202 — and refusing it here would leave a client polling a job it cannot stop.
+		if job.State.Terminal() {
 			writeJSON(w, 409, jsonx.O("error", "job "+jobID+" already finished ("+string(job.State)+")", "state", job.State))
 			return nil
 		}
 		by := terminal.ActorOf(*who)
 		s.jobs.Cancel(jobID, by)
+		// The running job's warning would be a lie about a queued one: it never started, so there is
+		// no partial state to go hunting for. Same reason `superseded` is not a flavour of
+		// `cancelled` (internal/jobs' header).
+		warning := "Nothing was undone. Whatever this job created or destroyed before it stopped is " +
+			"still that way — run verify to see what exists."
+		if job.State == jobs.Queued {
+			warning = "It had not started, so nothing was undone."
+		}
 		writeJSON(w, 200, jsonx.O("cancelled", jobID, "stack", job.Stack, "action", job.Action, "by", by,
-			"warning", "Nothing was undone. Whatever this job created or destroyed before it stopped is "+
-				"still that way — run verify to see what exists."))
+			"warning", warning))
 		return nil
 	}
 	if m := jobRe.FindStringSubmatch(path); m != nil {

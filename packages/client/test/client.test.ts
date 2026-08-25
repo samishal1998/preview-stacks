@@ -17,7 +17,7 @@ import { bootServer, type Booted } from '../../conformance/harness/server.ts';
 import { IMPL, REPO } from '../../conformance/harness/impl.ts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createClient, PstackError, verifyWebhook } from '../src/index.ts';
+import { createClient, PstackError, TERMINAL_JOB_STATES, verifyWebhook } from '../src/index.ts';
 
 const TOKEN = 'root-machine-token-value-0123456789';
 
@@ -304,6 +304,70 @@ describe('roles: an account carries one, and the client can read and set it', ()
     expect((refused as PstackError).message).toContain('last user');
     expect((await client.users.list()).map((u) => u.username)).toEqual(['role-probe-viewer']);
   }, 20_000);
+});
+
+describe('0.32.0: a job can be QUEUED, and waiting is not an answer', () => {
+  // `sleep 2` is the whole point: it makes the first job demonstrably still running when the next
+  // two arrive, so the queue is exercised deterministically instead of by racing a fast failure.
+  const SLOW = 'version: 1\nstack: client-queue\naxes:\n  - name: db\n    up: "sleep 2"\n    down: "true"\n';
+
+  // negative control: waitForJob's `TERMINAL_JOB_STATES.includes(job.state)` -> `job.state !== 'running'`
+  test('a second up queues, a third supersedes it, and waitForJob waits for every one', async () => {
+    await client.deployments.put('pr-queue', { spec: SLOW });
+
+    // Depth one, last-write-wins. None of the three is refused — that is the contract change.
+    const first = await client.deployments.up('pr-queue');
+    const second = await client.deployments.up('pr-queue');
+    const third = await client.deployments.up('pr-queue');
+    expect(first.state).toBe('running');
+    expect(second.state).toBe('queued');
+    expect(third.state).toBe('queued');
+
+    // The one in the middle reaches a terminal state UNDER ITS OWN ID rather than vanishing, and
+    // it never ran — so `startedAt` is null, not 0, which a UI would render as 1970.
+    const dropped = await client.waitForJob(second.id, { intervalMs: 25, timeoutMs: 20_000 });
+    expect(dropped.state).toBe('superseded');
+    expect(dropped.startedAt).toBe(null);
+
+    // THE REGRESSION THIS TEST EXISTS FOR: `third` is `queued` at the first poll. Returning on
+    // "not running" handed that back as a finished job, telling a CI pipeline the deploy was done
+    // before it had started.
+    const done = await client.waitForJob(third.id, { intervalMs: 25, timeoutMs: 20_000 });
+    expect(TERMINAL_JOB_STATES).toContain(done.state);
+    expect(done.startedAt).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+describe('0.32.0: stopping everything a stack has outstanding', () => {
+  const SLOW = 'version: 1\nstack: client-cancel\naxes:\n  - name: db\n    up: "sleep 30"\n    down: "true"\n';
+
+  // negative control: routes_deploy.go cancelStack -> act on the running job only, not CancelStack
+  test('cancel takes the running job AND the one queued behind it, in one call', async () => {
+    await client.deployments.put('pr-cancel', { spec: SLOW });
+    const running = await client.deployments.up('pr-cancel');
+    const waiting = await client.deployments.up('pr-cancel');
+    expect(running.state).toBe('running');
+    expect(waiting.state).toBe('queued');
+
+    const res = await client.deployments.cancel('pr-cancel');
+    expect(res.stack).toBe('client-cancel');
+    // BOTH, not just the one holding the slot — a queue left behind would dispatch the moment the
+    // running job died, which is the opposite of "stop everything".
+    expect(res.cancelled.map((j) => j.id).sort()).toEqual([running.id, waiting.id].sort());
+    // The running job's warning: it had started, so something may be half-done.
+    expect(res.warning).toContain('verify');
+
+    for (const j of [running, waiting]) {
+      const done = await client.waitForJob(j.id, { intervalMs: 25, timeoutMs: 20_000 });
+      expect(done.state).toBe('cancelled');
+    }
+
+    // Nothing outstanding: an empty ARRAY, never null, and the warning flips — nothing ran, so
+    // there is nothing to go verify.
+    const again = await client.deployments.cancel('pr-cancel');
+    expect(again.cancelled).toEqual([]);
+    expect(again.warning).toContain('Nothing had started');
+  }, 30_000);
 });
 
 describe('verifyWebhook — the half that lives in the receiver', () => {

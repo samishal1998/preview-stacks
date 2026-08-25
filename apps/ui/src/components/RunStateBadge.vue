@@ -8,13 +8,24 @@
  * a fact — that is how a live stack gets reported as torn down and someone forgets it.
  *
  * So unknown says unknown, and it gets its own colour.
+ *
+ * `busy` MEANS "running or waiting", not "running". A stack now queues a second job instead of
+ * refusing it, and the server reports a stack with a merely QUEUED job as busy — correctly, since
+ * the question `busy` answers is "can something else start here". Nothing on the deployment row
+ * distinguishes the two, so the badge does not pretend to: the job page is where a wait is
+ * explained, and this says only that the stack is spoken for.
  */
 import type { SleepRecord } from '../api/types';
 defineProps<{ busy: boolean | null; running: boolean | null; asleep?: SleepRecord | null }>();
 </script>
 
 <template>
-  <span v-if="busy === true" class="badge busy"><span class="dot pulse" />Busy</span>
+  <span
+    v-if="busy === true"
+    class="badge busy"
+    title="a job is running on this stack, or waiting its turn — open Jobs to see which"
+    ><span class="dot pulse" />Busy</span
+  >
   <!-- Asleep is its own state, before the running/idle question: the compose project is down on
        purpose, the data and axes are still there, and a request to its hostname brings it back. -->
   <span

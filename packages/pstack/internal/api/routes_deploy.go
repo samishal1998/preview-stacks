@@ -31,17 +31,22 @@ import (
 
 var (
 	deploymentRe = regexp.MustCompile(`^/api/deployments/([^/]+)(?:/(up|down|verify|sleep|wake))?$`)
-	shareRe      = regexp.MustCompile(`^/api/deployments/([^/]+)/share$`)
-	logsRe       = regexp.MustCompile(`^/api/deployments/([^/]+)/logs$`)
-	logStreamRe  = regexp.MustCompile(`^/api/deployments/([^/]+)/logs/stream$`)
-	sourceRe     = regexp.MustCompile(`^/api/deployments/([^/]+)/source$`)
-	containerRe  = regexp.MustCompile(`^/api/deployments/([^/]+)/containers/([^/]+)/(start|stop|restart)$`)
-	terminalRe   = regexp.MustCompile(`^/api/deployments/([^/]+)/terminal$`)
-	runtimeRe    = regexp.MustCompile(`^/api/deployments/([^/]+)/runtime$`)
-	readinessRe  = regexp.MustCompile(`^/api/deployments/([^/]+)/readiness$`)
-	serviceRe    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
-	durationRe   = regexp.MustCompile(`^(\d+[smhd])+$`)
-	rfc3339Re    = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T[\d:.+Z-]{4,}$`)
+	// Its own pattern, NOT another verb inside deploymentRe's group: that group is the lifecycle
+	// ACTION list (routes.go feeds m[2] straight to jobs.Action, and it is the regex AGENTS.md's
+	// "a new lifecycle action" recipe names). Sharing it would also weld this route's permission
+	// tier to up/down/verify's forever, which is the drift fuse permissions.go's header refuses.
+	deployCancelRe = regexp.MustCompile(`^/api/deployments/([^/]+)/cancel$`)
+	shareRe        = regexp.MustCompile(`^/api/deployments/([^/]+)/share$`)
+	logsRe         = regexp.MustCompile(`^/api/deployments/([^/]+)/logs$`)
+	logStreamRe    = regexp.MustCompile(`^/api/deployments/([^/]+)/logs/stream$`)
+	sourceRe       = regexp.MustCompile(`^/api/deployments/([^/]+)/source$`)
+	containerRe    = regexp.MustCompile(`^/api/deployments/([^/]+)/containers/([^/]+)/(start|stop|restart)$`)
+	terminalRe     = regexp.MustCompile(`^/api/deployments/([^/]+)/terminal$`)
+	runtimeRe      = regexp.MustCompile(`^/api/deployments/([^/]+)/runtime$`)
+	readinessRe    = regexp.MustCompile(`^/api/deployments/([^/]+)/readiness$`)
+	serviceRe      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+	durationRe     = regexp.MustCompile(`^(\d+[smhd])+$`)
+	rfc3339Re      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T[\d:.+Z-]{4,}$`)
 )
 
 // segment is decodeURIComponent(m[i]); a malformed escape is the reference's URIError → 500.
@@ -239,9 +244,14 @@ func (s *Server) putDeployment(w http.ResponseWriter, r *http.Request, id string
 	}
 	// Swapping the spec mid-job means the eventual `down` tears down with different profiles and
 	// axes than `up` created. Held across the write: a lifecycle POST racing this gets its 409.
+	//
+	// A QUEUED job blocks this too, and that is deliberate: it would dispatch the instant the hold
+	// released, against the spec it was never accepted for. Hence the escape hatch in the message —
+	// before, "wait for it" was the only move; now there is one that does not need waiting.
 	release, ok := s.jobs.Hold(parsed.Stack)
 	if !ok {
-		writeJSON(w, 409, jsonx.O("error", "stack "+parsed.Stack+" has a job in flight — wait for it before replacing the spec", "stack", parsed.Stack))
+		writeJSON(w, 409, jsonx.O("error", "stack "+parsed.Stack+" has a job in flight or waiting to start — wait for it, or "+
+			"POST /api/deployments/"+id+"/cancel, before replacing the spec", "stack", parsed.Stack))
 		return nil
 	}
 	defer release()
@@ -370,9 +380,12 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, dep *registry.Deploymen
 	if err != nil {
 		return err
 	}
+	// Deliberately NOT a CancelStack: an operator forgetting a record must not silently kill the
+	// teardown somebody else queued against it. The 409 names the route that does, and they choose.
 	release, ok := s.jobs.Hold(st.Stack)
 	if !ok {
-		writeJSON(w, 409, jsonx.O("error", "stack "+st.Stack+" has a job in flight", "stack", st.Stack))
+		writeJSON(w, 409, jsonx.O("error", "stack "+st.Stack+" has a job in flight or waiting to start — wait for it, or "+
+			"POST /api/deployments/"+dep.ID+"/cancel", "stack", st.Stack))
 		return nil
 	}
 	defer release()
@@ -457,12 +470,52 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, dep *registry
 	}
 	job, ok := s.startLifecycle(dep.ID, dep, st, action, o)
 	if !ok {
-		// One job per stack: a `down` racing an `up` over the same database branch is corruption,
-		// not contention, so the conflict is surfaced instead of queued.
-		writeJSON(w, 409, jsonx.O("error", "stack "+st.Stack+" already has a job in flight", "stack", st.Stack))
+		// THE LAST REFUSAL. A busy stack is no longer one: the second job for it QUEUES and a third
+		// replaces the queued one (depth one, last write wins), so five pushes to a PR run the
+		// first deploy and then exactly one more carrying the newest spec. What still refuses is a
+		// HOLD — PUT/DELETE of this deployment is mid-flight, and starting a job against a record
+		// that is being replaced or deleted is the race that hold exists to stop.
+		writeJSON(w, 409, jsonx.O("error", "stack "+st.Stack+" is being reconfigured — its deployment record is "+
+			"being replaced or deleted right now. Retry in a moment.", "stack", st.Stack))
 		return nil
 	}
+	// 202 whether it dispatched or queued; the stub's `state` says which.
 	writeJSON(w, 202, jsonx.O("job", job.Stub()))
+	return nil
+}
+
+// cancelStack is POST /api/deployments/:id/cancel: stop everything this deployment's stack has
+// outstanding — the running job and the one waiting behind it — in ONE registry call, so there is
+// no window where a cancelled job's successor dispatches.
+//
+// The deployment-level twin of POST /api/jobs/:id/cancel, and it sits at the lifecycle verbs'
+// level because that is what it acts on. It is NOT a teardown: a `down` also clears the stack (it
+// preempts) but then destroys things; this stops work and touches nothing else. Neither undoes
+// what a running job already did.
+func (s *Server) cancelStack(w http.ResponseWriter, dep *registry.Deployment, who *auth.Principal, vars map[string]string) error {
+	st, err := s.resolveDep(dep.ID, vars)
+	if err != nil {
+		return err
+	}
+	by := terminal.ActorOf(*who)
+	acted := s.jobs.CancelStack(st.Stack, by)
+	stubs := make([]jobs.Stub, 0, len(acted))
+	ran := false
+	for _, j := range acted {
+		if j.State == jobs.Running {
+			ran = true
+		}
+		stubs = append(stubs, j.Stub())
+	}
+	// The warning is the running job's, and only the running job's: a queued job never ran, so
+	// telling its operator to go hunting for partial state would send them after something that
+	// cannot exist — the same reason `superseded` is not a flavour of `cancelled`.
+	warning := "Nothing had started, so nothing was undone."
+	if ran {
+		warning = "Nothing was undone. Whatever the running job created or destroyed before it " +
+			"stopped is still that way — run verify to see what exists."
+	}
+	writeJSON(w, 200, jsonx.O("stack", st.Stack, "cancelled", stubs, "by", by, "warning", warning))
 	return nil
 }
 

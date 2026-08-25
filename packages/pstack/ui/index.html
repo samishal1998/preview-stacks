@@ -1261,7 +1261,15 @@
 
           <!-- ---- the outcome, in the four states that must never blur together ---- -->
           <div aria-live="polite">
-            <div v-if="job.state === 'running'" class="banner info">
+            <div v-if="job.state === 'queued'" class="banner info">
+              <b>queued.</b> Waiting for its turn &mdash; this stack has a job in flight, or the host
+              is at its job limit. The log below fills in the moment it starts.
+            </div>
+            <div v-else-if="job.state === 'superseded'" class="banner info">
+              <b>superseded.</b> A newer job for this stack replaced this one before it ran, so
+              nothing was started and nothing needs checking.
+            </div>
+            <div v-else-if="job.state === 'running'" class="banner info">
               <b>running.</b> Following the live log below. Leaving this page stops the follow but
               never the job.
             </div>
@@ -1293,7 +1301,7 @@
               <h2>Log</h2>
               <span class="grow"></span>
               <label><input type="checkbox" v-model="autoscroll"> autoscroll</label>
-              <button class="small" v-if="!following && job.state === 'running'" @click="follow(job.id)">Re-follow</button>
+              <button class="small" v-if="!following && (job.state === 'running' || job.state === 'queued')" @click="follow(job.id)">Re-follow</button>
               <button class="small" v-else-if="!following" @click="loadJob(job.id)">Reload</button>
             </div>
             <pre class="log" ref="logEl" @scroll="onLogScroll"><template v-for="l in lines" :key="l.seq"><span class="t">{{ hhmmss(l.at) }}</span> <span :class="'lv-' + l.level">{{ l.message }}</span>
@@ -1331,6 +1339,12 @@
               continuing.
             </p>
           </div>
+          <p v-else-if="job.state === 'queued'" class="muted">
+            Waiting to start &mdash; there are no step results until it does.
+          </p>
+          <p v-else-if="job.state === 'superseded'" class="muted">
+            Never started: a newer job for this stack replaced it.
+          </p>
           <p v-else-if="job.state !== 'running'" class="muted">
             This job produced no step results &mdash; it failed before the first step ran.
           </p>
@@ -1981,7 +1995,11 @@ createApp({
       if (!r.ok) { this.jobError = this.problem(r, `GET /api/jobs/${id}`); return; }
       this.job = r.body.job || null;
       if (!this.job) { this.jobError = 'the server returned no job record for that id.'; return; }
-      if (this.job.state === 'running') {
+      // QUEUED counts as "not over yet". A queued job's stream stays open and silent until it
+      // dispatches, then delivers the log — treating it as finished renders an empty page that
+      // never updates, even once the job runs. The same one-line mistake (`=== 'running'` where
+      // "not terminal" was meant) was found in sse.go, the cancel guard and the SDK's waitForJob.
+      if (this.job.state === 'running' || this.job.state === 'queued') {
         // The stream replays the whole buffered log first, so seeding `lines` from `job.log` here
         // would double every line already emitted.
         this.follow(id);

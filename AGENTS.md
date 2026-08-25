@@ -80,7 +80,7 @@ One package per responsibility, named as the reference's files were (the port ke
 |---|---|
 | `api` | HTTP API + UI host. **`server.go`'s header comment is the API's route list** — update it in the same edit as a route. `routes*.go` is the ordered if-chain, `principal.go` the gate, `sse.go`/`ws.go` the streams. Owns the `:id` → spec-variable binding. |
 | `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), **exit codes**, the `serve` loopback interlock, `healthcheck` (the container HEALTHCHECK — one GET, exit 0/1). `main.go` is one call. Logic belongs in the package, not here. |
-| `jobs` | In-memory job registry: one in-flight job per stack (a real mutex held across the check-then-act), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation. |
+| `jobs` | In-memory job registry: one RUNNING job per stack (a real mutex held across the check-then-act) plus a queue one deep where the newest replaces the queued one, a global concurrency cap (`PSTACK_MAX_JOBS`, 4), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation per job and per stack. |
 | `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
 | `specs` | Named specs: store once, reference from many deployments. |
 | `scheduler` | Sleep/wake: the `SleepIndex` (hostname → sleeping deployment, for the catch-all router), the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
@@ -394,7 +394,7 @@ a package; `cli` is argv, dispatch and exit codes only. The usage text is a gold
 `internal/api`: add the route to the if-chain in `routes.go` (in order — a greedy pattern later in
 the chain is reachable only if nothing above it matched), **update the route list in `server.go`'s
 header**, and return domain errors so `fail()` maps them to 400/409 rather than a 500. Long operations return `202 { job }`,
-never a held-open socket; one in-flight job per stack, 409 on conflict. Reads that start something
+never a held-open socket; one RUNNING job per stack with a queue one deep, so a busy stack answers 202-queued rather than 409. Reads that start something
 (a readiness watch) must not emit events — a page view must not manufacture a notification. Then the
 UI if it consumes it, and `packages/client` if a script would want it.
 
