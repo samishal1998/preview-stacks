@@ -195,11 +195,14 @@ describe('API: sleep, wake-on-call', () => {
       expect((w.outcome as { steps: Array<{ phase: string }> }).steps.map((st) => st.phase)).toEqual(['up', 'assert_live', 'compose'].filter((p) => p !== 'assert_live'));
       expect(seen().find((e) => e.event === 'stack.woken')!.data.by).toBe('request:app-wk.example.com');
 
-      // The record clears EARLY — long before anything is serving. That gap is the bug this
-      // assertion used to encode: it expected 200 here, and a 200 on a preview hostname is the
-      // embedded CONTROL UI, served because "no longer asleep" fell through to the generic
-      // non-/api/ rule. An operator watching a preview come up saw the pstack dashboard appear on
-      // their app's URL.
+      // The record clears EARLY — long before anything is serving — and what the hostname serves in
+      // that gap is asserted by "the waking page outlives the sleep record" below, which steers the
+      // container's healthcheck so the window cannot close underneath it.
+      //
+      // It is NOT asserted here, and that is the point of this comment. It was, briefly: a plain
+      // `expect(503)` at this line, which passed on a laptop and failed on CI, because on a slower
+      // machine readiness settles before the request goes out and the page correctly stops. A test
+      // that races the thing it measures reports the machine it ran on, not the code.
       for (let i = 0; i < 100; i++) {
         const m = JSON.parse(readFileSync(join(dataDir, 'deployments', 'wk', 'meta.json'), 'utf8')) as { sleep?: unknown };
         if (!m.sleep) break;
@@ -207,13 +210,7 @@ describe('API: sleep, wake-on-call', () => {
       }
       expect(JSON.parse(readFileSync(join(dataDir, 'deployments', 'wk', 'meta.json'), 'utf8')).sleep).toBeUndefined();
 
-      // negative control: in wakeFor, return false once `dep.Sleep == nil` (the pre-fix behaviour)
-      // — this becomes 200 and serves the control UI on a preview hostname.
-      const after = await fetch(`${base}/`, { headers: { host: 'app-wk.example.com' } });
-      expect(after.status).toBe(503);
-      expect(after.headers.get('x-pstack-wake')).toBe('1');
-      // And it is the waking page, not the app and not the dashboard.
-      expect(await after.text()).not.toContain('<div id="app">');
+      // What this test still owns: the record is gone, and exactly one wake job ran.
     } finally {
       tap.stop();
       await srv.stop();
