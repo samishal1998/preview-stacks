@@ -67,13 +67,18 @@ const (
 	PollMs = 2_000
 	// DefaultTimeoutMs: an image pull plus a slow boot; short enough that a wedged stack is reported today.
 	DefaultTimeoutMs = 180_000
-	// RestartLoop is the restarts tolerated before a container is called a crash loop. Not 1 (an app
-	// that boots before its database dies once and comes back fine); not unbounded (a container
-	// under `restart: unless-stopped` that dies on every boot cycles through a healthy-looking sample).
+	// RestartLoop is the DEFAULT restarts tolerated before a container is called a crash loop. Not 1
+	// (an app that boots before its database dies once and comes back fine); not unbounded (a
+	// container under `restart: unless-stopped` that dies on every boot cycles through a
+	// healthy-looking sample).
+	//
+	// Overridable per watcher via Options.RestartLoop (PSTACK_READINESS_RESTART_LOOP). A host running
+	// SWARM stacks wants it higher: swarm has no `depends_on`, so a dependent legitimately restarts
+	// a few times while its database converges, and 3 calls that a crash loop.
 	RestartLoop = 3
 )
 
-func readinessOf(c inspect.ContainerInfo) ContainerReadiness {
+func readinessOf(c inspect.ContainerInfo, restartLoop int64) ContainerReadiness {
 	base := ContainerReadiness{Name: c.Name, Service: c.Service, State: c.State, Health: c.Health, HasHealthcheck: c.Health != nil, ExitCode: c.ExitCode, RestartCount: c.RestartCount}
 	reason := func(s string) *string { return &s }
 	health := ""
@@ -89,7 +94,7 @@ func readinessOf(c inspect.ContainerInfo) ContainerReadiness {
 		base.Ready = true
 		return base
 	}
-	if c.RestartCount >= RestartLoop {
+	if c.RestartCount >= restartLoop {
 		msg := "restarted " + js.ToString(c.RestartCount) + " times — crash loop"
 		if c.ExitCode != nil && *c.ExitCode != 0 {
 			msg += " (last exit " + js.ToString(*c.ExitCode) + ")"
@@ -130,6 +135,7 @@ type watch struct {
 	snap         StackReadiness
 	emit         bool
 	orchestrator spec.Orchestrator
+	restartLoop  int64
 	health       map[string]*string
 	announced    map[string]bool
 	waiters      []chan StackReadiness
@@ -142,7 +148,9 @@ type watch struct {
 type Options struct {
 	PollMs    int64
 	TimeoutMs int64
-	Bus       *events.Bus
+	// RestartLoop is the crash-loop threshold; non-positive means the RestartLoop default.
+	RestartLoop int64
+	Bus         *events.Bus
 }
 
 // Watcher holds one watch per stack. Held by the server, never a singleton, so stopping a server
@@ -151,11 +159,12 @@ type Options struct {
 // Owner: the server. mu guards byStack and is held across the whole start-if-absent check-then-act
 // (rule 14: a GET that starts a silent watch must not race a deploy that starts a loud one).
 type Watcher struct {
-	mu        sync.Mutex
-	byStack   map[string]*watch
-	pollMs    int64
-	timeoutMs int64
-	bus       *events.Bus
+	mu          sync.Mutex
+	byStack     map[string]*watch
+	pollMs      int64
+	timeoutMs   int64
+	restartLoop int64
+	bus         *events.Bus
 }
 
 // New makes a watcher.
@@ -166,10 +175,13 @@ func New(o Options) *Watcher {
 	if o.TimeoutMs <= 0 {
 		o.TimeoutMs = DefaultTimeoutMs
 	}
+	if o.RestartLoop <= 0 {
+		o.RestartLoop = RestartLoop
+	}
 	if o.Bus == nil {
 		o.Bus = events.Default
 	}
-	return &Watcher{byStack: map[string]*watch{}, pollMs: o.PollMs, timeoutMs: o.TimeoutMs, bus: o.Bus}
+	return &Watcher{byStack: map[string]*watch{}, pollMs: o.PollMs, timeoutMs: o.TimeoutMs, restartLoop: o.RestartLoop, bus: o.Bus}
 }
 
 // Get returns a copy of the current snapshot, if a watch exists.
@@ -218,6 +230,7 @@ func (ws *Watcher) Start(stack string, r exec.Runner, o StartOptions) StackReadi
 		snap:         StackReadiness{Stack: stack, State: Watching, Containers: []ContainerReadiness{}, StartedAt: time.Now().UnixMilli(), Reachable: true, TimeoutMs: timeout},
 		emit:         o.Emit,
 		orchestrator: orch,
+		restartLoop:  ws.restartLoop,
 		health:       map[string]*string{},
 		announced:    map[string]bool{},
 		ctx:          ctx,
@@ -359,7 +372,7 @@ func (ws *Watcher) tick(w *watch, r exec.Runner) {
 	}
 	containers := make([]ContainerReadiness, 0, len(rt.Containers))
 	for _, c := range rt.Containers {
-		containers = append(containers, readinessOf(c))
+		containers = append(containers, readinessOf(c, w.restartLoop))
 	}
 	var toEmit []func()
 	w.mu.Lock()

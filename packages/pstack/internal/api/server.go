@@ -61,9 +61,12 @@ type Options struct {
 	// TerminalArgv opens a container shell. Default: docker exec -i <id> <shell>. Injectable for
 	// the same reason Runner is: the machine this is developed on has no Docker.
 	TerminalArgv func(containerID, shell string) []string
-	// Readiness tuning; zero means the defaults (2s / 180s).
+	// Readiness tuning; zero means the defaults (2s / 180s / 3 restarts).
 	ReadinessPollMs    int64
 	ReadinessTimeoutMs int64
+	// ReadinessRestartLoop is the crash-loop threshold. Raise it on a SWARM host: without
+	// `depends_on`, a dependent legitimately restarts while its database converges.
+	ReadinessRestartLoop int64
 	// Domain is the preview domain (PSTACK_DOMAIN): share links and the SSO callback are built on
 	// control.<domain>; without it the request's own origin is used.
 	Domain string
@@ -182,7 +185,7 @@ func New(o Options) (*Server, error) {
 		auth:       auth.New(st),
 		terminals:  terminal.NewAudit(st),
 		hostVars:   hostvars.New(st),
-		readiness:  readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, Bus: o.Bus}),
+		readiness:  readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, RestartLoop: o.ReadinessRestartLoop, Bus: o.Bus}),
 		sleepIndex: scheduler.NewSleepIndex(),
 		ssoClient:  sso.NewClient(nil),
 		bus:        o.Bus,
@@ -406,6 +409,10 @@ type lifecycleOptions struct {
 	Force  *bool
 	By     string
 	Reason string
+	// ReadinessTimeoutMs is the deadline of the watch an `up`/`wake` hands off to; 0 means the
+	// watcher default. Set from `?timeout=` by the POST route only — the scheduler and the wake path
+	// deliberately keep the default.
+	ReadinessTimeoutMs int64
 }
 
 // startLifecycle starts a lifecycle job. ONE place, because three callers start them — the POST
@@ -433,7 +440,7 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 			// containers are CREATED. Only after a success, and NOT with the job's runner — a watch
 			// outlives the deploy that started it.
 			if outcome.OK {
-				s.readiness.Start(st.Stack, s.runnerFor(st, dep.Dir, s.ctx), readiness.StartOptions{Restart: true, Emit: true, Orchestrator: orchestrator})
+				s.readiness.Start(st.Stack, s.runnerFor(st, dep.Dir, s.ctx), readiness.StartOptions{TimeoutMs: o.ReadinessTimeoutMs, Restart: true, Emit: true, Orchestrator: orchestrator})
 				s.clearSleep(id)
 			}
 			return outcome, nil

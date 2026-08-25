@@ -46,10 +46,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // means the default, and a value that is not a positive number is ignored rather than turning a
 // timeout into NaN.
 type Tuning struct {
-	ReadinessPollMs    float64
-	ReadinessTimeoutMs float64
-	SSOStateTTLS       float64
-	SSODiscoveryTTLS   float64
+	ReadinessPollMs      float64
+	ReadinessTimeoutMs   float64
+	ReadinessRestartLoop float64
+	SSOStateTTLS         float64
+	SSODiscoveryTTLS     float64
 }
 
 // TuningFromEnv reads the knobs.
@@ -66,10 +67,11 @@ func TuningFromEnv(env func(string) (string, bool)) Tuning {
 		return n
 	}
 	return Tuning{
-		ReadinessPollMs:    num("PSTACK_READINESS_POLL_MS"),
-		ReadinessTimeoutMs: num("PSTACK_READINESS_TIMEOUT_MS"),
-		SSOStateTTLS:       num("PSTACK_SSO_STATE_TTL_S"),
-		SSODiscoveryTTLS:   num("PSTACK_SSO_DISCOVERY_TTL_S"),
+		ReadinessPollMs:      num("PSTACK_READINESS_POLL_MS"),
+		ReadinessTimeoutMs:   num("PSTACK_READINESS_TIMEOUT_MS"),
+		ReadinessRestartLoop: num("PSTACK_READINESS_RESTART_LOOP"),
+		SSOStateTTLS:         num("PSTACK_SSO_STATE_TTL_S"),
+		SSODiscoveryTTLS:     num("PSTACK_SSO_DISCOVERY_TTL_S"),
 	}
 }
 
