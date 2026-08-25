@@ -17,6 +17,7 @@ import { api } from '../api/client';
 import ActionButton from '../components/ActionButton.vue';
 import InfoHint from '../components/InfoHint.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
+import SsoMark from '../components/SsoMark.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -38,12 +39,26 @@ const next = computed(() =>
  */
 const ssoError = computed(() => (typeof route.query.sso_error === 'string' ? route.query.sso_error : ''));
 
+/** The enabled providers, one button each. Empty until /api/health has answered. */
+const ssoProviders = computed(() => authState.sso?.providers ?? []);
+
+/**
+ * The banner must name the provider that failed. With one provider that is known locally; with
+ * several, the server prefixes its label onto the message itself, so the generic title is enough.
+ */
+const ssoErrorTitle = computed(() => {
+  const only = ssoProviders.value.length === 1 ? ssoProviders.value[0] : undefined;
+  return only ? `Signing in with ${only.label} did not work.` : 'Signing in did not work.';
+});
+
 /**
  * A full navigation, not a fetch: the whole point is to leave this origin for the provider's
  * consent screen. `api.url` so a dev session pointed at a tunnelled host still reaches its API.
  */
-function signInWithProvider(): void {
-  window.location.assign(api.url(`/api/auth/sso/start?next=${encodeURIComponent(next.value)}`));
+function signInWithProvider(key: string): void {
+  window.location.assign(
+    api.url(`/api/auth/sso/start?provider=${encodeURIComponent(key)}&next=${encodeURIComponent(next.value)}`),
+  );
 }
 
 async function submit(): Promise<void> {
@@ -99,23 +114,6 @@ async function submit(): Promise<void> {
         </div>
       </template>
 
-      <!-- ── the provider, above the form: for most people on a host with SSO it is the only
-           control on this page they should touch. -->
-      <template v-if="authState.sso?.enabled">
-        <div v-if="ssoError" class="banner failed" style="margin-top: var(--s3)">
-          <b>Signing in with {{ authState.sso.label }} did not work.</b>
-          <p>{{ ssoError }}</p>
-        </div>
-        <ActionButton variant="primary" style="width: 100%; margin-top: var(--s4)" @click="signInWithProvider">
-          Sign in with {{ authState.sso.label }}
-        </ActionButton>
-        <div class="row" style="margin: var(--s4) 0; align-items: center; gap: var(--s3)">
-          <hr style="flex: 1; border: 0; border-top: 1px solid var(--line)" />
-          <span class="mute" style="font-size: var(--t-sm)">or with a local account</span>
-          <hr style="flex: 1; border: 0; border-top: 1px solid var(--line)" />
-        </div>
-      </template>
-
       <form @submit.prevent="submit">
         <div class="field" style="margin-top: var(--s4)">
           <label for="u">Username</label>
@@ -149,6 +147,30 @@ async function submit(): Promise<void> {
           </RouterLink>
         </div>
       </form>
+
+      <!-- ── the providers, below the form: one full-width button each, so one configured
+           provider and five lay out the same way. Below rather than above because the health
+           probe answers after first paint — buttons appearing UNDER the form do not shove the
+           username field out from beneath the pointer. -->
+      <template v-if="ssoProviders.length">
+        <div class="row" style="margin: var(--s4) 0; align-items: center; gap: var(--s3)">
+          <hr style="flex: 1; border: 0; border-top: 1px solid var(--line)" />
+          <span class="mute" style="font-size: var(--t-sm)">or</span>
+          <hr style="flex: 1; border: 0; border-top: 1px solid var(--line)" />
+        </div>
+        <div v-if="ssoError" class="banner failed" style="margin-bottom: var(--s3)">
+          <b>{{ ssoErrorTitle }}</b>
+          <!-- The provider's (or server's) own words — arrives via redirect query, rendered as
+               text and never as markup. -->
+          <p>{{ ssoError }}</p>
+        </div>
+        <div class="sso-list">
+          <button v-for="p in ssoProviders" :key="p.key" class="sso-btn" @click="signInWithProvider(p.key)">
+            <SsoMark :preset="p.preset" />
+            <span>Continue with {{ p.label }}</span>
+          </button>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -163,5 +185,20 @@ async function submit(): Promise<void> {
 }
 .login-card {
   width: 100%;
+}
+
+/* One neutral button per provider: the brand mark carries the identity, the button stays the
+ * app's own control — a row of provider-branded buttons is a ransom note. */
+.sso-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.sso-btn {
+  width: 100%;
+  justify-content: center;
+}
+.sso-btn svg {
+  flex: none;
 }
 </style>

@@ -524,13 +524,92 @@ func TestConfiguration(t *testing.T) {
 		}
 		// The exact texts.
 		_, err := ParseConfig(parse(t, `{"mode":"oauth2","provider":"nope","clientId":"c"}`))
-		if err.Error() != `unknown provider "nope" — use one of github, gitlab, bitbucket, or custom` {
+		if err.Error() != `unknown provider "nope" — use one of github, gitlab, bitbucket, google, microsoft, okta, auth0, keycloak, or custom` {
 			t.Fatalf("%q", err.Error())
 		}
+		// An unknown provider is refused whatever the mode — including no mode at all, which used
+		// to fall into the oidc branch and complain about a missing issuer instead.
+		_, err = ParseConfig(parse(t, `{"provider":"nope","clientId":"c"}`))
+		wantErr(t, err, `unknown provider "nope"`)
 		_, err = ParseConfig(parse(t, `{"mode":"oidc","clientId":"c","issuer":"http://idp.example.com"}`))
 		if err.Error() != `issuer/discoveryUrl must be https (http is only accepted on localhost) — got "http://idp.example.com"` {
 			t.Fatalf("%q", err.Error())
 		}
+	})
+
+	t.Run("every preset row is fully enriched: mode, button, setup, and its mode's endpoints", func(t *testing.T) {
+		// negative control: blank google's DiscoveryURL (or github's SetupHint) → this fails naming the row
+		for _, p := range Presets {
+			if p.Mode != OIDC && p.Mode != OAuth2 {
+				t.Fatalf("%s: mode %q", p.Key, p.Mode)
+			}
+			if p.ButtonLabel == "" || p.SetupURL == "" || p.SetupHint == "" {
+				t.Fatalf("%s: missing button/setup enrichment: %+v", p.Key, p)
+			}
+			// The hint is the form's walkthrough; the one thing every provider setup shares is
+			// pasting the callback URL in as the redirect URI, so every hint must say so.
+			if !strings.Contains(strings.ToLower(p.SetupHint), "callback url") {
+				t.Fatalf("%s: the setup hint never mentions the callback URL: %q", p.Key, p.SetupHint)
+			}
+			switch p.Mode {
+			case OIDC:
+				if p.DiscoveryURL == "" || p.AuthorizeURL != "" || p.TokenURL != "" {
+					t.Fatalf("%s: an oidc preset carries a DiscoveryURL and no endpoints: %+v", p.Key, p)
+				}
+			case OAuth2:
+				if p.DiscoveryURL != "" || p.AuthorizeURL == "" || p.TokenURL == "" {
+					t.Fatalf("%s: an oauth2 preset carries endpoints and no DiscoveryURL: %+v", p.Key, p)
+				}
+			}
+		}
+		// The templates are exactly the tenant-specific providers; google is a real issuer.
+		for _, c := range []struct {
+			key      string
+			template bool
+		}{{"google", false}, {"microsoft", true}, {"okta", true}, {"auth0", true}, {"keycloak", true}} {
+			if got := strings.Contains(PresetFor(c.key).DiscoveryURL, "<"); got != c.template {
+				t.Fatalf("%s: template=%v, want %v (%q)", c.key, got, c.template, PresetFor(c.key).DiscoveryURL)
+			}
+		}
+	})
+
+	t.Run("an oidc preset fills the issuer in, a template placeholder is refused until replaced", func(t *testing.T) {
+		// negative control: drop the strings.Contains(discoveryURL, "<") refusal → the okta template
+		// reaches httpsURL and the error stops mentioning the placeholder
+		cfg := mustConfig(t, `{"provider":"google","clientId":"cid"}`)
+		if cfg.Mode != OIDC || cfg.DiscoveryURL != "https://accounts.google.com/" || cfg.Label != "Google" || cfg.Scopes != "openid email profile" || cfg.Provider != "google" {
+			t.Fatalf("%+v", cfg)
+		}
+		if cfg.DerivedKey() != "google" {
+			t.Fatalf("derived %q", cfg.DerivedKey())
+		}
+		// A template saved verbatim would fail every login at discovery; refuse it at the form.
+		_, err := ParseConfig(parse(t, `{"provider":"okta","clientId":"cid"}`))
+		wantErr(t, err, `still carries a <placeholder>`)
+		// The same rule reads a typed URL: the operator pasted the template without replacing it.
+		_, err = ParseConfig(parse(t, `{"mode":"oidc","clientId":"cid","discoveryUrl":"https://login.microsoftonline.com/<tenant-id>/v2.0"}`))
+		wantErr(t, err, `still carries a <placeholder>`)
+		// Replaced, it parses — the typed URL wins over the preset's template.
+		ok := mustConfig(t, `{"provider":"okta","clientId":"cid","discoveryUrl":"https://acme.okta.com/oauth2/default"}`)
+		if ok.DiscoveryURL != "https://acme.okta.com/oauth2/default" || ok.Label != "Okta" || ok.Provider != "okta" {
+			t.Fatalf("%+v", ok)
+		}
+		// A config with no preset is exactly what it was before presets learned oidc.
+		bare := mustConfig(t, `{"mode":"oidc","clientId":"c","issuer":"https://accounts.example.com"}`)
+		if bare.Provider != "" || bare.Label != "accounts.example.com" || bare.Scopes != "openid profile email" || bare.DerivedKey() != "oidc" {
+			t.Fatalf("%+v", bare)
+		}
+	})
+
+	t.Run("a preset's mode is authoritative: it fills an absent mode and refuses a contradicting one", func(t *testing.T) {
+		// negative control: drop the preset/mode mismatch refusal → github-under-oidc parses (the documented trap)
+		if got := mustConfig(t, `{"provider":"github","clientId":"c"}`); got.Mode != OAuth2 || got.AuthorizeURL == "" {
+			t.Fatalf("%+v", got)
+		}
+		_, err := ParseConfig(parse(t, `{"mode":"oidc","provider":"github","clientId":"c","issuer":"https://token.actions.githubusercontent.com"}`))
+		wantErr(t, err, `provider "github" is an oauth2 preset`)
+		_, err = ParseConfig(parse(t, `{"mode":"oauth2","provider":"google","clientId":"c"}`))
+		wantErr(t, err, `provider "google" is an oidc preset`)
 	})
 
 	t.Run("claim overrides merge onto the preset, and email domains are normalized", func(t *testing.T) {

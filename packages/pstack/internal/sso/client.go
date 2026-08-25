@@ -99,7 +99,7 @@ func (c *Client) SetDiscoveryTTL(ms int64) {
 	}
 }
 
-// Forget is the test seam and the "re-validate on save" path — `SetSsoConfig` drops the entry so the
+// Forget is the test seam and the "re-validate on save" path — `SetSsoProvider` drops the entry so the
 // next login re-reads. With no argument both caches are cleared; with URLs, those discovery entries.
 func (c *Client) Forget(urls ...string) {
 	c.mu.Lock()

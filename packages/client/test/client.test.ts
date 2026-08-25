@@ -193,13 +193,21 @@ describe('0.26.0: sleep/wake, share links, the swarm', () => {
 });
 
 describe('0.27.0: single sign-on', () => {
-  test('the provider round-trips, and the client secret has no read path', async () => {
+  test('providers round-trip under keys, and the client secret has no read path', async () => {
     const empty = await client.sso.config();
-    expect(empty.configured).toBe(false);
-    expect(empty.clientSecret).toBe('');
-    // The one string an operator must register with their provider — served, never guessed.
+    expect(empty.providers).toEqual([]);
+    // The one string an operator must register with every provider — served, never guessed.
     expect(empty.callbackUrl).toBe(`http://127.0.0.1:${server.port}/api/auth/sso/callback`);
-    expect(empty.presets.map((p) => p.key)).toEqual(['github', 'gitlab', 'bitbucket']);
+    expect(empty.presets.map((p) => p.key)).toEqual([
+      'github',
+      'gitlab',
+      'bitbucket',
+      'google',
+      'microsoft',
+      'okta',
+      'auth0',
+      'keycloak',
+    ]);
     expect((await client.health()).sso).toBeNull();
 
     const saved = await client.sso.save({
@@ -209,26 +217,28 @@ describe('0.27.0: single sign-on', () => {
       clientSecret: 'the-real-secret',
       allowedEmailDomains: ['Example.COM'],
     });
-    // The preset filled the endpoints in, and the domain was normalized.
+    // The keyless save (what a pre-multi-provider script sends) derived the slug; the preset
+    // filled the endpoints in, and the domain was normalized.
+    expect(saved.key).toBe('github');
     expect(saved.config.authorizeUrl).toBe('https://github.com/login/oauth/authorize');
     expect(saved.config.claimMap.subject).toBe('id');
     expect(saved.config.allowedEmailDomains).toEqual(['example.com']);
     expect(saved.config.label).toBe('GitHub');
 
     const read = await client.sso.config();
-    expect(read.configured).toBe(true);
-    expect(read.clientSecret).toBe('••••••••');
+    expect(read.providers.map((p) => p.key)).toEqual(['github']);
+    expect(read.providers[0]!.secretSet).toBe(true);
     expect(JSON.stringify(read)).not.toContain('the-real-secret');
-    // The login page's half, readable before authenticating.
-    expect((await client.health()).sso).toEqual({ enabled: true, label: 'GitHub' });
+    // The login page's half, readable before authenticating: one button per enabled provider.
+    expect((await client.health()).sso).toEqual({ providers: [{ key: 'github', label: 'GitHub', preset: 'github' }] });
 
     // A field the server refuses says so, as a PstackError with the server's own sentence.
-    await expect(client.sso.save({ mode: 'oauth2', provider: 'custom', clientId: 'c', clientSecret: 's' })).rejects.toThrow(
-      /authorizeUrl and tokenUrl/,
-    );
+    await expect(
+      client.sso.save({ key: 'corp', mode: 'oauth2', provider: 'custom', clientId: 'c', clientSecret: 's' }),
+    ).rejects.toThrow(/authorizeUrl and tokenUrl/);
 
-    expect((await client.sso.remove()).ok).toBe(true);
-    expect((await client.sso.config()).configured).toBe(false);
+    expect((await client.sso.remove('github')).ok).toBe(true);
+    expect((await client.sso.config()).providers).toEqual([]);
     await expect(client.sso.remove()).rejects.toThrow(PstackError);
   });
 });

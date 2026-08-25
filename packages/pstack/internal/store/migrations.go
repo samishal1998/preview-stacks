@@ -173,4 +173,37 @@ var Migrations = []string{
     expires_at INTEGER NOT NULL
   );
   `,
+	// 7 — SSO becomes multi-provider: sso_config's single row moves to a keyed table.
+	`
+  -- N simultaneous providers now. The key is an operator-chosen slug (^[a-z0-9][a-z0-9-]{0,31}$,
+  -- enforced by internal/auth — SQLite cannot). It names the ROW, not the identity:
+  -- sso_links.provider_key stays what the callback derives (the discovery ISSUER for oidc, the
+  -- preset key or "custom" for oauth2), so two rows on the same github preset share a link
+  -- namespace — the same subject from the same upstream directory is the same person.
+  CREATE TABLE sso_providers (
+    key           TEXT PRIMARY KEY,
+    -- JSON, the same shape sso_config.config held, WITHOUT the secret.
+    config        TEXT NOT NULL,
+    --
+    -- STORED, NOT HASHED — the notifier-secret precedent (see notifiers.secret above). The token
+    -- exchange must PRESENT this string to the provider, so a one-way form makes the feature
+    -- impossible. "Write-only" means what it means there: no route returns it, the read endpoint
+    -- answers with a mask, and a submit that leaves it empty keeps what is stored rather than
+    -- clearing it. The protection is the 0700 directory and the 0600 file.
+    client_secret TEXT NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+  -- The stored provider moves over under a DERIVED key: the config's provider field when non-empty
+  -- (github/gitlab/bitbucket/custom — ParseConfig only ever set it in oauth2 mode), else 'oidc'.
+  -- Keep sso.Config.DerivedKey in sync with this CASE. json_extract is available because
+  -- modernc.org/sqlite compiles in the JSON1 functions — proven by the migration-7 test in
+  -- store_test.go, which runs this statement over a real v6 database.
+  INSERT INTO sso_providers (key, config, client_secret, updated_at)
+    SELECT CASE WHEN COALESCE(json_extract(config, '$.provider'), '') <> ''
+                THEN json_extract(config, '$.provider')
+                ELSE 'oidc' END,
+           config, client_secret, updated_at
+    FROM sso_config;
+  DROP TABLE sso_config;
+  `,
 }

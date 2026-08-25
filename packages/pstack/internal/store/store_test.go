@@ -37,8 +37,9 @@ func TestOpen(t *testing.T) {
 		if fk != 1 {
 			t.Fatal("foreign_keys off")
 		}
-		// Every table the six migrations declare exists — the multi-statement Exec ran to the end.
-		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_config", "sso_links", "sso_state"} {
+		// Every table the migrations declare exists — the multi-statement Exec ran to the end.
+		// sso_config is deliberately absent: migration 7 replaced it with sso_providers.
+		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state"} {
 			var n int
 			if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n); err != nil || n != 1 {
 				t.Fatalf("table %s missing", tbl)
@@ -75,6 +76,50 @@ func TestOpen(t *testing.T) {
 		s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='extra'").Scan(&n)
 		if n != 0 {
 			t.Fatal("the first statement of a failed migration survived")
+		}
+	})
+
+	t.Run("migration 7 copies sso_config into sso_providers under the derived key", func(t *testing.T) {
+		// negative control: replace the CASE in migration 7's INSERT with a bare
+		// json_extract(config, '$.provider') → the oidc row lands under key "" and this fails
+		//
+		// The checked-in host fixture is a v6 database, so every future run executes migration 7
+		// against it; this test is the same v6→v7 hop with both derivations pinned, and it is also
+		// the proof that modernc.org/sqlite ships json_extract (JSON1).
+		for _, c := range []struct{ name, config, wantKey string }{
+			{"oauth2 keeps its provider name", `{"mode":"oauth2","provider":"github","clientId":"cid"}`, "github"},
+			{"oidc (provider empty) derives 'oidc'", `{"mode":"oidc","provider":"","clientId":"cid","discoveryUrl":"https://accounts.example.com/"}`, "oidc"},
+		} {
+			dir := t.TempDir()
+			saved := Migrations
+			Migrations = saved[:6]
+			s, err := Open(dir) // a real v6 database, made by the shipped migrations
+			Migrations = saved
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Exec("INSERT INTO sso_config (id, config, client_secret, updated_at) VALUES (1, ?, 'shh', 42)", c.config); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			s.Close()
+			s, err = Open(dir) // reopening runs migration 7
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			var key, config, secret string
+			var updatedAt int64
+			if err := s.DB.QueryRow("SELECT key, config, client_secret, updated_at FROM sso_providers").Scan(&key, &config, &secret, &updatedAt); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if key != c.wantKey || config != c.config || secret != "shh" || updatedAt != 42 {
+				t.Fatalf("%s: got (%q, %q, %q, %d)", c.name, key, config, secret, updatedAt)
+			}
+			var n int
+			s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='sso_config'").Scan(&n)
+			if n != 0 {
+				t.Fatalf("%s: sso_config survived", c.name)
+			}
+			s.Close()
 		}
 	})
 

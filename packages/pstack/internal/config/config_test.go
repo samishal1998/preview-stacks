@@ -94,7 +94,7 @@ func (h host) populate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Auth.SetSsoConfig(cfg, "the-client-secret"); err != nil {
+	if err := h.Auth.SetSsoProvider("corp", cfg, "the-client-secret"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.Registries.Put("ghcr.io", "robot", registryPwd); err != nil {
@@ -515,6 +515,63 @@ func TestAnOmittedRoleIsRefusedRatherThanMadeAdmin(t *testing.T) {
 	}
 }
 
+// A 0.30.0 export carries ONE provider as a bare "sso" object. It must keep applying: Parse folds
+// it into SSOProviders under the key store migration 7 derives for the same config in the
+// database ("oidc" here, since the config names no provider), and Apply lands it there.
+//
+// negative control: empty the foldLegacySSO body → SSOProviders stays empty after Parse, nothing is
+// created, and both halves of this test fail.
+func TestParseAcceptsTheOldSingleProviderShape(t *testing.T) {
+	// The old shape verbatim: version 1, the full normalised sso.Config under "sso" — the fields
+	// populate's provider stores, as 0.30.0's ssoConfig() exported them.
+	oldDoc := `{
+  "version": 1,
+  "pstackVersion": "0.30.0",
+  "exportedAt": 1,
+  "skipped": [], "users": [], "tokens": [], "vars": [], "notifiers": [],
+  "sso": {
+    "config": {"mode":"oidc","enabled":true,"clientId":"pstack","allowedEmailDomains":["example.com"],"allowedUsernames":[],"requiredGroups":[],"defaultRole":"admin","label":"accounts.example.com","discoveryUrl":"https://accounts.example.com/","provider":"","authorizeUrl":"","tokenUrl":"","userInfoUrl":"","emailsUrl":"","groupsUrl":"","scopes":"openid profile email","claimMap":{"subject":"sub","username":"preferred_username","email":"email","name":"name","avatar":"picture"}},
+    "clientSecret": "the-client-secret"
+  },
+  "registries": [], "routing": [], "specs": []
+}`
+	d, err := Parse([]byte(oldDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.SSO != nil {
+		t.Fatal("the legacy object survived Parse")
+	}
+	if len(d.SSOProviders) != 1 || d.SSOProviders[0].Key != "oidc" || d.SSOProviders[0].ClientSecret != "the-client-secret" {
+		t.Fatalf("folded %+v", d.SSOProviders)
+	}
+	h := newHost(t)
+	sum, err := h.Apply(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(sum.Created, "\n") != "sso provider oidc" {
+		t.Fatalf("created %v (skipped %v)", sum.Created, sum.Skipped)
+	}
+	row, err := h.Auth.SsoProvider("oidc")
+	if err != nil || row == nil || row.ClientSecret != "the-client-secret" || row.Config.DiscoveryURL != "https://accounts.example.com/" {
+		t.Fatalf("landed %+v %v", row, err)
+	}
+	// An oauth2 single provider derives its preset key instead — and reaching Apply WITHOUT Parse
+	// (it is exported) folds identically.
+	gh, err := sso.ParseConfig(parseMap(t, `{"mode":"oauth2","provider":"github","clientId":"cid"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHand := &Document{Version: FormatVersion, SSO: &SSO{Config: gh, ClientSecret: "shh"}}
+	if _, err := h.Apply(byHand); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := h.Auth.SsoProvider("github"); row == nil || row.Config.Label != "GitHub" {
+		t.Fatalf("oauth2 legacy landed %+v", row)
+	}
+}
+
 // Trusts() is the ONLY thing an operator sees before a push writes. A grant it does not name is a
 // grant nobody reviewed — and accounts, tokens and the identity provider are all larger grants than
 // the registry redirect the summary was originally written for.
@@ -527,10 +584,14 @@ func TestTrustsNamesEveryGrantNotJustRegistries(t *testing.T) {
 		Version: FormatVersion,
 		Users:   []auth.ExportUser{{Username: "svc-backup", Role: "admin"}},
 		Tokens:  []auth.ExportToken{{Username: "svc-backup", Name: "backup"}},
-		SSO:     &SSO{Config: &sso.Config{Provider: "github", Label: "Company SSO", DefaultRole: "admin", AuthorizeURL: "https://evil.example.com/authorize"}},
+		// TWO providers: the multi-provider point is that every one is named, not the first.
+		SSOProviders: []SSOProvider{
+			{Key: "gh", Config: &sso.Config{Provider: "github", Label: "Company SSO", DefaultRole: "admin", AuthorizeURL: "https://evil.example.com/authorize"}},
+			{Key: "corp", Config: &sso.Config{Label: "Corp IdP", DefaultRole: "admin", DiscoveryURL: "https://idp.corp.example"}},
+		},
 	}
 	got := strings.Join(doc.Trusts(), "\n")
-	for _, want := range []string{"svc-backup", "admin", "backup", "evil.example.com", "Company SSO"} {
+	for _, want := range []string{"svc-backup", "admin", "backup", "evil.example.com", "Company SSO", "idp.corp.example", "Corp IdP"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Trusts() never mentions %q:\n%s", want, got)
 		}

@@ -23,10 +23,15 @@ const sessionMaxAge = 30 * 24 * 60 * 60
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	n, _ := s.auth.UserCount()
 	var ssoSummary any
-	if stored, _ := s.auth.SsoConfig(); stored != nil && stored.Config.Enabled {
-		// What the login page needs BEFORE authenticating: whether to draw the button, and what to
-		// write on it. Never anything else about the provider.
-		ssoSummary = jsonx.O("enabled", true, "label", stored.Config.Label)
+	if enabled, _ := s.enabledSsoProviders(); len(enabled) > 0 {
+		// What the login page needs BEFORE authenticating: which buttons to draw, what to write on
+		// each, and the key to hand /start. `preset` is for an icon; never anything else about a
+		// provider. Null (not `{providers: []}`) when there is nothing to draw, as before.
+		providers := make([]jsonx.Object, 0, len(enabled))
+		for _, p := range enabled {
+			providers = append(providers, jsonx.O("key", p.Key, "label", p.Config.Label, "preset", p.Config.Provider))
+		}
+		ssoSummary = jsonx.O("providers", providers)
 	}
 	writeJSON(w, 200, jsonx.O(
 		"ok", true,
@@ -141,18 +146,80 @@ func (s *Server) preGateFail(w http.ResponseWriter, err error) {
 	}
 }
 
+// enabledSsoProviders is the sign-in surface: every stored provider whose config is enabled, in
+// key order. A disabled row keeps its config and secret but draws no button and refuses /start.
+func (s *Server) enabledSsoProviders() ([]auth.SsoProviderRow, error) {
+	rows, err := s.auth.ListSsoProviders()
+	if err != nil {
+		return nil, err
+	}
+	enabled := []auth.SsoProviderRow{}
+	for _, row := range rows {
+		if row.Config.Enabled {
+			enabled = append(enabled, row)
+		}
+	}
+	return enabled, nil
+}
+
+func ssoKeysOf(rows []auth.SsoProviderRow) string {
+	keys := make([]string, len(rows))
+	for i, row := range rows {
+		keys[i] = row.Key
+	}
+	return strings.Join(keys, ", ")
+}
+
+// ssoNamed prefixes the provider's label onto a login-page failure, but only when the host has
+// several providers — two buttons failing with identical sentences is undiagnosable, while the
+// single-provider messages stay byte-identical to the pre-multi-provider ones.
+func ssoNamed(label string, several bool, msg string) string {
+	if several {
+		return label + ": " + msg
+	}
+	return msg
+}
+
 func (s *Server) ssoStart(w http.ResponseWriter, r *http.Request) {
-	stored, _ := s.auth.SsoConfig()
-	if stored == nil || !stored.Config.Enabled {
-		ssoFailed(w, "single sign-on is not configured on this host")
+	enabled, err := s.enabledSsoProviders()
+	if err != nil {
+		s.preGateFail(w, err)
 		return
 	}
+	var stored *auth.SsoProviderRow
+	if key, ok := query(r.URL.RawQuery, "provider"); ok && key != "" {
+		for i := range enabled {
+			if enabled[i].Key == key {
+				stored = &enabled[i]
+				break
+			}
+		}
+		if stored == nil {
+			// One sentence for "no such row" and "row disabled": what a browser may sign in with
+			// is exactly the enabled set, and a disabled provider is not on the login page either.
+			ssoFailed(w, `no sign-in provider "`+key+`" is configured on this host`)
+			return
+		}
+	} else {
+		switch len(enabled) {
+		case 0:
+			ssoFailed(w, "single sign-on is not configured on this host")
+			return
+		case 1:
+			// The keyless /start of a single-provider host — every pre-multi-provider login link.
+			stored = &enabled[0]
+		default:
+			ssoFailed(w, "this host has several sign-in providers ("+ssoKeysOf(enabled)+") — pass ?provider= to choose one")
+			return
+		}
+	}
+	failed := func(msg string) { ssoFailed(w, ssoNamed(stored.Config.Label, len(enabled) > 1, msg)) }
 	// Discovery can be down or moved — the realistic failure here, and the one that must not be
 	// a JSON blob.
 	endpoints, err := s.ssoClient.EndpointsFor(stored.Config)
 	if err != nil {
 		if sso.IsError(err) {
-			ssoFailed(w, err.Error())
+			failed(err.Error())
 			return
 		}
 		s.preGateFail(w, err)
@@ -162,8 +229,10 @@ func (s *Server) ssoStart(w http.ResponseWriter, r *http.Request) {
 	state := sso.RandomB64URL(32)
 	next, _ := query(r.URL.RawQuery, "next")
 	// The verifier is the half the provider never sees; parking it server-side under the state is
-	// what makes an intercepted `code` useless to anyone but this process.
-	parked := jsonx.Must(jsonx.O("verifier", verifier, "next", sso.SafeNext(next)))
+	// what makes an intercepted `code` useless to anyone but this process. The provider KEY rides
+	// in the same value, so the callback answers with the config this login started against —
+	// sso_state stays a generic KV.
+	parked := jsonx.Must(jsonx.O("verifier", verifier, "next", sso.SafeNext(next), "provider", stored.Key))
 	if err := s.auth.Transient().Set("sso:"+state, string(parked), s.ssoTTL); err != nil {
 		s.preGateFail(w, err)
 		return
@@ -171,7 +240,7 @@ func (s *Server) ssoStart(w http.ResponseWriter, r *http.Request) {
 	to, err := sso.AuthorizeURL(stored.Config, endpoints, sso.AuthorizeArgs{RedirectURI: s.ssoCallbackURL(r), State: state, Challenge: challenge})
 	if err != nil {
 		if sso.IsError(err) {
-			ssoFailed(w, err.Error())
+			failed(err.Error())
 			return
 		}
 		s.preGateFail(w, err)
@@ -183,11 +252,6 @@ func (s *Server) ssoStart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 	// Whoever is here is a BROWSER coming back from a consent screen — see ssoFailed.
 	back := func(msg string) { ssoFailed(w, msg) }
-	stored, _ := s.auth.SsoConfig()
-	if stored == nil || !stored.Config.Enabled {
-		back("single sign-on is not configured")
-		return
-	}
 	// The provider refused (consent denied, app suspended, wrong redirect_uri). Its own words.
 	if refused := sso.DescribeError(sso.FromQuery(r.URL.RawQuery)); refused != "" {
 		back(refused)
@@ -209,6 +273,33 @@ func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 	parked, _ := parsed.(*omap.Map)
 	verifier, _ := getStr(parked, "verifier")
 	next, _ := getStr(parked, "next")
+	// The state's own value says which provider this login STARTED against, and that is the only
+	// config the code may be exchanged with — resolving "the" provider here instead would complete
+	// a login begun against A with B's secret and rules. A state parked before this host knew about
+	// provider keys carries none and reads as expired: the browser just starts over.
+	parkedKey, _ := getStr(parked, "provider")
+	if parkedKey == "" {
+		back("this sign-in has expired or was already used — try again")
+		return
+	}
+	enabled, err := s.enabledSsoProviders()
+	if err != nil {
+		s.preGateFail(w, err)
+		return
+	}
+	var stored *auth.SsoProviderRow
+	for i := range enabled {
+		if enabled[i].Key == parkedKey {
+			stored = &enabled[i]
+			break
+		}
+	}
+	if stored == nil {
+		// Deleted or disabled between /start and the consent screen.
+		back(`sign-in provider "` + parkedKey + `" is no longer configured on this host`)
+		return
+	}
+	back = func(msg string) { ssoFailed(w, ssoNamed(stored.Config.Label, len(enabled) > 1, msg)) }
 
 	fail := func(err error) {
 		if sso.IsError(err) || auth.IsError(err) {
@@ -263,6 +354,12 @@ func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// THE LINK KEY IS NOT THE ROW'S SLUG. sso_links.provider_key names the upstream DIRECTORY
+		// an identity came from — the discovery issuer here, the preset key or "custom" below —
+		// never the operator-chosen sso_providers key. Two rows on the same issuer (or the same
+		// github preset) therefore share a link namespace, which is correct: the same subject from
+		// the same upstream directory is the same person, whichever button they clicked.
+		//
 		// The issuer, not the hostname someone typed: two configs pointing at one issuer are the
 		// same directory and must resolve to the same links.
 		providerKey = endpoints.Issuer
@@ -316,7 +413,7 @@ func (s *Server) ssoCallback(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case endpoints.GroupsURL == "" || endpoints.GroupsKey == "":
 			// Unreachable through the API today: ParseConfig refuses this combination at save, and
-			// SsoConfig re-validates on every READ — so a hand-edited row carrying it reads as "not
+			// parseSsoRow re-validates on every READ — so a hand-edited row carrying it reads as "not
 			// configured" and never gets here. Fail closed rather than depend on that.
 			groupsErr = errors.New("no groups endpoint is configured for this provider")
 		case accessToken == "":
@@ -359,6 +456,9 @@ var (
 	userPasswordRe = regexp.MustCompile(`^/api/users/(\d+)/password$`)
 	userRe         = regexp.MustCompile(`^/api/users/(\d+)$`)
 	tokenRe        = regexp.MustCompile(`^/api/tokens/(\d+)$`)
+	// The segment pattern is auth's slug rule, so a path that could never name a row 404s from the
+	// chain instead of reaching the store.
+	ssoProviderRe = regexp.MustCompile(`^/api/sso/config/([a-z0-9][a-z0-9-]{0,31})$`)
 )
 
 // accountRoutes answers the account routes; ok=false means "not mine".
@@ -492,39 +592,45 @@ func (s *Server) accountRoutes(w http.ResponseWriter, r *http.Request, path stri
 		writeJSON(w, 200, jsonx.O("deleted", intID(m[1])))
 		return true, nil
 	}
+
+	// One keyed provider. Bare /api/sso/config is matched later in routes.go's chain; this keyed
+	// variant lives here only because this file owns the SSO config handlers — the two paths
+	// cannot overlap, so the split changes nothing about dispatch order.
+	if m := ssoProviderRe.FindStringSubmatch(path); m != nil && r.Method == http.MethodDelete {
+		return true, s.deleteSsoProvider(w, m[1])
+	}
 	return false, nil
 }
 
-// ssoConfigRoutes: one provider, one row. The client secret goes IN and never comes back out.
+// ssoConfigRoutes: the stored providers, each under an operator-chosen slug. The client secret
+// goes IN and never comes back out — a read learns `secretSet` and nothing else. The keyed DELETE
+// (/api/sso/config/<key>) is matched in accountRoutes and lands in deleteSsoProvider below; the
+// bare-path methods land here.
 func (s *Server) ssoConfigRoutes(w http.ResponseWriter, r *http.Request) error {
-	stored, err := s.auth.SsoConfig()
-	if err != nil {
-		return err
-	}
 	switch r.Method {
 	case http.MethodGet:
+		rows, err := s.auth.ListSsoProviders()
+		if err != nil {
+			return err
+		}
 		presets := make([]jsonx.Object, 0, len(sso.Presets))
 		for _, p := range sso.Presets {
-			presets = append(presets, jsonx.O("key", p.Key, "label", p.Label, "authorizeUrl", p.AuthorizeURL, "tokenUrl", p.TokenURL,
+			presets = append(presets, jsonx.O("key", p.Key, "label", p.Label, "mode", string(p.Mode),
+				"buttonLabel", p.ButtonLabel, "setupUrl", p.SetupURL, "setupHint", p.SetupHint,
+				"discoveryUrl", p.DiscoveryURL, "authorizeUrl", p.AuthorizeURL, "tokenUrl", p.TokenURL,
 				"userInfoUrl", p.UserInfoURL, "scopes", p.Scopes, "claimMap", p.ClaimMap))
 		}
-		var config any
-		clientSecret := ""
-		var updatedAt any
-		if stored != nil {
-			config = stored.Config
-			clientSecret = secretMask
-			updatedAt = stored.UpdatedAt
+		providers := make([]jsonx.Object, 0, len(rows))
+		for _, row := range rows {
+			providers = append(providers, jsonx.O("key", row.Key, "config", row.Config,
+				"secretSet", row.ClientSecret != "", "updatedAt", row.UpdatedAt))
 		}
 		writeJSON(w, 200, jsonx.O(
-			"configured", stored != nil,
-			// Exactly what the operator must register on their side, built by the same helper
-			// the flow uses — the two cannot drift.
+			"providers", providers,
+			// Exactly what the operator must register on their side — ONE URL for every provider,
+			// built by the same helper the flow uses, so the two cannot drift.
 			"callbackUrl", s.ssoCallbackURL(r),
 			"presets", presets,
-			"config", config,
-			"clientSecret", clientSecret,
-			"updatedAt", updatedAt,
 		))
 		return nil
 	case http.MethodPut:
@@ -537,10 +643,33 @@ func (s *Server) ssoConfigRoutes(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
+		key, _ := getStr(body, "key")
+		key = strings.TrimSpace(key)
+		if key == "" {
+			// The keyless PUT is the pre-multi-provider surface. An empty host derives the slug
+			// exactly as store migration 7 did, and a single-provider host replaces its one row —
+			// both keep a 0.30.0 script working unchanged. Several rows is a guess this API
+			// refuses to make.
+			rows, err := s.auth.ListSsoProviders()
+			if err != nil {
+				return err
+			}
+			switch len(rows) {
+			case 0:
+				key = config.DerivedKey()
+			case 1:
+				key = rows[0].Key
+			default:
+				writeError(w, 400, "this host has several sign-in providers ("+ssoKeysOf(rows)+`) — pass "key" to say which one to replace`)
+				return nil
+			}
+		}
 		typed, _ := getStr(body, "clientSecret")
 		typed = strings.TrimSpace(typed)
 		secret := typed
 		if typed == secretMask {
+			// The mask round-tripped from a read means "keep THIS key's stored secret", which is
+			// what SetSsoProvider does with an empty one.
 			secret = ""
 		}
 		// Validate the provider NOW rather than letting a typo'd issuer surface as somebody's
@@ -550,27 +679,50 @@ func (s *Server) ssoConfigRoutes(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		if err := s.auth.SetSsoConfig(config, secret); err != nil {
+		if err := s.auth.SetSsoProvider(key, config, secret); err != nil {
 			return err
 		}
 		// Drop the cache so a changed issuer takes effect on the next login, not in an hour.
 		s.ssoClient.Forget()
-		writeJSON(w, 200, jsonx.O("ok", true, "config", config, "callbackUrl", s.ssoCallbackURL(r)))
+		writeJSON(w, 200, jsonx.O("ok", true, "key", key, "config", config, "callbackUrl", s.ssoCallbackURL(r)))
 		return nil
 	case http.MethodDelete:
-		// The links survive on purpose: those accounts keep their tokens and their history.
-		s.ssoClient.Forget()
-		cleared, err := s.auth.ClearSsoConfig()
+		return s.deleteSsoProvider(w, "")
+	}
+	writeError(w, 404, "not found")
+	return nil
+}
+
+// deleteSsoProvider is DELETE /api/sso/config (key == "") and DELETE /api/sso/config/<key>. The
+// links survive on purpose: those accounts keep their tokens and their history. The bare DELETE
+// with exactly one provider removes it — what DELETE meant before keys existed — and with several
+// refuses to guess, naming the choices.
+func (s *Server) deleteSsoProvider(w http.ResponseWriter, key string) error {
+	if key == "" {
+		rows, err := s.auth.ListSsoProviders()
 		if err != nil {
 			return err
 		}
-		if !cleared {
+		switch len(rows) {
+		case 0:
 			writeError(w, 404, "single sign-on was not configured")
 			return nil
+		case 1:
+			key = rows[0].Key
+		default:
+			writeError(w, 400, "this host has several sign-in providers ("+ssoKeysOf(rows)+") — DELETE /api/sso/config/<key> to say which one")
+			return nil
 		}
-		writeJSON(w, 200, jsonx.O("ok", true))
+	}
+	s.ssoClient.Forget()
+	deleted, err := s.auth.DeleteSsoProvider(key)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		writeError(w, 404, `no sign-in provider "`+key+`" is configured`)
 		return nil
 	}
-	writeError(w, 404, "not found")
+	writeJSON(w, 200, jsonx.O("ok", true))
 	return nil
 }

@@ -37,8 +37,12 @@ export type Health = {
   /** False only in loopback dev mode, where the server refuses to bind off-localhost. */
   authEnforced: boolean;
   hasUsers?: boolean;
-  /** The configured identity provider, or null. Readable BEFORE authenticating — a login page needs it. */
-  sso?: { enabled: boolean; label: string } | null;
+  /**
+   * The ENABLED sign-in providers, or null when there are none. Readable BEFORE authenticating —
+   * a login page needs one button per entry. `key` is what `/api/auth/sso/start?provider=` takes;
+   * `preset` is the preset the config came from (`''` for a bare OIDC issuer), for an icon.
+   */
+  sso?: { providers: Array<{ key: string; label: string; preset: string }> } | null;
   dataDir: string;
   version: string;
 };
@@ -316,20 +320,38 @@ export type SsoConfig = {
 export type SsoPreset = {
   key: string;
   label: string;
+  /** How the provider is talked to; the config's mode defaults from it. */
+  mode: 'oidc' | 'oauth2';
+  /** Login-page button text ("Continue with GitHub"). */
+  buttonLabel: string;
+  /** Where the operator registers the OAuth app, and the walkthrough to show beside the form. */
+  setupUrl: string;
+  setupHint: string;
+  /**
+   * The issuer, for an oidc preset (`''` otherwise). One containing `<` is a TEMPLATE — render it
+   * as a field for the operator to fill in; the server refuses it verbatim.
+   */
+  discoveryUrl: string;
   authorizeUrl: string;
   tokenUrl: string;
-  userInfoUrl: string | null;
+  userInfoUrl: string;
   scopes: string;
   claimMap: SsoClaimMap;
 };
 
+/** One stored provider, under its operator-chosen slug. */
+export type SsoProviderEntry = {
+  key: string;
+  config: SsoConfig;
+  /** All a read learns about the client secret — the value has no read path. */
+  secretSet: boolean;
+  updatedAt: number;
+};
+
 export type SsoConfigResponse = {
-  configured: boolean;
-  /** Register THIS with the provider, byte for byte. Built server-side; never guess it. */
+  /** Every stored provider, in key order — disabled ones included. */
+  providers: SsoProviderEntry[];
+  /** Register THIS with every provider, byte for byte. Built server-side; never guess it. */
   callbackUrl: string;
   presets: SsoPreset[];
-  config: SsoConfig | null;
-  /** A mask when one is stored. Submit it back unchanged to keep the stored secret. */
-  clientSecret: string;
-  updatedAt: number | null;
 };
