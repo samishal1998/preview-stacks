@@ -74,6 +74,13 @@ with), and the rollback.
 Casing, alignment, spacing, roundness, width, tables, buttons. Read before touching
 `apps/ui/` — every rule exists because its absence produced a specific visible defect.
 
+### [`mcp-design.md`](mcp-design.md) — an unbuilt design, kept as a record
+
+**Nothing in it is built.** What serving the API as MCP tools would take (the generated command
+tree's lock file is already the tool manifest), and the three decisions that gate it: the
+dependency, what is exposed by default, and which credential it runs as. Read before proposing it,
+so the reasoning is not re-derived.
+
 ### [`secret-exposure.md`](secret-exposure.md) — a closed finding, kept as a record
 
 Unauthenticated reads used to be a credential feed, because job outcomes carry captured credentials
