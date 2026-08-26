@@ -11,6 +11,27 @@
   modifier or not), and the validation beside the box called `.trim()` on it. The rule now lives in
   a `.ts` with tests: this app has no component harness, so logic left inline in a `.vue` is proved
   by nothing.
+- **Docs: two features were labelled with a version that never contained them.** Roles were
+  documented as 0.31.0 and shipped in 0.32.0; runtime settings were documented as 0.32.0 and shipped
+  in 0.33.0. Both are the same mistake — a section stamped with whatever version was *next* while it
+  was being written, left behind when the feature slipped a release — and both told an operator a
+  feature existed on a host where it did not. Section anchors moved with the headings.
+- **Docs: the job-state list was missing `queued` and `superseded`**, the two states 0.32.0 added,
+  in the one line telling a script author what to branch on. A poller written against the older five
+  treats `queued` as unrecognised and never terminates on `superseded`. It is now a table saying
+  which two states are not final.
+- **Docs: `config.exported` and `config.imported` were absent from the event catalogue** — a
+  receiver subscribed to everything got a payload with no documented shape. Every one of the 29
+  events is now catalogued.
+- Docs: `pstack cloud-init --admin-user/--admin-password/--api-token` and the `swarmNotes` a swarm
+  submission returns (both 0.30.0) were in `--help` and in no guide. Two dead intra-doc links, and a
+  doc index still advertising an npm package that stopped existing in 0.29.0, are fixed with them.
+
+### Added
+
+- **A guide to the two orchestrators** — what `swarm` and `compose` each cost, how the host default
+  and the per-deployment override compose, and how to switch an existing host (tear every preview
+  down first; the networks change driver). It existed only as five scattered table rows.
 
 ## 0.33.0 — 2026-08-26
 

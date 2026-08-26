@@ -20,7 +20,7 @@ real domain), and the abridged JSON in section 6.
 | **stand up the control stack on a host** | [7 → `pstack init`](#stand-up-the-host-pstack-init) |
 | **choose a TLS mode (HTTP-01 or DNS-01)** | [7 → Choose a TLS mode](#choose-a-tls-mode) |
 | shared vs isolated, `requires`, `--force`, submitting deployments | [7. The control plane](#7-the-control-plane) |
-| **give my team accounts that cannot do everything** | [7e. The four roles](#7e-who-can-do-what-the-four-roles-0310) |
+| **give my team accounts that cannot do everything** | [7e. The four roles](#7e-who-can-do-what-the-four-roles-0320) |
 | deploy from GitHub Actions | [8. Wire it into CI](#8-wire-it-into-ci) |
 | a nightly leak sweep, orphan hunting | [9. Day-2 operations](#9-day-2-operations) |
 | every flag, route, env var, exit code | [10. Reference](#10-reference) |
@@ -85,7 +85,7 @@ checkout and 404s once installed cannot occur. The version is read from the embe
 
 Until 0.28.0 pstack was a Bun/TypeScript package on npm; `@samyx/preview-stacks` is deprecated
 there and stops at that release. The one-time move for an existing host is in
-[§9 Upgrading](#9-upgrading). The two npm packages that remain are the advanced UI
+[Upgrading a host](#upgrading-a-host). The two npm packages that remain are the advanced UI
 (`@samyx/preview-stacks-ui`, fetched *inside* the image build) and the client SDK
 (`@samyx/preview-stacks-client`).
 
@@ -756,7 +756,7 @@ which is also what lets the log stream use `EventSource` (it cannot send headers
 
 The token itself is **`root`** and passes everything. Accounts are weaker than it and differ from
 each other: each carries a **role**, and what each role may reach is
-[7e](#7e-who-can-do-what-the-four-roles-0310).
+[7e](#7e-who-can-do-what-the-four-roles-0320).
 
 It is still **not multi-tenant** — one spec set, one Docker socket, one host. Roles narrow what a
 colleague can do to that host; they are not an isolation boundary and do not pretend to be. Put the
@@ -888,9 +888,25 @@ $ curl -s https://api.preview.example.com/api/jobs/up-pr-123-1-apeq0d
 }
 ```
 
-`state` is the field to branch on: **`running` · `ok` · `failed` · `cancelled` · `leaked`**.
-`leaked` is its own state for the same reason exit 2 is its own code, and `cancelled` for a related
-one — a person stopped the run, so it did not try and lose.
+`state` is the field to branch on. There are **seven**, and only the first two are not final:
+
+| State | Final | Means |
+|---|---|---|
+| `queued` | no | accepted, not started — waiting for its own stack's running job, or for a slot under `max_jobs` ([the queue](#one-job-per-stack-and-a-queue-of-one)) |
+| `running` | no | executing now |
+| `ok` | yes | every step succeeded |
+| `failed` | yes | a step failed |
+| `cancelled` | yes | a person stopped it mid-run — partial state may exist, and the transcript says so |
+| `leaked` | yes | teardown ran and something survived it. The one to page on |
+| `superseded` | yes | a newer request replaced it **before it ever ran**. `startedAt` is `null`, so there is nothing to check |
+
+`leaked` is its own state for the same reason exit 2 is its own code. `cancelled` and `superseded`
+are deliberately not the same state: a cancelled job may have left half a deploy behind, a
+superseded one did nothing at all.
+
+**A poller must stop on all five final states, not on `ok`/`failed` alone.** `queued` and
+`superseded` both arrived in 0.32.0 — a loop written against the older five treats `queued` as
+unrecognised and waits forever on a `superseded` job that is already finished with.
 
 ### Use it from a script
 
@@ -1562,6 +1578,25 @@ curl -sS -X DELETE -H "Authorization: Bearer $PSTACK_TOKEN" \
      "$API/api/deployments/pr-123?PR=123"            # forget, after a clean down
 ```
 
+**Under swarm, the PUT tells you what the conversion will change** (0.30.0). The response carries
+`swarmNotes`, produced by the same conversion the deploy runs, so a submission and the job log can
+never name different keys:
+
+```json
+{
+  "id": "pr-123", "kind": "isolated", "stack": "pr-123",
+  "swarmNotes": [
+    "swarm: service api: depends_on: dropped — swarm has no start-order dependency; wait in the container's own entrypoint",
+    "swarm: service api: restart: always → deploy.restart_policy.condition: any"
+  ]
+}
+```
+
+They name what **you** wrote, not the routing labels pstack generates, because those are the ones you
+can act on — so `up`'s own list may be longer. Absent, never `[]`, when nothing was checked: under
+compose there is no conversion, and a compose file that does not parse is reported far better by
+`up` than by a guess here. They are advisory — a submission is never rejected for them.
+
 Five things that will bite you if you skip them:
 
 - **Variables ride on the query string, and are not stored.** A spec resolving `stack: pr-${PR}`
@@ -1595,6 +1630,46 @@ For CI, prefer the CLI with `-f` and `--set` (section 8): it needs no host acces
 Three things a preview host grows into once it has more than a handful of PRs on it: a second
 machine, previews that cost nothing while nobody looks at them, and a way to show one person one
 stack's logs without making them an account.
+
+### The two orchestrators, and how to choose
+
+Previews deploy one of two ways. It is a **host-level** decision with a **per-deployment** escape
+hatch, and nothing about the spec you write changes between them.
+
+| | `swarm` (the default since 0.26.0) | `compose` |
+|---|---|---|
+| Deploys with | `docker stack deploy`, converting the compose file on every deploy | `docker compose up -d`, byte for byte what you submitted |
+| Networks | `overlay --attachable` | `bridge` |
+| More than one machine | **yes** — that is the whole point | no, one box |
+| `mem_limit`, `privileged`, `devices`, `depends_on`, `profiles` | dropped or converted, and named in the notes | work as written |
+| `docker exec`, container start/stop, the terminal | manager-local; a task on a worker is listed and reachable for logs, not for a shell | always available |
+| Volumes on teardown | removed on the **manager**; one a task created on a worker stays there | removed |
+
+**Choose `compose` when the host will only ever be one machine and a service needs something swarm
+cannot express.** Choose `swarm` — or just take the default — if a second machine is plausible: it
+costs nothing on one node, and adding a worker later is one command rather than a rebuild.
+
+Three places set it, most specific first:
+
+```yaml
+compose:
+  file: docker-compose.yml
+  orchestrator: compose      # 1. this deployment only
+```
+
+2. `PSTACK_ORCHESTRATOR` on the server — what `pstack init --orchestrator` writes into
+   `control/.env`, and the host default every deployment inherits.
+3. Neither: `compose`. A spec run straight from the CLI on a laptop is not secretly a swarm.
+
+**Switching an existing host** is `pstack init --orchestrator <the other one>` on the host — the
+same idempotent command that stood it up. One precondition, and it is not a soft one: the two
+networks change driver (`bridge` ↔ `overlay`), and a driver swap is only possible when nothing but
+the control stack is attached. **Tear every preview down first.** A preview still attached is a hard
+stop that names the network rather than a half-migrated host. `pstack upgrade` never changes the
+mode — it keeps whatever the host already has.
+
+`GET /api/swarm` answers which mode is live: `active: false` means previews run with compose, and
+`reachable: false` means docker did not answer at all — which is not the same as "no nodes".
 
 ### Swarm mode
 
@@ -1860,7 +1935,7 @@ Accounts are created by hand, one at a time, by an admin or by whoever holds `PS
 does not scale past a couple of people. Point this host at the identity provider your organisation
 already runs and anyone who can authenticate against it can sign in — **no per-user setup here at
 all**. Decide what that provider's `defaultRole` is before you do
-([7e](#7e-who-can-do-what-the-four-roles-0310)): it decides what everyone who walks through the door
+([7e](#7e-who-can-do-what-the-four-roles-0320)): it decides what everyone who walks through the door
 can reach. Leaving it empty inherits the host's `default_role`
 ([Runtime settings](#runtime-settings-0330)) — which is `viewer` until somebody raises it, and is
 **capped below `admin`** on the way in, so an inheriting provider can never mint an administrator
@@ -2001,7 +2076,7 @@ placeholder.
 | `allowedUsernames: []` | Non-empty ⇒ a login whose username matches none of these **glob** patterns is refused. `*`, `?` and character classes (`qa-[0-9]*`), matched case-insensitively; a malformed pattern (`qa-[0-9`) is refused when you save rather than left silently matching nobody. **Fails closed the same way** — see the warning below, because this one has a sharp edge |
 | `requiredGroups: []` | Non-empty ⇒ the provider is asked which groups/orgs this user belongs to, and a login in none of them is refused. **Exact** names, case-insensitive — not globs, because a GitLab group is a path (`acme/backend`) and `*` would not mean what you'd expect across the `/`. Needs a preset and a scope: see below |
 | `groupsUrl` | Where that group list is read from. Filled in by the preset (`https://api.github.com/user/orgs`, `https://gitlab.com/api/v4/groups`); type your own for a self-hosted provider |
-| `defaultRole` | The [role](#7e-who-can-do-what-the-four-roles-0310) an auto-provisioned account is created with — one of `viewer`, `developer`, `maintainer`, `admin`, or **empty to inherit the host's `default_role`** ([Runtime settings](#runtime-settings-0330)), which is `viewer` until somebody sets it. Inheriting is resolved when an account is provisioned, not frozen when you save, so changing the host default changes what every inheriting provider mints. It is **never `admin` by omission**, and that is enforced rather than merely intended: an inheriting provider is **capped below `admin`** even if the host default IS `admin`, because otherwise two individually-sane settings compose into "any stranger who completes the OAuth flow is an administrator". In 0.27.0 an omitted value meant `admin` outright, and with all three allow-lists empty (how every preset saves) that is exactly what happened. To have a provider mint admins you must say `admin` **on that provider**, deliberately |
+| `defaultRole` | The [role](#7e-who-can-do-what-the-four-roles-0320) an auto-provisioned account is created with — one of `viewer`, `developer`, `maintainer`, `admin`, or **empty to inherit the host's `default_role`** ([Runtime settings](#runtime-settings-0330)), which is `viewer` until somebody sets it. Inheriting is resolved when an account is provisioned, not frozen when you save, so changing the host default changes what every inheriting provider mints. It is **never `admin` by omission**, and that is enforced rather than merely intended: an inheriting provider is **capped below `admin`** even if the host default IS `admin`, because otherwise two individually-sane settings compose into "any stranger who completes the OAuth flow is an administrator". In 0.27.0 an omitted value meant `admin` outright, and with all three allow-lists empty (how every preset saves) that is exactly what happened. To have a provider mint admins you must say `admin` **on that provider**, deliberately |
 
 The rules **and** together: each list is any-of, and every rule you set has to pass. They are
 **per provider**: each stored provider carries its own three lists, and a login is checked against
@@ -2084,7 +2159,7 @@ way — those accounts keep their personal tokens, and pointing the same provide
 re-links them by subject (under whatever key — see above). Set a password on one
 (`PUT /api/users/:id/password`) if someone needs to get in meanwhile.
 
-## 7d. Move a host's configuration to another host
+## 7d. Move a host's configuration to another host (0.30.0)
 
 Rebuilding a host, moving to a bigger box, or standing up a staging twin used to mean recreating
 every account, secret, notifier and registry login by hand. `pull config` seals the whole lot into
@@ -2239,9 +2314,9 @@ Two risks come with the feature itself. Neither is a bug, and neither goes away.
    produce yourself can repoint both. That is what the pre-write summary above is for; read it, and
    do not pipe `-y` at a file whose origin you cannot name.
 
-## 7e. Who can do what: the four roles (0.31.0)
+## 7e. Who can do what: the four roles (0.32.0)
 
-Until 0.31.0 every account on a host could do everything every other account could do. Roles fix
+Until 0.32.0 every account on a host could do everything every other account could do. Roles fix
 that. There are four, they are **ordered**, and each one includes everything below it:
 
 | Role | What it adds |
@@ -2255,7 +2330,7 @@ Two things sit outside that ladder:
 
 - **`root` — whoever holds `PSTACK_TOKEN`.** Not a role, not an account, and above all four. It is
   also the only principal that may `GET`/`POST /api/config`, the plaintext export of every
-  credential on the host ([7d](#7d-move-a-hosts-configuration-to-another-host)); an admin session is
+  credential on the host ([7d](#7d-move-a-hosts-configuration-to-another-host-0300)); an admin session is
   `403` there, deliberately.
 - **A share link is not a weak role.** It reaches exactly the views it was minted with, on exactly
   its own deployment, `GET` only ([share links](#share-links)). Roles changed nothing about it.
@@ -2697,6 +2772,9 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
 | `-o`, `--out <file>` | `cloud-init` `swarm join` `pull config` | write the rendered file instead of printing it. **Required** for `pull config`, which never writes an export to stdout and creates the file `0600`. |
 | `-i`, `--in <file>` | `push config` | the sealed export to apply. **Required** — there is no stdin form. |
+| `--admin-user <name>` | `cloud-init` | the first UI account, created on first boot. **Prompted** when absent unless `-y`. Its password comes from `--admin-password`, or is generated and printed beside the username |
+| `--admin-password <pw>` | `cloud-init` | that account's password. Refused without `--admin-user`. Never prompted — an absent one is generated, so the value exists nowhere else and can be discarded after the first sign-in |
+| `--api-token <token>` | `cloud-init` | `PSTACK_TOKEN`, written into the rendered file. Omitting it is preferred: `init` then mints one on the host and prints it once into the boot log, keeping it out of instance metadata |
 | `--config <file>` | `cloud-init` | embed a sealed export in the rendered file, applied on first boot. The **passphrase is embedded too**, so both sit in instance metadata. |
 | `--config-url <url>` | `cloud-init` | fetch the export at boot instead, so only the passphrase is embedded. Mutually exclusive with `--config`. |
 | `-y` | `cloud-init` `push config` | never prompt. On `push config` it also replaces the list of registries and notifier URLs with a count — those strings are credentials, and a log is not a terminal. |
@@ -2814,7 +2892,7 @@ an admin because there is nobody to promote it).
 principal** — reads included, since 0.10.0 — except `/api/health`, the login/bootstrap routes and the
 two SSO legs, which are how you become one. A session cookie is what lets the log stream use
 `EventSource`, which cannot send headers. Since 0.31.0 a principal is not enough on its own: each
-route also names a **least role** — [7e](#7e-who-can-do-what-the-four-roles-0310) is the matrix, and
+route also names a **least role** — [7e](#7e-who-can-do-what-the-four-roles-0320) is the matrix, and
 anything it does not list is the root token's alone.
 
 | Method | Route | Body / query | Returns |
@@ -2822,7 +2900,7 @@ anything it does not list is the root token's alone.
 | GET | `/api/health` | — | `{ ok, authEnforced, hasUsers, sso, dataDir, version }` — `sso` is `{ providers: [{ key, label, preset }…] }` (enabled providers, in key order) or `null`, read by the login page before authenticating |
 | GET | `/api/deployments` | spec variables as `?K=V`, **optional** | `{ deployments: [{ …meta, stack, busy, running, unresolved? }] }`. A row whose variables were not supplied degrades to `stack: null` + `unresolved: <reason>` rather than failing the listing; `busy`/`running` are `null` when undeterminable |
 | GET | `/api/deployments/:id` | spec variables as `?K=V`, **required** | `{ id, kind, createdAt, updatedAt, stack, busy, compose, requires, axes[{name,hooks}] }` — hook **names**, never bodies |
-| PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }` · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
+| PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }`, plus `swarmNotes` under swarm — what the conversion will change, [named at submit time](#submitting-a-deployment) rather than in the deploy transcript. Omitted, never `[]`, when nothing was checked · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
 | DELETE | `/api/deployments/:id` | spec variables as `?K=V` | forget it. Refused while containers exist **and** when Docker did not answer |
 | POST | `/api/deployments/:id/up` | spec variables as `?K=V` | **202** `{ job }` — `state: "queued"` when the stack is busy |
 | POST | `/api/deployments/:id/down` | `{ verify?, force? }` (`verify` defaults true) | **202** `{ job }` — **preempts**: cancels what is running, drops what is queued · 409 on `kind: shared` without `force` |
@@ -2835,7 +2913,7 @@ anything it does not list is the root token's alone.
 | GET | `/api/settings` | — | `{ settings: [{ key, value, source, minRole }…], env, precedence }` — the two runtime settings, resolved, each saying which layer it came from. `viewer`. See [Runtime settings](#runtime-settings-0330) |
 | PUT | `/api/settings/max_jobs` | `{ value }` | the row + `stored` + a `note`. **`maintainer`.** In force immediately — no restart; lowering it cancels nothing already running · 400 on anything but a whole number ≥ 1 |
 | PUT | `/api/settings/default_role` | `{ value }` | the row + `stored`. **`admin`** — it decides the role of accounts created without one · 400 on an unknown role |
-| POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only** (0.31.0), and an absent `role` means the host's `default_role` setting — `viewer` until somebody sets one. This route honours `admin` if that is the host default, unlike an inheriting SSO provider which is capped below it: creating accounts is already admin-only, so an admin minting at a level they chose is exercising authority they have, not a stranger acquiring it. See [7e](#7e-who-can-do-what-the-four-roles-0310). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
+| POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only** (0.31.0), and an absent `role` means the host's `default_role` setting — `viewer` until somebody sets one. This route honours `admin` if that is the host default, unlike an inheriting SSO provider which is capped below it: creating accounts is already admin-only, so an admin minting at a level they chose is exercising authority they have, not a stranger acquiring it. See [7e](#7e-who-can-do-what-the-four-roles-0320). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
 | PATCH | `/api/users/:id` | `{ role }` | `{ updated, role }` · **admin only** · 400 on an unknown role or on demoting the last admin · 404. Takes effect on that account's next request |
 | DELETE | `/api/users/:id` | — | `{ deleted }` · **admin only** · 400 on the last user or the last admin · 404 |
 | PUT | `/api/users/:id/password` | `{ password }` | `{ ok, revokedSessions }` — **your own** at any role, **anybody else's** is admin. Revokes that account's sessions and personal tokens |

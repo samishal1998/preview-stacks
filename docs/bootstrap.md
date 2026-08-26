@@ -103,7 +103,7 @@ name that is not "the UI host". (The older `pstack.<domain>` is gone.)
 | A domain you control the DNS for | the apex + wildcard A records (§3) |
 | **Port 80 reachable from the internet** | HTTP-01 answers the ACME challenge there. This is the one hard requirement of the default path — and it is needed for **renewals**, not just first issuance |
 | `2377/tcp`, `7946/tcp+udp`, `4789/udp` **between nodes** | only once you add a swarm worker (§7). A single-node swarm — what `init` creates — needs none of them open to the internet |
-| A **control image** on the box | `pstack init` refuses to run without one, and it does **not** pull. See [§4](#the-control-image-the-one-thing-a-global-install-does-not-give-you) |
+| A **control image** on the box | `pstack init` refuses to run without one, and it does **not** pull. See [§4](#the-control-image-the-one-thing-the-install-does-not-give-you) |
 | An SSH public key uploaded to the project (`hcloud ssh-key create`) | you will not be using a password |
 | ~~A DNS provider API token~~ | **not needed.** Only the opt-in `--challenge dns01` path wants one (§3) |
 | A git remote holding your `preview.yml` + `hooks/` | only if you drive the CLI **on the host**; specs submitted over HTTP travel as strings |
@@ -312,6 +312,34 @@ latest that day), and targets other distros with
 `--distro ubuntu|debian|fedora|suse|arch|alpine` — apt vs dnf vs zypper vs pacman vs apk, and OpenRC
 instead of systemd on Alpine, are handled per distro. The hand-written file below is the annotated
 reference for what the generator emits (Ubuntu form).
+
+It can also put the **credentials** in the file, so first boot leaves you nothing to fetch over SSH
+(0.30.0):
+
+```bash
+pstack cloud-init --domain preview.example.com --acme-email ops@example.com \
+  --admin-user ops \
+  -o cloud-init.yaml
+```
+
+| Flag | What it sets | When you leave it out |
+|---|---|---|
+| `--admin-user` | the first UI account, created on first boot | you are **prompted** for it (press enter to skip, or `-y` to never ask) |
+| `--admin-password` | that account's password | one is **generated** and printed beside the username when the file is rendered. Never prompted — a generated value exists nowhere else and can be discarded after the first sign-in |
+| `--api-token` | `PSTACK_TOKEN` | **preferred**: `init` mints one on the host and prints it once into `cloud-init-output.log`, which keeps it out of instance metadata altogether. Set one only when something already holds it — a CI secret, a second host |
+
+`--admin-password` without `--admin-user` is refused: a password with no account to attach to is a
+credential that silently does nothing, and rendering it would leave you believing the file carries
+an account it does not.
+
+The trade is stated rather than hidden. Whatever you pass is rendered **into the file**, and your
+provider stores user-data as **instance metadata** — readable by anything on the box that can reach
+the metadata service, for the life of the instance. That is a real cost, weighed against reading the
+token out of a boot log over SSH. The rendered file's SECRETS header names whichever credentials it
+actually carries, and neither is ever logged.
+
+A credential containing `{{` is refused rather than rendered: the template substitutes in order, and
+a value that looks like a placeholder would be rewritten by a later pass.
 
 Save as `cloud-init.yaml`. Replace every `example.com`, `<you>` and `CHANGEME` placeholder — and pin
 the pstack install marked below to the version you mean to run.
