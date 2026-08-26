@@ -22,6 +22,36 @@
   `unreachable` and `busy`. `?service=` picks one when a stack publishes several.
   `PSTACK_PROBE=off` removes the route.
 
+- **`pstack api …` — every HTTP route as a command.** Sixty-nine of them, **generated** from a new
+  OpenAPI document (`packages/pstack/api/openapi.yaml`) rather than hand-written, so they cannot
+  describe a route the server does not serve:
+
+  ```bash
+  export PSTACK_API_URL=https://api.preview.example.com PSTACK_TOKEN=…
+  pstack api deployments up --id pr-123
+  pstack api settings set-max-jobs --value 8
+  ```
+
+  Parameters are typed flags validated from the schema, a body is `--data` (or per-field flags when
+  the body is flat), `--json` prints the raw response, and a **non-2xx exits non-zero** so
+  `pstack api … || rollback` works. `PSTACK_API_URL` has no default — the same refusal
+  `pull config` makes — but `--help` needs neither variable.
+
+  The two SSE streams and the WebSocket terminal are deliberately absent: a command runs one request
+  and prints the answer, so each would buffer an endless response.
+
+  **The document is load-bearing, not decoration.** `docs/README.md` says the route list lives in the
+  code because a doc that duplicates a route table drifts from it — but that rule pointed at
+  `api.ts`'s header comment, which was deleted at the Go cutover, so nothing has held the list since
+  0.29.0. Now a route with no path in the document fails a test that reads the routes out of
+  `routes.go` itself, a path with no route fails the same test from the other side, and CI fails if
+  the document moves without the generated file. A rename that would break a command somebody
+  scripted is refused by the generator's lock file rather than shipped.
+
+  Cobra owns the `api` subtree and **nothing else**: the rest of the CLI keeps its hand-rolled
+  parser, whose usage text is a golden. Viper is not used — `PSTACK_API_URL` and `PSTACK_TOKEN` are
+  one lookup each and already have deliberate no-default semantics.
+
 ## 0.33.1 — 2026-08-26
 
 ### Fixed

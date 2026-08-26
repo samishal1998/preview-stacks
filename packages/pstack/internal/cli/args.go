@@ -256,7 +256,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "pull", "push", "healthcheck")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "pull", "push", "healthcheck", "api")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -283,7 +283,7 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|pull|push|serve> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|pull|push|serve|api> [flags]",
 		"",
 		"Flags:",
 		"  -f, --file <path>   spec file (default: preview.yml)",
@@ -342,6 +342,10 @@ func Usage(version string) string {
 		"            There is no passphrase FLAG on purpose: argv is world-readable through `ps`.",
 		"            `push` names every registry and notifier URL it is about to trust and asks first;",
 		"            -y applies without asking and prints counts instead (a log is not a terminal).",
+		"",
+		"api:        pstack api <group> <command>     every HTTP route as a command, generated from",
+		"            packages/pstack/api/openapi.yaml. `pstack api --help` lists the groups.",
+		"            env: PSTACK_API_URL · PSTACK_TOKEN (the host's, or a personal one)",
 		"",
 		"serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)",
 		"            PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)",

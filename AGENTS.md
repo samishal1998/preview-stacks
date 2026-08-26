@@ -53,11 +53,18 @@ apps/ui/               @samyx/preview-stacks-ui — the advanced UI (Vue 3 SPA).
 docs/                  See docs/README.md.
 ```
 
-The root `go.mod` (`module github.com/samishal1998/preview-stacks`, go 1.23) holds four
+The root `go.mod` (`module github.com/samishal1998/preview-stacks`, go 1.23) holds seven
 dependencies, each justified: `modernc.org/sqlite` (pure Go, so `CGO_ENABLED=0` is a static
 binary), `github.com/goccy/go-yaml` (a PARSER only — `internal/yamlx` resolves scalars itself),
-`github.com/coder/websocket`, `golang.org/x/crypto` (argon2). `net/http` only; the CLI parser is
-hand-rolled. Do not add a module for what a few lines do.
+`github.com/coder/websocket`, `golang.org/x/crypto` (argon2), and — for `pstack api` only —
+`github.com/samishal1998/openapi-commands` with `cobra`/`pflag`.
+
+`net/http` only; the CLI parser is hand-rolled and **cobra never owns the root command**, because
+flags may appear anywhere, `--ui` peeks ahead, and the usage text is a golden. Cobra owns the `api`
+subtree and nothing else. Its generator (`cmd/oascmd-gen`, which pulls libopenapi) is a TOOL
+dependency: the generated file is checked in, so the binary never links it.
+
+Do not add a module for what a few lines do.
 
 ### `packages/pstack/internal` — by responsibility
 
@@ -392,8 +399,10 @@ a package; `cli` is argv, dispatch and exit codes only. The usage text is a gold
 ### A new API route
 
 `internal/api`: add the route to the if-chain in `routes.go` (in order — a greedy pattern later in
-the chain is reachable only if nothing above it matched), **update the route list in `server.go`'s
-header**, and return domain errors so `fail()` maps them to 400/409 rather than a 500. Long operations return `202 { job }`,
+the chain is reachable only if nothing above it matched), **add it to `packages/pstack/api/openapi.yaml`
+and re-run `go generate ./packages/pstack/internal/apicli`** (or list it in `notInTheSpec` with a
+reason — `openapi_coverage_test.go` fails either way, and CI's `generated` job fails if the spec
+moved without the generated file), and return domain errors so `fail()` maps them to 400/409 rather than a 500. Long operations return `202 { job }`,
 never a held-open socket; one RUNNING job per stack with a queue one deep, so a busy stack answers 202-queued rather than 409. Reads that start something
 (a readiness watch) must not emit events — a page view must not manufacture a notification. Then the
 UI if it consumes it, and `packages/client` if a script would want it.

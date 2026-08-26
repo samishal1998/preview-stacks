@@ -925,6 +925,42 @@ const ready = await pstack.waitForReady(`pr-${pr}`, { vars: { PR: pr } });
 Zero dependencies, and it ships `verifyWebhook` for the receiving end.
 See [packages/client/README.md](../packages/client/README.md).
 
+### `pstack api` — every route as a command (0.34.0)
+
+The CLI carries the whole API. Sixty-nine commands, **generated** from
+[`packages/pstack/api/openapi.yaml`](../packages/pstack/api/openapi.yaml), so they cannot describe a
+route the server does not serve:
+
+```bash
+export PSTACK_API_URL=https://api.preview.example.com
+export PSTACK_TOKEN=…                       # the host's, or one from `pstack api tokens create`
+
+pstack api --help                           # the groups
+pstack api deployments --help               # the commands in one
+pstack api deployments list
+pstack api deployments up --id pr-123
+pstack api jobs get --job-id up-pr-123-1-apeq0d
+pstack api settings set-max-jobs --value 8
+```
+
+Parameters are flags, typed and validated from the schema: `--value` is an integer, `--action` is
+one of `start|stop|restart`, and a missing required flag is refused before anything is sent. Every
+command takes `--json` for the raw response, and a **non-2xx is a non-zero exit**, so
+`pstack api … || rollback` works.
+
+A **request body** is `--data '<json>'`. When a body is *flat* — every field a scalar — each field is
+also its own flag, which is why `settings set-max-jobs --value 8` works but
+`deployments put` takes `--data '{"spec":"…"}'`: its body carries `env`, a map, and there is no sane
+flag shape for one.
+
+`PSTACK_API_URL` has **no default**, the same refusal `pull config` makes: a guess would talk to the
+wrong host. `pstack api --help` needs neither variable — asking what the commands are does not
+depend on having a host.
+
+**Three routes are deliberately absent**: the two SSE streams and the WebSocket terminal. A command
+runs one request and prints the answer, so each would buffer an endless response. Use
+`curl -N` for the streams, and the UI for the terminal.
+
 ### Stop a running job
 
 ```console
@@ -2778,6 +2814,7 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `serve` | HTTP API + UI over the deployment registry. Runs until killed. | 3 on refusal |
 | `swarm [status]` | the swarm's nodes, the manager address and the ports a worker needs. Read-only; reads docker every time. **Exit 1 when this host is not a manager**, so a script need not parse it. | 0 · 1 |
 | `swarm join` | what a new worker runs — `--format command` (default), `script`, `cloud-config` (+`--distro`) or `token`. **The output is a secret**: every shape embeds the join token. To stdout, or `-o <file>`. | 0 · 1 · 3 |
+| `api <group> <command>` | call any API route. Generated from `api/openapi.yaml`; `--help` at any level lists what is under it. Needs `PSTACK_API_URL` and `PSTACK_TOKEN`. Non-2xx exits non-zero | 0 · 1 |
 | `pull config` | seal this host's whole portable configuration — accounts, tokens, host secrets, notifiers, SSO, registry logins, routing files, named specs — into one `0600` file (`-o`, never stdout). Talks to `PSTACK_API_URL` as the **root token**. | 0 · 1 · 3 |
 | `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
 
@@ -2976,7 +3013,8 @@ one (the body names both), a share link outside its views, or an admin at `/api/
 **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 
-Job `state`: `running` · `ok` · `failed` · `leaked` · `cancelled`. Job `action`: `up` · `down` ·
+Job `state`: `queued` · `running` · `ok` · `failed` · `leaked` · `cancelled` · `superseded` — the
+[seven](#read-a-job), of which only the first two are not final. Job `action`: `up` · `down` ·
 `verify` · `sleep` · `wake`.
 
 ### Control-stack hostnames

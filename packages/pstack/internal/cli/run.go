@@ -72,6 +72,11 @@ func run(argv []string, io IO) *Exit {
 	if io.Stdin == nil {
 		io.Stdin = os.Stdin
 	}
+	// BEFORE ParseArgs, deliberately: the `api` subtree is cobra's, and the walker would refuse
+	// `pstack api deployments up --id pr-1` as a verb with three unknown arguments. See api.go.
+	if isAPICommand(argv) {
+		return apiCmd(argv, io)
+	}
 	out, errOut := io.Stdout, io.Stderr
 	args, ex := ParseArgs(argv, io.Env)
 	if ex != nil {
