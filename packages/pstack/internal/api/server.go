@@ -3,7 +3,7 @@
 //
 // THIS API MUST NEVER MANAGE THE STACK IT RUNS IN (invariant 12). VARIABLES are merged from the
 // request's `?query` (and a PUT's `env`) over the process env, once, at resolve time. SECURITY:
-// every route but health/login/logout/bootstrap/sso is behind the principal gate, and behind THAT
+// every route but health/probe/login/logout/bootstrap/sso is behind the principal gate, and behind THAT
 // a second one — permissions.go, a single ordered (path, method, minimum role) table consulted once
 // at the top of routes(), default-deny, so a route nobody listed is root's. Responses are built
 // field by field and never echo a resolved Stack.Env.
@@ -80,6 +80,11 @@ type Options struct {
 	// by the container's environment on the next restart, and one who never opened the UI keeps
 	// exactly this value. PUT /api/settings/max_jobs applies without a restart.
 	MaxJobs int
+	// ProbeOff turns OFF `GET /api/probe/<id>`, the unauthenticated "is this preview serving"
+	// route (routes_probe.go). Named for the off switch so the ZERO VALUE is the shipped
+	// behaviour — every caller that does not care, tests included, gets the route without saying
+	// so, and only `PSTACK_PROBE=off` has to be spelled out.
+	ProbeOff bool
 	// Domain is the preview domain (PSTACK_DOMAIN): share links and the SSO callback are built on
 	// control.<domain>; without it the request's own origin is used.
 	Domain string
@@ -136,6 +141,11 @@ type Server struct {
 	ssoTTL     int64
 
 	writeMu sync.Mutex
+
+	// probeSem bounds concurrent /api/probe work. Buffered channel as a semaphore rather than a
+	// mutex: the route must answer `busy` immediately instead of queueing, since the caller is a
+	// polling loop and a queued probe is a probe that has already stopped being useful.
+	probeSem chan struct{}
 
 	// waking is deployment id → what a request to its hostnames needs while it comes back: the
 	// stack name (to read the readiness verdict) and the hostnames the sleep record carried. See
@@ -218,6 +228,7 @@ func New(o Options) (*Server, error) {
 		readiness:  readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, RestartLoop: o.ReadinessRestartLoop, Bus: o.Bus}),
 		sleepIndex: scheduler.NewSleepIndex(),
 		waking:     map[string]wakingUp{},
+		probeSem:   make(chan struct{}, probeSlots),
 		ssoClient:  sso.NewClient(nil),
 		bus:        o.Bus,
 		followers:  map[int]func(){},
@@ -863,6 +874,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	if path == "/api/health" {
 		s.health(w, r)
+		return
+	}
+
+	// The probe, beside health and for the same reason: a caller that has no token still needs an
+	// answer. It writes a status and no body, ever — see routes_probe.go.
+	if s.probe(w, r, path) {
 		return
 	}
 

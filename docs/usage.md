@@ -1044,6 +1044,42 @@ deadline (default 180s, or the host's `PSTACK_READINESS_TIMEOUT_MS`; floored at 
 value defers to the host default rather than silently shortening the watch). The same convergence is pushed to notifiers as `healthcheck.*`, `container.*`
 and `stack.*` events — see [webhook-events.md](webhook-events.md).
 
+### Probe a preview without a token (0.34.0)
+
+A CI job that polls `https://app-pr-123.example.com` right after a deploy is often not waiting on
+the app at all — under HTTP-01 it is waiting on **that hostname's certificate**, which Let's Encrypt
+issues on the first HTTPS request and which every new stack needs separately. The probe asks the
+same question on a hostname whose certificate has been warm since `init` ran:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://api.preview.example.com/api/probe/pr-123
+# → 200
+```
+
+**No token.** That is the point: the thing polling is usually a shell loop in a pipeline that has no
+business holding a credential which can start privileged containers.
+
+The status is the **container's own**, so a 404 means the app answered and does not serve `/` —
+which is still "it is serving". `x-pstack-probe` says what kind of answer it is:
+
+| Header | Status | Means |
+|---|---|---|
+| `upstream` | the app's | the container answered |
+| `unknown` | 404 | no such deployment |
+| `asleep` | 503 | sleeping — **and left that way**; the probe never wakes anything |
+| `no-target` | 503 | nothing to dial: no router, no port, or not on `preview-ingress` |
+| `unresolved` | 503 | the spec needs request variables, which this route does not take |
+| `unreachable` | 502 | the dial failed or took longer than 3s |
+| `busy` | 503 | too many probes in flight (4 at once) |
+
+`?service=web` picks one when a stack publishes several; without it the alphabetically first router
+with an address wins, the same one every time.
+
+**What it deliberately cannot do**, because it has no auth: return a body — not the app's, not an
+error message, ever; forward the upstream's headers; follow a redirect; or fetch any path but `/`.
+It does disclose whether a deployment id exists and whether it is up, which is the question being
+asked. `PSTACK_PROBE=off` removes the route on a host that does not want even that.
+
 ### One job per stack, and a queue of one
 
 A stack still runs exactly one job at a time — a `down` deleting the database branch an `up` just
@@ -2813,6 +2849,7 @@ different problems with different owners.
 | `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
+| `PSTACK_PROBE` | `serve` | *on* | `off` removes `GET /api/probe/:id`, the unauthenticated [probe](#probe-a-preview-without-a-token-0340); the path then 404s like any unknown one. Any other value, including a misspelling, leaves it on — a typo should not silently turn a CI pipeline into one that polls a 404 forever |
 | `PSTACK_MAX_JOBS` | `serve` | `4` | lifecycle jobs running at once, across every stack. **The default for the `max_jobs` setting, not the authority** (0.33.0): a value stored through `PUT /api/settings/max_jobs` outranks it and survives a restart, so setting it here is how a host that never opens the UI is configured — see [Runtime settings](#runtime-settings-0330). |
 | `PSTACK_TRAEFIK_METRICS` | `serve` | — | Traefik's Prometheus endpoint, what `sleep.idle` reads. `http://traefik:8082/metrics` inside the control stack; unset means `idle` never triggers. |
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
@@ -2899,6 +2936,7 @@ anything it does not list is the root token's alone.
 |---|---|---|---|
 | GET | `/api/health` | — | `{ ok, authEnforced, hasUsers, sso, dataDir, version }` — `sso` is `{ providers: [{ key, label, preset }…] }` (enabled providers, in key order) or `null`, read by the login page before authenticating |
 | GET | `/api/deployments` | spec variables as `?K=V`, **optional** | `{ deployments: [{ …meta, stack, busy, running, unresolved? }] }`. A row whose variables were not supplied degrades to `stack: null` + `unresolved: <reason>` rather than failing the listing; `busy`/`running` are `null` when undeterminable |
+| GET | `/api/probe/:id` | — | **No token.** The upstream's own status, **no body ever**, and `x-pstack-probe: upstream\|unknown\|asleep\|no-target\|unresolved\|unreachable\|busy`. `?service=` names which one on a stack that publishes several. See [Probe a preview without a token](#probe-a-preview-without-a-token-0340) |
 | GET | `/api/deployments/:id` | spec variables as `?K=V`, **required** | `{ id, kind, createdAt, updatedAt, stack, busy, compose, requires, axes[{name,hooks}] }` — hook **names**, never bodies |
 | PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }`, plus `swarmNotes` under swarm — what the conversion will change, [named at submit time](#submitting-a-deployment) rather than in the deploy transcript. Omitted, never `[]`, when nothing was checked · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
 | DELETE | `/api/deployments/:id` | spec variables as `?K=V` | forget it. Refused while containers exist **and** when Docker did not answer |
