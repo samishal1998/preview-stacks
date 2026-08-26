@@ -60,3 +60,23 @@ export function supersededBy(job: Job, jobs: Job[]): Job | null {
   const newer = jobs.slice(0, i).reverse();
   return newer.find((j) => j.stack === job.stack) ?? null;
 }
+
+/**
+ * Why the host's concurrency limit cannot be saved as typed, or `''` when it can.
+ *
+ * Takes `string | number` because that is what the box actually holds. `v-model` on
+ * `<input type="number">` hands back a NUMBER the moment the value parses — Vue casts for that
+ * input TYPE, with or without the `.number` modifier — while an empty box and the value first read
+ * from the server are strings. Assuming either one throws on the other, which is exactly how this
+ * arrived: `.trim()` on the number the first keystroke produced.
+ *
+ * The server takes an integer ≥ 1 and refuses everything else; saying so here spares a round trip
+ * and never replaces it — the 403 or 400 is still the enforcement.
+ */
+export function capProblem(draft: string | number): string {
+  const raw = String(draft).trim();
+  if (!raw) return 'type a number first';
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) return 'the limit is a whole number, 1 or more';
+  return '';
+}
