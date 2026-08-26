@@ -75,6 +75,18 @@ const running = computed(() => rt.value?.containers.filter((c) => c.state === 'r
 const hasNode = computed(() => rt.value?.containers.some((c) => c.node) ?? false);
 
 /**
+ * The preview domain, for the `init` line in the TLS hint — derived from where this page is served
+ * rather than asked for, because `control.<domain>` and `api.<domain>` are the only two hostnames
+ * that reach it.
+ *
+ * A guess, and a visible one: browse by IP or through a tunnel and you get that back, which reads as
+ * obviously-not-your-domain in a command you are about to paste. Better than a placeholder nobody
+ * can act on, and the alternative — a `domain` field on this response — would exist only for a
+ * snippet.
+ */
+const domain = computed(() => location.host.replace(/^(control|api)\./, ''));
+
+/**
  * The part of a container's name worth reading in a table cell.
  *
  * Compose names a container `<stack>-<service>-<n>`. Swarm names a TASK
@@ -185,6 +197,37 @@ function urlFor(c: RuntimeContainer): string | null {
                 hostname resolves its own certificate. Under DNS-01 that inverts — one always-on router
                 holds the wildcard, and a per-PR certresolver makes each PR order its own and burn the
                 weekly limit. Read from the running Traefik's own flags, not configured here.
+                <!--
+                  The switch is NAMED, not offered, and deliberately not spelled out as a
+                  ready-to-paste `init` line. `init` re-renders the control stack from its ARGUMENTS
+                  ALONE — it reads nothing back — so a snippet here that omitted `--ui advanced`,
+                  `--orchestrator` or PSTACK_TOKEN would silently revert the UI, flip the
+                  orchestrator, or mint a new machine token and 401 every CI job on the host. This
+                  page cannot know any of those three: none is on the runtime payload and no route
+                  exposes them.
+
+                  So it points at the command that DOES know. `pstack upgrade -n` prints the host's
+                  own init line, built by the same `initFlags` an upgrade uses to re-init without
+                  changing anything nobody asked to change.
+                -->
+                <p style="margin-top: var(--s2)">
+                  <b>Switching is a host command, not a control here</b> — and not one to type from
+                  memory: <code>init</code> re-renders from its arguments alone, so every flag you
+                  omit silently reverts to its default. Ask the host for its own line first:
+                </p>
+                <pre
+                  class="code"
+                  style="white-space: pre-wrap; margin: var(--s1) 0"
+                >ssh {{ domain }}
+pstack upgrade -n | grep 'pstack init'</pre>
+                <p>
+                  Re-run that line with <code>--challenge dns01 --dns-provider …</code> added and
+                  <code>PSTACK_TOKEN</code> from <code>control/.env</code>, then
+                  <b>redeploy every stack</b>: routers are labelled at deploy time, so the ones
+                  already up still carry <code>certresolver=le</code> and would each order their own
+                  certificate instead of inheriting the wildcard. Full playbook, rollback included:
+                  <code>docs/tls-challenge.md</code>.
+                </p>
               </InfoHint>
             </span>
           </div>
