@@ -936,8 +936,26 @@ type ExportToken struct {
 	Name     string `json:"name"`
 	// TokenHash is the SHA-256 of the token, verbatim, so scripts holding the token keep working.
 	TokenHash string `json:"tokenHash"`
+	// Token is a PLAINTEXT token, accepted on import and NEVER written on export — the host does not
+	// have it to write, which is the whole point of storing a hash.
+	//
+	// It exists for the document nobody exported: a config an operator AUTHORS, declaring the
+	// credentials a rebuilt host should come up holding, so a migration does not mean re-issuing
+	// every token and re-pasting it into every CI secret. Without it that document has to carry a
+	// hash the author computed by hand, which is friction on exactly the path that is supposed to
+	// remove friction.
+	//
+	// It is not a new exposure class: the document already carries host-variable secrets in
+	// plaintext and is sealed as a whole. It IS a stronger grant than a hash — a hash cannot be
+	// replayed and this can — so `Trusts()` names it separately, and an export never emits it.
+	Token     string `json:"token,omitempty"`
 	CreatedAt int64  `json:"createdAt"`
 }
+
+// HashToken is how a token becomes the thing the tokens table stores. Exported so an import can
+// accept a plaintext token and arrive at the same digest `CreateToken` would have written — the two
+// must never drift, which is why this is one function and not two call sites of sha256.
+func HashToken(token string) string { return sha256Hex(token) }
 
 // ExportUsers is every account WITH its password hash, by username.
 func (a *Auth) ExportUsers() ([]ExportUser, error) {

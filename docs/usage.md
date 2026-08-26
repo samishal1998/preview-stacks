@@ -2285,7 +2285,7 @@ is loopback or a private address, for the same reason.
 | Travels | Stays behind |
 |---|---|
 | accounts, with their password hashes — people keep the passwords they already have | deployments: they are per-PR and ephemeral, and belong to the host's Docker |
-| API tokens (hashes), so scripts keep working | login sessions and half-finished SSO sign-ins |
+| API tokens (hashes), so scripts keep working — and a document you author may [name the token itself](#predeclaring-the-tokens-a-rebuilt-host-should-hold-0340) | login sessions and half-finished SSO sign-ins |
 | host variables **and secrets** | notifier delivery history |
 | notifiers, with their signing secrets and URLs | terminal sessions |
 | the SSO providers and their client secrets | |
@@ -2293,6 +2293,45 @@ is loopback or a private address, for the same reason.
 
 Restoring the right-hand column into a *different* host would be wrong, not merely useless — so
 none of it is in the file, and nothing in the file names it.
+
+#### Predeclaring the tokens a rebuilt host should hold (0.34.0)
+
+**A migration already preserves API tokens.** They travel as SHA-256 digests, which is what the
+`tokens` table stores anyway, so every script and CI secret holding one keeps working on the other
+side without anything being re-issued. That is the round trip, and it needs nothing from you.
+
+The other direction is a document **nobody exported** — one you author, declaring the credentials a
+rebuilt host should come up holding. A token row may name the token itself instead of its digest:
+
+```json
+{
+  "version": 1,
+  "users":  [{ "username": "ci", "role": "developer", "passwordHash": "$argon2id$…", "createdAt": 1 }],
+  "tokens": [{ "username": "ci", "name": "pipeline", "token": "pstack_pat_…", "createdAt": 1 }]
+}
+```
+
+`token` is hashed on apply with the same function that mints one, so the value authenticates exactly
+as an issued token would. A row may carry **either** `token` or `tokenHash`; carrying both with
+different values is refused rather than guessed at, and named in the skip list.
+
+Three things to know before you use it:
+
+- **A token belongs to an account.** There is no host-wide machine token but `PSTACK_TOKEN` (below),
+  so the document must create — or the host must already have — the user the token is for. The
+  token inherits **that account's role**, and follows it: promote the account and every token it
+  holds is promoted with it.
+- **An export never emits `token`.** The host does not have the plaintext to emit; that is the point
+  of storing a digest. Round-tripping an export is still hash-only.
+- **`pull config`'s pre-write summary calls it out** — "carried in PLAINTEXT, so whoever wrote this
+  file holds it" — because a digest proves nothing about its author and a plaintext token proves
+  they hold the credential. Seal the file (`push config` requires it) and treat it as the secret it
+  is.
+
+**`PSTACK_TOKEN` is not one of these and cannot be a list.** It is a single value, compared directly,
+and it is also the **HMAC key share links are signed with** — which is what makes rotating it the
+only way to revoke every outstanding link. A second accepted value would silently break that, so
+per-machine credentials are personal tokens, named and individually revocable, not extra root ones.
 
 ### Only `PSTACK_TOKEN` can do this
 

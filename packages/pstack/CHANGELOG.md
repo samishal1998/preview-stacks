@@ -22,6 +22,21 @@
   `unreachable` and `busy`. `?service=` picks one when a stack publishes several.
   `PSTACK_PROBE=off` removes the route.
 
+- **A token an operator CHOSE can be predeclared in a portable config.** A migration already
+  preserved API tokens — they travel as the SHA-256 digests the `tokens` table stores, so scripts
+  keep working — but that only covers a document somebody *exported*. A document you **author** may
+  now name the token itself (`"token": "pstack_pat_…"` instead of `"tokenHash"`), hashed on apply
+  with the same function that mints one, so a rebuilt host comes up holding the credentials your CI
+  already has. A row carrying both, disagreeing, is refused rather than guessed at; an export never
+  emits a plaintext token (the host does not have one to emit); and `Trusts()` names a plaintext
+  token separately, because a digest proves nothing about its author and this proves they hold the
+  credential.
+
+  **`PSTACK_TOKEN` is still exactly one value and cannot become a list** — it is also the HMAC key
+  share links are signed with, which is what makes rotating it the only way to revoke every
+  outstanding link. Per-machine credentials are personal tokens: named, individually revocable, and
+  carrying the role of the account they belong to.
+
 - **`pstack api …` — every HTTP route as a command.** Sixty-nine of them, **generated** from a new
   OpenAPI document (`packages/pstack/api/openapi.yaml`) rather than hand-written, so they cannot
   describe a route the server does not serve:

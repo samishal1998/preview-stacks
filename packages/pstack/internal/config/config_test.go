@@ -602,3 +602,126 @@ func TestTrustsNamesEveryGrantNotJustRegistries(t *testing.T) {
 		t.Fatal("a document that creates an admin and an IdP summarised as trusting nothing")
 	}
 }
+
+// A document an operator AUTHORS, declaring the credentials a rebuilt host should come up holding.
+//
+// The point of the whole feature: a migration should not mean re-issuing every token and re-pasting
+// it into every CI secret. An exported document already carries tokens by hash, so an export→apply
+// round trip preserves them — this is the other direction, where nobody exported anything and the
+// author picked the value.
+//
+// negative control: drop the `auth.HashToken(t.Token)` branch in applyTokens — the row has no
+// tokenHash, so it is skipped as "not a sha256 digest" and the token below authenticates as nobody.
+func TestApplyAcceptsAPlaintextTokenAnAuthorChose(t *testing.T) {
+	h := newHost(t)
+	const chosen = "pstack_pat_a_value_the_operator_picked"
+	sum, err := h.Apply(&Document{
+		Version: FormatVersion,
+		Users:   []auth.ExportUser{{Username: "ci", Role: "developer", PasswordHash: goodHash, CreatedAt: 1}},
+		Tokens:  []auth.ExportToken{{Username: "ci", Name: "pipeline", Token: chosen, CreatedAt: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Skipped) != 0 {
+		t.Fatalf("skipped %v", sum.Skipped)
+	}
+	// The real assertion: the token AUTHENTICATES. Comparing digests would only prove this test can
+	// call the same function the code did.
+	row, err := h.Auth.TokenUser(chosen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil || row.Username != "ci" || row.Role != "developer" {
+		t.Fatalf("the chosen token does not authenticate as ci/developer: %+v", row)
+	}
+}
+
+// A row carrying BOTH, disagreeing, is a document saying two different things about one credential.
+//
+// negative control: let `token` win silently when a tokenHash is also present — the host then holds
+// a credential the author did not intend, and nothing anywhere says so.
+func TestApplyRefusesATokenThatContradictsItsOwnHash(t *testing.T) {
+	h := newHost(t)
+	sum, err := h.Apply(&Document{
+		Version: FormatVersion,
+		Users:   []auth.ExportUser{{Username: "ci", Role: "viewer", PasswordHash: goodHash, CreatedAt: 1}},
+		Tokens: []auth.ExportToken{
+			{Username: "ci", Name: "mismatched", Token: "one-value", TokenHash: strings.Repeat("a", 64), CreatedAt: 1},
+			// The same value in both places is not a contradiction — it is an export that also
+			// carries the plaintext, and it must apply.
+			{Username: "ci", Name: "agreeing", Token: "another-value", TokenHash: auth.HashToken("another-value"), CreatedAt: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Skipped) != 1 || !strings.Contains(sum.Skipped[0], "not the same credential") {
+		t.Fatalf("skipped %v", sum.Skipped)
+	}
+	if row, err := h.Auth.TokenUser("one-value"); err != nil || row != nil {
+		t.Fatalf("the contradicted token was stored anyway: %+v (%v)", row, err)
+	}
+	if row, err := h.Auth.TokenUser("another-value"); err != nil || row == nil {
+		t.Fatalf("the agreeing row should have applied: %+v (%v)", row, err)
+	}
+}
+
+// An EXPORT never emits a plaintext token — the host does not have one to emit, which is the whole
+// reason the tokens table stores a digest.
+//
+// negative control: give ExportToken.Token no `omitempty` and set it during export — every exported
+// document starts carrying `"token": ""`, and the field stops meaning "an author chose this".
+func TestExportNeverCarriesAPlaintextToken(t *testing.T) {
+	h := newHost(t)
+	const chosen = "pstack_pat_round_trip"
+	if _, err := h.Apply(&Document{
+		Version: FormatVersion,
+		Users:   []auth.ExportUser{{Username: "ci", Role: "viewer", PasswordHash: goodHash, CreatedAt: 1}},
+		Tokens:  []auth.ExportToken{{Username: "ci", Name: "pipeline", Token: chosen, CreatedAt: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := h.Assemble()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Tokens) != 1 {
+		t.Fatalf("tokens %+v", doc.Tokens)
+	}
+	if doc.Tokens[0].Token != "" {
+		t.Fatalf("the export carried a plaintext token: %q", doc.Tokens[0].Token)
+	}
+	if doc.Tokens[0].TokenHash != auth.HashToken(chosen) {
+		t.Fatalf("the export lost the digest: %+v", doc.Tokens[0])
+	}
+	// And the round trip still works: the hash alone reinstalls a working credential on a new host.
+	h2 := newHost(t)
+	if _, err := h2.Apply(&Document{Version: FormatVersion,
+		Users:  []auth.ExportUser{{Username: "ci", Role: "viewer", PasswordHash: goodHash, CreatedAt: 1}},
+		Tokens: doc.Tokens}); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := h2.Auth.TokenUser(chosen); err != nil || row == nil {
+		t.Fatalf("the migrated token does not authenticate: %+v (%v)", row, err)
+	}
+}
+
+// The pre-write summary distinguishes the two. A hash proves nothing and cannot be replayed; a
+// plaintext token means whoever wrote the file HOLDS the credential.
+//
+// negative control: use one sentence for both — an operator accepting a file from somewhere else
+// cannot tell which kind of grant they are being handed.
+func TestTrustsNamesAPlaintextTokenAsStronger(t *testing.T) {
+	hashed := (&Document{Tokens: []auth.ExportToken{{Username: "ci", Name: "a", TokenHash: strings.Repeat("a", 64)}}}).Trusts()
+	plain := (&Document{Tokens: []auth.ExportToken{{Username: "ci", Name: "a", Token: "x"}}}).Trusts()
+	if len(hashed) != 1 || len(plain) != 1 {
+		t.Fatalf("hashed %v plain %v", hashed, plain)
+	}
+	if strings.Contains(hashed[0], "PLAINTEXT") {
+		t.Errorf("a hashed token is described as plaintext: %q", hashed[0])
+	}
+	if !strings.Contains(plain[0], "PLAINTEXT") {
+		t.Errorf("a plaintext token is not called out: %q", plain[0])
+	}
+}

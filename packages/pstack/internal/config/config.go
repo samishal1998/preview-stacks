@@ -467,7 +467,14 @@ func (d *Document) Trusts() []string {
 		out = append(out, fmt.Sprintf("sign in as %q with the role %q", u.Username, u.Role))
 	}
 	for _, t := range d.Tokens {
-		out = append(out, fmt.Sprintf("call this API with the token %q, as %q", t.Name, t.Username))
+		// A plaintext token is named as one. Whoever wrote the document HOLDS that credential —
+		// unlike a hash, which proves nothing and cannot be replayed — and an operator accepting a
+		// file from somewhere else is entitled to know which of the two they are being handed.
+		how := "the token %q, as %q"
+		if t.Token != "" {
+			how = "the token %q, as %q — carried in PLAINTEXT, so whoever wrote this file holds it"
+		}
+		out = append(out, fmt.Sprintf("call this API with "+how, t.Name, t.Username))
 	}
 	// The SSO providers are the widest grant of all: each delegates who may sign in — and with what
 	// role — to whoever controls that issuer. EVERY provider is named, not the first.
@@ -662,7 +669,22 @@ func (s Sources) applyTokens(d *Document, sum *Summary) error {
 			sum.skip(what, "it has no name")
 			continue
 		}
-		if !sha256Re.MatchString(t.TokenHash) {
+		// A hand-authored document may declare the token itself rather than its digest. Hashing it
+		// here — with the same function `CreateToken` uses — is what lets an operator write the
+		// credentials a rebuilt host should come up holding.
+		hash := t.TokenHash
+		if t.Token != "" {
+			derived := auth.HashToken(t.Token)
+			// Both, disagreeing, is a document saying two different things about one credential.
+			// Guessing which it meant would silently install a token the author did not intend; a
+			// skip with the reason is the only honest answer.
+			if hash != "" && !strings.EqualFold(hash, derived) {
+				sum.skip(what, "it carries both a token and a tokenHash, and they are not the same credential")
+				continue
+			}
+			hash = derived
+		}
+		if !sha256Re.MatchString(hash) {
 			sum.skip(what, "its hash is not a sha256 digest")
 			continue
 		}
@@ -676,7 +698,7 @@ func (s Sources) applyTokens(d *Document, sum *Summary) error {
 			return err
 		}
 		var id int64
-		err = s.Store.DB.QueryRow("SELECT id FROM tokens WHERE token_hash = ?", t.TokenHash).Scan(&id)
+		err = s.Store.DB.QueryRow("SELECT id FROM tokens WHERE token_hash = ?", hash).Scan(&id)
 		switch {
 		case err == nil:
 			sum.skip(what, "that token already exists here")
@@ -686,7 +708,7 @@ func (s Sources) applyTokens(d *Document, sum *Summary) error {
 		}
 		if _, err := s.Store.DB.Exec(
 			"INSERT INTO tokens (user_id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
-			userID, t.Name, t.TokenHash, t.CreatedAt); err != nil {
+			userID, t.Name, hash, t.CreatedAt); err != nil {
 			return err
 		}
 		sum.created(what)
