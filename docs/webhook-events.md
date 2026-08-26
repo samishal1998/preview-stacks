@@ -407,6 +407,38 @@ Fires when a read-only link to one deployment is minted (`POST …/share`). Says
 | `expiresAt` | number | Epoch ms. |
 | `by` | string | The actor who minted it. |
 
+### `config.exported` / `config.imported`
+
+The portable host configuration moved (`GET` / `POST /api/config`, [7d](usage.md#7d-move-a-hosts-configuration-to-another-host-0300)).
+`config.exported` is a **complete credential dump leaving the host**; `config.imported` is one
+arriving. They exist so that neither can happen silently, which is the only reason the route is
+allowed to exist at all — an export is root-token-only and an admin session is refused there. (0.30.0)
+
+Both carry **counts and identities only**: registry hostnames and notifier names, never a password,
+a hash, a token or a notifier URL.
+
+`config.exported`:
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `by` | string | The actor. Always the root token — nothing else may export. |
+| `users` · `tokens` · `vars` · `notifiers` · `registries` · `routing` · `specs` | number | How many of each left the host. |
+| `sso` | boolean | Whether any SSO provider was included. |
+| `skipped` | number | Entries the export deliberately left behind. |
+
+`config.imported`:
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `by` | string | The actor who applied it. |
+| `registries` | string[] | The registry hostnames the document asked this host to trust. |
+| `notifiers` | string[] | The notifier names it carried. Names, never URLs. |
+| `created` · `skipped` | number | Applied create-or-skip: an import never updates and never deletes, so `skipped` is what already existed. |
+| `failed` | boolean | The apply failed part-way. Not transactional — what was already written stays. |
+
+**Page on `config.imported` if you page on anything here.** A hostile document cannot repoint what
+exists, but it can *add* — an account, a token, a registry it controls.
+
 ---
 
 ## Test deliveries

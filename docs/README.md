@@ -13,11 +13,14 @@ your question rather than reading in order — these are references, not a manua
 | **Change the code** (you are an agent, or new to the repo) | [`../AGENTS.md`](../AGENTS.md) |
 | Call the API **from a script** | [`../packages/client/README.md`](../packages/client/README.md) |
 | Receive **events** in your own service | [`webhook-events.md`](webhook-events.md) |
+| Give a team **accounts that cannot do everything** | [`usage.md` §7e](usage.md#7e-who-can-do-what-the-four-roles-0320) |
+| Let people sign in with **GitHub, Google, Okta…** | [`usage.md` §7c](usage.md#7c-sign-in-with-your-identity-provider-0270) |
+| **Copy a host's configuration** onto another host | [`usage.md` §7d](usage.md#7d-move-a-hosts-configuration-to-another-host-0300) |
 | Know how the **Go binary** (0.29.0) was proven a drop-in for the TypeScript one, and what still differs | [`port-status.md`](port-status.md) |
 
 ## The documents
 
-### [`usage.md`](usage.md) — the task-oriented guide (~1900 lines)
+### [`usage.md`](usage.md) — the task-oriented guide (~3000 lines)
 
 The longest document and the one to search first. Written as a walk-through: install, write a spec,
 add an isolation axis, deploy, read the step report, tear down, and then **deliberately sabotage a
@@ -25,12 +28,19 @@ teardown hook** to watch the leak gate catch it — that last section is the fas
 what this tool is actually for.
 
 Later sections cover the control plane: `pstack init`, hostnames and TLS modes, `shared` vs
-`isolated`, wildcard subdomains, the API with worked `curl` calls, jobs and their states, readiness,
-container actions, stopping a job, upgrading a host, and the web UI. §7b (0.26.0) covers **swarm
-mode** (what the automatic compose→swarm conversion changes, adding a worker), **sleep and
-wake-on-call** (the `sleep:` block, the catch-all router, the spinning-up page) and **share links**.
+`isolated`, wildcard subdomains, the API with worked `curl` calls, jobs and their seven states, the
+per-stack queue and the host-wide job cap, readiness, container actions, upgrading a host, and the
+web UI. Then, one section per thing a host grows into:
 
-### [`control-plane.md`](control-plane.md) — the architecture (~1000 lines)
+| § | Covers | Since |
+|---|---|---|
+| 7b | **the two orchestrators** and how to switch, **swarm mode** (what the compose→swarm conversion changes, adding a worker), **sleep and wake-on-call** (the `sleep:` block, the catch-all router, the spinning-up page), and **share links** | 0.26.0 |
+| 7c | **single sign-on** — several providers at once, the presets, who gets an account and with which role | 0.27.0 |
+| 7d | **moving a host's configuration** to another host, sealed, including onto a machine that does not exist yet | 0.30.0 |
+| 7e | **the four roles**, what each adds, and what sits outside the ladder | 0.32.0 |
+| 10 | **runtime settings** — the job cap and the default role, changeable without a restart | 0.33.0 |
+
+### [`control-plane.md`](control-plane.md) — the architecture (~1300 lines)
 
 Why the control plane is shaped the way it is: the CLI/API split (and why `init` can never move into
 the API), the registry as a cache of intent rather than a state store, what SQLite is allowed to
@@ -45,12 +55,12 @@ The worked example is Hetzner + cloud-init, but the reasoning is provider-agnost
 which ports must be open, HTTP-01 vs DNS-01 and the rate limit that decides between them, the
 socket-exposure tradeoff, and what to check when the certificate never arrives.
 
-### [`webhook-events.md`](webhook-events.md) — every event a notifier receives (~370 lines)
+### [`webhook-events.md`](webhook-events.md) — every event a notifier receives (~450 lines)
 
 The envelope, headers, and a worked signature-verification receiver. Delivery semantics: at-least-
-once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of all ~20 events
-with every payload field — deployments, jobs (including `job.leaked`, the one to page on), specs,
-routing, readiness, and container actions.
+once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 29 events** with
+every payload field — deployments, jobs (including `job.leaked`, the one to page on), specs, routing,
+readiness, container actions, sleep and wake, share links, and configuration import/export.
 
 ### [`ui-rules.md`](ui-rules.md) — the advanced UI's conventions (~100 lines)
 
@@ -68,7 +78,7 @@ to read why it was tightened.
 
 | Package | What it is |
 |---|---|
-| [`packages/pstack`](../packages/pstack/README.md) | The CLI, the API, and the library. Published as `@samyx/preview-stacks`. |
+| [`packages/pstack`](../packages/pstack/README.md) | The CLI and the API — one static Go binary, released on GitHub (not npm since 0.29.0). |
 | [`packages/client`](../packages/client/README.md) | `@samyx/preview-stacks-client` — a zero-dependency typed API client, plus `verifyWebhook` for your receiver. |
 | `apps/ui` | The advanced UI (Vue 3 SPA), published as `@samyx/preview-stacks-ui`. Conventions in [`ui-rules.md`](ui-rules.md). |
 
