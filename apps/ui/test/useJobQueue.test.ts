@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { Job, JobState } from '../src/api/types';
-import { isTerminal, supersededBy, waitReason } from '../src/composables/useJobQueue';
+import { capProblem, isTerminal, supersededBy, waitReason } from '../src/composables/useJobQueue';
 
 /** A job list is newest-first, the way `GET /api/jobs` serves it. */
 function job(id: string, stack: string, state: JobState): Job {
@@ -96,5 +96,34 @@ describe('supersededBy', () => {
     const mine = job('mine', 'pr-7', 'superseded');
     expect(supersededBy(mine, [mine])).toBeNull();
     expect(supersededBy(mine, [])).toBeNull();
+  });
+});
+
+describe('capProblem', () => {
+  test('a NUMBER is accepted — `v-model` on a number input stops handing back strings', () => {
+    // negative control: `draft.trim()` instead of `String(draft).trim()` — every one of these
+    // throws `trim is not a function`, which is the TypeError this shipped as in 0.33.0. The
+    // Settings page renders this in a computed, so the whole panel died on the first keystroke.
+    expect(capProblem(4)).toBe('');
+    expect(capProblem(1)).toBe('');
+    expect(capProblem(0)).toBe('the limit is a whole number, 1 or more');
+    expect(capProblem(2.5)).toBe('the limit is a whole number, 1 or more');
+  });
+
+  test('an empty box asks for a number rather than refusing one', () => {
+    // negative control: drop the `!raw` arm — `Number('')` is 0, so an untouched box reports the
+    // integer complaint about a value nobody typed.
+    expect(capProblem('')).toBe('type a number first');
+    expect(capProblem('   ')).toBe('type a number first');
+  });
+
+  test('what the server would refuse is refused here first', () => {
+    // negative control: `n < 1` → `n < 0` — 0 passes the button and comes back a 400 the operator
+    // has to read to learn what this line already knew.
+    expect(capProblem('12')).toBe('');
+    expect(capProblem(' 8 ')).toBe('');
+    expect(capProblem('-3')).toBe('the limit is a whole number, 1 or more');
+    expect(capProblem('1.5')).toBe('the limit is a whole number, 1 or more');
+    expect(capProblem('lots')).toBe('the limit is a whole number, 1 or more');
   });
 });

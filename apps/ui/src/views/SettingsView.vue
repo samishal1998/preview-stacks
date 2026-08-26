@@ -48,6 +48,7 @@ import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
 import { ROLES, type HostSettings, type Role, type SettingKey, type SettingRow, type SettingWritten } from '../api/types';
 import { can } from '../composables/useAuth';
+import { capProblem } from '../composables/useJobQueue';
 import { settings } from '../composables/useSettings';
 import { state, loadHealth, loadJobs } from '../composables/useControlPlane';
 import { sentence } from '../composables/useFormat';
@@ -95,8 +96,14 @@ async function recheck(): Promise<void> {
 const host = ref<HostSettings | null>(null);
 const hostError = ref('');
 const hostLoaded = ref(false);
-/** What the boxes hold, kept apart from the server's copy so "changed" is a comparison, not a flag. */
-const maxJobsDraft = ref('');
+/**
+ * What the boxes hold, kept apart from the server's copy so "changed" is a comparison, not a flag.
+ *
+ * `string | number` is not laziness about the type: `v-model` on `<input type="number">` REPLACES
+ * the string with a number as soon as the value parses, so this ref genuinely holds both — a string
+ * when it is empty or freshly reset from the server, a number after a keystroke.
+ */
+const maxJobsDraft = ref<string | number>('');
 const roleDraft = ref('viewer');
 /** Which key is in flight — one at a time, so a save cannot be racing its own re-read. */
 const savingKey = ref<SettingKey | null>(null);
@@ -191,16 +198,13 @@ const SOURCE_LABEL: Record<SettingRow['source'], string> = {
 const running = computed(() => state.jobs.filter((j) => j.state === 'running').length);
 const waiting = computed(() => state.jobs.filter((j) => j.state === 'queued').length);
 
-/** Why the cap cannot be saved as typed — shown as the button's title, per the disabled rule. */
-const maxJobsProblem = computed(() => {
-  const raw = maxJobsDraft.value.trim();
-  if (!raw) return 'type a number first';
-  const n = Number(raw);
-  // The server takes an integer ≥ 1 and refuses everything else; saying so here spares a round trip,
-  // and the server still gets the last word.
-  if (!Number.isInteger(n) || n < 1) return 'the limit is a whole number, 1 or more';
-  return '';
-});
+/**
+ * Why the cap cannot be saved as typed — shown as the button's title, per the disabled rule.
+ *
+ * The rule itself lives in `useJobQueue` because this app has no component harness: logic that
+ * would sit inline in a `.vue` is untestable there, and this one shipped broken.
+ */
+const maxJobsProblem = computed(() => capProblem(maxJobsDraft.value));
 /** `Number` on both sides: the input hands back a string, so `'4' !== 4` would leave Save lit forever. */
 const maxJobsDirty = computed(() => Number(maxJobsDraft.value) !== Number(maxJobs.value?.value));
 const roleDirty = computed(() => roleDraft.value !== String(defaultRole.value?.value ?? ''));

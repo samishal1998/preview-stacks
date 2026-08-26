@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The concurrency limit could not be changed at all.** The Settings page threw
+  `trim is not a function` on the first keystroke and stopped rendering — so 0.33.0 shipped its
+  headline setting unusable through the UI. `v-model` on `<input type="number">` replaces the
+  string with a NUMBER as soon as the value parses (Vue casts for that input type, `.number`
+  modifier or not), and the validation beside the box called `.trim()` on it. The rule now lives in
+  a `.ts` with tests: this app has no component harness, so logic left inline in a `.vue` is proved
+  by nothing.
+
 ## 0.33.0 — 2026-08-26
 
 ### Added
