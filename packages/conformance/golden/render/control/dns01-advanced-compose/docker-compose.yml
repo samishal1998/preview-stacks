@@ -99,7 +99,6 @@ services:
       # propagation check.
       - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53
       - --certificatesresolvers.le.acme.dnschallenge.propagation.delaybeforechecks=30s
-      # Ask a public resolver during the precheck instead of the host's, which may serve stale or
       - --log.level=INFO
       - --accesslog=true
 

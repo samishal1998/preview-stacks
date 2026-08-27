@@ -96,7 +96,6 @@ services:
       - --certificatesresolvers.le.acme.httpchallenge=true
       # Must be the :80 entrypoint, and :80 must be reachable from the internet.
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
-      # Ask a public resolver during the precheck instead of the host's, which may serve stale or
       - --log.level=INFO
       - --accesslog=true
 

@@ -94,7 +94,6 @@ services:
       # `pstack init` replaces this marker with the challenge args for the chosen mode. HTTP-01 is
       # the default (no DNS credential to obtain, store or rotate); DNS-01 is `--challenge dns01`.
       #__ACME_CHALLENGE__
-      # Ask a public resolver during the precheck instead of the host's, which may serve stale or
       - --log.level=INFO
       - --accesslog=true
 
