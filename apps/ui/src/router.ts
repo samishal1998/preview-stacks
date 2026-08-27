@@ -44,6 +44,7 @@ const routes: RouteRecordRaw[] = [
   },
   { path: '/routing', name: 'routing', component: () => import('./views/RoutingView.vue') },
   { path: '/swarm', name: 'swarm', component: () => import('./views/SwarmView.vue') },
+  { path: '/control', name: 'control', component: () => import('./views/ControlView.vue') },
   { path: '/registries', name: 'registries', component: () => import('./views/RegistriesView.vue') },
   { path: '/notifiers', name: 'notifiers', component: () => import('./views/NotifiersView.vue') },
   { path: '/specs', name: 'specs', component: () => import('./views/SpecsView.vue') },

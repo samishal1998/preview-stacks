@@ -141,8 +141,12 @@ type rawInspect struct {
 		Status    string                   `json:"Status"`
 		ExitCode  *int64                   `json:"ExitCode"`
 		StartedAt string                   `json:"StartedAt"`
+		OOMKilled *bool                    `json:"OOMKilled"`
 		Health    *struct{ Status string } `json:"Health"`
 	} `json:"State"`
+	HostConfig *struct {
+		Memory *int64 `json:"Memory"`
+	} `json:"HostConfig"`
 	NetworkSettings *struct {
 		Networks map[string]*struct{ IPAddress string } `json:"Networks"`
 		Ports    map[string][]struct{ HostPort string } `json:"Ports"`
@@ -757,7 +761,7 @@ func RoutesFromLabels(container string, labels map[string]string, ingressIP *str
 // DetectChallenge reads which ACME challenge the host's Traefik runs from its own flags. It decides
 // an OPPOSITE rule for per-PR routers, so reading the running container beats asking.
 func DetectChallenge(r exec.Runner) Challenge {
-	ids, ok := idsByLabel(r, "com.docker.compose.project=pstack-control")
+	ids, ok := idsByLabel(r, "com.docker.compose.project="+ControlProject)
 	if !ok || len(ids) == 0 {
 		return Unknown
 	}

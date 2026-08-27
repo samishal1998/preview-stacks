@@ -2,6 +2,7 @@
   "go": {
     "test/api-auth.test.ts": 11,
     "test/api-config.test.ts": 7,
+    "test/api-control.test.ts": 3,
     "test/api-host-vars.test.ts": 2,
     "test/api-jobs-and-containers.test.ts": 12,
     "test/api-openapi.test.ts": 4,

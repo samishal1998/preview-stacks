@@ -38,6 +38,8 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("config").AddCommand(NewConfigImportCommand(exec))
 	group("config").AddCommand(NewConfigImportSealedCommand(exec))
 	group("host").AddCommand(NewHostControlCommand(exec))
+	group("host").AddCommand(NewHostControlRestartCommand(exec))
+	group("host").AddCommand(NewHostControlRuntimeCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsListCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsDeleteCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsGetCommand(exec))
@@ -236,6 +238,70 @@ func NewHostControlCommand(exec oascmd.ExecOptions) *cobra.Command {
 		req := oascmd.Request{
 			Method: "GET",
 			Path:   "/api/control",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewHostControlRestartCommand returns the "host control-restart" command
+// (POST /api/control/restart).
+func NewHostControlRestartCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyService string
+		flagData    string
+	)
+	cmd := &cobra.Command{
+		Use:   "control-restart",
+		Short: "Restart one control service by name (from control-runtime). `pstack` itself is always refused — it is the container answering this request. Restarting `traefik` severs in-flight connections for a few seconds, this response possibly included. Maintainer.",
+	}
+	cmd.Flags().StringVar(&bodyService, "service", "", "A control service name: traefik, advanced-ui, … — never pstack.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "POST",
+			Path:   "/api/control/restart",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("service") {
+			body["service"] = bodyService
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewHostControlRuntimeCommand returns the "host control-runtime" command
+// (GET /api/control/runtime).
+func NewHostControlRuntimeCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "control-runtime",
+		Short: "The control stack as an operator debugs it: per container, restart count, OOM-killed flag and memory limit beside the usual state. A restarting Traefik silently loses in-flight certificate issuance — this page is where that stops being invisible. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/control/runtime",
 		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")

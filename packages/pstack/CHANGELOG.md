@@ -32,6 +32,14 @@
 
 ### Added
 
+- **The control stack has an operator page.** `GET /api/control/runtime` (maintainer; `pstack api
+  host control-runtime`; **Control stack** in the UI) shows the control containers with the two
+  fields nothing surfaced before: **restart count** and **OOM-killed** — the pair that catches a
+  Traefik quietly losing in-flight certificate issuance on every restart while still reporting
+  `running`. `POST /api/control/restart` restarts one control service; `pstack` itself is always
+  refused, whoever asks — it is the container answering the request. `GET /api/control` is
+  unchanged: still the viewer-rank summary, still read-only.
+
 - **The API serves its own OpenAPI document**, unauthenticated, in both formats:
   `GET /api/openapi.yaml` (the file byte for byte — comments and key order intact) and
   `GET /api/openapi.json` (the same content, key order preserved, so a diff between two versions is

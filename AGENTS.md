@@ -199,6 +199,10 @@ either to `false` is how a UI reports a live stack as torn down.
 **12. `init` and `upgrade` are CLI-only, permanently.** The API runs *inside* the control stack;
 recreating that stack from a request kills the process mid-operation, and a broken image leaves the
 host with no control plane and no remote way to repair it. Never add a route that calls them.
+`POST /api/control/restart` is not an exception but the boundary drawn exactly: it restarts a
+control container *other than pstack's own* (refused by name, whoever asks — root included), it
+re-renders nothing, and the same image comes back — the unrepairable-host failure mode cannot
+happen from it.
 
 **13. The container name in a request is never trusted.** `docker exec`/`stop` accept any container
 on the daemon — including Traefik (every preview on the host) and `pstack-control` itself (whose

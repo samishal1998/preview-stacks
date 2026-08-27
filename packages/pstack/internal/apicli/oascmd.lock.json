@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "9f12cb454847617b052a51f769b8dda462ae7718d321df6a025a5c8923f03974",
+  "specDigest": "3446088caa2e8862b0d758f4cabd142556939575cb9a62ad83a02150679b14c1",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -432,6 +432,18 @@
         "name": "export"
       },
       "digest": "5c910c0a8c518448"
+    },
+    "getControlRuntime": {
+      "operationId": "getControlRuntime",
+      "method": "GET",
+      "path": "/api/control/runtime",
+      "command": "host control-runtime",
+      "funcName": "NewHostControlRuntimeCommand",
+      "summary": "The control stack as an operator debugs it: per container, restart count, OOM-killed flag and memory limit beside the usual state. A restarting Traefik silently loses in-flight certificate issuance — this page is where that stops being invisible. Maintainer.",
+      "ext": {
+        "name": "control-runtime"
+      },
+      "digest": "0dbf304e0adb468e"
     },
     "getControlStack": {
       "operationId": "getControlStack",
@@ -1177,6 +1189,31 @@
         "name": "deliveries redeliver"
       },
       "digest": "954f39e1d780a655"
+    },
+    "restartControlService": {
+      "operationId": "restartControlService",
+      "method": "POST",
+      "path": "/api/control/restart",
+      "command": "host control-restart",
+      "funcName": "NewHostControlRestartCommand",
+      "summary": "Restart one control service by name (from control-runtime). `pstack` itself is always refused — it is the container answering this request. Restarting `traefik` severs in-flight connections for a few seconds, this response possibly included. Maintainer.",
+      "flags": [
+        {
+          "name": "service",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "A control service name: traefik, advanced-ui, … — never pstack."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "control-restart"
+      },
+      "digest": "5a88702f763f0467"
     },
     "setDefaultRole": {
       "operationId": "setDefaultRole",

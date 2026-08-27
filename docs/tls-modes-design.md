@@ -1,9 +1,10 @@
-# API-driven TLS modes and `dns-persist-01` — a design, not a feature
+# API-driven TLS modes and `dns-persist-01` — a design, partly built
 
-> **NOTHING HERE IS BUILT.** This records the shape agreed on 2026-08-27 — a third challenge mode,
-> switching modes through the API instead of over SSH, and a runtime view of the control stack —
-> with the decisions already taken and the ones still open. Kept for the same reason
-> [`mcp-design.md`](mcp-design.md) is: cheap to write down now, expensive to re-derive later.
+> **Phase 1 — the control-stack runtime view and restart — SHIPPED in 0.35.0**; see
+> [usage.md → Watch the control stack itself](usage.md#watch-the-control-stack-itself-0350). The
+> rest — `dns-persist-01`, the certd sidecar, API-driven mode switching — records the shape agreed
+> on 2026-08-27 and is NOT built. Kept for the same reason [`mcp-design.md`](mcp-design.md) is:
+> cheap to write down now, expensive to re-derive later.
 
 ## Why this exists
 
