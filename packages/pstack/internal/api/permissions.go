@@ -152,6 +152,21 @@ var permissions = []perm{
 	{path: "/api/control/runtime", methods: mGet, min: auth.Maintainer},
 	{path: "/api/control/restart", methods: mPost, min: auth.Maintainer},
 
+	// ── the certificate mode ────────────────────────────────────────────────────────────────────
+	// The wildcard WRITE is ADMIN, above the maintainer host-configuration tier, for BLAST RADIUS:
+	// it changes the certificate every hostname on the host presents, and the redeploy that follows
+	// touches every stack. It is NOT an impersonation boundary, and must not be described as one —
+	// a maintainer already writes Traefik dynamic config through /api/routing, where `tls:` is a
+	// legal section (routing.go's `sections`), so `tls.certificates` with an inline PEM, a
+	// `tls.stores.default.defaultCertificate`, or an `http.routers` entry aimed at their own
+	// backend reach the same place one tier down. Refusing those here while leaving that door open
+	// would be the theatre this file's header refuses for the terminal row. Close the routing door
+	// first — it is "reconfigure this host's ingress" by design — and this row can follow it.
+	// Status and the redeploy loop sit with the other host surfaces.
+	{path: "/api/tls", methods: mGet, min: auth.Maintainer},
+	{path: "/api/tls/wildcard", methods: mPutDelete, min: auth.Admin},
+	{path: "/api/tls/redeploy", methods: mPost, min: auth.Maintainer},
+
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},

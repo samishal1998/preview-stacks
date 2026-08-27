@@ -32,6 +32,20 @@
 
 ### Added
 
+- **`dns-persist-01` — bring your own wildcard, no init, no restart, no rate limit.** `PUT
+  /api/tls/wildcard` (admin; the Control stack page in the UI) stores a wildcard certificate pair
+  beside Traefik's dynamic config: every preview inherits it by SNI, per-PR certificate orders stop
+  entirely, and a Traefik restart can no longer lose in-flight issuance because there is none. The
+  pair is validated (match, dates, that it covers `*.<domain>`), the key has no read path, and the
+  mode is **derived from the stored artifacts** — `GET /api/tls` reports it, `DELETE` leaves it.
+  Because the mode *is* the artifact, `tls-wildcard.yml` is reserved: the (maintainer-tier) routing
+  API refuses to write or delete that name, and `config export` leaves it behind rather than moving
+  a pointer without the pair it names.
+  `POST /api/tls/redeploy` is the migration loop from the TLS playbook, server-side: every awake
+  stack redeploys so its router labels regenerate for the current mode; asleep stacks pick theirs
+  up on wake. Renewal is manual for now (PUT the fresh pair; the UI warns under 21 days) — the lego
+  sidecar that automates it is designed in `docs/tls-modes-design.md` and not yet built.
+
 - **The control stack has an operator page.** `GET /api/control/runtime` (maintainer; `pstack api
   host control-runtime`; **Control stack** in the UI) shows the control containers with the two
   fields nothing surfaced before: **restart count** and **OOM-killed** — the pair that catches a

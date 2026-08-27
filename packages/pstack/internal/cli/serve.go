@@ -15,6 +15,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/version"
 )
@@ -65,13 +66,7 @@ func Serve(o ServeOptions) *Exit {
 	dataDir := registry.DataDir()
 	// In the control container Traefik's directory is mounted at /etc/traefik/dynamic. On the HOST
 	// the same directory is at <dataDir>/control/traefik-dynamic. PSTACK_ROUTING_DIR overrides both.
-	routingDir, ok := env("PSTACK_ROUTING_DIR")
-	if !ok {
-		routingDir = filepath.Join(dataDir, "control", "traefik-dynamic")
-		if isDir("/etc/traefik/dynamic") {
-			routingDir = "/etc/traefik/dynamic"
-		}
-	}
+	routingDir := routing.DynamicDir(dataDir) // env override > in-container mount > host path
 	registryDir, ok := env("DOCKER_CONFIG")
 	if !ok {
 		registryDir = filepath.Join(dataDir, "control", "docker")

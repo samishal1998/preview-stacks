@@ -1,13 +1,21 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/hostvars"
@@ -364,6 +372,55 @@ func TestRegistryEntriesThatCannotBeRebuiltAreSkipped(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("skip reasons did not name %q:\n%s", want, joined)
 		}
+	}
+}
+
+func TestApplyingAnOldExportWithThePointerSkipsIt(t *testing.T) {
+	// negative control: return a non-routing.Error from the reserved gate — applyRouting's
+	// IsError branch misses it and the whole apply aborts on a document that is merely stale.
+	h := newHost(t)
+	d := &Document{Version: FormatVersion, Routing: []RoutingFile{
+		{Name: "tls-wildcard.yml", Content: "tls:\n  certificates: []\n"},
+		{Name: "later.yml", Content: "http: {}\n"},
+	}}
+	sum, err := h.Apply(d)
+	if err != nil {
+		t.Fatalf("a stale export must not abort the apply: %v", err)
+	}
+	joined := strings.Join(sum.Skipped, "\n")
+	if !strings.Contains(joined, "tls-wildcard.yml") || !strings.Contains(joined, "managed by pstack") {
+		t.Fatalf("the pointer must be skipped with its reason: %v", sum.Skipped)
+	}
+	// And the file AFTER it in the document still applies — one skip is not a stop.
+	if _, err := h.Routing.Read("later.yml"); err != nil {
+		t.Fatalf("the rest of the document must still apply: %v", err)
+	}
+}
+
+func TestTheWildcardPointerDoesNotTravel(t *testing.T) {
+	// negative control: drop the routing.IsReserved skip in assemble — tls-wildcard.yml rides along
+	// without the pair it names, and applying this document puts the TARGET host in dns-persist-01
+	// with no certificate: every new deploy drops its certresolver and Traefik points at files that
+	// were never copied. TLS silently off, on a host nobody touched.
+	h := newHost(t)
+	cert, key := mintPair(t, "*.preview.example.com")
+	if _, err := h.Routing.SetWildcard(cert, key, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Routing.Write("extra.yml", "http: {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	d := assemble(t, h)
+	for _, f := range d.Routing {
+		if f.Name == routing.WildcardYAML {
+			t.Fatalf("the pointer travelled without its pair: %+v", d.Routing)
+		}
+	}
+	if len(d.Routing) != 1 || d.Routing[0].Name != "extra.yml" {
+		t.Fatalf("ordinary routing files must still travel: %+v", d.Routing)
+	}
+	if !strings.Contains(strings.Join(d.Skipped, "\n"), "PUT /api/tls/wildcard") {
+		t.Fatalf("the skip must say how to store one on the target: %v", d.Skipped)
 	}
 }
 
@@ -724,4 +781,33 @@ func TestTrustsNamesAPlaintextTokenAsStronger(t *testing.T) {
 	if !strings.Contains(plain[0], "PLAINTEXT") {
 		t.Errorf("a plaintext token is not called out: %q", plain[0])
 	}
+}
+
+// mintPair is a self-signed certificate for one name, valid now — the cheapest thing SetWildcard
+// accepts, so a test can put a host into dns-persist-01 without a fixture file.
+func mintPair(t *testing.T, name string) (certPEM, keyPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: name},
+		DNSNames:     []string{name},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kder, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder}))
 }

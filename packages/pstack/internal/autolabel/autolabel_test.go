@@ -448,6 +448,39 @@ func TestGeneratedTraefikLabels(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("the stored wildcard overrides the argv probe", func(t *testing.T) {
+			// negative control: probe argv before the wildcard file — a dns-persist host, whose
+			// traefik still carries its init-time httpchallenge flags, gets a certresolver back on
+			// every deploy and each preview orders its own certificate past the stored wildcard.
+			dynDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dynDir, "tls-wildcard.yml"), []byte("tls:\n  certificates: []\n"), 0o666); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PSTACK_ROUTING_DIR", dynDir)
+			dir := t.TempDir()
+			write(t, dir, "services:\n  app:\n    image: x\n    labels:\n      - pstack.routing.port=80\n")
+			// A docker that says HTTP-01 — the answer that must LOSE to the stored wildcard.
+			http01Host := exec.NewFake(nil, "")
+			http01Host.Answer = func(cmd string) (exec.Result, bool) {
+				if strings.HasPrefix(cmd, "docker ps") {
+					return exec.Result{OK: true, Stdout: "abc123\n"}, true
+				}
+				if strings.HasPrefix(cmd, "docker inspect") {
+					return exec.Result{OK: true, Stdout: `[{"Id":"abc123","Config":{"Cmd":["--certificatesresolvers.le.acme.httpchallenge=true"]}}]`}, true
+				}
+				return exec.Result{}, false
+			}
+			r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: http01Host})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, l := range generatedFor(t, r, "app") {
+				if strings.Contains(l, "certresolver") {
+					t.Errorf("the wildcard file must beat the argv probe: %v", r.Generated)
+				}
+			}
+		})
 	})
 }
 

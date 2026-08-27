@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "3446088caa2e8862b0d758f4cabd142556939575cb9a62ad83a02150679b14c1",
+  "specDigest": "8ceef24ee422762e8490d009b1104a3b3adafdcd26ee3dfaf3c3082047b9d229",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -348,6 +348,18 @@
         "name": "provider delete"
       },
       "digest": "9d6cf20c2826a496"
+    },
+    "deleteTlsWildcard": {
+      "operationId": "deleteTlsWildcard",
+      "method": "DELETE",
+      "path": "/api/tls/wildcard",
+      "command": "tls wildcard-remove",
+      "funcName": "NewTlsWildcardRemoveCommand",
+      "summary": "Remove the stored wildcard — back to Traefik-native resolution. Stacks deployed under it then have no certificate until redeployed. Admin.",
+      "ext": {
+        "name": "wildcard-remove"
+      },
+      "digest": "d72ea773105eaf23"
     },
     "deleteToken": {
       "operationId": "deleteToken",
@@ -768,6 +780,18 @@
       },
       "digest": "65b80abed80b5af2"
     },
+    "getTls": {
+      "operationId": "getTls",
+      "method": "GET",
+      "path": "/api/tls",
+      "command": "tls status",
+      "funcName": "NewTlsStatusCommand",
+      "summary": "The host's certificate mode, derived from its artifacts: `dns-persist-01` when a wildcard is stored, else what Traefik's own flags say. Includes the stored certificate's public facts — never the key. Maintainer.",
+      "ext": {
+        "name": "status"
+      },
+      "digest": "645a2cacd7bd7414"
+    },
     "importConfig": {
       "operationId": "importConfig",
       "method": "POST",
@@ -933,6 +957,18 @@
       "funcName": "NewUsersListCommand",
       "ext": {},
       "digest": "aaaa2196fa31020c"
+    },
+    "postTlsRedeploy": {
+      "operationId": "postTlsRedeploy",
+      "method": "POST",
+      "path": "/api/tls/redeploy",
+      "command": "tls redeploy",
+      "funcName": "NewTlsRedeployCommand",
+      "summary": "Redeploy every awake stack so its router labels regenerate for the current mode — the migration loop from the TLS playbook, server-side. Asleep stacks are skipped (their labels regenerate on wake, and a redeploy would BE a wake). Each redeploy queues like any job. Maintainer.",
+      "ext": {
+        "name": "redeploy"
+      },
+      "digest": "3b55f30a32093b5f"
     },
     "probeDeployment": {
       "operationId": "probeDeployment",
@@ -1161,6 +1197,38 @@
         "name": "provider put"
       },
       "digest": "4c18ecab332198a3"
+    },
+    "putTlsWildcard": {
+      "operationId": "putTlsWildcard",
+      "method": "PUT",
+      "path": "/api/tls/wildcard",
+      "command": "tls wildcard-set",
+      "funcName": "NewTlsWildcardSetCommand",
+      "summary": "Store a wildcard certificate pair and point Traefik at it — enters `dns-persist-01` with no init and no restart. The pair is validated (match, dates, covers *.\u003cdomain\u003e); the key has no read path. Existing stacks need one redeploy (see `redeploy`). Admin, for blast radius: it changes what every hostname on this host presents.",
+      "flags": [
+        {
+          "name": "cert",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "PEM: the leaf certificate first, any chain after it."
+        },
+        {
+          "name": "key",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "PEM: the private key. Stored 0600; never returned by anything."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "wildcard-set"
+      },
+      "digest": "29a1cccbc8e039c0"
     },
     "redeliverNotifierDelivery": {
       "operationId": "redeliverNotifierDelivery",

@@ -194,9 +194,11 @@ function urlFor(c: RuntimeContainer): string | null {
               TLS: {{ rt.challenge === 'unknown' ? 'unknown' : rt.challenge }}
               <InfoHint label="why the TLS mode matters here" align="end">
                 Under HTTP-01 every per-PR router needs <code>tls.certresolver=le</code>, because each
-                hostname resolves its own certificate. Under DNS-01 that inverts — one always-on router
-                holds the wildcard, and a per-PR certresolver makes each PR order its own and burn the
-                weekly limit. Read from the running Traefik's own flags, not configured here.
+                hostname resolves its own certificate. Under DNS-01 — and under
+                <code>dns-persist-01</code>, where the host serves a wildcard you supplied — that
+                inverts: one certificate covers every preview, and a per-PR certresolver makes each PR
+                order its own and burn the weekly limit. Read from what the host actually has: a
+                stored wildcard if there is one, otherwise the running Traefik's own flags.
                 <!--
                   The switch is NAMED, not offered, and deliberately not spelled out as a
                   ready-to-paste `init` line. `init` re-renders the control stack from its ARGUMENTS
@@ -211,9 +213,14 @@ function urlFor(c: RuntimeContainer): string | null {
                   changing anything nobody asked to change.
                 -->
                 <p style="margin-top: var(--s2)">
-                  <b>Switching is a host command, not a control here</b> — and not one to type from
-                  memory: <code>init</code> re-renders from its arguments alone, so every flag you
-                  omit silently reverts to its default. Ask the host for its own line first:
+                  <b>To stop per-PR ordering without touching the host,</b> store a wildcard you
+                  obtained yourself on the <RouterLink to="/control">Control stack</RouterLink> page —
+                  no re-init, no restart, and the redeploy is a button there.
+                </p>
+                <p>
+                  <b>Moving Traefik's own resolver to DNS-01 is a host command</b> — and not one to
+                  type from memory: <code>init</code> re-renders from its arguments alone, so every
+                  flag you omit silently reverts to its default. Ask the host for its own line first:
                 </p>
                 <pre
                   class="code"

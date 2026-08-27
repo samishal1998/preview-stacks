@@ -32,6 +32,13 @@ One sentence each; the numbers are in usage.md.
 
 "TLS is slow on this host" is almost always the first of those.
 
+> **The no-init escape hatch (0.35.0):** if you can obtain a wildcard certificate yourself, you do
+> not need this playbook at all — `PUT /api/tls/wildcard` enters `dns-persist-01` with no re-init,
+> no Traefik restart and no DNS credential on the host, and `POST /api/tls/redeploy` replaces
+> step 4 below. See [usage.md → Bring your own
+> wildcard](usage.md#bring-your-own-wildcard-dns-persist-01-0350). The rest of this page is for
+> moving Traefik's own resolver to DNS-01.
+
 ## Moving to DNS-01 with Cloudflare
 
 ### 1. A token with two permissions
@@ -101,6 +108,7 @@ inverts between modes:
 |---|---|
 | `http01` | `tls=true` **and** `tls.certresolver=le` — no wildcard exists to inherit |
 | `dns01` | `tls=true` **and nothing else** — one always-on router holds the wildcard, everyone else gets it by SNI |
+| `dns-persist-01` | `tls=true` **and nothing else** — same rule, but the wildcard is one you supplied through `PUT /api/tls/wildcard` |
 
 So the stacks that were deployed under HTTP-01 still carry `certresolver=le`. Left alone, each one
 orders **its own certificate** instead of inheriting the wildcard — which spends the weekly budget

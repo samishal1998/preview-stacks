@@ -1,10 +1,14 @@
-# API-driven TLS modes and `dns-persist-01` — a design, partly built
+# API-driven TLS modes and `dns-persist-01` — a design, mostly built
 
 > **Phase 1 — the control-stack runtime view and restart — SHIPPED in 0.35.0**; see
-> [usage.md → Watch the control stack itself](usage.md#watch-the-control-stack-itself-0350). The
-> rest — `dns-persist-01`, the certd sidecar, API-driven mode switching — records the shape agreed
-> on 2026-08-27 and is NOT built. Kept for the same reason [`mcp-design.md`](mcp-design.md) is:
-> cheap to write down now, expensive to re-derive later.
+> [usage.md → Watch the control stack itself](usage.md#watch-the-control-stack-itself-0350).
+> **Phase 2's manual half — `dns-persist-01` itself — SHIPPED in 0.35.0 too**: `PUT/DELETE
+> /api/tls/wildcard` stores a pair you obtained yourself, `POST /api/tls/redeploy` is the migration
+> loop server-side, and the mode is derived from the stored artifacts rather than a setting; see
+> [usage.md → Bring your own wildcard](usage.md#bring-your-own-wildcard-dns-persist-01-0350).
+> What remains UNBUILT is the **certd sidecar** — automated issuance and renewal with the vendor
+> DNS token — which drops onto the same plumbing: it obtains the pair and calls the same store the
+> PUT uses. The sections below record that remaining shape and its decisions.
 
 ## Why this exists
 

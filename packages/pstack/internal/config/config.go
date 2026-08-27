@@ -234,6 +234,15 @@ func (s Sources) Assemble() (*Document, error) {
 	regs, skipped := s.registryEntries()
 	d.Registry, d.Skipped = regs, append(d.Skipped, skipped...)
 	for _, f := range s.Routing.List() {
+		if routing.IsReserved(f.Name) {
+			// The wildcard POINTER without the pair it names would put the target host in
+			// dns-persist-01 mode with nothing to serve: every new deploy would drop its
+			// certresolver and Traefik would hold a path to files that do not exist. The pair is
+			// not in this document (a private key does not belong in a portable export), so the
+			// pointer must not be either.
+			d.Skipped = append(d.Skipped, "routing "+f.Name+": the wildcard pointer is host-specific and the certificate pair it names is not in an export — store one on the target with PUT /api/tls/wildcard")
+			continue
+		}
 		content, err := s.Routing.Read(f.Name)
 		if err != nil {
 			d.Skipped = append(d.Skipped, "routing "+f.Name+": "+err.Error())
