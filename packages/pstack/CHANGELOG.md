@@ -13,6 +13,14 @@
   which is correct there). If you migrated a host to DNS-01 and redeployed, redeploy the stacks
   again after upgrading — this time the labels really do drop the resolver.
 
+### Changed
+
+- **Traefik's `mem_limit` is now 512m** (was 256m). An OOM-killed Traefik takes its in-memory ACME
+  challenge tokens with it: every in-flight validation then 404s (`Cannot retrieve the ACME
+  challenge`), and the failed order still bills the Let's Encrypt rate limit. A busy host with many
+  routers sits close enough to 256m for that to happen mid-issuance. Applied to an existing host by
+  the next `pstack upgrade` / `pstack init` re-render.
+
 ### Added
 
 - **The API serves its own OpenAPI document**, unauthenticated, in both formats:
