@@ -957,6 +957,18 @@ flag shape for one.
 wrong host. `pstack api --help` needs neither variable — asking what the commands are does not
 depend on having a host.
 
+**The host serves the document these commands come from**, unauthenticated, in both formats:
+
+```bash
+curl -s https://api.preview.example.com/api/openapi.yaml     # the file, byte for byte
+curl -s https://api.preview.example.com/api/openapi.json     # the same, key order preserved
+pstack api host openapi                                      # or through the CLI
+```
+
+It is embedded in the binary, so what a host serves always matches the routes that host answers —
+and it is the same file `pstack api` was generated from, so the commands and the description cannot
+disagree. `ETag` is the version; the body only changes when the binary does.
+
 **Three routes are deliberately absent**: the two SSE streams and the WebSocket terminal. A command
 runs one request and prints the answer, so each would buffer an endless response. Use
 `curl -N` for the streams, and the UI for the terminal.
@@ -3012,6 +3024,7 @@ anything it does not list is the root token's alone.
 |---|---|---|---|
 | GET | `/api/health` | — | `{ ok, authEnforced, hasUsers, sso, dataDir, version }` — `sso` is `{ providers: [{ key, label, preset }…] }` (enabled providers, in key order) or `null`, read by the login page before authenticating |
 | GET | `/api/deployments` | spec variables as `?K=V`, **optional** | `{ deployments: [{ …meta, stack, busy, running, unresolved? }] }`. A row whose variables were not supplied degrades to `stack: null` + `unresolved: <reason>` rather than failing the listing; `busy`/`running` are `null` when undeterminable |
+| GET | `/api/openapi.yaml` · `/api/openapi.json` | — | **No token.** The API's own OpenAPI document — the same file `pstack api` is generated from. YAML is the file byte for byte (comments and key order intact); JSON is that file, key order preserved. `ETag` is the version |
 | GET | `/api/probe/:id` | — | **No token.** The upstream's own status, **no body ever**, and `x-pstack-probe: upstream\|unknown\|asleep\|no-target\|unresolved\|unreachable\|busy`. `?service=` names which one on a stack that publishes several. See [Probe a preview without a token](#probe-a-preview-without-a-token-0340) |
 | GET | `/api/deployments/:id` | spec variables as `?K=V`, **required** | `{ id, kind, createdAt, updatedAt, stack, busy, compose, requires, axes[{name,hooks}] }` — hook **names**, never bodies |
 | PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }`, plus `swarmNotes` under swarm — what the conversion will change, [named at submit time](#submitting-a-deployment) rather than in the deploy transcript. Omitted, never `[]`, when nothing was checked · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |

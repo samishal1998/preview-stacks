@@ -1,4 +1,4 @@
-// Package pstack carries the five files the binary embeds. Explicit paths, never a glob: the
+// Package pstack carries the six files the binary embeds. Explicit paths, never a glob: the
 // READMEs beside the assets must not ship, and a pattern that matches nothing is a compile error —
 // which is exactly the failure mode `with { type: 'text' }` had at bundle time, moved earlier.
 package pstack
@@ -29,3 +29,14 @@ var CloudInitTemplate string
 //
 //go:embed package.json
 var PackageJSON []byte
+
+// OpenAPISpec is the API's own OpenAPI document, served at `/api/openapi.yaml` and, converted, at
+// `/api/openapi.json`.
+//
+// The SAME file oascmd-gen reads to generate `pstack api`, so the served document and the shipped
+// commands cannot describe different APIs — and a route missing from it fails a test before either
+// exists. Embedding costs ~34KB in a 17MB binary; fetching it from anywhere at runtime would mean a
+// host could serve a spec that does not match the binary answering the requests.
+//
+//go:embed api/openapi.yaml
+var OpenAPISpec []byte

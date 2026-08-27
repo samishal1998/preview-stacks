@@ -715,6 +715,24 @@ paths:
       summary: Who opened a container shell, when, and against what.
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
+  /api/openapi.yaml:
+    get:
+      tags: [host]
+      operationId: getOpenApiYaml
+      x-cli-name: openapi
+      summary: This document, byte for byte. No token needed.
+      responses:
+        '200': { description: The OpenAPI document as YAML., content: { application/yaml: { schema: { type: string } } } }
+
+  /api/openapi.json:
+    get:
+      tags: [host]
+      operationId: getOpenApiJson
+      x-cli-name: openapi-json
+      summary: This document as JSON, key order preserved. No token needed.
+      responses:
+        '200': { description: The OpenAPI document as JSON., content: { application/json: { schema: { type: object } } } }
+
   /api/health:
     get:
       tags: [host]
