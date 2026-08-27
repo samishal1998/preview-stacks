@@ -138,6 +138,7 @@ var groupShort = map[string]string{
 	"settings":    "The two settings changeable at runtime, without a restart.",
 	"sso":         "Single sign-on providers.",
 	"swarm":       "The swarm, and what a new worker runs to join it.",
+	"tls":         "The host's certificate mode, and the bring-your-own wildcard.",
 	"config":      "The whole portable configuration: export it, or apply one.",
 	"host":        "The host itself — health, the control stack, terminal history, the probe.",
 }

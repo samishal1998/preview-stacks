@@ -10,11 +10,12 @@
  * One action, one refusal: any control service can be restarted except `pstack` itself — the
  * server refuses its own container by name, whoever asks, and this page does not offer it.
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
-import type { ControlRuntime } from '../api/types';
+import type { ControlRuntime, TlsRedeploy, TlsStatus } from '../api/types';
 import { usePolling } from '../composables/usePolling';
-import { ago, sentence } from '../composables/useFormat';
+import { can } from '../composables/useAuth';
+import { ago, sentence, stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
@@ -57,6 +58,69 @@ function mem(bytes: number | null): string {
   if (bytes === null) return 'unlimited';
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
   return `${Math.round(bytes / (1024 * 1024))} MiB`;
+}
+
+// ── the certificate mode ──────────────────────────────────────────────────────────────────────────
+const tls = ref<TlsStatus | null>(null);
+async function loadTls(): Promise<void> {
+  const r = await api.get<TlsStatus>('/api/tls');
+  if (r.ok) tls.value = r.body;
+}
+usePolling(loadTls, 30_000);
+
+const daysLeft = computed(() => {
+  if (!tls.value?.wildcard) return null;
+  return Math.floor((tls.value.wildcard.notAfter - Date.now()) / 86_400_000);
+});
+
+const certDraft = ref('');
+const keyDraft = ref('');
+const storing = ref(false);
+async function storeWildcard(): Promise<void> {
+  storing.value = true;
+  const r = await api.put<{ wildcard: TlsWildcardShape; note: string }>('/api/tls/wildcard', {
+    cert: certDraft.value,
+    key: keyDraft.value,
+  });
+  storing.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, 'store the wildcard'));
+    return;
+  }
+  certDraft.value = '';
+  keyDraft.value = '';
+  toast('ok', 'Wildcard stored — new deploys inherit it now. Redeploy the rest below.');
+  redeployed.value = null; // that summary described a run under the previous mode
+  await loadTls();
+}
+type TlsWildcardShape = NonNullable<TlsStatus['wildcard']>;
+
+const removing = ref(false);
+async function removeWildcard(): Promise<void> {
+  removing.value = true;
+  const r = await api.del<{ note: string }>('/api/tls/wildcard');
+  removing.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, 'remove the wildcard'));
+    return;
+  }
+  toast('ok', 'Removed — back to Traefik-native resolution. Redeploy the stacks below.');
+  redeployed.value = null;
+  await loadTls();
+}
+
+const redeploying = ref(false);
+const redeployed = ref<TlsRedeploy | null>(null);
+async function redeployAll(): Promise<void> {
+  redeploying.value = true;
+  const r = await api.post<TlsRedeploy>('/api/tls/redeploy', {});
+  redeploying.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, 'redeploy the stacks'));
+    return;
+  }
+  redeployed.value = r.body;
+  toast('ok', `Redeploying ${r.body.started.length} stack${r.body.started.length === 1 ? '' : 's'}; ${r.body.skipped.length} skipped.`);
 }
 </script>
 
@@ -179,6 +243,93 @@ function mem(bytes: number | null): string {
       <p v-else class="mute">
         Docker lists no control containers — on a host serving this page, that means the project
         label changed, not that nothing runs.
+      </p>
+    </section>
+
+    <!-- ============================ the certificate mode ============================ -->
+    <section v-if="tls" class="panel">
+      <div class="phead">
+        <h2 class="section">Certificates</h2>
+        <span class="grow" />
+        <span class="badge" :class="tls.mode === 'dns-persist-01' ? 'ok' : 'info'">{{ tls.mode }}</span>
+      </div>
+
+      <p class="dim">{{ tls.note }}</p>
+
+      <template v-if="tls.wildcard">
+        <ul class="kvlist" style="margin: var(--s3) 0">
+          <li>
+            <span class="k">Covers</span>
+            <span class="v mono">{{ tls.wildcard.domains.join(', ') }}</span>
+          </li>
+          <li>
+            <span class="k">Valid until</span>
+            <span class="v">
+              {{ stamp(tls.wildcard.notAfter) }}
+              <span :class="daysLeft !== null && daysLeft < 21 ? 'badge failed' : 'mute'"> {{ daysLeft }} days left</span>
+            </span>
+          </li>
+          <li>
+            <span class="k">Issuer</span>
+            <span class="v">
+              {{ tls.wildcard.issuer || 'unnamed' }}
+              <span v-if="tls.wildcard.selfSigned" class="badge warn">self-signed — browsers will warn</span>
+            </span>
+          </li>
+        </ul>
+        <div v-if="can('admin')" class="row">
+          <ActionButton variant="danger" :pending="removing" :disabled="removing" @click="removeWildcard">
+            Remove wildcard
+          </ActionButton>
+          <span class="mute" style="font-size: var(--t-sm)">
+            Stacks deployed under it then have no certificate until redeployed.
+          </span>
+        </div>
+      </template>
+
+      <template v-if="can('admin')">
+        <p class="dim" style="margin-top: var(--s3)">
+          <template v-if="tls.wildcard">
+            <b>Renew or replace it.</b> Paste the new pair — it overwrites both halves in place and
+            Traefik picks it up immediately. Nothing needs redeploying for a renewal: the router
+            labels do not change, only the certificate behind them.
+          </template>
+          <template v-else>
+            <b>Bring your own wildcard.</b> Paste a certificate for <span class="mono">*.your-domain</span>
+            and its key — previews stop ordering per-hostname certificates the moment it lands, with no
+            re-init and no Traefik restart.
+          </template>
+          The key is stored 0600 and nothing ever returns it.
+        </p>
+        <div class="field">
+          <label for="tls-cert">Certificate (PEM, leaf first, chain after)</label>
+          <textarea id="tls-cert" v-model="certDraft" rows="5" class="mono" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+        </div>
+        <div class="field">
+          <label for="tls-key">Private key (PEM)</label>
+          <textarea id="tls-key" v-model="keyDraft" rows="4" class="mono" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+        </div>
+        <ActionButton variant="primary" :pending="storing" :disabled="storing || !certDraft || !keyDraft" @click="storeWildcard">
+          {{ tls.wildcard ? 'Replace wildcard' : 'Store wildcard' }}
+        </ActionButton>
+      </template>
+      <p v-else-if="!tls.wildcard" class="mute">
+        Storing a wildcard is an admin's: it changes what every hostname on this host presents.
+      </p>
+
+      <div class="row" style="margin-top: var(--s4); align-items: center">
+        <ActionButton :pending="redeploying" :disabled="redeploying" @click="redeployAll">
+          Redeploy all stacks
+        </ActionButton>
+        <span class="mute" style="font-size: var(--t-sm)">
+          Router labels are stamped at deploy time — run this once after changing the mode. Asleep
+          stacks are skipped; they pick the new labels up when they wake.
+        </span>
+      </div>
+      <p v-if="redeployed" class="mute" style="margin-top: var(--s2)">
+        Started {{ redeployed.started.length }} · skipped {{ redeployed.skipped.length
+        }}<template v-if="redeployed.skipped.length"> ({{ redeployed.skipped.map((x) => `${x.id}: ${x.reason}`).join('; ') }})</template>
+        — watch them under Jobs.
       </p>
     </section>
   </div>

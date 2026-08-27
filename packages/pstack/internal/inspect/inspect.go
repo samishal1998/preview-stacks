@@ -113,6 +113,10 @@ const (
 	HTTP01  Challenge = "http01"
 	DNS01   Challenge = "dns01"
 	Unknown Challenge = "unknown"
+	// DNSPersist: a stored wildcard beside Traefik's dynamic config covers every preview. Never
+	// detected HERE (DetectChallenge reads argv, and Traefik's argv keeps its init-time flags in
+	// this mode) — the server passes it in when the stored wildcard exists.
+	DNSPersist Challenge = "dns-persist-01"
 )
 
 // Runtime is everything the deployment page needs.
@@ -1134,8 +1138,8 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 		if challenge == HTTP01 && rt.TLS && rt.Certresolver == nil {
 			findings = append(findings, Finding{"error", `Router "` + rt.Router + `" requests TLS but sets no tls.certresolver, and this host uses HTTP-01, where every hostname resolves its own certificate. The route will exist and the TLS handshake will fail.`})
 		}
-		if challenge == DNS01 && rt.Certresolver != nil {
-			findings = append(findings, Finding{"warn", `Router "` + rt.Router + `" sets tls.certresolver on a DNS-01 host. One always-on router already requests the wildcard; this makes the PR order its own certificate and burn the ~50-per-week limit. Use tls=true alone.`})
+		if (challenge == DNS01 || challenge == DNSPersist) && rt.Certresolver != nil {
+			findings = append(findings, Finding{"warn", `Router "` + rt.Router + `" sets tls.certresolver on a host whose wildcard already covers every preview (` + string(challenge) + `). This makes the PR order its own certificate and burn the ~50-per-week limit. Use tls=true alone — a redeploy regenerates the labels.`})
 		}
 		// Traefik's router namespace is global: a duplicate name means one PR serves another's app.
 		if owners := a.AllRouters[rt.Router]; len(owners) > 1 {

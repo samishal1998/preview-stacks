@@ -783,7 +783,7 @@ func (s *Server) deploymentRuntime(w http.ResponseWriter, dep *registry.Deployme
 	}
 	// Gathered once and passed in: the router-name collision check is global across the daemon.
 	all := inspect.AllTraefikRouters(s.host)
-	rt := inspect.DeploymentRuntime(inspect.RuntimeArgs{Stack: st.Stack, Runner: s.host, Challenge: inspect.DetectChallenge(s.host), AllRouters: all.ByName, Orchestrator: orchestratorOf(st)})
+	rt := inspect.DeploymentRuntime(inspect.RuntimeArgs{Stack: st.Stack, Runner: s.host, Challenge: s.challenge(), AllRouters: all.ByName, Orchestrator: orchestratorOf(st)})
 	var asleep any
 	if dep.Sleep != nil {
 		asleep = dep.Sleep

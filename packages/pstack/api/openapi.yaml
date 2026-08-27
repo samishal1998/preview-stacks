@@ -57,6 +57,8 @@ tags:
     description: 'Named specs, stored on the host and referenced by a deployment.'
   - name: routing
     description: 'Traefik''s dynamic-config files, and what it is actually serving.'
+  - name: tls
+    description: 'The host''s certificate mode, and the bring-your-own wildcard (dns-persist-01).'
   - name: registries
     description: 'Private-registry logins, used when a deploy pulls.'
   - name: notifiers
@@ -705,6 +707,46 @@ paths:
       operationId: getControlStack
       x-cli-name: control
       summary: The control stack's own containers. Read-only, never actionable.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/tls:
+    get:
+      tags: [tls]
+      operationId: getTls
+      x-cli-name: status
+      summary: 'The host''s certificate mode, derived from its artifacts: `dns-persist-01` when a wildcard is stored, else what Traefik''s own flags say. Includes the stored certificate''s public facts — never the key. Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/tls/wildcard:
+    put:
+      tags: [tls]
+      operationId: putTlsWildcard
+      x-cli-name: wildcard-set
+      summary: 'Store a wildcard certificate pair and point Traefik at it — enters `dns-persist-01` with no init and no restart. The pair is validated (match, dates, covers *.<domain>); the key has no read path. Existing stacks need one redeploy (see `redeploy`). Admin, for blast radius: it changes what every hostname on this host presents.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cert, key]
+              properties:
+                cert: { type: string, description: 'PEM: the leaf certificate first, any chain after it.' }
+                key: { type: string, description: 'PEM: the private key. Stored 0600; never returned by anything.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [tls]
+      operationId: deleteTlsWildcard
+      x-cli-name: wildcard-remove
+      summary: 'Remove the stored wildcard — back to Traefik-native resolution. Stacks deployed under it then have no certificate until redeployed. Admin.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+
+  /api/tls/redeploy:
+    post:
+      tags: [tls]
+      operationId: postTlsRedeploy
+      x-cli-name: redeploy
+      summary: 'Redeploy every awake stack so its router labels regenerate for the current mode — the migration loop from the TLS playbook, server-side. Asleep stacks are skipped (their labels regenerate on wake, and a redeploy would BE a wake). Each redeploy queues like any job. Maintainer.'
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
   /api/control/runtime:

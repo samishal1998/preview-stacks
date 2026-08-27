@@ -154,6 +154,20 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.controlRestart(w, r)
 	}
 
+	// ---- the host's certificate mode ----
+	if path == "/api/tls" && r.Method == http.MethodGet {
+		return s.tlsStatus(w)
+	}
+	if path == "/api/tls/wildcard" && r.Method == http.MethodPut {
+		return s.tlsWildcardPut(w, r)
+	}
+	if path == "/api/tls/wildcard" && r.Method == http.MethodDelete {
+		return s.tlsWildcardDelete(w)
+	}
+	if path == "/api/tls/redeploy" && r.Method == http.MethodPost {
+		return s.tlsRedeploy(w, who)
+	}
+
 	// ---- the swarm ----
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)

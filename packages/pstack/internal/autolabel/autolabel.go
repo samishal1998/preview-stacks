@@ -69,6 +69,8 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
@@ -91,12 +93,32 @@ const (
 	HTTP01  Challenge = "http01"
 	DNS01   Challenge = "dns01"
 	Unknown Challenge = "unknown"
+	// DNSPersist is the bring-your-own-wildcard mode: a certificate pair stored beside Traefik's
+	// dynamic config covers every preview by SNI, so per-PR routers must not order their own —
+	// the same label rule as DNS01, detected from the stored file rather than Traefik's argv.
+	DNSPersist Challenge = "dns-persist-01"
 )
 
-// DetectChallenge asks the running Traefik which challenge mode it uses — inspect's probe, behind a
-// variable so tests can pin a mode without scripting docker. A host that cannot be probed answers
-// Unknown, which errs toward including the certresolver (see AugmentComposeDoc).
-var DetectChallenge = func(r exec.Runner) Challenge { return Challenge(inspect.DetectChallenge(r)) }
+// wildcardMode is the label question: does ONE always-on certificate cover every preview, so a
+// per-router certresolver would order a redundant one (and, at PR volume, burn the weekly limit)?
+func wildcardMode(c Challenge) bool { return c == DNS01 || c == DNSPersist }
+
+// DetectChallenge asks the host which challenge mode it runs — behind a variable so tests can pin a
+// mode without scripting docker. The stored wildcard is checked FIRST because it overrides whatever
+// Traefik's argv still says (the argv keeps its init-time resolver flags in dns-persist mode); then
+// inspect's argv probe. A host that answers neither is Unknown, which errs toward including the
+// certresolver (see AugmentComposeDoc).
+// The dynamic dir is resolved from the PROCESS ENVIRONMENT here, while the server holds its own
+// Options.RoutingDir — `pstack serve` computes both from the same DynamicDir over the same env, so
+// they agree. An embedder that passes a custom RoutingDir without setting PSTACK_ROUTING_DIR would
+// split them: the API would report dns-persist-01 while deploys kept stamping certresolver, which
+// is the exact burn this mode exists to stop. Keep the two resolutions on one source.
+var DetectChallenge = func(r exec.Runner) Challenge {
+	if routing.New(routing.DynamicDir(registry.DataDir())).WildcardActive() {
+		return DNSPersist
+	}
+	return Challenge(inspect.DetectChallenge(r))
+}
 
 // RoutingRequest is what a service asked for, read from its `pstack.routing.*` labels.
 type RoutingRequest struct {
@@ -290,10 +312,10 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 			// it — no host-port publishing is involved.
 			"traefik.http.services." + id + ".loadbalancer.server.port=" + js.ToString(req.Port),
 		}
-		if challenge != DNS01 {
+		if !wildcardMode(challenge) {
 			// Under HTTP-01 each hostname resolves its own certificate. Included when the mode is unknown
 			// too: a missing certresolver on an HTTP-01 host means no certificate at all, while a spare one
-			// on DNS-01 costs a redundant certificate — the cheaper mistake.
+			// on a wildcard-carrying host costs a redundant certificate — the cheaper mistake.
 			added = append(added, "traefik.http.routers."+id+".tls.certresolver=le")
 		}
 
@@ -311,7 +333,7 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 					"traefik.http.routers."+id+"-wild.tls=true",
 					"traefik.http.routers."+id+"-wild.service="+id,
 				)
-				if challenge != DNS01 {
+				if !wildcardMode(challenge) {
 					added = append(added, "traefik.http.routers."+id+"-wild.tls.certresolver=le")
 				}
 				break

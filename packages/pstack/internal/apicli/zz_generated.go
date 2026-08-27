@@ -98,6 +98,10 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("swarm").AddCommand(NewSwarmGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmJoinCommand(exec))
 	group("host").AddCommand(NewHostTerminalSessionsCommand(exec))
+	group("tls").AddCommand(NewTlsStatusCommand(exec))
+	group("tls").AddCommand(NewTlsRedeployCommand(exec))
+	group("tls").AddCommand(NewTlsWildcardRemoveCommand(exec))
+	group("tls").AddCommand(NewTlsWildcardSetCommand(exec))
 	group("tokens").AddCommand(NewTokensListCommand(exec))
 	group("tokens").AddCommand(NewTokensCreateCommand(exec))
 	group("tokens").AddCommand(NewTokensDeleteCommand(exec))
@@ -2207,6 +2211,122 @@ func NewHostTerminalSessionsCommand(exec oascmd.ExecOptions) *cobra.Command {
 		req := oascmd.Request{
 			Method: "GET",
 			Path:   "/api/terminal-sessions",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewTlsStatusCommand returns the "tls status" command (GET /api/tls).
+func NewTlsStatusCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "The host's certificate mode, derived from its artifacts: `dns-persist-01` when a wildcard is stored, else what Traefik's own flags say. Includes the stored certificate's public facts — never the key. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/tls",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewTlsRedeployCommand returns the "tls redeploy" command (POST
+// /api/tls/redeploy).
+func NewTlsRedeployCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "redeploy",
+		Short: "Redeploy every awake stack so its router labels regenerate for the current mode — the migration loop from the TLS playbook, server-side. Asleep stacks are skipped (their labels regenerate on wake, and a redeploy would BE a wake). Each redeploy queues like any job. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "POST",
+			Path:   "/api/tls/redeploy",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewTlsWildcardRemoveCommand returns the "tls wildcard-remove" command
+// (DELETE /api/tls/wildcard).
+func NewTlsWildcardRemoveCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "wildcard-remove",
+		Short: "Remove the stored wildcard — back to Traefik-native resolution. Stacks deployed under it then have no certificate until redeployed. Admin.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "DELETE",
+			Path:   "/api/tls/wildcard",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewTlsWildcardSetCommand returns the "tls wildcard-set" command (PUT
+// /api/tls/wildcard).
+func NewTlsWildcardSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyCert string
+		bodyKey  string
+		flagData string
+	)
+	cmd := &cobra.Command{
+		Use:   "wildcard-set",
+		Short: "Store a wildcard certificate pair and point Traefik at it — enters `dns-persist-01` with no init and no restart. The pair is validated (match, dates, covers *.<domain>); the key has no read path. Existing stacks need one redeploy (see `redeploy`). Admin, for blast radius: it changes what every hostname on this host presents.",
+	}
+	cmd.Flags().StringVar(&bodyCert, "cert", "", "PEM: the leaf certificate first, any chain after it.")
+	cmd.Flags().StringVar(&bodyKey, "key", "", "PEM: the private key. Stored 0600; never returned by anything.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/tls/wildcard",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("cert") {
+			body["cert"] = bodyCert
+		}
+		if cmd.Flags().Changed("key") {
+			body["key"] = bodyKey
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
 		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")

@@ -1457,8 +1457,10 @@ no CORS; `api.<domain>` exists to give external callers an honest name that is n
 
 ### Choose a TLS mode
 
-Both modes get certificates from Let's Encrypt through Traefik's `le` resolver. They differ in what
-proves you own the domain, and that difference decides how many PRs a week the host can certify.
+Two of the three modes get certificates from Let's Encrypt through Traefik's `le` resolver, and
+differ in what proves you own the domain — which decides how many PRs a week the host can certify.
+The third, [`dns-persist-01`](#bring-your-own-wildcard-dns-persist-01-0350), takes Traefik out of
+issuance entirely: you supply the wildcard and the host serves it.
 
 | | `--challenge http01` (default) | `--challenge dns01` |
 |---|---|---|
@@ -1503,6 +1505,7 @@ This is the easiest thing in the whole system to get wrong, and it is expensive 
 |---|---|---|
 | `http01` | `tls=true` **+** `tls.certresolver=le` | there is no wildcard to inherit; each hostname must resolve its own certificate, ordered the moment its router loads. Omit the resolver and that host has no certificate, ever |
 | `dns01` | `tls=true` — **nothing else** | **exactly one** always-on router requests the wildcard (`tls.domains[0].main=<domain>` + `.sans=*.<domain>`, on the control router). Every other router inherits it by SNI |
+| `dns-persist-01` | `tls=true` — **nothing else** | same rule as `dns01`, different source: the wildcard is a certificate **you supplied** (`PUT /api/tls/wildcard`), served from Traefik's certificate store. Nothing on the host orders anything |
 
 > **Under DNS-01, adding `tls.certresolver=le` to a per-PR router orders a SEPARATE certificate for
 > that hostname** — which is how a fleet of previews silently burns the ~50-per-week budget and takes
@@ -1540,6 +1543,55 @@ preview.example.com.     A   <host-ip>
 Under DNS-01 that wildcard record plus the apex is also what the single wildcard **certificate**
 covers. Under HTTP-01 you still want the wildcard record — resolution and certification are separate
 problems — but each hostname is certified individually, the moment its router loads at deploy.
+
+#### Bring your own wildcard: `dns-persist-01` (0.35.0)
+
+The third mode needs **no re-init, no Traefik restart, and no DNS credential on the host**: you
+obtain a wildcard certificate yourself (certbot with a manual DNS record, your company's CA,
+however you like) and hand the pair to the API. It lands beside Traefik's dynamic config, every
+preview inherits it by SNI, and per-PR certificate orders stop entirely — which is the whole
+rate-limit problem gone, and nothing left in Traefik's memory for a restart to lose.
+
+```bash
+# PIPED, never -d "$(…)": a private key in argv is readable by every local user in `ps` and
+# lands in your shell history.
+jq -n --rawfile cert fullchain.pem --rawfile key privkey.pem '{cert: $cert, key: $key}' \
+  | curl -sX PUT https://api.preview.example.com/api/tls/wildcard \
+      -H "authorization: Bearer $PSTACK_TOKEN" -H 'content-type: application/json' --data-binary @-
+
+curl -sX POST https://api.preview.example.com/api/tls/redeploy \
+  -H "authorization: Bearer $PSTACK_TOKEN"
+```
+
+Through the CLI (same caveat — the key would be an argument, so prefer the piped form above for the
+store; the other three are safe):
+
+```bash
+pstack api tls status
+pstack api tls redeploy
+pstack api tls wildcard-remove
+```
+
+(Or the **Control stack** page in the UI, which also shows days-to-expiry.) The PUT validates the
+pair — match, dates, that it actually covers `*.<domain>` — and refuses with the reason otherwise.
+The **redeploy** is the step people miss in every mode switch: router labels are stamped at deploy
+time, so stacks deployed before the wildcard keep ordering their own certificates until they deploy
+once more. Asleep stacks are skipped — their labels regenerate on wake.
+
+`tls-wildcard.yml` in Traefik's dynamic directory is **pstack's file, not yours**: the routing API
+refuses to write or delete that one name (whoever asks), because its presence *is* the mode and the
+certificate pair it names lives beside it. It also does not travel in a `config export` — the pair
+cannot, so the pointer must not either, or the target host would enter the mode with nothing to
+serve.
+
+What this mode does **not** do yet: renew. The certificate is a static file; the UI shows a red
+badge under 21 days and renewing is `PUT` again with the fresh pair. `GET /api/tls` reports the
+mode and the certificate's public facts; the private key has no read path, ever. Exact-SAN
+certificates already in `acme.json` keep winning the handshake for their own hostnames, so
+adopting this mode revokes nothing.
+
+Leaving it is `DELETE /api/tls/wildcard` — then redeploy again, for the mirror-image reason: the
+stacks are carrying `tls=true` alone and need their resolver back.
 
 ### `shared` vs `isolated`
 
@@ -2509,6 +2561,8 @@ every account until someone puts it in the table.
 | `POST`/`PATCH`/`DELETE /api/notifiers`… (incl. `/test`, `/redeliver`) | `maintainer` |
 | `GET /api/swarm/join` | `maintainer` |
 | `GET /api/control/runtime` · `POST /api/control/restart` | `maintainer` |
+| `GET /api/tls` · `POST /api/tls/redeploy` | `maintainer` |
+| `PUT`/`DELETE /api/tls/wildcard` | `admin` |
 | `GET /api/sso/config` | `maintainer` |
 | `GET /api/settings` | `viewer` |
 | `PUT /api/settings/max_jobs` | `maintainer` |
@@ -3083,6 +3137,10 @@ anything it does not list is the root token's alone.
 | GET | `/api/control` | — | the control stack's summary `{ project, reachable, services[], note }` — the dashboard's card |
 | GET | `/api/control/runtime` | — | **maintainer and up** — the operator view: per container, `restartCount`, `oomKilled`, `memLimitBytes` beside the usual state ([why](#watch-the-control-stack-itself-0350)) |
 | POST | `/api/control/restart` | `{ service }` | **maintainer and up** — restart one control service; `pstack` itself is always 400 (it is the container answering); 404 unknown service; 503 docker down |
+| GET | `/api/tls` | — | **maintainer and up** — `{ mode, traefik, wildcard, note }`; the mode is derived from the artifacts, never stored |
+| PUT | `/api/tls/wildcard` | `{ cert, key }` | **admin** — store a wildcard pair, enter `dns-persist-01`; 400 names what is wrong with the pair. The key has no read path |
+| DELETE | `/api/tls/wildcard` | — | **admin** — back to Traefik-native resolution; 404 when none is stored |
+| POST | `/api/tls/redeploy` | — | **maintainer and up** — redeploy every awake stack so labels regenerate; `{ started[], skipped[] }` |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
 | ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping **or waking** stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the wake page. A sleeping one also starts a wake job; a waking one is held until readiness settles ([7b](#sleep-and-wake-on-call)) |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |

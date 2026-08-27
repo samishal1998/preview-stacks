@@ -45,6 +45,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
@@ -146,6 +147,9 @@ type RoutingFile struct {
 // whole file wins — the reference had the same property.
 type RoutingStore struct {
 	Dir string
+	// wildcardMu serialises the wildcard's multi-file writes — see SetWildcard. It guards nothing
+	// else: the single-file routes keep the last-whole-file-wins property described above.
+	wildcardMu sync.Mutex
 }
 
 // New returns the store over dir.
@@ -212,6 +216,14 @@ func (s *RoutingStore) Read(name string) (string, error) {
 // avoid. It is named so that Traefik will not read it (no `.yml` suffix) and is removed on failure,
 // because a leftover file in this directory is exactly what must never happen.
 func (s *RoutingStore) Write(name, content string) (*string, error) {
+	if err := assertNotReserved(name); err != nil {
+		return nil, err
+	}
+	return s.write(name, content)
+}
+
+// write is Write without the reserved-name gate — for the routes that OWN a reserved file.
+func (s *RoutingStore) write(name, content string) (*string, error) {
 	if err := AssertValidRoutingName(name); err != nil {
 		return nil, err
 	}
@@ -241,6 +253,14 @@ func (s *RoutingStore) Write(name, content string) (*string, error) {
 
 // Remove deletes a file and returns the removed content, so a caller can offer an undo.
 func (s *RoutingStore) Remove(name string) (string, error) {
+	if err := assertNotReserved(name); err != nil {
+		return "", err
+	}
+	return s.remove(name)
+}
+
+// remove is Remove without the reserved-name gate — for the routes that OWN a reserved file.
+func (s *RoutingStore) remove(name string) (string, error) {
 	if err := AssertValidRoutingName(name); err != nil {
 		return "", err
 	}

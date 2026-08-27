@@ -154,6 +154,13 @@ const TABLE: Row[] = [
   // and a restart that 404s on a service the (empty) view does not name — never the gate's 403.
   { method: 'GET', path: '/api/control/runtime', min: 'maintainer', ok: 200 },
   { method: 'POST', path: '/api/control/restart', body: { service: 'traefik' }, min: 'maintainer', ok: 404 },
+  // The certificate mode. Status and the redeploy loop sit with the host surfaces; the wildcard
+  // WRITE is admin — whoever stores that key can impersonate every preview. The allowed role gets
+  // the handler's own answers: a garbage pair is 400, deleting a wildcard nobody stored is 404.
+  { method: 'GET', path: '/api/tls', min: 'maintainer', ok: 200 },
+  { method: 'POST', path: '/api/tls/redeploy', body: {}, min: 'maintainer', ok: 200 },
+  { method: 'PUT', path: '/api/tls/wildcard', body: { cert: 'not-a-cert', key: 'not-a-key' }, min: 'admin', ok: 400 },
+  { method: 'DELETE', path: '/api/tls/wildcard', min: 'admin', ok: 404 },
   // Reading the SSO configuration is a maintainer's — it returns a mask, never the client secret.
   // Writing it is two rows down, and admin, for a reason worth reading there.
   { method: 'GET', path: '/api/sso/config', min: 'maintainer', ok: 200 },

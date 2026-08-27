@@ -362,7 +362,7 @@ export type RuntimeResponse = {
   containers: RuntimeContainer[];
   routes: RuntimeRoute[];
   findings: Array<{ level: 'error' | 'warn' | 'info'; message: string }>;
-  challenge: 'http01' | 'dns01' | 'unknown';
+  challenge: 'http01' | 'dns01' | 'dns-persist-01' | 'unknown';
   /** False means "could not determine", never "nothing is running". */
   reachable: boolean;
 };
@@ -669,4 +669,31 @@ export type ControlRuntime = {
   containers: ControlContainer[];
   /** false ⇒ docker did not answer — "unknown", never "empty". */
   reachable: boolean;
+};
+
+/** The stored wildcard certificate's public facts — the key has no read path. */
+export type TlsWildcard = {
+  domains: string[];
+  notBefore: number;
+  notAfter: number;
+  issuer: string;
+  /** Fine for a lab; a browser warning in production. */
+  selfSigned: boolean;
+};
+
+/** What `GET /api/tls` answers. Maintainer. */
+export type TlsStatus = {
+  /** dns-persist-01 when a wildcard is stored, else whatever Traefik's own flags say. */
+  mode: string;
+  /** What Traefik's flags say regardless — its resolver stays configured under dns-persist-01. */
+  traefik: string;
+  wildcard: TlsWildcard | null;
+  note: string;
+};
+
+/** What `POST /api/tls/redeploy` answers. */
+export type TlsRedeploy = {
+  started: Array<{ id: string; job: string }>;
+  skipped: Array<{ id: string; reason: string }>;
+  note: string;
 };

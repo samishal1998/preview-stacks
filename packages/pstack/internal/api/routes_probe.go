@@ -129,7 +129,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, path string) bool
 	target := probeTarget(inspect.DeploymentRuntime(inspect.RuntimeArgs{
 		Stack:        st.Stack,
 		Runner:       s.host,
-		Challenge:    inspect.DetectChallenge(s.host),
+		Challenge:    s.challenge(),
 		AllRouters:   inspect.AllTraefikRouters(s.host).ByName,
 		Orchestrator: orchestratorOf(st),
 	}), r.URL.Query().Get("service"))
