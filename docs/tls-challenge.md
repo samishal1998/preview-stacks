@@ -21,7 +21,7 @@ In the UI it is the **TLS:** chip in the Routing panel of any deployment's Conta
 
 One sentence each; the numbers are in usage.md.
 
-- **HTTP-01 issues one certificate per hostname**, on that hostname's first HTTPS request. So a host
+- **HTTP-01 issues one certificate per hostname**, ordered the moment the stack's router loads. So a host
   with many stacks spends its Let's Encrypt budget (~50 new certificates per registered domain per
   week) three previews at a time, and past that issuance fails as a browser TLS error on a preview
   that deployed perfectly.

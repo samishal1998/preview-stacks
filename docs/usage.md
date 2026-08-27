@@ -1474,7 +1474,7 @@ This is the easiest thing in the whole system to get wrong, and it is expensive 
 
 | Mode | Every per-PR router | Why |
 |---|---|---|
-| `http01` | `tls=true` **+** `tls.certresolver=le` | there is no wildcard to inherit; each hostname must resolve its own certificate on first request. Omit the resolver and that host has no certificate, ever |
+| `http01` | `tls=true` **+** `tls.certresolver=le` | there is no wildcard to inherit; each hostname must resolve its own certificate, ordered the moment its router loads. Omit the resolver and that host has no certificate, ever |
 | `dns01` | `tls=true` — **nothing else** | **exactly one** always-on router requests the wildcard (`tls.domains[0].main=<domain>` + `.sans=*.<domain>`, on the control router). Every other router inherits it by SNI |
 
 > **Under DNS-01, adding `tls.certresolver=le` to a per-PR router orders a SEPARATE certificate for
@@ -1512,7 +1512,7 @@ preview.example.com.     A   <host-ip>
 
 Under DNS-01 that wildcard record plus the apex is also what the single wildcard **certificate**
 covers. Under HTTP-01 you still want the wildcard record — resolution and certification are separate
-problems — but each hostname is certified individually, on its first HTTPS request.
+problems — but each hostname is certified individually, the moment its router loads at deploy.
 
 ### `shared` vs `isolated`
 
