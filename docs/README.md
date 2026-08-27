@@ -81,6 +81,13 @@ tree's lock file is already the tool manifest), and the three decisions that gat
 dependency, what is exposed by default, and which credential it runs as. Read before proposing it,
 so the reasoning is not re-derived.
 
+### [`tls-modes-design.md`](tls-modes-design.md) — an unbuilt design, kept as a record
+
+**Nothing in it is built.** A third challenge mode (`dns-persist-01`: a lego sidecar owns issuance,
+certificates reach Traefik as files, restarts cost nothing), switching modes through the API
+instead of over SSH, and a runtime view of the control stack. The load-bearing finding: the file
+provider is already the API's writing hand, so most of it needs no init and no Traefik restart.
+
 ### [`secret-exposure.md`](secret-exposure.md) — a closed finding, kept as a record
 
 Unauthenticated reads used to be a credential feed, because job outcomes carry captured credentials
