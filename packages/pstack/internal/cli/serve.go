@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -90,12 +91,16 @@ func Serve(o ServeOptions) *Exit {
 		ReadinessTimeoutMs:   int64(tuning.ReadinessTimeoutMs),
 		ReadinessRestartLoop: int64(tuning.ReadinessRestartLoop),
 		MaxJobs:              int(tuning.MaxJobs),
-		SSOStateTTLS:         int64(tuning.SSOStateTTLS),
-		SSODiscoveryTTLS:     int64(tuning.SSODiscoveryTTLS),
-		Version:              version.Get(),
-		UIHTML:               o.UIHTML,
-		ShareHTML:            o.ShareHTML,
-		Log:                  func(l string) { fmt.Fprintln(o.Stderr, l) },
+		// `off` and nothing else. A misspelling leaves the route ON, deliberately: this is a
+		// convenience endpoint, and the alternative — any unrecognised value disabling it — turns a
+		// typo into a CI pipeline that polls a 404 forever with nothing saying why.
+		ProbeOff:         strings.EqualFold(strings.TrimSpace(get("PSTACK_PROBE")), "off"),
+		SSOStateTTLS:     int64(tuning.SSOStateTTLS),
+		SSODiscoveryTTLS: int64(tuning.SSODiscoveryTTLS),
+		Version:          version.Get(),
+		UIHTML:           o.UIHTML,
+		ShareHTML:        o.ShareHTML,
+		Log:              func(l string) { fmt.Fprintln(o.Stderr, l) },
 	})
 	if err != nil {
 		return &Exit{Code: ExitFailed, Msg: err.Error()}

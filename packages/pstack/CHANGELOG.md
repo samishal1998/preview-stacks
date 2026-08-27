@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`GET /api/probe/<id>` — "is this preview serving?", without a token.** A CI job polling a
+  preview's own hostname right after a deploy is often waiting on **that hostname's certificate**,
+  not on the app: under HTTP-01 every new stack needs its own, issued on first request. The probe
+  asks the same question on a hostname whose certificate has been warm since `init` ran, and answers
+  with the container's own status code.
+
+  It is unauthenticated, so it is built to be incapable rather than careful. **No body, ever** — not
+  the app's, not an error message; the endpoint cannot become a data feed, which is what
+  `docs/secret-exposure.md` exists to remember. No upstream headers, no redirects followed, and the
+  path is fixed at `/` rather than taken from the query, which would reach endpoints a preview's own
+  middleware protects. **A sleeping stack answers `asleep` and is left asleep**: an unauthenticated
+  route that starts a deploy is an unauthenticated deploy. Four probes may be in flight at once; the
+  rest are told `busy` rather than queued.
+
+  `x-pstack-probe` distinguishes the app's 503 from `asleep`, `no-target`, `unresolved`,
+  `unreachable` and `busy`. `?service=` picks one when a stack publishes several.
+  `PSTACK_PROBE=off` removes the route.
+
 ## 0.33.1 — 2026-08-26
 
 ### Fixed
