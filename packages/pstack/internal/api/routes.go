@@ -146,6 +146,14 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.putSetting(w, r, settings.KeyDefaultRole)
 	}
 
+	// ---- the control stack, visible ----
+	if path == "/api/control/runtime" && r.Method == http.MethodGet {
+		return s.controlRuntime(w)
+	}
+	if path == "/api/control/restart" && r.Method == http.MethodPost {
+		return s.controlRestart(w, r)
+	}
+
 	// ---- the swarm ----
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)
@@ -684,7 +692,10 @@ func (s *Server) specRoutes(w http.ResponseWriter, r *http.Request, name string)
 	return nil
 }
 
-// controlStack is GET /api/control: READ-ONLY, never actionable (invariant 12).
+// controlStack is GET /api/control: READ-ONLY, never actionable (invariant 12). The viewer-rank
+// summary — the maintainer's operator page, with restart counts and the one permitted action, is
+// /api/control/runtime and /api/control/restart (routes_control.go). "Not managed through this
+// API" stays true: a restart re-renders nothing and may not touch the pstack container.
 func (s *Server) controlStack(w http.ResponseWriter) error {
 	ps := s.host.Run("docker compose -p "+compose.Shq(initctl.ControlProject)+" ps --format json", exec.RunOptions{})
 	services := []jsonx.Object{}

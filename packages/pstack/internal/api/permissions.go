@@ -145,6 +145,13 @@ var permissions = []perm{
 	{path: "/api/settings/max_jobs", methods: mPut, min: auth.Maintainer},
 	{path: "/api/settings/default_role", methods: mPut, min: auth.Admin},
 
+	// ── the control stack ───────────────────────────────────────────────────────────────────────
+	// Maintainer for both, like the other host-configuration surfaces. The restart's harder rule —
+	// even root may not restart `pstack` itself — is a refusal in inspect.RestartControlService,
+	// not a row: it is about which container answers the request, not about who asks.
+	{path: "/api/control/runtime", methods: mGet, min: auth.Maintainer},
+	{path: "/api/control/restart", methods: mPost, min: auth.Maintainer},
+
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},

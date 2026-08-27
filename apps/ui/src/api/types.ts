@@ -653,3 +653,20 @@ export type SsoConfigResponse = {
   callbackUrl: string;
   presets: SsoPreset[];
 };
+
+// ── the control stack's operator page ───────────────────────────────────────────────────────────
+
+/** One control-stack container: the runtime shape plus the two fields only this stack needs. */
+export type ControlContainer = RuntimeContainer & {
+  /** docker's own flag: the LAST exit was the kernel's, not the process's. */
+  oomKilled: boolean;
+  /** The container's memory limit in bytes; null means unlimited (docker's 0 is normalized away). */
+  memLimitBytes: number | null;
+};
+
+/** What `GET /api/control/runtime` answers. Maintainer. */
+export type ControlRuntime = {
+  containers: ControlContainer[];
+  /** false ⇒ docker did not answer — "unknown", never "empty". */
+  reachable: boolean;
+};

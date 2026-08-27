@@ -149,6 +149,11 @@ const TABLE: Row[] = [
   // with the others. Still a real credential (the token joins a machine to the cluster), so it stops
   // here and goes no lower. 409 = the handler answered: the shim's daemon is not a swarm manager.
   { method: 'GET', path: '/api/swarm/join', min: 'maintainer', ok: 409 },
+  // The control stack's operator page and its one action. The shim's docker lists no control
+  // containers, so the allowed role gets the handler's own answers: an empty-but-reachable view,
+  // and a restart that 404s on a service the (empty) view does not name — never the gate's 403.
+  { method: 'GET', path: '/api/control/runtime', min: 'maintainer', ok: 200 },
+  { method: 'POST', path: '/api/control/restart', body: { service: 'traefik' }, min: 'maintainer', ok: 404 },
   // Reading the SSO configuration is a maintainer's — it returns a mask, never the client secret.
   // Writing it is two rows down, and admin, for a reason worth reading there.
   { method: 'GET', path: '/api/sso/config', min: 'maintainer', ok: 200 },

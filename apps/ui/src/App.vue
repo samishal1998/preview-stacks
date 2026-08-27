@@ -30,6 +30,7 @@ import {
   Network,
   Package,
   Plus,
+  ServerCog,
   Settings2,
   ShieldCheck,
   Upload,
@@ -161,6 +162,10 @@ void settings;
         <RouterLink to="/users" class="navlink">
           <Users :size="17" aria-hidden="true" />
           <span>Users</span>
+        </RouterLink>
+        <RouterLink v-if="can('maintainer')" to="/control" class="navlink">
+          <ServerCog :size="17" aria-hidden="true" />
+          <span>Control stack</span>
         </RouterLink>
         <RouterLink v-if="can('maintainer')" to="/sso" class="navlink">
           <ShieldCheck :size="17" aria-hidden="true" />

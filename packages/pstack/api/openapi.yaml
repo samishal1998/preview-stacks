@@ -707,6 +707,31 @@ paths:
       summary: The control stack's own containers. Read-only, never actionable.
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
+  /api/control/runtime:
+    get:
+      tags: [host]
+      operationId: getControlRuntime
+      x-cli-name: control-runtime
+      summary: 'The control stack as an operator debugs it: per container, restart count, OOM-killed flag and memory limit beside the usual state. A restarting Traefik silently loses in-flight certificate issuance — this page is where that stops being invisible. Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/control/restart:
+    post:
+      tags: [host]
+      operationId: restartControlService
+      x-cli-name: control-restart
+      summary: 'Restart one control service by name (from control-runtime). `pstack` itself is always refused — it is the container answering this request. Restarting `traefik` severs in-flight connections for a few seconds, this response possibly included. Maintainer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service]
+              properties:
+                service: { type: string, description: 'A control service name: traefik, advanced-ui, … — never pstack.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+
   /api/terminal-sessions:
     get:
       tags: [host]

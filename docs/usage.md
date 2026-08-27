@@ -1412,6 +1412,33 @@ asymmetry *is* the recovery path.
 Practically: **never submit a spec whose compose project is the one running Traefik and `pstack`.**
 Nothing in the code can stop you — the API cannot reliably know its own deployment id.
 
+### Watch the control stack itself (0.35.0)
+
+The control stack has an operator page: **Control stack** in the UI (maintainer and up), or
+
+```bash
+pstack api host control-runtime
+# → { containers: [ { service, image, state, health, restartCount, oomKilled,
+#                     memLimitBytes, startedAt, … } ], reachable }
+```
+
+The two fields that earn the page are **`restartCount`** and **`oomKilled`**. A Traefik restart
+wipes its in-memory ACME challenge tokens, so certificate issuance silently fails mid-flight while
+every container still reports `running` — a climbing restart count with `oomKilled: true` is that
+whole story in two fields. (`GET /api/control` remains the viewer-rank summary the dashboard uses.)
+
+One action, one refusal:
+
+```bash
+pstack api host control-restart --service traefik   # severs connections for a few seconds
+pstack api host control-restart --service pstack    # 400 — always
+```
+
+The server refuses to restart **its own container**, whoever asks — root included. Recreating the
+container answering the request kills the request (and any running job) with it, which is the same
+reason [`init` is CLI-only](#why-init-is-cli-only-and-always-will-be). From the host:
+`docker compose -p pstack-control restart pstack`.
+
 ### Hostnames
 
 | Hostname | Serves |
@@ -2481,6 +2508,7 @@ every account until someone puts it in the table.
 | `PUT`/`DELETE /api/host-vars/:name` · `/api/registries/:host` · `/api/routing/:file` | `maintainer` |
 | `POST`/`PATCH`/`DELETE /api/notifiers`… (incl. `/test`, `/redeliver`) | `maintainer` |
 | `GET /api/swarm/join` | `maintainer` |
+| `GET /api/control/runtime` · `POST /api/control/restart` | `maintainer` |
 | `GET /api/sso/config` | `maintainer` |
 | `GET /api/settings` | `viewer` |
 | `PUT /api/settings/max_jobs` | `maintainer` |
@@ -3052,6 +3080,9 @@ anything it does not list is the root token's alone.
 | DELETE | `/api/sso/config` · `/api/sso/config/<key>` | — | forget that provider; the accounts it created stay · bare with several providers is 400 naming the keys · 404 if none |
 | GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
 | GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **maintainer and up** (it was admin before 0.31.0); 409 when this daemon is not a manager |
+| GET | `/api/control` | — | the control stack's summary `{ project, reachable, services[], note }` — the dashboard's card |
+| GET | `/api/control/runtime` | — | **maintainer and up** — the operator view: per container, `restartCount`, `oomKilled`, `memLimitBytes` beside the usual state ([why](#watch-the-control-stack-itself-0350)) |
+| POST | `/api/control/restart` | `{ service }` | **maintainer and up** — restart one control service; `pstack` itself is always 400 (it is the container answering); 404 unknown service; 503 docker down |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
 | ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping **or waking** stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the wake page. A sleeping one also starts a wake job; a waking one is held until readiness settles ([7b](#sleep-and-wake-on-call)) |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |
