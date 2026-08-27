@@ -142,23 +142,28 @@ func TestWakePageSaysWhichOfTheThreeThingsIsTrue(t *testing.T) {
 		t.Errorf("waking: %s", waking)
 	}
 	// Starting is the window the report is about: awake, not answering. It must not claim sleep,
-	// and it must keep the spinner (only .failed hides it).
+	// and it must keep the waking title and the breathing lamp (only .failed stills it).
 	starting := page(Starting, "")
 	if strings.Contains(starting, "was asleep") {
 		t.Error("a woken stack was never asleep by then")
 	}
-	if !strings.Contains(starting, "is awake and its containers are starting") || !strings.Contains(starting, `class="starting"`) {
+	if !strings.Contains(starting, "is awake and getting ready to answer") || !strings.Contains(starting, `class="starting"`) {
 		t.Errorf("starting: %s", starting)
 	}
-	if !strings.Contains(starting, "spinning up") || !strings.Contains(starting, `class="spin"`) {
-		t.Error("starting is still converging: it keeps the title and the spinner")
+	if !strings.Contains(starting, "Waking your preview") || !strings.Contains(starting, `class="lamp"`) {
+		t.Error("starting is still converging: it keeps the title and the lamp")
 	}
-	// A failure is a different page, and it quotes the reason rather than spinning.
+	// Busy is a third true thing: not asleep, not booting — another job holds the stack.
+	busy := page(Busy, "")
+	if strings.Contains(busy, "was asleep") || !strings.Contains(busy, "another update") || !strings.Contains(busy, `class="busy"`) {
+		t.Errorf("busy: %s", busy)
+	}
+	// A failure is a different page: it quotes the reason instead of breathing.
 	failed := page(Failed, "app: exited with code 1")
-	if !strings.Contains(failed, "could not start") || !strings.Contains(failed, "app: exited with code 1") {
+	if !strings.Contains(failed, "couldn&#39;t start") || !strings.Contains(failed, "app: exited with code 1") {
 		t.Errorf("failed: %s", failed)
 	}
 	if !strings.Contains(failed, `class="failed"`) {
-		t.Error("the failed class is what hides the spinner")
+		t.Error("the failed class is what stills the lamp")
 	}
 }

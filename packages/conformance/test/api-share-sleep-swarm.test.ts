@@ -175,7 +175,7 @@ describe('API: sleep, wake-on-call', () => {
       expect(wake.headers.get('x-pstack-wake')).toBe('1');
       expect(wake.headers.get('retry-after')).toBe('5');
       const html = await wake.text();
-      expect(html).toContain('Your preview is spinning up');
+      expect(html).toContain('Waking your preview');
       expect(html).toContain('wk');
       // The wildcard rule matches too.
       const sub = await fetch(`${base}/`, { headers: { 'x-forwarded-host': 'api.app-wk.example.com' } });
@@ -329,7 +329,7 @@ describe('API: sleep, wake-on-call', () => {
         expect(starting.status).toBe(503);
         expect(starting.wake).toBe('1');
         expect(starting.retry).toBe('5');
-        expect(starting.html).toContain('is awake and its containers are starting');
+        expect(starting.html).toContain('is awake and getting ready to answer');
         expect(starting.html).not.toContain('was asleep'); // it is awake — the page must not lie
         expect(starting.html).not.toContain('<div id="app">'); // the control UI
       }
@@ -362,12 +362,12 @@ describe('API: sleep, wake-on-call', () => {
       expect((await asVisitor(base)).status).toBe(503);
       expect((await wakeJob(srv)).state).toBe('ok');
 
-      const failed = await until(async () => await asVisitor(base), (v) => v.html.includes('could not start'), 10_000, 50);
+      const failed = await until(async () => await asVisitor(base), (v) => v.html.includes('couldn&#39;t start'), 10_000, 50);
       expect(failed.status).toBe(503);
       expect(failed.wake).toBe('1');
-      expect(failed.html).toContain('Your preview could not start');
+      expect(failed.html).toContain('Your preview couldn&#39;t start');
       expect(failed.html).toContain('app: exited with code 1'); // the container's own reason, named
-      expect(failed.html).toContain('<body class="failed"'); // the class that hides the spinner
+      expect(failed.html).toContain('<body class="failed"'); // the class that stills the lamp
       expect(failed.html).not.toContain('<div id="app">');
 
       // And it STAYS the failure page. Falling through on the reload after the one that reported the
@@ -375,7 +375,7 @@ describe('API: sleep, wake-on-call', () => {
       const again = await asVisitor(base, '/reload');
       expect(again.status).toBe(503);
       expect(again.wake).toBe('1');
-      expect(again.html).toContain('Your preview could not start');
+      expect(again.html).toContain('Your preview couldn&#39;t start');
 
       // Reloading does NOT try again here, whatever the page's text says: the wake SUCCEEDED and it
       // is the containers that died, so there is no sleep record left for a request to act on. One

@@ -314,7 +314,7 @@ func TestWakeForHoldsTheHostnameUntilReadinessSettles(t *testing.T) {
 	if w.Code != 503 || w.Header().Get("x-pstack-wake") != "1" {
 		t.Fatalf("status %d, x-pstack-wake %q — the hostname must still be the visitor's", w.Code, w.Header().Get("x-pstack-wake"))
 	}
-	if body := w.Body.String(); !strings.Contains(body, "is awake and its containers are starting") {
+	if body := w.Body.String(); !strings.Contains(body, "is awake and getting ready to answer") {
 		t.Errorf("body: %s", body)
 	}
 	// It is not one answer that gets it right: the page is served for as long as it takes.
@@ -362,7 +362,7 @@ func TestWakeForShowsTheFAILUREOfAPreviewThatNeverServes(t *testing.T) {
 		t.Fatalf("status %d — a broken preview must show its failure, never the control UI", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "could not start") || !strings.Contains(body, "app: exited with code 1") {
+	if !strings.Contains(body, "couldn&#39;t start") || !strings.Contains(body, "app: exited with code 1") {
 		t.Errorf("the page must name what failed: %s", body)
 	}
 	// And it keeps saying so: an eternal spinner is what this replaces, not an eternal 200.
