@@ -52,9 +52,10 @@
 //
 // ── THE CHALLENGE PROBE (a Go-only note) ─────────────────────────────────────────────────────────
 //
-// The TS called inspect.ts's detectChallenge directly. Here inspect sits above this package in the
-// import graph, so the probe is the DetectChallenge variable, which inspect fills in at init. Until
-// it does, the mode is `unknown` — which errs toward including the certresolver, the cheaper mistake.
+// The TS called inspect.ts's detectChallenge directly; so does this package — the DetectChallenge
+// variable defaults to inspect's probe and exists only so tests can pin a mode without scripting
+// docker. When the probe cannot answer, the mode is `unknown` — which errs toward including the
+// certresolver, the cheaper mistake.
 package autolabel
 
 import (
@@ -64,6 +65,7 @@ import (
 	"strings"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
@@ -91,9 +93,10 @@ const (
 	Unknown Challenge = "unknown"
 )
 
-// DetectChallenge asks the running Traefik which challenge mode it uses. inspect replaces this at
-// init; the default answers Unknown.
-var DetectChallenge = func(exec.Runner) Challenge { return Unknown }
+// DetectChallenge asks the running Traefik which challenge mode it uses — inspect's probe, behind a
+// variable so tests can pin a mode without scripting docker. A host that cannot be probed answers
+// Unknown, which errs toward including the certresolver (see AugmentComposeDoc).
+var DetectChallenge = func(r exec.Runner) Challenge { return Challenge(inspect.DetectChallenge(r)) }
 
 // RoutingRequest is what a service asked for, read from its `pstack.routing.*` labels.
 type RoutingRequest struct {

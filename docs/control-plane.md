@@ -222,7 +222,7 @@ mode is the rate-limit bug in the other.
 | | **HTTP-01** | **DNS-01** |
 |---|---|---|
 | Per-PR router labels | `tls=true` **and** `tls.certresolver=le` | `tls=true` **and nothing else** |
-| Who requests a cert | **every** router, for its own hostname, on first HTTPS request | **exactly one** always-on router |
+| Who requests a cert | **every** router, for its own hostname, the moment its router loads | **exactly one** always-on router |
 | `tls.domains[0].main` / `.sans` | not used | on that one router only: `${DOMAIN}` / `*.${DOMAIN}` |
 | How other routers get TLS | they don't inherit — each resolves its own | **inherit the wildcard by SNI** |
 

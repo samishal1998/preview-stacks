@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **DNS-01 hosts no longer order a certificate per preview.** The deploy-time probe that reads the
+  challenge mode off the running Traefik was never wired in the Go port — its seam defaulted to
+  `unknown`, so every per-PR router carried `tls.certresolver=le` even on DNS-01 hosts, where each
+  new hostname then ordered its **own** certificate instead of inheriting the wildcard: slow
+  issuance (DNS-01 orders run serially, ~30 s propagation wait each), and past ~50 new hostnames a
+  week, none at all. HTTP-01 hosts were unaffected (`unknown` errs toward including the resolver,
+  which is correct there). If you migrated a host to DNS-01 and redeployed, redeploy the stacks
+  again after upgrading — this time the labels really do drop the resolver.
+
+### Changed
+
+- **Traefik's `mem_limit` is now 512m** (was 256m). An OOM-killed Traefik takes its in-memory ACME
+  challenge tokens with it: every in-flight validation then 404s (`Cannot retrieve the ACME
+  challenge`), and the failed order still bills the Let's Encrypt rate limit. A busy host with many
+  routers sits close enough to 256m for that to happen mid-issuance. Applied to an existing host by
+  the next `pstack upgrade` / `pstack init` re-render.
+
 ### Added
 
 - **The API serves its own OpenAPI document**, unauthenticated, in both formats:

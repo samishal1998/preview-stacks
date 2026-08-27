@@ -31,7 +31,9 @@ services:
     # provider then comes up empty — every route 404s while Traefik itself looks perfectly healthy.
     image: traefik:v3.6.1
     restart: unless-stopped
-    mem_limit: 256m
+    # Not lower: an OOM kill wipes Traefik's in-memory ACME challenge tokens, and every in-flight
+    # certificate validation then 404s while the failed order still bills the LE rate limit.
+    mem_limit: 512m
     ports:
       - "80:80"
       - "443:443"
@@ -101,7 +103,6 @@ services:
       # propagation check.
       - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53
       - --certificatesresolvers.le.acme.dnschallenge.propagation.delaybeforechecks=30s
-      # Ask a public resolver during the precheck instead of the host's, which may serve stale or
       - --log.level=INFO
       - --accesslog=true
 
