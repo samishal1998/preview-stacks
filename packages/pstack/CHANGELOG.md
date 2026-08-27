@@ -15,6 +15,15 @@
 
 ### Changed
 
+- **The wake page was redesigned.** A breathing amber lamp — the sleeping-laptop light — instead of
+  a generic spinner: slow breath while waking, quicker once the preview is awake and about to
+  answer, a still ember when the wake failed. The hostname is the page's one large element (the
+  preview's name bright, the shared domain dimmed), the copy is written for whoever clicked the
+  link rather than for an operator, a distinct message covers the busy state, long hostnames and
+  long failure notes wrap and scroll instead of overflowing, an elapsed counter appears once the
+  wait is real, and `prefers-reduced-motion` stills the breath. Behavior is unchanged: same 503,
+  same headers, same polling, failures still quote the container's own reason.
+
 - **Traefik's `mem_limit` is now 512m** (was 256m). An OOM-killed Traefik takes its in-memory ACME
   challenge tokens with it: every in-flight validation then 404s (`Cannot retrieve the ACME
   challenge`), and the failed order still bills the Let's Encrypt rate limit. A busy host with many

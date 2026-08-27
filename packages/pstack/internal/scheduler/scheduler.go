@@ -431,50 +431,81 @@ const (
 // hostname, where nothing of the control plane exists) and it polls ITSELF: when the response stops
 // carrying x-pstack-wake, Traefik routes the hostname to the app and a reload lands on it.
 func WakePage(host, stack string, state WakeState, errText string) string {
-	title := "Your preview is spinning up…"
-	if state == Failed {
-		title = "Your preview could not start"
-	}
-	var detail string
+	title, aria := "Waking your preview", "your preview is waking"
+	var detail, failure string
 	switch state {
 	case Failed:
+		title, aria = "Your preview couldn't start", "waking failed"
 		if errText == "" {
 			errText = "unknown error"
 		}
-		detail = "The last attempt to wake <b>" + js.Esc(stack) + "</b> failed: <code>" + js.Esc(errText) + "</code>. Reload to try again."
+		detail = "Waking <b>" + js.Esc(stack) + "</b> didn't work this time. Reload to try again — and if it keeps happening, the note below is what the person who runs your previews will want to see."
+		failure = "\n  <pre class=\"why\"><code>" + js.Esc(errText) + "</code></pre>"
+	case Busy:
+		aria = "your preview is busy"
+		detail = "<b>" + js.Esc(stack) + "</b> is in the middle of another update. Your preview will answer as soon as that wraps up — nothing for you to do."
 	case Starting:
 		// Deliberately not "was asleep": it is awake. This is the window that used to serve the
 		// control plane's own UI here. It is NOT the 502 the same visitor may also see — once
 		// Traefik has the container's route, the request goes to the container and never reaches
 		// this process at all, so nothing on this page can replace that one.
-		detail = "<b>" + js.Esc(stack) + "</b> is awake and its containers are starting — it has not answered a request yet. This page reloads by itself when it does."
+		aria = "your preview is almost ready"
+		detail = "<b>" + js.Esc(stack) + "</b> is awake and getting ready to answer — almost there. You'll be taken in the moment it responds."
 	default:
-		detail = "<b>" + js.Esc(stack) + "</b> was asleep. It is being brought back now — this page reloads by itself when it answers."
+		detail = "<b>" + js.Esc(stack) + "</b> was asleep. Previews doze off when nobody is visiting, and come back the moment someone does — it's happening now. This page will take you in as soon as it answers."
+	}
+	// The hostname is the page's one large typographic element: the preview's own name bright, the
+	// shared domain dimmed, a <wbr> letting an arbitrarily long name break where it means something.
+	name, domain, _ := strings.Cut(host, ".")
+	hostLine := "<span>" + js.Esc(name) + "</span>"
+	if domain != "" {
+		hostLine += "<wbr>." + js.Esc(domain)
 	}
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>` + js.Esc(title) + `</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="15">
 <style>
-  body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px/1.5 system-ui,sans-serif;background:#0f1115;color:#e6e8ee}
-  main{max-width:34rem;padding:2rem;text-align:center}
-  h1{font-size:1.4rem;font-weight:600;margin:1rem 0 .5rem}
-  p{margin:.25rem 0;color:#aab0bd}
-  code{font-family:ui-monospace,monospace;background:#1b1f27;padding:.1rem .35rem;border-radius:4px;color:#e6e8ee}
-  .spin{width:2.5rem;height:2.5rem;margin:0 auto;border:3px solid #2a2f3a;border-top-color:#7aa2f7;border-radius:50%;animation:r 1s linear infinite}
-  .failed .spin{display:none}
-  small{display:block;margin-top:1.5rem;color:#6b7280}
-  @keyframes r{to{transform:rotate(360deg)}}
+  :root{--night:#10131c;--bright:#eceef4;--mist:#a5abbc;--dim:#5d6373;--ember:#f2a65a;--ember-core:#ffd9a8;--pane:#181c28}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;min-height:100svh;display:grid;place-items:center;font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--night);color:var(--mist);-webkit-font-smoothing:antialiased}
+  main{max-width:36rem;padding:min(8vw,3rem) min(6vw,2rem);text-align:center}
+  /* THE LAMP — a sleeping machine breathes. ~13 breaths a minute while waking; quicker once the
+     preview is awake and about to answer; a still, cold ember when the wake failed. */
+  .lamp{height:5.5rem;display:grid;place-items:center;margin-bottom:.5rem}
+  .lamp i{width:.85rem;height:.85rem;border-radius:50%;background:var(--ember-core);
+    box-shadow:0 0 .6rem .15rem var(--ember),0 0 2.6rem .9rem rgba(242,166,90,.38),0 0 7rem 2.6rem rgba(242,166,90,.14);
+    animation:breathe 4.6s ease-in-out infinite}
+  .starting .lamp i{animation-duration:1.7s}
+  .failed .lamp i{animation:none;background:#8a4a33;box-shadow:0 0 .5rem .1rem rgba(180,86,46,.45),0 0 2rem .6rem rgba(180,86,46,.12);opacity:.8}
+  @keyframes breathe{0%,100%{transform:scale(.82);opacity:.62}50%{transform:scale(1.06);opacity:1}}
+  @media (prefers-reduced-motion:reduce){.lamp i{animation:none}}
+  h1{font-size:clamp(1.35rem,4.5vw,1.7rem);font-weight:650;letter-spacing:-.015em;color:var(--bright);margin:0 0 .35rem}
+  .host{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(.82rem,2.8vw,.95rem);color:var(--dim);word-break:break-all;margin:0 0 1.1rem}
+  .host span{color:var(--ember);font-weight:600}
+  .what{margin:0 auto;max-width:32rem}
+  .what b{color:var(--bright);font-weight:600}
+  .why{margin:1.1rem auto 0;max-width:32rem;max-height:9rem;overflow:auto;text-align:left;background:var(--pane);border:1px solid #232838;border-radius:8px;padding:.7rem .9rem}
+  .why code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.82rem;line-height:1.55;color:var(--mist);white-space:pre-wrap;word-break:break-word}
+  .tick{margin:1.2rem 0 0;font-size:.82rem;color:var(--dim);min-height:1.2em}
+  footer{margin-top:2.4rem;font-size:.78rem;letter-spacing:.03em;color:var(--dim)}
 </style></head>
 <body class="` + string(state) + `"><main>
-  <div class="spin" role="status" aria-label="loading"></div>
+  <div class="lamp" role="status" aria-label="` + js.Esc(aria) + `"><i></i></div>
   <h1>` + js.Esc(title) + `</h1>
-  <p>` + detail + `</p>
-  <small>` + js.Esc(host) + ` · pstack wake-on-call</small>
+  <p class="host">` + hostLine + `</p>
+  <p class="what">` + detail + `</p>` + failure + `
+  <p class="tick" aria-hidden="true"></p>
+  <footer>pstack · wake-on-call</footer>
 </main>
 <script>
   (function () {
-    var tries = 0;
+    var tries = 0, born = Date.now();
+    var tick = document.querySelector('.tick');
+    setInterval(function () {
+      var s = Math.round((Date.now() - born) / 1000);
+      if (s >= 5 && tick) tick.textContent = 'still checking — ' + (s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's');
+    }, 1000);
     function poll() {
       fetch(location.href, { cache: 'no-store', redirect: 'manual' }).then(function (r) {
         if (r.headers.get('x-pstack-wake') !== '1' && r.status < 500) { location.reload(); return; }
