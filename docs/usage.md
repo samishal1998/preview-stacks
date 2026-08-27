@@ -925,6 +925,42 @@ const ready = await pstack.waitForReady(`pr-${pr}`, { vars: { PR: pr } });
 Zero dependencies, and it ships `verifyWebhook` for the receiving end.
 See [packages/client/README.md](../packages/client/README.md).
 
+### `pstack api` — every route as a command (0.34.0)
+
+The CLI carries the whole API. Sixty-nine commands, **generated** from
+[`packages/pstack/api/openapi.yaml`](../packages/pstack/api/openapi.yaml), so they cannot describe a
+route the server does not serve:
+
+```bash
+export PSTACK_API_URL=https://api.preview.example.com
+export PSTACK_TOKEN=…                       # the host's, or one from `pstack api tokens create`
+
+pstack api --help                           # the groups
+pstack api deployments --help               # the commands in one
+pstack api deployments list
+pstack api deployments up --id pr-123
+pstack api jobs get --job-id up-pr-123-1-apeq0d
+pstack api settings set-max-jobs --value 8
+```
+
+Parameters are flags, typed and validated from the schema: `--value` is an integer, `--action` is
+one of `start|stop|restart`, and a missing required flag is refused before anything is sent. Every
+command takes `--json` for the raw response, and a **non-2xx is a non-zero exit**, so
+`pstack api … || rollback` works.
+
+A **request body** is `--data '<json>'`. When a body is *flat* — every field a scalar — each field is
+also its own flag, which is why `settings set-max-jobs --value 8` works but
+`deployments put` takes `--data '{"spec":"…"}'`: its body carries `env`, a map, and there is no sane
+flag shape for one.
+
+`PSTACK_API_URL` has **no default**, the same refusal `pull config` makes: a guess would talk to the
+wrong host. `pstack api --help` needs neither variable — asking what the commands are does not
+depend on having a host.
+
+**Three routes are deliberately absent**: the two SSE streams and the WebSocket terminal. A command
+runs one request and prints the answer, so each would buffer an endless response. Use
+`curl -N` for the streams, and the UI for the terminal.
+
 ### Stop a running job
 
 ```console
@@ -2249,7 +2285,7 @@ is loopback or a private address, for the same reason.
 | Travels | Stays behind |
 |---|---|
 | accounts, with their password hashes — people keep the passwords they already have | deployments: they are per-PR and ephemeral, and belong to the host's Docker |
-| API tokens (hashes), so scripts keep working | login sessions and half-finished SSO sign-ins |
+| API tokens (hashes), so scripts keep working — and a document you author may [name the token itself](#predeclaring-the-tokens-a-rebuilt-host-should-hold-0340) | login sessions and half-finished SSO sign-ins |
 | host variables **and secrets** | notifier delivery history |
 | notifiers, with their signing secrets and URLs | terminal sessions |
 | the SSO providers and their client secrets | |
@@ -2257,6 +2293,45 @@ is loopback or a private address, for the same reason.
 
 Restoring the right-hand column into a *different* host would be wrong, not merely useless — so
 none of it is in the file, and nothing in the file names it.
+
+#### Predeclaring the tokens a rebuilt host should hold (0.34.0)
+
+**A migration already preserves API tokens.** They travel as SHA-256 digests, which is what the
+`tokens` table stores anyway, so every script and CI secret holding one keeps working on the other
+side without anything being re-issued. That is the round trip, and it needs nothing from you.
+
+The other direction is a document **nobody exported** — one you author, declaring the credentials a
+rebuilt host should come up holding. A token row may name the token itself instead of its digest:
+
+```json
+{
+  "version": 1,
+  "users":  [{ "username": "ci", "role": "developer", "passwordHash": "$argon2id$…", "createdAt": 1 }],
+  "tokens": [{ "username": "ci", "name": "pipeline", "token": "pstack_pat_…", "createdAt": 1 }]
+}
+```
+
+`token` is hashed on apply with the same function that mints one, so the value authenticates exactly
+as an issued token would. A row may carry **either** `token` or `tokenHash`; carrying both with
+different values is refused rather than guessed at, and named in the skip list.
+
+Three things to know before you use it:
+
+- **A token belongs to an account.** There is no host-wide machine token but `PSTACK_TOKEN` (below),
+  so the document must create — or the host must already have — the user the token is for. The
+  token inherits **that account's role**, and follows it: promote the account and every token it
+  holds is promoted with it.
+- **An export never emits `token`.** The host does not have the plaintext to emit; that is the point
+  of storing a digest. Round-tripping an export is still hash-only.
+- **`pull config`'s pre-write summary calls it out** — "carried in PLAINTEXT, so whoever wrote this
+  file holds it" — because a digest proves nothing about its author and a plaintext token proves
+  they hold the credential. Seal the file (`push config` requires it) and treat it as the secret it
+  is.
+
+**`PSTACK_TOKEN` is not one of these and cannot be a list.** It is a single value, compared directly,
+and it is also the **HMAC key share links are signed with** — which is what makes rotating it the
+only way to revoke every outstanding link. A second accepted value would silently break that, so
+per-machine credentials are personal tokens, named and individually revocable, not extra root ones.
 
 ### Only `PSTACK_TOKEN` can do this
 
@@ -2778,6 +2853,7 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `serve` | HTTP API + UI over the deployment registry. Runs until killed. | 3 on refusal |
 | `swarm [status]` | the swarm's nodes, the manager address and the ports a worker needs. Read-only; reads docker every time. **Exit 1 when this host is not a manager**, so a script need not parse it. | 0 · 1 |
 | `swarm join` | what a new worker runs — `--format command` (default), `script`, `cloud-config` (+`--distro`) or `token`. **The output is a secret**: every shape embeds the join token. To stdout, or `-o <file>`. | 0 · 1 · 3 |
+| `api <group> <command>` | call any API route. Generated from `api/openapi.yaml`; `--help` at any level lists what is under it. Needs `PSTACK_API_URL` and `PSTACK_TOKEN`. Non-2xx exits non-zero | 0 · 1 |
 | `pull config` | seal this host's whole portable configuration — accounts, tokens, host secrets, notifiers, SSO, registry logins, routing files, named specs — into one `0600` file (`-o`, never stdout). Talks to `PSTACK_API_URL` as the **root token**. | 0 · 1 · 3 |
 | `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
 
@@ -2976,7 +3052,8 @@ one (the body names both), a share link outside its views, or an admin at `/api/
 **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 
-Job `state`: `running` · `ok` · `failed` · `leaked` · `cancelled`. Job `action`: `up` · `down` ·
+Job `state`: `queued` · `running` · `ok` · `failed` · `leaked` · `cancelled` · `superseded` — the
+[seven](#read-a-job), of which only the first two are not final. Job `action`: `up` · `down` ·
 `verify` · `sleep` · `wake`.
 
 ### Control-stack hostnames

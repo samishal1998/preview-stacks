@@ -1,0 +1,797 @@
+openapi: 3.0.3
+
+# The pstack control-plane API, as a document.
+#
+# ── WHY THIS FILE EXISTS, IN A REPO THAT REFUSES DUPLICATED ROUTE TABLES ─────────────────────────
+#
+# `docs/README.md` says the route list lives in the code "because a doc that duplicates a route table
+# drifts from it". That rule pointed at `api.ts`'s header comment, and `api.ts` was deleted at the Go
+# cutover — so the artifact it protected has not existed since 0.29.0. This is that artifact, and it
+# is not merely a description: `pstack api …` is GENERATED from it (oascmd-gen → zz_generated.go),
+# so a path that is wrong here produces a command that is wrong, and `openapi_coverage_test.go`
+# fails when a route exists in `routes.go` and not here. Drift is a build failure, not a stale
+# paragraph.
+#
+# ── WHAT IS DELIBERATELY NOT IN IT ───────────────────────────────────────────────────────────────
+#
+# The three STREAMING routes — `GET /api/deployments/:id/logs/stream` (SSE),
+# `GET /api/jobs/:id/stream` (SSE) and `GET /api/deployments/:id/terminal` (WebSocket). A generated
+# command executes one request and prints the response, so each would buffer an unbounded stream
+# into memory and print it when the server finally closes — an hour later for the log follower, or
+# never for the terminal. The coverage test lists them by name so their absence is a decision with a
+# reason attached rather than an oversight.
+#
+# Also absent: `GET /` and every non-`/api/` path (the embedded UI), and the catch-all wake route.
+# Neither is an API call.
+#
+# ── SCHEMAS ARE LOOSE ON PURPOSE ─────────────────────────────────────────────────────────────────
+#
+# Bodies are modelled where flat modelling gives a caller real flags (`--value`, `--username`,
+# `--role`) and left as free objects with `--data` where they are not. A complete PATH set generates
+# every command; a rich SCHEMA set for a third of the paths generates a third of the commands. Paths
+# first, bodies as they earn it.
+
+info:
+  title: pstack control plane
+  version: 0.34.0
+  description: |
+    The HTTP API of a pstack host. Every operation here is reachable as `pstack api …`.
+
+    Authentication is `Authorization: Bearer <token>` — either `PSTACK_TOKEN` (the machine
+    credential, which outranks every role) or a personal token minted at `/api/tokens`. The CLI
+    sends whichever `PSTACK_TOKEN` holds and talks to `PSTACK_API_URL`, which has no default.
+
+servers:
+  - url: '{apiUrl}'
+    variables:
+      apiUrl:
+        default: https://api.preview.example.com
+        description: PSTACK_API_URL — the API's own hostname, `api.<domain>` on a host stood up by `pstack init`.
+
+tags:
+  - name: deployments
+    description: 'Submit, deploy, tear down, sleep, share and inspect a preview stack.'
+  - name: jobs
+    description: 'What the host is doing, or just did. In memory, newest 50.'
+  - name: specs
+    description: 'Named specs, stored on the host and referenced by a deployment.'
+  - name: routing
+    description: 'Traefik''s dynamic-config files, and what it is actually serving.'
+  - name: registries
+    description: 'Private-registry logins, used when a deploy pulls.'
+  - name: notifiers
+    description: 'Webhook and chat notifiers, their deliveries, and redelivery.'
+  - name: host-vars
+    description: 'Host variables and secrets, shared by every deployment.'
+  - name: users
+    description: 'Accounts, roles and passwords.'
+  - name: tokens
+    description: 'Personal API tokens.'
+  - name: settings
+    description: 'The two settings changeable at runtime, without a restart.'
+  - name: sso
+    description: 'Single sign-on providers.'
+  - name: swarm
+    description: 'The swarm, and what a new worker runs to join it.'
+  - name: config
+    description: 'The whole portable configuration: export it, apply one.'
+  - name: host
+    description: 'The host itself — health, the control stack, terminal history, the probe.'
+
+paths:
+  # ── deployments ─────────────────────────────────────────────────────────────────────────────────
+  /api/deployments:
+    get:
+      tags: [deployments]
+      operationId: listDeployments
+      summary: Every deployment, with its busy/running state.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/deployments/{id}:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [deployments]
+      operationId: getDeployment
+      summary: One deployment's meta and spec summary.
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [deployments]
+      operationId: putDeployment
+      summary: Submit or replace a deployment. The spec is parsed before it is stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spec]
+              properties:
+                spec: { type: string, description: The spec document, as text. }
+                compose: { type: string, description: The compose file, as text. }
+                env: { type: object, additionalProperties: { type: string }, description: 'Spec variables. Read from HERE, never from the query string.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '201': { $ref: '#/components/responses/Created' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
+    delete:
+      tags: [deployments]
+      operationId: deleteDeployment
+      summary: Forget a deployment. Refused while its containers exist.
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/Conflict' } }
+
+  /api/deployments/{id}/up:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: upDeployment
+      summary: Deploy. 202 with a job — queued when the stack is busy.
+      responses: { '202': { $ref: '#/components/responses/Accepted' } }
+
+  /api/deployments/{id}/down:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: downDeployment
+      summary: Tear down. Preempts whatever the stack is doing.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                verify: { type: boolean, default: true, description: Run the leak check afterwards. }
+                force: { type: boolean, description: 'Required to tear down a `kind: shared` deployment.' }
+      responses: { '202': { $ref: '#/components/responses/Accepted' }, '409': { $ref: '#/components/responses/Conflict' } }
+
+  /api/deployments/{id}/verify:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: verifyDeployment
+      summary: Run every assert_gone and report what survived.
+      responses: { '202': { $ref: '#/components/responses/Accepted' } }
+
+  /api/deployments/{id}/sleep:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: sleepDeployment
+      summary: Take the project down, keeping every volume and axis.
+      responses: { '202': { $ref: '#/components/responses/Accepted' }, '409': { $ref: '#/components/responses/Conflict' } }
+
+  /api/deployments/{id}/wake:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: wakeDeployment
+      summary: Bring a sleeping deployment back.
+      responses: { '202': { $ref: '#/components/responses/Accepted' } }
+
+  /api/deployments/{id}/cancel:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: cancelDeploymentJobs
+      x-cli-name: cancel
+      summary: Stop everything this stack has outstanding — running and queued.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/deployments/{id}/share:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    post:
+      tags: [deployments]
+      operationId: createShareLink
+      x-cli-name: share create
+      summary: Mint a read-only link to one deployment.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                views: { type: array, items: { type: string, enum: [details, logs] }, description: What the link may open. }
+                ttl: { type: string, description: 'How long it lives, e.g. `7d`.' }
+      responses: { '201': { $ref: '#/components/responses/Created' } }
+
+  /api/deployments/{id}/runtime:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [deployments]
+      operationId: getDeploymentRuntime
+      summary: Containers, routes, findings and the host's ACME challenge mode.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/deployments/{id}/readiness:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [deployments]
+      operationId: getDeploymentReadiness
+      summary: The readiness verdict, optionally waiting for one.
+      parameters:
+        - { name: timeout, in: query, schema: { type: integer }, description: Milliseconds to wait for a verdict. }
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/deployments/{id}/logs:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [deployments]
+      operationId: getDeploymentLogs
+      summary: A slice of container logs, redacted.
+      parameters:
+        - { name: tail, in: query, schema: { type: integer }, description: How many lines. }
+        - { name: service, in: query, schema: { type: string }, description: One service instead of all. }
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/deployments/{id}/source:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [deployments]
+      operationId: getDeploymentSource
+      summary: The stored spec and compose file, as submitted.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/deployments/{id}/containers/{name}/{action}:
+    parameters:
+      - { $ref: '#/components/parameters/DeploymentId' }
+      - { name: name, in: path, required: true, schema: { type: string }, description: The container's name, which this deployment must own. }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
+    post:
+      tags: [deployments]
+      operationId: actOnContainer
+      x-cli-name: containers act
+      summary: Start, stop or restart one container.
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+
+  # ── jobs ────────────────────────────────────────────────────────────────────────────────────────
+  /api/jobs:
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      summary: The last 50 jobs, newest first. In memory — a restart loses them.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/jobs/{jobId}:
+    parameters: [{ name: jobId, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: One job — state, transcript and outcome.
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+
+  /api/jobs/{jobId}/cancel:
+    parameters: [{ name: jobId, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [jobs]
+      operationId: cancelJob
+      summary: Stop one running job. Partial state is left as it is.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── specs ───────────────────────────────────────────────────────────────────────────────────────
+  /api/specs:
+    get:
+      tags: [specs]
+      operationId: listSpecs
+      summary: Every named spec.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/specs/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [specs]
+      operationId: getSpec
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [specs]
+      operationId: putSpec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spec]
+              properties:
+                spec: { type: string }
+                compose: { type: string }
+                description: { type: string }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [specs]
+      operationId: deleteSpec
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── routing ─────────────────────────────────────────────────────────────────────────────────────
+  /api/routing:
+    get:
+      tags: [routing]
+      operationId: listRoutingFiles
+      x-cli-name: list
+      summary: Traefik's dynamic-config files.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/routing/live:
+    get:
+      tags: [routing]
+      operationId: getLiveRouting
+      x-cli-name: live
+      summary: Every router Traefik currently knows about.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/routing/{file}:
+    parameters: [{ name: file, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [routing]
+      operationId: getRoutingFile
+      x-cli-name: get
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [routing]
+      operationId: putRoutingFile
+      x-cli-name: put
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, description: The file's whole contents. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [routing]
+      operationId: deleteRoutingFile
+      x-cli-name: delete
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── registries ──────────────────────────────────────────────────────────────────────────────────
+  /api/registries:
+    get:
+      tags: [registries]
+      operationId: listRegistries
+      summary: Private-registry logins. Hostnames only, never a credential.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # The route's regexp is greedy (`(.+)`), so a host containing `/` is reachable over HTTP but not
+  # through a templated path. No registry hostname contains one; a caller with such a host has to
+  # use curl, and that is the trade for having every other registry as a command.
+  /api/registries/{host}:
+    parameters: [{ name: host, in: path, required: true, schema: { type: string }, description: 'The registry hostname, e.g. `ghcr.io`.' }]
+    put:
+      tags: [registries]
+      operationId: putRegistry
+      x-cli-name: put
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [registries]
+      operationId: deleteRegistry
+      x-cli-name: delete
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── notifiers ───────────────────────────────────────────────────────────────────────────────────
+  /api/notifiers:
+    get:
+      tags: [notifiers]
+      operationId: listNotifiers
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    post:
+      tags: [notifiers]
+      operationId: createNotifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, events, config]
+              properties:
+                name: { type: string }
+                type: { type: string, description: '`webhook` (the default), `slack` or `discord`.' }
+                events: { type: array, items: { type: string }, description: 'Event names, or `*` for everything including events added later.' }
+                config: { type: object, description: 'Type-specific: the URL, the secret, the channel.' }
+      responses: { '201': { $ref: '#/components/responses/Created' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/notifiers/meta:
+    get:
+      tags: [notifiers]
+      operationId: getNotifierMeta
+      x-cli-name: meta
+      summary: Every event name a notifier may subscribe to, and each type's config shape.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/notifiers/{notifierId}:
+    parameters: [{ $ref: '#/components/parameters/NotifierId' }]
+    get:
+      tags: [notifiers]
+      operationId: getNotifier
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+    patch:
+      tags: [notifiers]
+      operationId: updateNotifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                events: { type: array, items: { type: string } }
+                config: { type: object }
+                enabled: { type: boolean }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [notifiers]
+      operationId: deleteNotifier
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/notifiers/{notifierId}/test:
+    parameters: [{ $ref: '#/components/parameters/NotifierId' }]
+    post:
+      tags: [notifiers]
+      operationId: testNotifier
+      summary: 'Send one delivery now, straight to this notifier. It carries `test: true`.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/notifiers/{notifierId}/deliveries:
+    parameters: [{ $ref: '#/components/parameters/NotifierId' }]
+    get:
+      tags: [notifiers]
+      operationId: listNotifierDeliveries
+      x-cli-name: deliveries list
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/notifiers/{notifierId}/deliveries/{deliveryId}/redeliver:
+    parameters:
+      - { $ref: '#/components/parameters/NotifierId' }
+      - { name: deliveryId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [notifiers]
+      operationId: redeliverNotifierDelivery
+      x-cli-name: deliveries redeliver
+      summary: Send the stored envelope again, byte for byte.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── host variables ──────────────────────────────────────────────────────────────────────────────
+  /api/host-vars:
+    get:
+      tags: [host-vars]
+      operationId: listHostVars
+      x-cli-name: list
+      summary: Every host variable. A secret's NAME, never its value.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/host-vars/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    put:
+      tags: [host-vars]
+      operationId: putHostVar
+      x-cli-name: put
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string }
+                secret: { type: boolean, description: A secret's value is never returned by any route again. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [host-vars]
+      operationId: deleteHostVar
+      x-cli-name: delete
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── people and credentials ──────────────────────────────────────────────────────────────────────
+  /api/users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Admin only. An absent role means the host's `default_role`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                email: { type: string }
+                role: { type: string, enum: [viewer, developer, maintainer, admin] }
+      responses: { '201': { $ref: '#/components/responses/Created' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/users/{userId}:
+    parameters: [{ $ref: '#/components/parameters/UserId' }]
+    patch:
+      tags: [users]
+      operationId: updateUserRole
+      x-cli-name: set-role
+      summary: Admin only. Refused on demoting the last admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [viewer, developer, maintainer, admin] }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [users]
+      operationId: deleteUser
+      summary: Admin only. Refused on the last user and the last admin.
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/users/{userId}/password:
+    parameters: [{ $ref: '#/components/parameters/UserId' }]
+    put:
+      tags: [users]
+      operationId: setUserPassword
+      x-cli-name: password set
+      summary: Your own at any role; anybody else's is admin only. Revokes their sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/tokens:
+    get:
+      tags: [tokens]
+      operationId: listTokens
+      summary: Your personal API tokens. Hashes are never returned.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    post:
+      tags: [tokens]
+      operationId: createToken
+      summary: Mint one. The token itself appears in this response and nowhere else, ever.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                ttl: { type: string, description: 'How long it lives, e.g. `90d`.' }
+      responses: { '201': { $ref: '#/components/responses/Created' } }
+
+  /api/tokens/{tokenId}:
+    parameters: [{ name: tokenId, in: path, required: true, schema: { type: integer } }]
+    delete:
+      tags: [tokens]
+      operationId: deleteToken
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/auth/me:
+    get:
+      tags: [users]
+      operationId: getCurrentPrincipal
+      x-cli-name: me
+      summary: Who this credential is, and at what role.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── settings ────────────────────────────────────────────────────────────────────────────────────
+  /api/settings:
+    get:
+      tags: [settings]
+      operationId: listSettings
+      summary: Both runtime settings, resolved, each saying which layer it came from.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/settings/max_jobs:
+    put:
+      tags: [settings]
+      operationId: setMaxJobs
+      x-cli-name: set-max-jobs
+      summary: 'How many jobs run at once, host-wide. Maintainer. In force immediately: raising it dispatches what was waiting, lowering it cancels nothing.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: integer, description: A whole number, 1 or more. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/settings/default_role:
+    put:
+      tags: [settings]
+      operationId: setDefaultRole
+      x-cli-name: set-default-role
+      summary: The role an account gets when nothing names one. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string, enum: [viewer, developer, maintainer, admin] }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  # ── single sign-on ──────────────────────────────────────────────────────────────────────────────
+  /api/sso/config:
+    get:
+      tags: [sso]
+      operationId: getSsoConfig
+      x-cli-name: config get
+      summary: Every provider, the callback URL to paste, and the presets. Never a client secret.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    put:
+      tags: [sso]
+      operationId: putSsoConfig
+      x-cli-name: config put
+      summary: Create or replace one provider. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: 'The provider''s config, plus `key` and `clientSecret`. Free-form because the fields differ per preset.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [sso]
+      operationId: deleteSsoConfig
+      x-cli-name: config delete
+      summary: Forget the only provider. Accounts it created stay.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/sso/config/{key}:
+    parameters: [{ name: key, in: path, required: true, schema: { type: string }, description: The provider's slug. }]
+    put:
+      tags: [sso]
+      operationId: putSsoProvider
+      x-cli-name: provider put
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [sso]
+      operationId: deleteSsoProvider
+      x-cli-name: provider delete
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── the host itself ─────────────────────────────────────────────────────────────────────────────
+  /api/swarm:
+    get:
+      tags: [swarm]
+      operationId: getSwarm
+      summary: The swarm's nodes and the manager address. Never the join token.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/swarm/join:
+    get:
+      tags: [swarm]
+      operationId: getSwarmJoin
+      x-cli-name: join
+      summary: What a new worker runs. THE OUTPUT IS A SECRET — every shape embeds the join token.
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [token, command, script, cloud-config] } }
+        - { name: distro, in: query, schema: { type: string }, description: 'For `cloud-config`: which Docker install steps to emit.' }
+      responses:
+        '200': { description: The join instructions, as text., content: { text/plain: { schema: { type: string } } } }
+
+  /api/control:
+    get:
+      tags: [host]
+      operationId: getControlStack
+      x-cli-name: control
+      summary: The control stack's own containers. Read-only, never actionable.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/terminal-sessions:
+    get:
+      tags: [host]
+      operationId: listTerminalSessions
+      x-cli-name: terminal-sessions
+      summary: Who opened a container shell, when, and against what.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/health:
+    get:
+      tags: [host]
+      operationId: getHealth
+      x-cli-name: health
+      summary: Liveness, whether auth is enforced, whether any account exists, and the version. No token needed.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/probe/{id}:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [host]
+      operationId: probeDeployment
+      x-cli-name: probe
+      summary: Is this preview serving? No token, no body — the answer is the status code and `x-pstack-probe`.
+      parameters:
+        - { name: service, in: query, schema: { type: string }, description: Which service, on a stack that publishes several. }
+      responses:
+        '200': { description: The upstream's own status. There is never a body. }
+
+  # ── portable configuration ──────────────────────────────────────────────────────────────────────
+  /api/config:
+    get:
+      tags: [config]
+      operationId: exportConfig
+      x-cli-name: export
+      summary: 'THE WHOLE PORTABLE CONFIGURATION IN PLAINTEXT: password hashes, token hashes, host secrets. Root token only, and it emits an event.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    post:
+      tags: [config]
+      operationId: importConfig
+      x-cli-name: import
+      summary: Apply such a document, create-or-skip. It can add but never repoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: A document from `exportConfig`. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/config/sealed:
+    post:
+      tags: [config]
+      operationId: importSealedConfig
+      x-cli-name: import-sealed
+      summary: Apply a sealed export, unsealed with a passphrase. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+components:
+  parameters:
+    DeploymentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: The registry id, e.g. `pr-123`.
+    NotifierId:
+      name: notifierId
+      in: path
+      required: true
+      schema: { type: integer }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: integer }
+
+  responses:
+    Ok: { description: OK. }
+    Created: { description: Created. }
+    Accepted: { description: 'Accepted — the response carries a job; poll it or stream it.' }
+    BadRequest: { description: The request named its own problem. }
+    Forbidden: { description: A credential this route admits, doing something it may not. }
+    NotFound: { description: No such thing. }
+    Conflict: { description: A job is in flight for that stack, or a guard refused. }

@@ -13,6 +13,7 @@ your question rather than reading in order — these are references, not a manua
 | **Change the code** (you are an agent, or new to the repo) | [`../AGENTS.md`](../AGENTS.md) |
 | Call the API **from a script** | [`../packages/client/README.md`](../packages/client/README.md) |
 | Receive **events** in your own service | [`webhook-events.md`](webhook-events.md) |
+| **Move a host from HTTP-01 to DNS-01** (certificates are slow, or the weekly limit bites) | [`tls-challenge.md`](tls-challenge.md) |
 | Give a team **accounts that cannot do everything** | [`usage.md` §7e](usage.md#7e-who-can-do-what-the-four-roles-0320) |
 | Let people sign in with **GitHub, Google, Okta…** | [`usage.md` §7c](usage.md#7c-sign-in-with-your-identity-provider-0270) |
 | **Copy a host's configuration** onto another host | [`usage.md` §7d](usage.md#7d-move-a-hosts-configuration-to-another-host-0300) |
@@ -62,10 +63,23 @@ once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogu
 every payload field — deployments, jobs (including `job.leaked`, the one to page on), specs, routing,
 readiness, container actions, sleep and wake, share links, and configuration import/export.
 
+### [`tls-challenge.md`](tls-challenge.md) — switching HTTP-01 ↔ DNS-01 on a host that exists
+
+A playbook, not a reference: what each mode *is* stays in `usage.md`. Four steps, the two footguns
+(`init` re-renders from its arguments alone, and per-PR routers keep the labels they were deployed
+with), and the rollback.
+
 ### [`ui-rules.md`](ui-rules.md) — the advanced UI's conventions (~100 lines)
 
 Casing, alignment, spacing, roundness, width, tables, buttons. Read before touching
 `apps/ui/` — every rule exists because its absence produced a specific visible defect.
+
+### [`mcp-design.md`](mcp-design.md) — an unbuilt design, kept as a record
+
+**Nothing in it is built.** What serving the API as MCP tools would take (the generated command
+tree's lock file is already the tool manifest), and the three decisions that gate it: the
+dependency, what is exposed by default, and which credential it runs as. Read before proposing it,
+so the reasoning is not re-derived.
 
 ### [`secret-exposure.md`](secret-exposure.md) — a closed finding, kept as a record
 

@@ -1,0 +1,1398 @@
+{
+  "lockVersion": 1,
+  "generatorVersion": "oascmd-gen/1",
+  "specDigest": "bc54b3cd51d02ef531e3f91a8f2bbd073ac92c4ad91080ce34356e2c54d8cd96",
+  "operations": {
+    "actOnContainer": {
+      "operationId": "actOnContainer",
+      "method": "POST",
+      "path": "/api/deployments/{id}/containers/{name}/{action}",
+      "command": "deployments containers act",
+      "funcName": "NewDeploymentsContainersActCommand",
+      "summary": "Start, stop or restart one container.",
+      "flags": [
+        {
+          "name": "action",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "start",
+            "stop",
+            "restart"
+          ]
+        },
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The container's name"
+        }
+      ],
+      "ext": {
+        "name": "containers act"
+      },
+      "digest": "93c540410ad651f6"
+    },
+    "cancelDeploymentJobs": {
+      "operationId": "cancelDeploymentJobs",
+      "method": "POST",
+      "path": "/api/deployments/{id}/cancel",
+      "command": "deployments cancel",
+      "funcName": "NewDeploymentsCancelCommand",
+      "summary": "Stop everything this stack has outstanding — running and queued.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {
+        "name": "cancel"
+      },
+      "digest": "9e92d02f99aa9d0f"
+    },
+    "cancelJob": {
+      "operationId": "cancelJob",
+      "method": "POST",
+      "path": "/api/jobs/{jobId}/cancel",
+      "command": "jobs cancel",
+      "funcName": "NewJobsCancelCommand",
+      "summary": "Stop one running job. Partial state is left as it is.",
+      "flags": [
+        {
+          "name": "job-id",
+          "apiName": "jobId",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "d1508b43c0a18de8"
+    },
+    "createNotifier": {
+      "operationId": "createNotifier",
+      "method": "POST",
+      "path": "/api/notifiers",
+      "command": "notifiers create",
+      "funcName": "NewNotifiersCreateCommand",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {},
+      "digest": "0bcde9c31f2d6e65"
+    },
+    "createShareLink": {
+      "operationId": "createShareLink",
+      "method": "POST",
+      "path": "/api/deployments/{id}/share",
+      "command": "deployments share create",
+      "funcName": "NewDeploymentsShareCreateCommand",
+      "summary": "Mint a read-only link to one deployment.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "ttl",
+          "source": "body",
+          "type": "string",
+          "description": "How long it lives, e.g. `7d`."
+        },
+        {
+          "name": "views",
+          "source": "body",
+          "type": "[]string",
+          "enum": [
+            "details",
+            "logs"
+          ],
+          "description": "What the link may open."
+        }
+      ],
+      "body": {
+        "flat": true
+      },
+      "ext": {
+        "name": "share create"
+      },
+      "digest": "6d0c593dedf9d123"
+    },
+    "createToken": {
+      "operationId": "createToken",
+      "method": "POST",
+      "path": "/api/tokens",
+      "command": "tokens create",
+      "funcName": "NewTokensCreateCommand",
+      "summary": "Mint one. The token itself appears in this response and nowhere else, ever.",
+      "flags": [
+        {
+          "name": "name",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "ttl",
+          "source": "body",
+          "type": "string",
+          "description": "How long it lives, e.g. `90d`."
+        }
+      ],
+      "body": {
+        "flat": true
+      },
+      "ext": {},
+      "digest": "4c9df60747b0b7cc"
+    },
+    "createUser": {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/api/users",
+      "command": "users create",
+      "funcName": "NewUsersCreateCommand",
+      "summary": "Admin only. An absent role means the host's `default_role`.",
+      "flags": [
+        {
+          "name": "email",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "password",
+          "source": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "role",
+          "source": "body",
+          "type": "string",
+          "enum": [
+            "viewer",
+            "developer",
+            "maintainer",
+            "admin"
+          ]
+        },
+        {
+          "name": "username",
+          "source": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {},
+      "digest": "5634509d5decfdee"
+    },
+    "deleteDeployment": {
+      "operationId": "deleteDeployment",
+      "method": "DELETE",
+      "path": "/api/deployments/{id}",
+      "command": "deployments delete",
+      "funcName": "NewDeploymentsDeleteCommand",
+      "summary": "Forget a deployment. Refused while its containers exist.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "3ceebce3b0762132"
+    },
+    "deleteHostVar": {
+      "operationId": "deleteHostVar",
+      "method": "DELETE",
+      "path": "/api/host-vars/{name}",
+      "command": "host-vars delete",
+      "funcName": "NewHostVarsDeleteCommand",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "delete"
+      },
+      "digest": "6e01018f4aa84a34"
+    },
+    "deleteNotifier": {
+      "operationId": "deleteNotifier",
+      "method": "DELETE",
+      "path": "/api/notifiers/{notifierId}",
+      "command": "notifiers delete",
+      "funcName": "NewNotifiersDeleteCommand",
+      "flags": [
+        {
+          "name": "notifier-id",
+          "apiName": "notifierId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "5d3f9f7740e12790"
+    },
+    "deleteRegistry": {
+      "operationId": "deleteRegistry",
+      "method": "DELETE",
+      "path": "/api/registries/{host}",
+      "command": "registries delete",
+      "funcName": "NewRegistriesDeleteCommand",
+      "flags": [
+        {
+          "name": "host",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry hostname, e.g. `ghcr.io`."
+        }
+      ],
+      "ext": {
+        "name": "delete"
+      },
+      "digest": "51dd630eda3a0a33"
+    },
+    "deleteRoutingFile": {
+      "operationId": "deleteRoutingFile",
+      "method": "DELETE",
+      "path": "/api/routing/{file}",
+      "command": "routing delete",
+      "funcName": "NewRoutingDeleteCommand",
+      "flags": [
+        {
+          "name": "file",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "delete"
+      },
+      "digest": "3ac0bec3dbfeb00c"
+    },
+    "deleteSpec": {
+      "operationId": "deleteSpec",
+      "method": "DELETE",
+      "path": "/api/specs/{name}",
+      "command": "specs delete",
+      "funcName": "NewSpecsDeleteCommand",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "764cb7777a9d5884"
+    },
+    "deleteSsoConfig": {
+      "operationId": "deleteSsoConfig",
+      "method": "DELETE",
+      "path": "/api/sso/config",
+      "command": "sso config delete",
+      "funcName": "NewSsoConfigDeleteCommand",
+      "summary": "Forget the only provider. Accounts it created stay.",
+      "ext": {
+        "name": "config delete"
+      },
+      "digest": "d4c3c23667f86561"
+    },
+    "deleteSsoProvider": {
+      "operationId": "deleteSsoProvider",
+      "method": "DELETE",
+      "path": "/api/sso/config/{key}",
+      "command": "sso provider delete",
+      "funcName": "NewSsoProviderDeleteCommand",
+      "flags": [
+        {
+          "name": "key",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The provider's slug."
+        }
+      ],
+      "ext": {
+        "name": "provider delete"
+      },
+      "digest": "9d6cf20c2826a496"
+    },
+    "deleteToken": {
+      "operationId": "deleteToken",
+      "method": "DELETE",
+      "path": "/api/tokens/{tokenId}",
+      "command": "tokens delete",
+      "funcName": "NewTokensDeleteCommand",
+      "flags": [
+        {
+          "name": "token-id",
+          "apiName": "tokenId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "7b9fd59a080e2ee6"
+    },
+    "deleteUser": {
+      "operationId": "deleteUser",
+      "method": "DELETE",
+      "path": "/api/users/{userId}",
+      "command": "users delete",
+      "funcName": "NewUsersDeleteCommand",
+      "summary": "Admin only. Refused on the last user and the last admin.",
+      "flags": [
+        {
+          "name": "user-id",
+          "apiName": "userId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "af8edcfef16d6871"
+    },
+    "downDeployment": {
+      "operationId": "downDeployment",
+      "method": "POST",
+      "path": "/api/deployments/{id}/down",
+      "command": "deployments down",
+      "funcName": "NewDeploymentsDownCommand",
+      "summary": "Tear down. Preempts whatever the stack is doing.",
+      "flags": [
+        {
+          "name": "force",
+          "source": "body",
+          "type": "bool",
+          "description": "Required to tear down a `kind: shared` deployment."
+        },
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "verify",
+          "source": "body",
+          "type": "bool",
+          "default": "true",
+          "description": "Run the leak check afterwards."
+        }
+      ],
+      "body": {
+        "flat": true
+      },
+      "ext": {},
+      "digest": "a16815b0592792d6"
+    },
+    "exportConfig": {
+      "operationId": "exportConfig",
+      "method": "GET",
+      "path": "/api/config",
+      "command": "config export",
+      "funcName": "NewConfigExportCommand",
+      "summary": "THE WHOLE PORTABLE CONFIGURATION IN PLAINTEXT: password hashes, token hashes, host secrets. Root token only, and it emits an event.",
+      "ext": {
+        "name": "export"
+      },
+      "digest": "5c910c0a8c518448"
+    },
+    "getControlStack": {
+      "operationId": "getControlStack",
+      "method": "GET",
+      "path": "/api/control",
+      "command": "host control",
+      "funcName": "NewHostControlCommand",
+      "summary": "The control stack's own containers. Read-only, never actionable.",
+      "ext": {
+        "name": "control"
+      },
+      "digest": "41a9e26c914d63bf"
+    },
+    "getCurrentPrincipal": {
+      "operationId": "getCurrentPrincipal",
+      "method": "GET",
+      "path": "/api/auth/me",
+      "command": "users me",
+      "funcName": "NewUsersMeCommand",
+      "summary": "Who this credential is, and at what role.",
+      "ext": {
+        "name": "me"
+      },
+      "digest": "225b10f1b0aaf3c9"
+    },
+    "getDeployment": {
+      "operationId": "getDeployment",
+      "method": "GET",
+      "path": "/api/deployments/{id}",
+      "command": "deployments get",
+      "funcName": "NewDeploymentsGetCommand",
+      "summary": "One deployment's meta and spec summary.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "fc9b8df895b3245d"
+    },
+    "getDeploymentLogs": {
+      "operationId": "getDeploymentLogs",
+      "method": "GET",
+      "path": "/api/deployments/{id}/logs",
+      "command": "deployments logs get",
+      "funcName": "NewDeploymentsLogsGetCommand",
+      "summary": "A slice of container logs, redacted.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "service",
+          "source": "query",
+          "type": "string",
+          "description": "One service instead of all."
+        },
+        {
+          "name": "tail",
+          "source": "query",
+          "type": "int",
+          "description": "How many lines."
+        }
+      ],
+      "ext": {},
+      "digest": "1a914f1ad1e19657"
+    },
+    "getDeploymentReadiness": {
+      "operationId": "getDeploymentReadiness",
+      "method": "GET",
+      "path": "/api/deployments/{id}/readiness",
+      "command": "deployments readiness get",
+      "funcName": "NewDeploymentsReadinessGetCommand",
+      "summary": "The readiness verdict, optionally waiting for one.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "timeout",
+          "source": "query",
+          "type": "int",
+          "description": "Milliseconds to wait for a verdict."
+        }
+      ],
+      "ext": {},
+      "digest": "6debfd3c3e7055f1"
+    },
+    "getDeploymentRuntime": {
+      "operationId": "getDeploymentRuntime",
+      "method": "GET",
+      "path": "/api/deployments/{id}/runtime",
+      "command": "deployments runtime get",
+      "funcName": "NewDeploymentsRuntimeGetCommand",
+      "summary": "Containers, routes, findings and the host's ACME challenge mode.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "20c795b07ab7ee1c"
+    },
+    "getDeploymentSource": {
+      "operationId": "getDeploymentSource",
+      "method": "GET",
+      "path": "/api/deployments/{id}/source",
+      "command": "deployments source get",
+      "funcName": "NewDeploymentsSourceGetCommand",
+      "summary": "The stored spec and compose file, as submitted.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "25eec157ef5824cc"
+    },
+    "getHealth": {
+      "operationId": "getHealth",
+      "method": "GET",
+      "path": "/api/health",
+      "command": "host health",
+      "funcName": "NewHostHealthCommand",
+      "summary": "Liveness, whether auth is enforced, whether any account exists, and the version. No token needed.",
+      "ext": {
+        "name": "health"
+      },
+      "digest": "b410f221434b6c42"
+    },
+    "getJob": {
+      "operationId": "getJob",
+      "method": "GET",
+      "path": "/api/jobs/{jobId}",
+      "command": "jobs get",
+      "funcName": "NewJobsGetCommand",
+      "summary": "One job — state, transcript and outcome.",
+      "flags": [
+        {
+          "name": "job-id",
+          "apiName": "jobId",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "a4c5bc69c55f2d60"
+    },
+    "getLiveRouting": {
+      "operationId": "getLiveRouting",
+      "method": "GET",
+      "path": "/api/routing/live",
+      "command": "routing live",
+      "funcName": "NewRoutingLiveCommand",
+      "summary": "Every router Traefik currently knows about.",
+      "ext": {
+        "name": "live"
+      },
+      "digest": "bb689b301e1715fa"
+    },
+    "getNotifier": {
+      "operationId": "getNotifier",
+      "method": "GET",
+      "path": "/api/notifiers/{notifierId}",
+      "command": "notifiers get",
+      "funcName": "NewNotifiersGetCommand",
+      "flags": [
+        {
+          "name": "notifier-id",
+          "apiName": "notifierId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "38b67b0f4a6a62d6"
+    },
+    "getNotifierMeta": {
+      "operationId": "getNotifierMeta",
+      "method": "GET",
+      "path": "/api/notifiers/meta",
+      "command": "notifiers meta",
+      "funcName": "NewNotifiersMetaCommand",
+      "summary": "Every event name a notifier may subscribe to, and each type's config shape.",
+      "ext": {
+        "name": "meta"
+      },
+      "digest": "000a477f3d6abfa3"
+    },
+    "getRoutingFile": {
+      "operationId": "getRoutingFile",
+      "method": "GET",
+      "path": "/api/routing/{file}",
+      "command": "routing get",
+      "funcName": "NewRoutingGetCommand",
+      "flags": [
+        {
+          "name": "file",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "get"
+      },
+      "digest": "ec785e0671eb0ce1"
+    },
+    "getSpec": {
+      "operationId": "getSpec",
+      "method": "GET",
+      "path": "/api/specs/{name}",
+      "command": "specs get",
+      "funcName": "NewSpecsGetCommand",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "83fa39d6dd88486d"
+    },
+    "getSsoConfig": {
+      "operationId": "getSsoConfig",
+      "method": "GET",
+      "path": "/api/sso/config",
+      "command": "sso config get",
+      "funcName": "NewSsoConfigGetCommand",
+      "summary": "Every provider, the callback URL to paste, and the presets. Never a client secret.",
+      "ext": {
+        "name": "config get"
+      },
+      "digest": "33759ba1b7465868"
+    },
+    "getSwarm": {
+      "operationId": "getSwarm",
+      "method": "GET",
+      "path": "/api/swarm",
+      "command": "swarm get",
+      "funcName": "NewSwarmGetCommand",
+      "summary": "The swarm's nodes and the manager address. Never the join token.",
+      "ext": {},
+      "digest": "9cadf0bb2d8b6a07"
+    },
+    "getSwarmJoin": {
+      "operationId": "getSwarmJoin",
+      "method": "GET",
+      "path": "/api/swarm/join",
+      "command": "swarm join",
+      "funcName": "NewSwarmJoinCommand",
+      "summary": "What a new worker runs. THE OUTPUT IS A SECRET — every shape embeds the join token.",
+      "flags": [
+        {
+          "name": "distro",
+          "source": "query",
+          "type": "string",
+          "description": "For `cloud-config`: which Docker install steps to emit."
+        },
+        {
+          "name": "format",
+          "source": "query",
+          "type": "string",
+          "enum": [
+            "token",
+            "command",
+            "script",
+            "cloud-config"
+          ]
+        }
+      ],
+      "ext": {
+        "name": "join"
+      },
+      "digest": "65b80abed80b5af2"
+    },
+    "importConfig": {
+      "operationId": "importConfig",
+      "method": "POST",
+      "path": "/api/config",
+      "command": "config import",
+      "funcName": "NewConfigImportCommand",
+      "summary": "Apply such a document, create-or-skip. It can add but never repoint.",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "import"
+      },
+      "digest": "df93c9c58f9c9863"
+    },
+    "importSealedConfig": {
+      "operationId": "importSealedConfig",
+      "method": "POST",
+      "path": "/api/config/sealed",
+      "command": "config import-sealed",
+      "funcName": "NewConfigImportSealedCommand",
+      "summary": "Apply a sealed export, unsealed with a passphrase. Admin only.",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "import-sealed"
+      },
+      "digest": "e8c94023155ae424"
+    },
+    "listDeployments": {
+      "operationId": "listDeployments",
+      "method": "GET",
+      "path": "/api/deployments",
+      "command": "deployments list",
+      "funcName": "NewDeploymentsListCommand",
+      "summary": "Every deployment, with its busy/running state.",
+      "ext": {},
+      "digest": "8d7d84dc632f8f8a"
+    },
+    "listHostVars": {
+      "operationId": "listHostVars",
+      "method": "GET",
+      "path": "/api/host-vars",
+      "command": "host-vars list",
+      "funcName": "NewHostVarsListCommand",
+      "summary": "Every host variable. A secret's NAME, never its value.",
+      "ext": {
+        "name": "list"
+      },
+      "digest": "cc05ae2e969f9618"
+    },
+    "listJobs": {
+      "operationId": "listJobs",
+      "method": "GET",
+      "path": "/api/jobs",
+      "command": "jobs list",
+      "funcName": "NewJobsListCommand",
+      "summary": "The last 50 jobs, newest first. In memory — a restart loses them.",
+      "ext": {},
+      "digest": "4a484ce5971b40e7"
+    },
+    "listNotifierDeliveries": {
+      "operationId": "listNotifierDeliveries",
+      "method": "GET",
+      "path": "/api/notifiers/{notifierId}/deliveries",
+      "command": "notifiers deliveries list",
+      "funcName": "NewNotifiersDeliveriesListCommand",
+      "flags": [
+        {
+          "name": "notifier-id",
+          "apiName": "notifierId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "deliveries list"
+      },
+      "digest": "3d3b6d3a3d1ce717"
+    },
+    "listNotifiers": {
+      "operationId": "listNotifiers",
+      "method": "GET",
+      "path": "/api/notifiers",
+      "command": "notifiers list",
+      "funcName": "NewNotifiersListCommand",
+      "ext": {},
+      "digest": "9f2a07d3d33c500d"
+    },
+    "listRegistries": {
+      "operationId": "listRegistries",
+      "method": "GET",
+      "path": "/api/registries",
+      "command": "registries list",
+      "funcName": "NewRegistriesListCommand",
+      "summary": "Private-registry logins. Hostnames only, never a credential.",
+      "ext": {},
+      "digest": "7d5f2cc96eb4c3d0"
+    },
+    "listRoutingFiles": {
+      "operationId": "listRoutingFiles",
+      "method": "GET",
+      "path": "/api/routing",
+      "command": "routing list",
+      "funcName": "NewRoutingListCommand",
+      "summary": "Traefik's dynamic-config files.",
+      "ext": {
+        "name": "list"
+      },
+      "digest": "1a3baa1436445e43"
+    },
+    "listSettings": {
+      "operationId": "listSettings",
+      "method": "GET",
+      "path": "/api/settings",
+      "command": "settings list",
+      "funcName": "NewSettingsListCommand",
+      "summary": "Both runtime settings, resolved, each saying which layer it came from.",
+      "ext": {},
+      "digest": "6ec6d6a9c8d004da"
+    },
+    "listSpecs": {
+      "operationId": "listSpecs",
+      "method": "GET",
+      "path": "/api/specs",
+      "command": "specs list",
+      "funcName": "NewSpecsListCommand",
+      "summary": "Every named spec.",
+      "ext": {},
+      "digest": "e374fa8ab934a0a7"
+    },
+    "listTerminalSessions": {
+      "operationId": "listTerminalSessions",
+      "method": "GET",
+      "path": "/api/terminal-sessions",
+      "command": "host terminal-sessions",
+      "funcName": "NewHostTerminalSessionsCommand",
+      "summary": "Who opened a container shell, when, and against what.",
+      "ext": {
+        "name": "terminal-sessions"
+      },
+      "digest": "457eb6fe63e1f85f"
+    },
+    "listTokens": {
+      "operationId": "listTokens",
+      "method": "GET",
+      "path": "/api/tokens",
+      "command": "tokens list",
+      "funcName": "NewTokensListCommand",
+      "summary": "Your personal API tokens. Hashes are never returned.",
+      "ext": {},
+      "digest": "c24ef8b9332cf50f"
+    },
+    "listUsers": {
+      "operationId": "listUsers",
+      "method": "GET",
+      "path": "/api/users",
+      "command": "users list",
+      "funcName": "NewUsersListCommand",
+      "ext": {},
+      "digest": "aaaa2196fa31020c"
+    },
+    "probeDeployment": {
+      "operationId": "probeDeployment",
+      "method": "GET",
+      "path": "/api/probe/{id}",
+      "command": "host probe",
+      "funcName": "NewHostProbeCommand",
+      "summary": "Is this preview serving? No token, no body — the answer is the status code and `x-pstack-probe`.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "service",
+          "source": "query",
+          "type": "string",
+          "description": "Which service"
+        }
+      ],
+      "ext": {
+        "name": "probe"
+      },
+      "digest": "9a814f1d718558bb"
+    },
+    "putDeployment": {
+      "operationId": "putDeployment",
+      "method": "PUT",
+      "path": "/api/deployments/{id}",
+      "command": "deployments put",
+      "funcName": "NewDeploymentsPutCommand",
+      "summary": "Submit or replace a deployment. The spec is parsed before it is stored.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {},
+      "digest": "22409d1f6c001f32"
+    },
+    "putHostVar": {
+      "operationId": "putHostVar",
+      "method": "PUT",
+      "path": "/api/host-vars/{name}",
+      "command": "host-vars put",
+      "funcName": "NewHostVarsPutCommand",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "secret",
+          "source": "body",
+          "type": "bool",
+          "description": "A secret's value is never returned by any route again."
+        },
+        {
+          "name": "value",
+          "source": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "put"
+      },
+      "digest": "d7aac6bacc7a54aa"
+    },
+    "putRegistry": {
+      "operationId": "putRegistry",
+      "method": "PUT",
+      "path": "/api/registries/{host}",
+      "command": "registries put",
+      "funcName": "NewRegistriesPutCommand",
+      "flags": [
+        {
+          "name": "host",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry hostname, e.g. `ghcr.io`."
+        },
+        {
+          "name": "password",
+          "source": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "username",
+          "source": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "put"
+      },
+      "digest": "41b6cb39a3d0c726"
+    },
+    "putRoutingFile": {
+      "operationId": "putRoutingFile",
+      "method": "PUT",
+      "path": "/api/routing/{file}",
+      "command": "routing put",
+      "funcName": "NewRoutingPutCommand",
+      "flags": [
+        {
+          "name": "content",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "The file's whole contents."
+        },
+        {
+          "name": "file",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "put"
+      },
+      "digest": "e3bd58b43c3ecc0f"
+    },
+    "putSpec": {
+      "operationId": "putSpec",
+      "method": "PUT",
+      "path": "/api/specs/{name}",
+      "command": "specs put",
+      "funcName": "NewSpecsPutCommand",
+      "flags": [
+        {
+          "name": "compose",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spec",
+          "source": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {},
+      "digest": "91dc68a5049e771c"
+    },
+    "putSsoConfig": {
+      "operationId": "putSsoConfig",
+      "method": "PUT",
+      "path": "/api/sso/config",
+      "command": "sso config put",
+      "funcName": "NewSsoConfigPutCommand",
+      "summary": "Create or replace one provider. Admin only.",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "config put"
+      },
+      "digest": "75f27f961da2eb32"
+    },
+    "putSsoProvider": {
+      "operationId": "putSsoProvider",
+      "method": "PUT",
+      "path": "/api/sso/config/{key}",
+      "command": "sso provider put",
+      "funcName": "NewSsoProviderPutCommand",
+      "flags": [
+        {
+          "name": "key",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The provider's slug."
+        }
+      ],
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "provider put"
+      },
+      "digest": "4c18ecab332198a3"
+    },
+    "redeliverNotifierDelivery": {
+      "operationId": "redeliverNotifierDelivery",
+      "method": "POST",
+      "path": "/api/notifiers/{notifierId}/deliveries/{deliveryId}/redeliver",
+      "command": "notifiers deliveries redeliver",
+      "funcName": "NewNotifiersDeliveriesRedeliverCommand",
+      "summary": "Send the stored envelope again, byte for byte.",
+      "flags": [
+        {
+          "name": "delivery-id",
+          "apiName": "deliveryId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "notifier-id",
+          "apiName": "notifierId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "deliveries redeliver"
+      },
+      "digest": "954f39e1d780a655"
+    },
+    "setDefaultRole": {
+      "operationId": "setDefaultRole",
+      "method": "PUT",
+      "path": "/api/settings/default_role",
+      "command": "settings set-default-role",
+      "funcName": "NewSettingsSetDefaultRoleCommand",
+      "summary": "The role an account gets when nothing names one. Admin only.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "viewer",
+            "developer",
+            "maintainer",
+            "admin"
+          ]
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-default-role"
+      },
+      "digest": "5c27a683e8479e8d"
+    },
+    "setMaxJobs": {
+      "operationId": "setMaxJobs",
+      "method": "PUT",
+      "path": "/api/settings/max_jobs",
+      "command": "settings set-max-jobs",
+      "funcName": "NewSettingsSetMaxJobsCommand",
+      "summary": "How many jobs run at once, host-wide. Maintainer. In force immediately: raising it dispatches what was waiting, lowering it cancels nothing.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "int",
+          "required": true,
+          "description": "A whole number"
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-max-jobs"
+      },
+      "digest": "eb2ede7e8108a80e"
+    },
+    "setUserPassword": {
+      "operationId": "setUserPassword",
+      "method": "PUT",
+      "path": "/api/users/{userId}/password",
+      "command": "users password set",
+      "funcName": "NewUsersPasswordSetCommand",
+      "summary": "Your own at any role; anybody else's is admin only. Revokes their sessions.",
+      "flags": [
+        {
+          "name": "password",
+          "source": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "user-id",
+          "apiName": "userId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "password set"
+      },
+      "digest": "f7beb082b19e91ea"
+    },
+    "sleepDeployment": {
+      "operationId": "sleepDeployment",
+      "method": "POST",
+      "path": "/api/deployments/{id}/sleep",
+      "command": "deployments sleep",
+      "funcName": "NewDeploymentsSleepCommand",
+      "summary": "Take the project down, keeping every volume and axis.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "5417adbfaabc9a44"
+    },
+    "testNotifier": {
+      "operationId": "testNotifier",
+      "method": "POST",
+      "path": "/api/notifiers/{notifierId}/test",
+      "command": "notifiers test",
+      "funcName": "NewNotifiersTestCommand",
+      "summary": "Send one delivery now, straight to this notifier. It carries `test: true`.",
+      "flags": [
+        {
+          "name": "notifier-id",
+          "apiName": "notifierId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "ext": {},
+      "digest": "5ea2e551f4c4c591"
+    },
+    "upDeployment": {
+      "operationId": "upDeployment",
+      "method": "POST",
+      "path": "/api/deployments/{id}/up",
+      "command": "deployments up",
+      "funcName": "NewDeploymentsUpCommand",
+      "summary": "Deploy. 202 with a job — queued when the stack is busy.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "134ce31efcb28e72"
+    },
+    "updateNotifier": {
+      "operationId": "updateNotifier",
+      "method": "PATCH",
+      "path": "/api/notifiers/{notifierId}",
+      "command": "notifiers update",
+      "funcName": "NewNotifiersUpdateCommand",
+      "flags": [
+        {
+          "name": "notifier-id",
+          "apiName": "notifierId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {},
+      "digest": "3bb0a3aa8fc7f705"
+    },
+    "updateUserRole": {
+      "operationId": "updateUserRole",
+      "method": "PATCH",
+      "path": "/api/users/{userId}",
+      "command": "users set-role",
+      "funcName": "NewUsersSetRoleCommand",
+      "summary": "Admin only. Refused on demoting the last admin.",
+      "flags": [
+        {
+          "name": "role",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "viewer",
+            "developer",
+            "maintainer",
+            "admin"
+          ]
+        },
+        {
+          "name": "user-id",
+          "apiName": "userId",
+          "source": "path",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-role"
+      },
+      "digest": "1599cce4a9f031f1"
+    },
+    "verifyDeployment": {
+      "operationId": "verifyDeployment",
+      "method": "POST",
+      "path": "/api/deployments/{id}/verify",
+      "command": "deployments verify",
+      "funcName": "NewDeploymentsVerifyCommand",
+      "summary": "Run every assert_gone and report what survived.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "68ebec06ebb8d655"
+    },
+    "wakeDeployment": {
+      "operationId": "wakeDeployment",
+      "method": "POST",
+      "path": "/api/deployments/{id}/wake",
+      "command": "deployments wake",
+      "funcName": "NewDeploymentsWakeCommand",
+      "summary": "Bring a sleeping deployment back.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {},
+      "digest": "7590a3c1557a650b"
+    }
+  }
+}

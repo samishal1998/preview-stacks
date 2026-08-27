@@ -167,6 +167,29 @@ jobs:
       - name: Installer is POSIX
         run: shellcheck install.sh
 
+  # `pstack api …` is generated from the OpenAPI document, and the generated file plus its lock are
+  # CHECKED IN so the binary builds without the generator (which pulls libopenapi). That only stays
+  # true if a spec edit and its regeneration land together — this is the job that says so.
+  #
+  # No `--on-drift` flag, deliberately: the default REFUSES a change that would move or remove an
+  # existing command, so a rename somebody scripted against fails here rather than in their pipeline.
+  # A wanted rename is accepted once, locally, with `--on-drift=all`.
+  generated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: The API commands match the spec
+        run: |
+          go generate ./packages/pstack/internal/apicli
+          git diff --exit-code -- packages/pstack/internal/apicli || {
+            echo "::error::openapi.yaml changed without regenerating — run: go generate ./packages/pstack/internal/apicli"
+            exit 1
+          }
+
   # ── one required check for branch protection, so the fan-out above can change freely ──────────
   #
   # Without this, every job name is a separately-configured required check and splitting or renaming
@@ -175,7 +198,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     if: always()
-    needs: [go, web, conformance, image, lint]
+    needs: [go, web, conformance, image, lint, generated]
     steps:
       # Through an env var, and the QUOTES are the reason — this workflow's first run failed before
       # a single job started, with no logs and no line number, only "a workflow file issue".
