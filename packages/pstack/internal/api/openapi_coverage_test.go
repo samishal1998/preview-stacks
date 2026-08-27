@@ -105,6 +105,12 @@ func routeShapes(t *testing.T) map[string]string {
 	reDecl := regexp.MustCompile("regexp\\.MustCompile\\(`\\^(/api/[^`]*)\\$`\\)")
 	// `path == "/api/…"` — the literal comparisons.
 	litDecl := regexp.MustCompile(`path == "(/api/[^"]*)"`)
+	// `case "/api/…":` — the same dispatch written as a switch on `path`. Missing this is not
+	// hypothetical: routes_openapi.go is a two-way switch, and with only the `path ==` rule above
+	// this test reported its paths as PHANTOMS — a spec path no route serves — while the routes were
+	// there all along. A route hidden from a coverage test is exactly what it exists to prevent, so
+	// the rule matches the shape rather than the idiom.
+	caseDecl := regexp.MustCompile(`case "(/api/[^"]*)"`)
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -116,8 +122,10 @@ func routeShapes(t *testing.T) map[string]string {
 		for _, m := range reDecl.FindAllStringSubmatch(string(src), -1) {
 			expandRoute(out, m[1], f)
 		}
-		for _, m := range litDecl.FindAllStringSubmatch(string(src), -1) {
-			out[shapeOf(m[1])] = f
+		for _, re := range []*regexp.Regexp{litDecl, caseDecl} {
+			for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+				out[shapeOf(m[1])] = f
+			}
 		}
 	}
 	return out

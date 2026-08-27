@@ -23,8 +23,10 @@ import (
 type ServeOptions struct {
 	UIHTML    string
 	ShareHTML string
-	Stdout    io.Writer
-	Stderr    io.Writer
+	// OpenAPISpec is the embedded OpenAPI document, served at /api/openapi.{yaml,json}.
+	OpenAPISpec []byte
+	Stdout      io.Writer
+	Stderr      io.Writer
 	// Env is the process environment (os.LookupEnv-shaped); nil means the real one.
 	Env func(string) (string, bool)
 }
@@ -98,6 +100,7 @@ func Serve(o ServeOptions) *Exit {
 		SSOStateTTLS:     int64(tuning.SSOStateTTLS),
 		SSODiscoveryTTLS: int64(tuning.SSODiscoveryTTLS),
 		Version:          version.Get(),
+		OpenAPISpec:      o.OpenAPISpec,
 		UIHTML:           o.UIHTML,
 		ShareHTML:        o.ShareHTML,
 		Log:              func(l string) { fmt.Fprintln(o.Stderr, l) },

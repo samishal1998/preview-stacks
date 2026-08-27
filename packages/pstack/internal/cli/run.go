@@ -48,6 +48,8 @@ type IO struct {
 	// UIHTML and ShareHTML are the embedded pages `serve` hosts.
 	UIHTML    string
 	ShareHTML string
+	// OpenAPISpec is the embedded OpenAPI document `serve` publishes.
+	OpenAPISpec []byte
 }
 
 // Run is the CLI: argv in, exit code out. Every `process.exit` in the reference is a return here.
@@ -273,7 +275,7 @@ func run(argv []string, io IO) *Exit {
 		return Healthcheck(io.Env)
 
 	case "serve":
-		return Serve(ServeOptions{UIHTML: io.UIHTML, ShareHTML: io.ShareHTML, Stdout: out, Stderr: errOut, Env: io.Env})
+		return Serve(ServeOptions{UIHTML: io.UIHTML, ShareHTML: io.ShareHTML, OpenAPISpec: io.OpenAPISpec, Stdout: out, Stderr: errOut, Env: io.Env})
 	}
 	return fail(`unknown command "` + args.Cmd + `" (try: ` + strings.Join(Commands, ", ") + `)`)
 }

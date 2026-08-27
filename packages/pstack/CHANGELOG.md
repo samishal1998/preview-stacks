@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **The API serves its own OpenAPI document**, unauthenticated, in both formats:
+  `GET /api/openapi.yaml` (the file byte for byte — comments and key order intact) and
+  `GET /api/openapi.json` (the same content, key order preserved, so a diff between two versions is
+  legible). `ETag` is the version; the body changes only when the binary does.
+
+  It is **embedded**, not assembled at runtime: what a host serves is the file that generated that
+  host's `pstack api` commands, so the description, the commands and the routes are one artifact
+  rather than three that agree until they do not. `pstack api host openapi` fetches it, and the two
+  routes are in the document like every other route.
+
 ## 0.34.0 — 2026-08-27
 
 ### Added

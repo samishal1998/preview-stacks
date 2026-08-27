@@ -98,9 +98,13 @@ to read why it was tightened.
 
 ## Where the docs are NOT
 
-Two important surfaces are documented in the code rather than here, deliberately — a doc that
+Three surfaces are documented in the code rather than here, deliberately — a doc that
 duplicates a route table drifts from it:
 
+- **The API's own description** is [`packages/pstack/api/openapi.yaml`](../packages/pstack/api/openapi.yaml),
+  which generates `pstack api` and is served by every host at `/api/openapi.yaml` and
+  `/api/openapi.json`. A route missing from it fails a test; a path in it that no route serves fails
+  the same test from the other side.
 - **The API's route list** lives in the header comment of
   [`packages/pstack/internal/api/server.go`](../packages/pstack/internal/api/server.go). It is the
   API's own documentation and is updated in the same edit as a route.

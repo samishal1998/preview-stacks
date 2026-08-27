@@ -70,6 +70,8 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("notifiers", "deliveries").AddCommand(NewNotifiersDeliveriesListCommand(exec))
 	group("notifiers", "deliveries").AddCommand(NewNotifiersDeliveriesRedeliverCommand(exec))
 	group("notifiers").AddCommand(NewNotifiersTestCommand(exec))
+	group("host").AddCommand(NewHostOpenapiJSONCommand(exec))
+	group("host").AddCommand(NewHostOpenapiCommand(exec))
 	group("host").AddCommand(NewHostProbeCommand(exec))
 	group("registries").AddCommand(NewRegistriesListCommand(exec))
 	group("registries").AddCommand(NewRegistriesDeleteCommand(exec))
@@ -1303,6 +1305,54 @@ func NewNotifiersTestCommand(exec oascmd.ExecOptions) *cobra.Command {
 			PathParams: map[string]string{},
 		}
 		req.PathParams["notifierId"] = strconv.FormatInt(flagNotifierID, 10)
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewHostOpenapiJSONCommand returns the "host openapi-json" command (GET
+// /api/openapi.json).
+func NewHostOpenapiJSONCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "openapi-json",
+		Short: "This document as JSON, key order preserved. No token needed.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/openapi.json",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewHostOpenapiCommand returns the "host openapi" command (GET
+// /api/openapi.yaml).
+func NewHostOpenapiCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "openapi",
+		Short: "This document, byte for byte. No token needed.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/openapi.yaml",
+		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw

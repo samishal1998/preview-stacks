@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "bc54b3cd51d02ef531e3f91a8f2bbd073ac92c4ad91080ce34356e2c54d8cd96",
+  "specDigest": "9f12cb454847617b052a51f769b8dda462ae7718d321df6a025a5c8923f03974",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -642,6 +642,30 @@
         "name": "meta"
       },
       "digest": "000a477f3d6abfa3"
+    },
+    "getOpenApiJson": {
+      "operationId": "getOpenApiJson",
+      "method": "GET",
+      "path": "/api/openapi.json",
+      "command": "host openapi-json",
+      "funcName": "NewHostOpenapiJSONCommand",
+      "summary": "This document as JSON, key order preserved. No token needed.",
+      "ext": {
+        "name": "openapi-json"
+      },
+      "digest": "c715bfcad56f2695"
+    },
+    "getOpenApiYaml": {
+      "operationId": "getOpenApiYaml",
+      "method": "GET",
+      "path": "/api/openapi.yaml",
+      "command": "host openapi",
+      "funcName": "NewHostOpenapiCommand",
+      "summary": "This document, byte for byte. No token needed.",
+      "ext": {
+        "name": "openapi"
+      },
+      "digest": "44d6c1a329c4c970"
     },
     "getRoutingFile": {
       "operationId": "getRoutingFile",

@@ -3,7 +3,7 @@
 //
 // THIS API MUST NEVER MANAGE THE STACK IT RUNS IN (invariant 12). VARIABLES are merged from the
 // request's `?query` (and a PUT's `env`) over the process env, once, at resolve time. SECURITY:
-// every route but health/probe/login/logout/bootstrap/sso is behind the principal gate, and behind THAT
+// every route but health/probe/openapi/login/logout/bootstrap/sso is behind the principal gate, and behind THAT
 // a second one — permissions.go, a single ordered (path, method, minimum role) table consulted once
 // at the top of routes(), default-deny, so a route nobody listed is root's. Responses are built
 // field by field and never echo a resolved Stack.Env.
@@ -80,6 +80,10 @@ type Options struct {
 	// by the container's environment on the next restart, and one who never opened the UI keeps
 	// exactly this value. PUT /api/settings/max_jobs applies without a restart.
 	MaxJobs int
+	// OpenAPISpec is the API's own OpenAPI document, served at `/api/openapi.yaml` and, converted,
+	// at `/api/openapi.json`. Passed in rather than imported so this package does not depend on the
+	// root one — the same reason UIHTML and ShareHTML are options. Empty means the two routes 404.
+	OpenAPISpec []byte
 	// ProbeOff turns OFF `GET /api/probe/<id>`, the unauthenticated "is this preview serving"
 	// route (routes_probe.go). Named for the off switch so the ZERO VALUE is the shipped
 	// behaviour — every caller that does not care, tests included, gets the route without saying
@@ -146,6 +150,9 @@ type Server struct {
 	// mutex: the route must answer `busy` immediately instead of queueing, since the caller is a
 	// polling loop and a queued probe is a probe that has already stopped being useful.
 	probeSem chan struct{}
+
+	// spec is the OpenAPI document and its JSON conversion, the latter computed on first request.
+	spec *openAPIDoc
 
 	// waking is deployment id → what a request to its hostnames needs while it comes back: the
 	// stack name (to read the readiness verdict) and the hostnames the sleep record carried. See
@@ -229,6 +236,7 @@ func New(o Options) (*Server, error) {
 		sleepIndex: scheduler.NewSleepIndex(),
 		waking:     map[string]wakingUp{},
 		probeSem:   make(chan struct{}, probeSlots),
+		spec:       newOpenAPIDoc(o.OpenAPISpec),
 		ssoClient:  sso.NewClient(nil),
 		bus:        o.Bus,
 		followers:  map[int]func(){},
@@ -880,6 +888,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	// The probe, beside health and for the same reason: a caller that has no token still needs an
 	// answer. It writes a status and no body, ever — see routes_probe.go.
 	if s.probe(w, r, path) {
+		return
+	}
+
+	// The API's own description, in both formats. Unauthenticated for the same reason: a client
+	// generating against it has no token yet — see routes_openapi.go.
+	if s.openAPI(w, r, path) {
 		return
 	}
 

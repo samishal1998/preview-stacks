@@ -13,5 +13,5 @@ import (
 )
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], cli.IO{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, UIHTML: pstack.UIHTML, ShareHTML: pstack.ShareHTML}))
+	os.Exit(cli.Run(os.Args[1:], cli.IO{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, UIHTML: pstack.UIHTML, ShareHTML: pstack.ShareHTML, OpenAPISpec: pstack.OpenAPISpec}))
 }

@@ -24,4 +24,4 @@ package apicli
 // A CONSTANT, checked by a test against the lock file, rather than a walk of the tree at startup:
 // building the tree needs an `ExecOptions` — which needs a resolved PSTACK_API_URL and a token — and
 // `pstack --help` must work on a laptop with neither. The test is what keeps it honest.
-const OperationCount = 69
+const OperationCount = 71
