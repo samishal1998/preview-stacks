@@ -3,7 +3,7 @@
 Instructions for an AI agent changing **this codebase**. Using `pstack` is a different job; this is
 about editing it.
 
-**Current version: 0.33.1.** One workspace: the Go binary (`packages/pstack`, released on GitHub),
+**Current version: 0.34.0.** One workspace: the Go binary (`packages/pstack`, released on GitHub),
 its black-box specification (`packages/conformance`), and two npm packages (the client SDK, the
 advanced UI). The control plane was a Bun/TypeScript package until 0.28.0; 0.29.0 is the Go port,
 byte-compatible with it (`docs/port-status.md`).
