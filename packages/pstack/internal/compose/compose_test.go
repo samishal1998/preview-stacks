@@ -307,12 +307,19 @@ func TestMaterializingTheFileThroughCompose(t *testing.T) {
 		r := exec.NewFake(nil, "").WithCwd(dir)
 		must(t)(ComposeUp(s(), r, map[string]string{}, nil))
 		must(t)(ComposeDown(s(), r))
-		cmds := r.Commands()
+		// Each verb also probes the challenge mode (`docker ps`) before generating labels; only the
+		// compose invocations are under test here.
+		cmds := []string{}
+		for _, c := range r.Commands() {
+			if strings.HasPrefix(c, "docker compose") {
+				cmds = append(cmds, c)
+			}
+		}
 		if len(cmds) != 2 {
 			t.Fatalf("cmds: %v", cmds)
 		}
 		for _, c := range cmds {
-			if !strings.HasPrefix(c, "docker compose") || !strings.Contains(c, "-f '"+autolabel.GeneratedCompose+"'") {
+			if !strings.Contains(c, "-f '"+autolabel.GeneratedCompose+"'") {
 				t.Errorf("cmd: %s", c)
 			}
 		}
@@ -343,8 +350,12 @@ func TestMaterializingTheFileThroughCompose(t *testing.T) {
 		if err == nil || !spec.IsSpecError(err) || !strings.Contains(err.Error(), "not a port") {
 			t.Errorf("got %v", err)
 		}
-		if len(r.Commands()) != 0 {
-			t.Errorf("ran anyway: %v", r.Commands())
+		// The challenge probe (`docker ps`) legitimately runs before the labels are generated; what
+		// must NOT run on a bad file is the verb itself.
+		for _, c := range r.Commands() {
+			if strings.HasPrefix(c, "docker compose") {
+				t.Errorf("ran anyway: %v", r.Commands())
+			}
 		}
 	})
 }

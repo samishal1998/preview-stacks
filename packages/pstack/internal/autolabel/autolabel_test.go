@@ -421,6 +421,33 @@ func TestGeneratedTraefikLabels(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("the seam's DEFAULT probes the running traefik, not a constant", func(t *testing.T) {
+			// negative control: restore `return Unknown` as the var's default — the certresolver label
+			// reappears on this dns01 host, and every PR orders its own certificate past the wildcard.
+			// (That was a live bug: the comments promised inspect wired the seam at init, nothing did.)
+			dir := t.TempDir()
+			write(t, dir, "services:\n  app:\n    image: x\n    labels:\n      - pstack.routing.port=80\n")
+			dns01Host := exec.NewFake(nil, "")
+			dns01Host.Answer = func(cmd string) (exec.Result, bool) {
+				if strings.HasPrefix(cmd, "docker ps") {
+					return exec.Result{OK: true, Stdout: "abc123\n"}, true
+				}
+				if strings.HasPrefix(cmd, "docker inspect") {
+					return exec.Result{OK: true, Stdout: `[{"Id":"abc123","Name":"/pstack-control-traefik-1","Config":{"Cmd":["--certificatesresolvers.le.acme.dnschallenge=true"]}}]`}, true
+				}
+				return exec.Result{}, false
+			}
+			r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: dns01Host})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, l := range generatedFor(t, r, "app") {
+				if strings.Contains(l, "certresolver") {
+					t.Errorf("the default seam did not consult the running traefik: %v", r.Generated)
+				}
+			}
+		})
 	})
 }
 

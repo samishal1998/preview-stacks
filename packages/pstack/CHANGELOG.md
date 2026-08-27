@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **DNS-01 hosts no longer order a certificate per preview.** The deploy-time probe that reads the
+  challenge mode off the running Traefik was never wired in the Go port — its seam defaulted to
+  `unknown`, so every per-PR router carried `tls.certresolver=le` even on DNS-01 hosts, where each
+  new hostname then ordered its **own** certificate instead of inheriting the wildcard: slow
+  issuance (DNS-01 orders run serially, ~30 s propagation wait each), and past ~50 new hostnames a
+  week, none at all. HTTP-01 hosts were unaffected (`unknown` errs toward including the resolver,
+  which is correct there). If you migrated a host to DNS-01 and redeployed, redeploy the stacks
+  again after upgrading — this time the labels really do drop the resolver.
+
 ### Added
 
 - **The API serves its own OpenAPI document**, unauthenticated, in both formats:
