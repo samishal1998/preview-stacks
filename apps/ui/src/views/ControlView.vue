@@ -12,7 +12,7 @@
  */
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
-import type { ControlRuntime, TlsRedeploy, TlsStatus } from '../api/types';
+import type { ControlRuntime, DomainsStatus, TlsRedeploy, TlsStatus } from '../api/types';
 import { usePolling } from '../composables/usePolling';
 import { can } from '../composables/useAuth';
 import { ago, sentence, stamp } from '../composables/useFormat';
@@ -59,6 +59,34 @@ function mem(bytes: number | null): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
   return `${Math.round(bytes / (1024 * 1024))} MiB`;
 }
+
+// ── the hostnames this host answers on ────────────────────────────────────────────────────────────
+const domains = ref<DomainsStatus | null>(null);
+const newDomain = ref('');
+const savingDomains = ref(false);
+
+async function loadDomains(): Promise<void> {
+  const r = await api.get<DomainsStatus>('/api/domains');
+  if (r.ok) domains.value = { ...r.body, domains: r.body.domains ?? [] };
+}
+usePolling(loadDomains, 30_000);
+
+/** The list replaces what is stored, so add and remove are the same call. */
+async function saveDomains(next: string[]): Promise<void> {
+  savingDomains.value = true;
+  const r = await api.put<DomainsStatus>('/api/domains', { domains: next });
+  savingDomains.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, 'save the domains'));
+    return;
+  }
+  newDomain.value = '';
+  toast('ok', 'Saved — Traefik picks these up within a couple of seconds.');
+  await Promise.all([loadDomains(), loadTls()]);
+}
+
+const addDomain = () => saveDomains([...(domains.value?.domains ?? []), newDomain.value.trim()]);
+const removeDomain = (d: string) => saveDomains((domains.value?.domains ?? []).filter((x) => x !== d));
 
 // ── the certificate mode ──────────────────────────────────────────────────────────────────────────
 const tls = ref<TlsStatus | null>(null);
@@ -243,6 +271,56 @@ async function redeployAll(): Promise<void> {
       <p v-else class="mute">
         Docker lists no control containers — on a host serving this page, that means the project
         label changed, not that nothing runs.
+      </p>
+    </section>
+
+    <!-- ============================ the hostnames ============================ -->
+    <section v-if="domains" class="panel">
+      <div class="phead">
+        <h2 class="section">Domains</h2>
+        <span class="grow" />
+        <span class="mute" style="font-size: var(--t-sm)">primary <span class="mono">{{ domains.primary || '—' }}</span></span>
+      </div>
+
+      <p class="dim">{{ domains.note }}</p>
+
+      <ul class="kvlist" style="margin: var(--s3) 0">
+        <li>
+          <span class="k mono">{{ domains.primary || 'not set' }}</span>
+          <span class="v mute">
+            primary — its routers are labels on the pstack container, so it keeps working whatever
+            else changes here. It cannot be removed from this page.
+          </span>
+        </li>
+        <li v-for="d in domains.domains" :key="d">
+          <span class="k mono">{{ d }}</span>
+          <span class="v">
+            <span class="mute">control.{{ d }} · api.{{ d }} · wakes sleeping previews</span>
+            <button v-if="can('maintainer')" class="sm ghost" :disabled="savingDomains" @click="removeDomain(d)">Remove</button>
+          </span>
+        </li>
+      </ul>
+
+      <div v-if="can('maintainer')" class="row" style="align-items: flex-end; gap: var(--s3); flex-wrap: wrap">
+        <div class="field inline" style="flex: 1 1 18rem">
+          <label for="new-domain">Add a domain</label>
+          <input
+            id="new-domain"
+            v-model="newDomain"
+            class="mono"
+            placeholder="preview.new-company.com"
+            spellcheck="false"
+            @keyup.enter="newDomain.trim() && addDomain()"
+          />
+        </div>
+        <ActionButton variant="primary" :pending="savingDomains" :disabled="savingDomains || !newDomain.trim()" @click="addDomain">
+          Add
+        </ActionButton>
+      </div>
+      <p class="mute" style="font-size: var(--t-sm); margin-top: var(--s2)">
+        Adding a domain only makes this host <b>serve and wake</b> names under it. To move a
+        deployment, set <code>PREVIEW_DOMAIN</code> in its variables and redeploy it — one stack at a
+        time, and rolling back is that same stack.
       </p>
     </section>
 

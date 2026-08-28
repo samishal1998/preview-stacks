@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "8ceef24ee422762e8490d009b1104a3b3adafdcd26ee3dfaf3c3082047b9d229",
+  "specDigest": "ec6ad98a3227cf8ca69bd1ae752c775ee474977cdc33a8ed05e751ea52997332",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -594,6 +594,18 @@
       "ext": {},
       "digest": "25eec157ef5824cc"
     },
+    "getDomains": {
+      "operationId": "getDomains",
+      "method": "GET",
+      "path": "/api/domains",
+      "command": "tls domains",
+      "funcName": "NewTlsDomainsCommand",
+      "summary": "The hostnames this host answers on: the primary `init` rendered, plus any added here. Maintainer.",
+      "ext": {
+        "name": "domains"
+      },
+      "digest": "8eb642e5d3403244"
+    },
     "getHealth": {
       "operationId": "getHealth",
       "method": "GET",
@@ -1019,6 +1031,31 @@
       },
       "ext": {},
       "digest": "22409d1f6c001f32"
+    },
+    "putDomains": {
+      "operationId": "putDomains",
+      "method": "PUT",
+      "path": "/api/domains",
+      "command": "tls domains-set",
+      "funcName": "NewTlsDomainsSetCommand",
+      "summary": "Replace the additional domains. Each gets control./api. routers and a wake catch-all in Traefik's watched directory — no re-init, no restart, live in about two seconds. The primary is refused (it already has routers on the container's labels). Point a deployment at a domain with PREVIEW_DOMAIN in its vars. Maintainer.",
+      "flags": [
+        {
+          "name": "domains",
+          "source": "body",
+          "type": "[]string",
+          "required": true,
+          "description": "The complete list of ADDITIONAL hostnames; it replaces what is stored. Empty removes them all."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "domains-set"
+      },
+      "digest": "625aebcedebbdd8a"
     },
     "putHostVar": {
       "operationId": "putHostVar",

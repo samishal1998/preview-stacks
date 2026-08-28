@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **More than one domain per host.** `GET`/`PUT /api/domains` (maintainer; `pstack api tls domains`;
+  a **Domains** panel on the Control stack page) adds hostnames the host answers on besides the one
+  `init` rendered. Each gets `control.`/`api.` routers and a wake catch-all written to Traefik's
+  watched directory — live in about two seconds, with no re-init, no restart and no downtime,
+  because a router does not have to come from a container label. The list is **derived from the
+  file**, so it cannot disagree with what Traefik serves, and the primary domain stays on the
+  container's own labels where no dynamic-config mistake can reach it.
+
+  Moving a deployment is separate and already worked: set `PREVIEW_DOMAIN` in its variables and
+  redeploy. The unit of migration is one stack, and rolling back is that same stack. The stored
+  wildcard (`dns-persist-01`) must now cover every registered domain — a pair that misses one is
+  refused rather than failing in a visitor's browser.
+
 ## 0.35.0 — 2026-08-28
 
 ### Fixed

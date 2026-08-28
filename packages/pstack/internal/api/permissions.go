@@ -152,6 +152,11 @@ var permissions = []perm{
 	{path: "/api/control/runtime", methods: mGet, min: auth.Maintainer},
 	{path: "/api/control/restart", methods: mPost, min: auth.Maintainer},
 
+	// ── the hostnames this host answers on ──────────────────────────────────────────────────────
+	// Maintainer, like the routing files it writes — this IS a routing-file write, performed by the
+	// route that owns the file so the list stays derivable from it.
+	{path: "/api/domains", methods: []string{http.MethodGet, http.MethodPut}, min: auth.Maintainer},
+
 	// ── the certificate mode ────────────────────────────────────────────────────────────────────
 	// The wildcard WRITE is ADMIN, above the maintainer host-configuration tier, for BLAST RADIUS:
 	// it changes the certificate every hostname on the host presents, and the redeploy that follows

@@ -21,6 +21,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
@@ -283,6 +284,7 @@ func wakingServer(t *testing.T, stack string) *Server {
 		sleepIndex: scheduler.NewSleepIndex(),
 		waking:     map[string]wakingUp{},
 		readiness:  readiness.New(readiness.Options{PollMs: 20, TimeoutMs: 60_000}),
+		routing:    routing.New(filepath.Join(dir, "traefik-dynamic")),
 		opts:       Options{Domain: "preview.example.com", Log: func(string) {}},
 	}
 	t.Cleanup(s.readiness.StopAll)

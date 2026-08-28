@@ -404,7 +404,7 @@ func TestTheWildcardPointerDoesNotTravel(t *testing.T) {
 	// were never copied. TLS silently off, on a host nobody touched.
 	h := newHost(t)
 	cert, key := mintPair(t, "*.preview.example.com")
-	if _, err := h.Routing.SetWildcard(cert, key, ""); err != nil {
+	if _, err := h.Routing.SetWildcard(cert, key, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.Routing.Write("extra.yml", "http: {}\n"); err != nil {

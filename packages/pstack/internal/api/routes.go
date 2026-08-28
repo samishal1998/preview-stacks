@@ -154,6 +154,14 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.controlRestart(w, r)
 	}
 
+	// ---- the hostnames this host answers on ----
+	if path == "/api/domains" && r.Method == http.MethodGet {
+		return s.domainsGet(w)
+	}
+	if path == "/api/domains" && r.Method == http.MethodPut {
+		return s.domainsPut(w, r)
+	}
+
 	// ---- the host's certificate mode ----
 	if path == "/api/tls" && r.Method == http.MethodGet {
 		return s.tlsStatus(w)

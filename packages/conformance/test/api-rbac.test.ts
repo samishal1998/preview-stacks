@@ -157,6 +157,9 @@ const TABLE: Row[] = [
   // The certificate mode. Status and the redeploy loop sit with the host surfaces; the wildcard
   // WRITE is admin — whoever stores that key can impersonate every preview. The allowed role gets
   // the handler's own answers: a garbage pair is 400, deleting a wildcard nobody stored is 404.
+  { method: 'GET', path: '/api/domains', min: 'maintainer', ok: 200 },
+  // The allowed role gets the handler's own 400 (the primary is refused), never the gate's 403.
+  { method: 'PUT', path: '/api/domains', body: { domains: ['{r}.example.com'] }, min: 'maintainer', ok: 200 },
   { method: 'GET', path: '/api/tls', min: 'maintainer', ok: 200 },
   { method: 'POST', path: '/api/tls/redeploy', body: {}, min: 'maintainer', ok: 200 },
   { method: 'PUT', path: '/api/tls/wildcard', body: { cert: 'not-a-cert', key: 'not-a-key' }, min: 'admin', ok: 400 },

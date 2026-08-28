@@ -636,8 +636,10 @@ func dedupe(xs []string) []string {
 // page that polls until Traefik routes the hostname to the app again. Returns false when the
 // hostname is nobody's.
 func (s *Server) wakeFor(w http.ResponseWriter, hostname string) bool {
-	// The control plane's own hostnames are never a preview's to wake.
-	if d := s.opts.Domain; d != "" && (hostname == "control."+d || hostname == "api."+d) {
+	// The control plane's own hostnames are never a preview's to wake — on EVERY domain it answers
+	// on, not just the one `init` rendered. Missing an added domain's `control.` here would hand the
+	// console's own hostname to the sleep index and answer it with a waking page.
+	if s.routing.IsControlHostname(hostname, s.opts.Domain) {
 		return false
 	}
 	id := s.sleepIndex.Find(hostname)
