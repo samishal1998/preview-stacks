@@ -69,7 +69,8 @@ func (s *Server) tlsWildcardPut(w http.ResponseWriter, r *http.Request) error {
 		writeError(w, 400, "body must be { cert, key } — both PEM, the certificate with its chain and the private key")
 		return nil
 	}
-	info, err := s.routing.SetWildcard(cert, key, s.opts.Domain)
+	// Every domain the host answers on — the primary plus anything /api/domains added.
+	info, err := s.routing.SetWildcard(cert, key, append([]string{s.opts.Domain}, s.routing.Domains()...))
 	if err != nil {
 		if routing.IsError(err) {
 			writeError(w, 400, err.Error())

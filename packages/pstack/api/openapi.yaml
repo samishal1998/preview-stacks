@@ -709,6 +709,32 @@ paths:
       summary: The control stack's own containers. Read-only, never actionable.
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
+  /api/domains:
+    get:
+      tags: [tls]
+      operationId: getDomains
+      x-cli-name: domains
+      summary: 'The hostnames this host answers on: the primary `init` rendered, plus any added here. Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    put:
+      tags: [tls]
+      operationId: putDomains
+      x-cli-name: domains-set
+      summary: 'Replace the additional domains. Each gets control./api. routers and a wake catch-all in Traefik''s watched directory — no re-init, no restart, live in about two seconds. The primary is refused (it already has routers on the container''s labels). Point a deployment at a domain with PREVIEW_DOMAIN in its vars. Maintainer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domains]
+              properties:
+                domains:
+                  type: array
+                  items: { type: string }
+                  description: 'The complete list of ADDITIONAL hostnames; it replaces what is stored. Empty removes them all.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
   /api/tls:
     get:
       tags: [tls]

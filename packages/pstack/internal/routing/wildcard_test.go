@@ -60,7 +60,7 @@ func TestTheOrderOfWritesIsPEMsThenPointer(t *testing.T) {
 	if err := os.MkdirAll(certs, 0o500); err != nil { // readable, NOT writable
 		t.Fatal(err)
 	}
-	if _, err := s.SetWildcard(cert, key, ""); err == nil {
+	if _, err := s.SetWildcard(cert, key, nil); err == nil {
 		t.Fatal("the pair write must fail on an unwritable certs directory")
 	}
 	if s.WildcardActive() {
@@ -80,7 +80,7 @@ func TestTheOrderOfWritesIsPEMsThenPointer(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(s.Dir, WildcardYAML), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetWildcard(cert, key, ""); err == nil {
+	if _, err := s.SetWildcard(cert, key, nil); err == nil {
 		t.Fatal("the pointer write must fail")
 	}
 	for _, rel := range []string{"certs/wildcard.crt", "certs/wildcard.key"} {
@@ -97,7 +97,7 @@ func TestARemoveSweepsAKeyLeftWithoutItsPointer(t *testing.T) {
 	s := New(t.TempDir())
 	now := time.Now()
 	cert, key := mint(t, []string{"*.preview.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
-	if _, err := s.SetWildcard(cert, key, ""); err != nil {
+	if _, err := s.SetWildcard(cert, key, nil); err != nil {
 		t.Fatal(err)
 	}
 	// The crash: the pointer went, the process died before the pair did.
@@ -128,7 +128,7 @@ func TestWildcardStoreValidatesAndStoresThePair(t *testing.T) {
 		t.Fatal("empty store must be inactive")
 	}
 
-	info, err := s.SetWildcard(cert, key, "preview.example.com")
+	info, err := s.SetWildcard(cert, key, []string{"preview.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestWildcardStoreValidatesAndStoresThePair(t *testing.T) {
 
 	// Rotation: a second PUT replaces the pair, and the info reads the NEW certificate.
 	cert2, key2 := mint(t, []string{"*.preview.example.com"}, good, good.Add(300*24*time.Hour))
-	info2, err := s.SetWildcard(cert2, key2, "preview.example.com")
+	info2, err := s.SetWildcard(cert2, key2, []string{"preview.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestThePointerIsNotAnOperatorFile(t *testing.T) {
 	// The wildcard's own path still writes it — the gate is on the generic door, not the owner.
 	now := time.Now()
 	cert, key := mint(t, []string{"*.preview.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
-	if _, err := s.SetWildcard(cert, key, "preview.example.com"); err != nil {
+	if _, err := s.SetWildcard(cert, key, []string{"preview.example.com"}); err != nil {
 		t.Fatalf("the owner must still write it: %v", err)
 	}
 	if _, err := s.Remove(WildcardYAML); err == nil || !strings.Contains(err.Error(), "managed by pstack") {
@@ -213,22 +213,22 @@ func TestWildcardRefusals(t *testing.T) {
 	cert, _ := mint(t, []string{"*.preview.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
 	_, otherKey := mint(t, []string{"*.preview.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
 
-	if _, err := s.SetWildcard(cert, otherKey, ""); err == nil || !strings.Contains(err.Error(), "do not form a usable pair") {
+	if _, err := s.SetWildcard(cert, otherKey, nil); err == nil || !strings.Contains(err.Error(), "do not form a usable pair") {
 		t.Errorf("mismatch: %v", err)
 	}
 	expiredCert, expiredKey := mint(t, []string{"*.preview.example.com"}, now.Add(-48*time.Hour), now.Add(-24*time.Hour))
-	if _, err := s.SetWildcard(expiredCert, expiredKey, ""); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := s.SetWildcard(expiredCert, expiredKey, nil); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Errorf("expired: %v", err)
 	}
 	wrongCert, wrongKey := mint(t, []string{"*.other.example.com"}, now.Add(-time.Hour), now.Add(time.Hour))
-	if _, err := s.SetWildcard(wrongCert, wrongKey, "preview.example.com"); err == nil || !strings.Contains(err.Error(), "does not cover *.preview.example.com") {
+	if _, err := s.SetWildcard(wrongCert, wrongKey, []string{"preview.example.com"}); err == nil || !strings.Contains(err.Error(), "does not cover *.preview.example.com") {
 		t.Errorf("wrong zone: %v", err)
 	}
-	if _, err := s.SetWildcard("not pem", "not pem", ""); err == nil {
+	if _, err := s.SetWildcard("not pem", "not pem", nil); err == nil {
 		t.Error("garbage must be refused")
 	}
 	// No zone check when the host has no domain configured — a lab host still gets to store one.
-	if _, err := s.SetWildcard(wrongCert, wrongKey, ""); err != nil {
+	if _, err := s.SetWildcard(wrongCert, wrongKey, nil); err != nil {
 		t.Errorf("no domain, no zone check: %v", err)
 	}
 }

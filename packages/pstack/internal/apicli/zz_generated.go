@@ -56,6 +56,8 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("deployments").AddCommand(NewDeploymentsUpCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsVerifyCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsWakeCommand(exec))
+	group("tls").AddCommand(NewTlsDomainsCommand(exec))
+	group("tls").AddCommand(NewTlsDomainsSetCommand(exec))
 	group("host").AddCommand(NewHostHealthCommand(exec))
 	group("host-vars").AddCommand(NewHostVarsListCommand(exec))
 	group("host-vars").AddCommand(NewHostVarsDeleteCommand(exec))
@@ -878,6 +880,70 @@ func NewDeploymentsWakeCommand(exec oascmd.ExecOptions) *cobra.Command {
 			PathParams: map[string]string{},
 		}
 		req.PathParams["id"] = flagID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewTlsDomainsCommand returns the "tls domains" command (GET
+// /api/domains).
+func NewTlsDomainsCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "domains",
+		Short: "The hostnames this host answers on: the primary `init` rendered, plus any added here. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/domains",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewTlsDomainsSetCommand returns the "tls domains-set" command (PUT
+// /api/domains).
+func NewTlsDomainsSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyDomains []string
+		flagData    string
+	)
+	cmd := &cobra.Command{
+		Use:   "domains-set",
+		Short: "Replace the additional domains. Each gets control./api. routers and a wake catch-all in Traefik's watched directory — no re-init, no restart, live in about two seconds. The primary is refused (it already has routers on the container's labels). Point a deployment at a domain with PREVIEW_DOMAIN in its vars. Maintainer.",
+	}
+	cmd.Flags().StringSliceVar(&bodyDomains, "domains", nil, "The complete list of ADDITIONAL hostnames; it replaces what is stored. Empty removes them all.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/domains",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("domains") {
+			body["domains"] = bodyDomains
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw

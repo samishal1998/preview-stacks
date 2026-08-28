@@ -697,3 +697,14 @@ export type TlsRedeploy = {
   skipped: Array<{ id: string; reason: string }>;
   note: string;
 };
+
+/** What `GET /api/domains` answers. Maintainer. */
+export type DomainsStatus = {
+  /** The domain `init` rendered onto the container's labels. Cannot be removed from here. */
+  primary: string;
+  /** Additional hostnames this host answers on, sorted. */
+  domains: string[];
+  /** The host's certificate mode, since it decides what an added domain costs. */
+  mode: string;
+  note: string;
+};

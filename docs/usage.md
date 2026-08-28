@@ -1544,7 +1544,42 @@ Under DNS-01 that wildcard record plus the apex is also what the single wildcard
 covers. Under HTTP-01 you still want the wildcard record — resolution and certification are separate
 problems — but each hostname is certified individually, the moment its router loads at deploy.
 
-#### Bring your own wildcard: `dns-persist-01` (0.35.0)
+#### Serve more than one domain (0.36.0)
+
+A host answers on the domain `init` gave it. `GET`/`PUT /api/domains` adds more — for a migration
+you can perform gradually rather than in one cutover:
+
+```bash
+pstack api tls domains                                   # what it answers on now
+pstack api tls domains-set --data '{"domains":["preview.new-company.com"]}'
+```
+
+(Or the **Domains** panel on the Control stack page.) Each added domain gets `control.<d>`,
+`api.<d>` and a **wake catch-all** written into Traefik's watched directory — live in about two
+seconds, with no re-init, no restart and no downtime. The list is the file: `GET /api/domains`
+reads it back out of the routers it wrote, so the two cannot disagree.
+
+**The primary domain is not in that list and cannot be removed from it.** Its routers are labels on
+the pstack container, deliberately: whatever goes wrong in a dynamic file, the hostname you would
+use to undo it still answers. That is also why this is a file rather than more labels — a label
+cannot be added to a running container, so doing it that way would mean recreating the container
+serving the request.
+
+**Adding a domain does not move anything.** It makes the host able to *serve and wake* names under
+it. A preview's hostname comes from its own spec, so you move one deployment by setting
+`PREVIEW_DOMAIN` in its variables and redeploying it — the unit of migration is one stack, and
+rolling back is that same stack. Deployments you have not touched keep the domain they were
+deployed under.
+
+Don't forget the certificates, since the rule differs per mode:
+
+| Mode | An added domain… |
+|---|---|
+| `http01` | gets its own per-hostname certificates automatically — **and its own weekly budget**, since Let's Encrypt counts per registered domain. Port 80 must reach the box for that name too |
+| `dns01` | pins its **own** wildcard, so one domain failing validation cannot take another's certificate down. The DNS credential must be able to serve that zone as well |
+| `dns-persist-01` | must be covered by the stored pair — `PUT /api/tls/wildcard` refuses one whose SANs miss a registered domain, rather than letting it fail in a visitor's browser |
+
+### Bring your own wildcard: `dns-persist-01` (0.35.0)
 
 The third mode needs **no re-init, no Traefik restart, and no DNS credential on the host**: you
 obtain a wildcard certificate yourself (certbot with a manual DNS record, your company's CA,
@@ -2561,6 +2596,7 @@ every account until someone puts it in the table.
 | `POST`/`PATCH`/`DELETE /api/notifiers`… (incl. `/test`, `/redeliver`) | `maintainer` |
 | `GET /api/swarm/join` | `maintainer` |
 | `GET /api/control/runtime` · `POST /api/control/restart` | `maintainer` |
+| `GET`/`PUT /api/domains` | `maintainer` |
 | `GET /api/tls` · `POST /api/tls/redeploy` | `maintainer` |
 | `PUT`/`DELETE /api/tls/wildcard` | `admin` |
 | `GET /api/sso/config` | `maintainer` |
@@ -3137,6 +3173,8 @@ anything it does not list is the root token's alone.
 | GET | `/api/control` | — | the control stack's summary `{ project, reachable, services[], note }` — the dashboard's card |
 | GET | `/api/control/runtime` | — | **maintainer and up** — the operator view: per container, `restartCount`, `oomKilled`, `memLimitBytes` beside the usual state ([why](#watch-the-control-stack-itself-0350)) |
 | POST | `/api/control/restart` | `{ service }` | **maintainer and up** — restart one control service; `pstack` itself is always 400 (it is the container answering); 404 unknown service; 503 docker down |
+| GET | `/api/domains` | — | **maintainer and up** — `{ primary, domains[], mode, note }`; the list is derived from the routers it wrote |
+| PUT | `/api/domains` | `{ domains }` | **maintainer and up** — replace the additional domains; each gets control./api./wake routers. The primary is refused (400) |
 | GET | `/api/tls` | — | **maintainer and up** — `{ mode, traefik, wildcard, note }`; the mode is derived from the artifacts, never stored |
 | PUT | `/api/tls/wildcard` | `{ cert, key }` | **admin** — store a wildcard pair, enter `dns-persist-01`; 400 names what is wrong with the pair. The key has no read path |
 | DELETE | `/api/tls/wildcard` | — | **admin** — back to Traefik-native resolution; 404 when none is stored |

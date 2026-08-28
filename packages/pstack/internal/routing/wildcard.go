@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -62,12 +63,13 @@ type WildcardInfo struct {
 
 // IsReserved is true for a dynamic file THIS package owns rather than the operator.
 //
-// The gate exists because the mode is derived from the artifact: `tls-wildcard.yml` existing IS
-// `dns-persist-01`, so a maintainer writing that one name through the generic routing API would
-// have entered — or, deleting it, left — a mode whose own routes are admin's, and left the key pair
-// orphaned in `certs/` on the way out. The routing API is for files the operator owns; this one
-// belongs to /api/tls, which validates the pair the pointer names.
-func IsReserved(name string) bool { return name == WildcardYAML }
+// The gate exists because these files are DERIVED STATE, not operator configuration: the wildcard
+// pointer's existence IS `dns-persist-01` (so writing that name through the generic routing API
+// would enter a mode whose own routes are admin's, or leaving it would orphan the key pair in
+// `certs/`), and the domains file's routers ARE the domain list `GET /api/domains` reports. Either
+// hand edit makes the API's answer a lie about the host. Each belongs to the route that owns it,
+// which validates what the generic routing API cannot.
+func IsReserved(name string) bool { return name == WildcardYAML || name == DomainsYAML }
 
 func assertNotReserved(name string) error {
 	if IsReserved(name) {
@@ -132,7 +134,7 @@ func leafOf(certPEM []byte) (*x509.Certificate, error) {
 // Serialised: this is TWO renames plus the pointer, and interleaving them with another PUT would
 // leave certA beside keyB — each half valid, the pair unloadable, and the failure visible only in
 // Traefik's own log. That is precisely what the validation above exists to prevent.
-func (s *RoutingStore) SetWildcard(certPEM, keyPEM, domain string) (*WildcardInfo, error) {
+func (s *RoutingStore) SetWildcard(certPEM, keyPEM string, domains []string) (*WildcardInfo, error) {
 	s.wildcardMu.Lock()
 	defer s.wildcardMu.Unlock()
 	// The pair must MATCH — a cert stored with someone else's key serves nothing, and Traefik would
@@ -151,12 +153,21 @@ func (s *RoutingStore) SetWildcard(certPEM, keyPEM, domain string) (*WildcardInf
 	if now.Before(leaf.NotBefore) {
 		return nil, &Error{fmt.Sprintf("the certificate is not valid until %s", leaf.NotBefore.UTC().Format("2006-01-02"))}
 	}
-	if domain != "" {
-		// One representative preview hostname; covering it means covering them all, since every
-		// generated hostname is exactly one label under the domain.
-		if err := leaf.VerifyHostname("preview-probe." + domain); err != nil {
-			return nil, &Error{fmt.Sprintf("the certificate does not cover *.%s — its names are %v. Previews live one label under the domain, so that wildcard is the one that matters", domain, leaf.DNSNames)}
+	// EVERY domain this host answers on, not just the primary: an added domain whose previews the
+	// pair does not cover would serve a browser error, and the only symptom is a visitor's warning
+	// page weeks later. One representative preview hostname per domain is enough — every generated
+	// hostname is exactly one label under it.
+	uncovered := []string{}
+	for _, d := range domains {
+		if d == "" {
+			continue
 		}
+		if err := leaf.VerifyHostname("preview-probe." + d); err != nil {
+			uncovered = append(uncovered, "*."+d)
+		}
+	}
+	if len(uncovered) > 0 {
+		return nil, &Error{fmt.Sprintf("the certificate does not cover %s — its names are %v. Previews live one label under a domain, so those wildcards are the ones that matter. Remove the domain from /api/domains, or store a pair whose SANs include it", strings.Join(uncovered, " and "), leaf.DNSNames)}
 	}
 	if !s.Writable() {
 		return nil, &Error{fmt.Sprintf("Traefik's dynamic directory is not writable from here (%s). The control stack mounts it into the API from 0.4.0 onward — re-run `pstack init` on the host to pick up the mount.", s.Dir)}
