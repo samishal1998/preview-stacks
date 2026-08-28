@@ -465,6 +465,10 @@ func WakePage(host, stack string, state WakeState, errText string) string {
 <html lang="en"><head><meta charset="utf-8"><title>` + js.Esc(title) + `</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="15">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#10131c">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%230e1116'/%3E%3Crect%20x='7'%20y='7'%20width='18'%20height='4.6'%20rx='2.3'%20fill='%234a9dff'/%3E%3Crect%20x='7'%20y='13.7'%20width='18'%20height='4.6'%20rx='2.3'%20fill='%237c8798'/%3E%3Crect%20x='7'%20y='20.4'%20width='18'%20height='4.6'%20rx='2.3'%20fill='%2349525f'/%3E%3C/svg%3E">
 <style>
   :root{--night:#10131c;--bright:#eceef4;--mist:#a5abbc;--dim:#5d6373;--ember:#f2a65a;--ember-core:#ffd9a8;--pane:#181c28}
   *{box-sizing:border-box}
