@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.36.0 — 2026-08-28
 
 ### Added
 
@@ -16,6 +16,13 @@
   redeploy. The unit of migration is one stack, and rolling back is that same stack. The stored
   wildcard (`dns-persist-01`) must now cover every registered domain — a pair that misses one is
   refused rather than failing in a visitor's browser.
+
+- **A favicon and page metadata**, on all four pages — the advanced UI, the embedded basic UI, the
+  public share page and the wake page. One inline SVG mark rather than an asset, because three of
+  those ship inside the binary and cannot fetch one. Alongside it: `noindex` on the pages that
+  lacked it (an operations console and a link-shared log view do not belong in a search index), a
+  `theme-color` matching each page's own background, and Open Graph text on the share page — the
+  one page that gets pasted into a PR or a channel, so deliberately generic.
 
 ## 0.35.0 — 2026-08-28
 
