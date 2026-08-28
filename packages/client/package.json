@@ -1,6 +1,6 @@
 {
   "name": "@samyx/preview-stacks-client",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "description": "Typed API client for a pstack control plane: deployments, jobs, readiness, containers, logs, notifiers.",
   "repository": {
     "type": "git",
