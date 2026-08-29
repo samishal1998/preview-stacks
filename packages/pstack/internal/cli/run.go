@@ -199,9 +199,22 @@ func run(argv []string, io IO) *Exit {
 		if args.Challenge == "dns01" && args.DNSProvider == "" {
 			return fail("--challenge dns01 needs --dns-provider (or PSTACK_DNS_PROVIDER), e.g. cloudflare")
 		}
-		token, _ := io.Env("PSTACK_DNS_TOKEN")
+		token, hasDNSToken := io.Env("PSTACK_DNS_TOKEN")
+		// A host that already exists is re-rendered from these arguments alone, so anything this run
+		// would change WITHOUT being asked to is refused — see initguard.go. A first init reads no
+		// state and passes straight through, and so does `pstack upgrade`, which supplies every
+		// value it read back.
+		dataDir := registry.DataDir()
+		if !args.Force {
+			if state, err := upgrade.ReadControlState(dataDir); err == nil {
+				_, hasToken := io.Env("PSTACK_TOKEN")
+				if msg := initRevertRefusal(initReverts(state, dataDir, args, hasToken, hasDNSToken)); msg != "" {
+					return fail(msg)
+				}
+			}
+		}
 		err := initctl.Init(initctl.Options{
-			DataDir: registry.DataDir(), Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
+			DataDir: dataDir, Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
 			Challenge: initctl.Challenge(args.Challenge), UI: initctl.UI(args.UI), Orchestrator: spec.Orchestrator(args.Orchestrator),
 			Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
 		})

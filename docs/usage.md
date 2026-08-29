@@ -1400,6 +1400,33 @@ Your data survives — deployments and the SQLite database are host-path mounts 
 container filesystem. In-flight **job history does not**: it is in memory by design, so do not upgrade
 mid-deploy.
 
+#### The silent-revert guard (0.37.0)
+
+Because `init` renders from its arguments alone, a re-run that omits a flag takes that flag's
+**default**, host-wide, without saying so — a new machine token, a blanked DNS credential, an
+advanced UI reverted to basic. From 0.37.0 `init` refuses that:
+
+```console
+$ pstack init --domain preview.example.com --acme-email ops@example.com
+refusing to re-init: this would change 3 thing(s) about a host that already exists, and you
+did not ask for any of them.
+
+  the machine token
+      the one this host has  →  a NEWLY GENERATED one
+      keep it with:  PSTACK_TOKEN=$(. /var/lib/pstack/control/.env; echo "$PSTACK_TOKEN")
+  the ACME challenge
+      dns01  →  http01
+      keep it with:  --challenge dns01
+  the web UI
+      advanced  →  basic
+      keep it with:  --ui advanced
+```
+
+It refuses **omissions only**. A flag you spelled is a decision and passes through — `--challenge
+dns01` on an http01 host is still how you switch modes — a first `init` has nothing to compare
+against, and `pstack upgrade` supplies every value it read back, so it never trips. `--force`
+proceeds anyway.
+
 ### Why `init` is CLI-only, and always will be
 
 `init` — and `upgrade` — are CLI-only and will never be HTTP routes,
