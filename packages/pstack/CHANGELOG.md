@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`init` refuses a re-run that would silently change the host.** It renders the control stack from
+  its arguments alone, so a flag left off has always taken that flag's default — a new machine token
+  (401s for every CI job holding the old one), a blanked DNS-01 credential (renewal fails weeks
+  later), an advanced UI reverted to basic. That shape is the largest single source of upgrade
+  incidents this project has had, and it is now refused, naming each change and the flag that
+  preserves it.
+
+  Only **omissions** are refused: a flag you spelled is a decision and passes through, a first
+  `init` has nothing to compare against, and `pstack upgrade` supplies every value it read back.
+  `--force` proceeds anyway.
+
 ## 0.36.0 — 2026-08-28
 
 ### Added

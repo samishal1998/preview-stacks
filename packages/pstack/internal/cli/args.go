@@ -82,7 +82,7 @@ type Parsed struct {
 	Yes    bool
 	To     string
 	Resume bool
-	// Typed records which value flags were spelled on the command line, for the two commands that
+	// Typed records which value flags were spelled on the command line, for the commands that
 	// must only act on an EXPLICIT --ui / --orchestrator (upgrade, ui).
 	Typed map[string]bool
 	// Help and Version short-circuit dispatch.
@@ -153,6 +153,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		case "--acme-email":
 			p.AcmeEmail = next(&i, p.AcmeEmail)
 		case "--dns-provider":
+			p.Typed["--dns-provider"] = true
 			p.DNSProvider = next(&i, p.DNSProvider)
 		case "--tag":
 			p.Tag = next(&i, p.Tag)
@@ -201,6 +202,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			}
 			p.UIImage = true
 		case "--challenge":
+			p.Typed["--challenge"] = true
 			c := next(&i, "")
 			if c != "http01" && c != "dns01" {
 				return nil, fail(fmt.Sprintf(`--challenge must be http01 or dns01, got "%s"`, c))
