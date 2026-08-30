@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **`pstack <command> --help`, and shell completion.** Every command now has its own page — its
+  flags, what it does, and the traps particular to it — instead of one manual that answers
+  everything at once. `pstack completion bash|zsh|fish` prints a script for your shell, and each
+  one says where to put it.
+
+  Both are generated from one table, so a flag the shell offers is a flag the help describes: a
+  completion script that lists something the help does not is the drift nobody notices, because a
+  missing completion reads as a shell that needs reloading. A test walks every command and fails
+  when one has no page, and another runs each generated script through its own shell's parser —
+  which is how the zsh one was caught refusing to parse at all (a command summary contains `<`,
+  which zsh read as a redirection).
+
 ### Fixed
 
 - **`cloud-init --challenge dns01` rendered a host that could never get a certificate.** The
