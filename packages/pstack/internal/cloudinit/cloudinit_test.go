@@ -136,11 +136,32 @@ func TestCloudInitGeneration(t *testing.T) {
 		}
 	})
 
+	t.Run("dns01 without a credential is refused, not rendered broken", func(t *testing.T) {
+		// negative control: drop the DNSToken check in validate() — the render succeeds and hands
+		// over a file whose host boots, writes an EMPTY variable into dns.env, and answers every
+		// ACME order with "some credentials information are missing". It looks like a working
+		// wildcard host until someone visits a preview. That shipped, and this is why.
+		a := base
+		a.Challenge, a.DNSProvider = "dns01", "cloudflare"
+		if _, err := RenderCloudInit(a); err == nil || !strings.Contains(err.Error(), "empty dns.env") {
+			t.Errorf("dns01 with no token must be refused: %v", err)
+		}
+		// http01 needs none, and must stay renderable with nothing supplied.
+		if _, err := RenderCloudInit(base); err != nil {
+			t.Errorf("http01 needs no DNS credential: %v", err)
+		}
+	})
+
 	t.Run("dns01 adds the challenge flags to the init call; http01 adds none", func(t *testing.T) {
 		// negative control: drop the dns01 branch of initFlags — the dns assertions fail.
 		a := base
-		a.Challenge, a.DNSProvider = "dns01", "hetzner"
+		a.Challenge, a.DNSProvider, a.DNSToken = "dns01", "hetzner", "the-dns-token"
 		dns := initCall(t, render(t, a))
+		// The credential travels on the init call, or the host renders an empty dns.env and every
+		// ACME order fails with "some credentials information are missing".
+		if !strings.Contains(dns, "PSTACK_DNS_TOKEN='the-dns-token'") {
+			t.Errorf("the credential must reach the init call: %q", dns)
+		}
 		if !strings.Contains(dns, "--challenge dns01") || !strings.Contains(dns, "--dns-provider hetzner") {
 			t.Errorf("dns01 init call: %q", dns)
 		}
@@ -585,6 +606,9 @@ func TestCloudInitGoldens(t *testing.T) {
 	}
 	adv := golden
 	adv.Challenge, adv.DNSProvider, adv.UI, adv.ConfigRepo = "dns01", "cloudflare", "advanced", "https://github.com/example/previews.git"
+	// The same value gen/goldens.table.ts passes as PSTACK_DNS_TOKEN — dns01 will not render
+	// without one, because a host that boots with an empty dns.env never gets a certificate.
+	adv.DNSToken = "golden-dns-token-0123456789"
 	cases["cloud-init-dns01-advanced-swarm"] = adv
 
 	for name, a := range cases {

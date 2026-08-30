@@ -22,18 +22,7 @@
 # with no per-PR DNS work. Note it matches ONE label: `backend-pr-7.{{DOMAIN}}` is
 # covered, `backend.pr-7.{{DOMAIN}}` is NOT. Flatten per-PR hostnames with dashes.
 #
-# ── TLS: HTTP-01, so there is no DNS credential anywhere in this file ────────────────────────
-# Traefik answers the challenge on port 80, so **port 80 must be reachable from the internet** —
-# do not firewall it off "because everything is HTTPS". The web→websecure redirect does not break
-# it: Traefik installs an internal ACME router at maximum priority that bypasses the redirect for
-# /.well-known/acme-challenge/.
-#
-# The cost of HTTP-01: it CANNOT issue wildcards, so every hostname gets its own certificate.
-# Let's Encrypt allows ~50 new certificates per registered domain per week, so at ~3 surfaces per
-# PR that is roughly **16 new PRs/week** before issuance starts failing — and a preview URL is not
-# valid until its container actually exists. When you outgrow that, switch to a wildcard by adding
-#     --challenge dns01 --dns-provider <lego-code>
-# plus PSTACK_DNS_TOKEN=… to the `pstack init` call. Nothing else changes.
+{{TLS_SECTION}}
 #
 # ── NO SHARED STACK (deliberate, for now) ───────────────────────────────────────────────────
 # This host runs the CONTROL stack only: Traefik + pstack (API + UI). There are no `kind: shared`

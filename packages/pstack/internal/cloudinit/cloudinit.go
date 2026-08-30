@@ -172,6 +172,12 @@ type Answers struct {
 	AdminUser string
 	// AdminPassword is that account's password. Only read when AdminUser is set.
 	AdminPassword string
+	// DNSToken is the DNS-01 credential (PSTACK_DNS_TOKEN on the rendered init call). REQUIRED with
+	// `dns01`: without it the host boots, renders `dns.env` empty, and every ACME order fails with
+	// "some credentials information are missing" — a wildcard host that never gets a certificate,
+	// which is not a state worth rendering a file for. It DOES land in instance metadata, so the
+	// header says so rather than claiming the file holds no credential.
+	DNSToken string
 	// Token is PSTACK_TOKEN for the host. Empty (the default) is the SAFER one: `init` generates a
 	// token on the box and prints it once into the boot log, so it never exists in instance metadata
 	// at all. Set it only when something already holds the token — a CI secret, a second host.
@@ -244,6 +250,13 @@ func validate(a Answers) error {
 	}
 	if a.Challenge == "dns01" && a.DNSProvider == "" {
 		return &Error{"dns01 needs a provider code (see https://go-acme.github.io/lego/dns/)"}
+	}
+	// A dns01 file with no credential renders a host that boots BROKEN: `init` writes an empty
+	// variable into dns.env and Traefik answers every order with "some credentials information are
+	// missing". Refuse it rather than hand over a file the operator will believe works — the same
+	// rule an admin password with no account follows.
+	if a.Challenge == "dns01" && a.DNSToken == "" {
+		return &Error{"dns01 needs the credential too, or the host boots with an empty dns.env and never gets a certificate — pass --dns-token-file <path> or set PSTACK_DNS_TOKEN. It is embedded in the rendered file, which the provider stores as instance metadata"}
 	}
 	if strings.Contains(a.DashboardPassword, "'") {
 		// It is interpolated into a single-quoted shell command in the template.
@@ -406,9 +419,46 @@ func RenderCloudInit(a Answers) (string, error) {
 	if a.Token != "" {
 		initEnv = append(initEnv, "PSTACK_TOKEN='"+a.Token+"'")
 	}
+	if a.DNSToken != "" {
+		initEnv = append(initEnv, "PSTACK_DNS_TOKEN='"+a.DNSToken+"'")
+	}
 	initEnvPrefix := ""
 	if len(initEnv) > 0 {
 		initEnvPrefix = strings.Join(initEnv, " ") + " "
+	}
+
+	// The TLS section of the header. It was static HTTP-01 prose, which a dns01 file then carried
+	// verbatim — telling the operator "there is no DNS credential anywhere in this file" on the one
+	// file that needs one. The http01 branch is that original text, unchanged.
+	tlsSection := strings.Join([]string{
+		"# ── TLS: HTTP-01, so there is no DNS credential anywhere in this file ────────────────────────",
+		"# Traefik answers the challenge on port 80, so **port 80 must be reachable from the internet** —",
+		"# do not firewall it off \"because everything is HTTPS\". The web→websecure redirect does not break",
+		"# it: Traefik installs an internal ACME router at maximum priority that bypasses the redirect for",
+		"# /.well-known/acme-challenge/.",
+		"#",
+		"# The cost of HTTP-01: it CANNOT issue wildcards, so every hostname gets its own certificate.",
+		"# Let's Encrypt allows ~50 new certificates per registered domain per week, so at ~3 surfaces per",
+		"# PR that is roughly **16 new PRs/week** before issuance starts failing — and a preview URL is not",
+		"# valid until its container actually exists. When you outgrow that, switch to a wildcard by adding",
+		"#     --challenge dns01 --dns-provider <lego-code>",
+		"# plus PSTACK_DNS_TOKEN=… to the `pstack init` call. Nothing else changes.",
+	}, "\n")
+	if a.Challenge == "dns01" {
+		tlsSection = strings.Join([]string{
+			"# ── TLS: DNS-01, and the credential for it IS in this file ───────────────────────────────────",
+			"# Traefik proves the domain by writing a TXT record through your DNS provider, so port 80 needs",
+			"# no special treatment and a hostname is covered before its container exists.",
+			"#",
+			"# ONE wildcard certificate covers `*." + a.Domain + "` — no per-hostname issuance, so none of",
+			"# HTTP-01's ~50-per-registered-domain-per-week ceiling applies. The cost is the credential on",
+			"# the `pstack init` call below (PSTACK_DNS_TOKEN), which lands in instance metadata with this",
+			"# file. It can edit DNS for the zone, so scope it to that zone and rotate it if this file leaks.",
+			"#",
+			"# The per-PR rule INVERTS here: every preview router carries `tls=true` and NOTHING else, and",
+			"# one always-on router requests the wildcard. A `tls.certresolver` copied from an HTTP-01 host",
+			"# makes each PR order its own certificate.",
+		}, "\n")
 	}
 
 	secrets := []string{
@@ -446,6 +496,13 @@ func RenderCloudInit(a Answers) (string, error) {
 				`#   - the first pstack account ("`+a.AdminUser+`") and its password. It is spent on first boot —`,
 				"#     the account is created only while there is none — so change it once you have signed in.")
 			note = append(note, "  #   PSTACK_ADMIN_*  the first admin account, created on first boot and inert after.")
+		}
+		if a.DNSToken != "" {
+			secrets = append(secrets,
+				"#   - the DNS-01 credential (PSTACK_DNS_TOKEN). It can create and delete DNS records in this",
+				"#     zone, which is how Traefik proves the domain — rotate it at your DNS provider if this",
+				"#     file gets out. It cannot touch this host.")
+			note = append(note, "  #   PSTACK_DNS_TOKEN  the DNS-01 credential; without it dns.env is empty and no certificate ever arrives.")
 		}
 		if a.Token != "" {
 			secrets = append(secrets,
@@ -612,6 +669,7 @@ func RenderCloudInit(a Answers) (string, error) {
 		{"SECRETS_LIST", strings.Join(secrets, "\n")},
 		{"INIT_ENV_NOTE", initNote},
 		{"INIT_ENV", initEnvPrefix},
+		{"TLS_SECTION", tlsSection},
 		{"TOKEN_MESSAGE", tokenMessage},
 		{"INIT_EXTRA_FLAGS", initExtra},
 		{"UI_IMAGE_STEP", uiImageStep},
