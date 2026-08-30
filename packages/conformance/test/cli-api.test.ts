@@ -112,7 +112,7 @@ describe.skipIf(NO_CLI)('pstack api', () => {
     // negative control: add the `api` block to the usage text but not to the Usage: line — the
     // verb list a reader scans first would not mention it.
     const top = await runCli(['--help']);
-    expect(top.stdout).toContain('|serve|api>');
+    expect(top.stdout).toContain('|serve|api|completion>');
     expect(top.stdout).toContain('every HTTP route as a command');
   }, 20_000);
 });

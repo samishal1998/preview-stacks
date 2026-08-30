@@ -90,7 +90,21 @@ func run(argv []string, io IO) *Exit {
 		return nil
 	}
 	if args.Help {
+		// `pstack <cmd> --help` is that command's own page; bare --help is still the whole manual,
+		// because someone who does not yet know the vocabulary needs to see it.
+		if page := CommandHelp(args.Cmd); page != "" {
+			fmt.Fprint(out, page)
+			return nil
+		}
 		fmt.Fprint(out, Usage(version.Get()))
+		return nil
+	}
+	if args.Cmd == "completion" {
+		script, exit := Completion(args.Sub)
+		if exit != nil {
+			return exit
+		}
+		fmt.Fprint(out, script)
 		return nil
 	}
 	if args.Cmd == "" {

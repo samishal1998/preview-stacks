@@ -240,6 +240,11 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.Overrides[k] = kv[eq+1:]
 		case "-h", "--help":
 			p.Help = true
+			// Keep whatever command was already named: `pstack init --help` is a request for
+			// init's page, and returning here without this made every one of them the full manual.
+			if len(rest) > 0 {
+				p.Cmd = rest[0]
+			}
 			return p, nil
 		case "-V", "--version":
 			p.Version = true
@@ -265,7 +270,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "pull", "push", "healthcheck", "api")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "pull", "push", "healthcheck", "api", "completion")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -292,7 +297,9 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|pull|push|serve|api> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|pull|push|serve|api|completion> [flags]",
+		"",
+		"Any command's own flags: pstack <command> --help",
 		"",
 		"Flags:",
 		"  -f, --file <path>   spec file (default: preview.yml)",
@@ -366,6 +373,8 @@ func Usage(version string) string {
 		"            PSTACK_MAX_JOBS (4) — lifecycle jobs running at once, across every stack",
 		"",
 		"healthcheck: GET /api/health on PSTACK_PORT, exit 0 or 1 — the container HEALTHCHECK.",
+		"",
+		"completion: pstack completion bash|zsh|fish   a script for your shell; each prints where to put it.",
 		"",
 		"Exit: 0 ok · 1 failed · 2 leaked · 3 bad spec/usage",
 	}, "\n") + "\n"
