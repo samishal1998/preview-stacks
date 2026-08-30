@@ -94,12 +94,20 @@ export const SCENARIOS: Scenario[] = [
       await s.fetch('PATCH', '/api/deployments/pr-1');
       await s.fetch('GET', '/api/deployments/pr-1/up');
       const up = await s.fetch('POST', '/api/deployments/pr-1/up');
-      await s.fetch('POST', '/api/deployments/pr-1/up');
       const upJob = await s.waitJob((up.body.job as { id: string }).id);
       void upJob;
       // A successful `up` hands off to the readiness watcher, which reads docker in the background.
       // Wait for it to settle before going on, or its calls land in the recorded argv at a position
       // that depends on scheduling — the one thing a trace cannot have.
+      await s.until('GET', '/api/deployments/pr-1/readiness', (b) => b.state !== 'watching');
+      // A SECOND up, and deliberately SEQUENTIAL — issued only once the first has fully settled,
+      // job and watcher both. Overlapping them is what a trace cannot survive: the first deploy's
+      // readiness `docker inspect` interleaves with the second's challenge-probe `docker ps` at a
+      // position decided by the scheduler, so the recorded argv differs between two runs of the
+      // SAME binary. That the second up would QUEUE is real behaviour and worth testing — it is
+      // tested where order does not have to be byte-stable, in test/api-jobs-and-containers.test.ts.
+      const again = await s.fetch('POST', '/api/deployments/pr-1/up');
+      await s.waitJob((again.body.job as { id: string }).id);
       await s.until('GET', '/api/deployments/pr-1/readiness', (b) => b.state !== 'watching');
       await s.fetch('GET', '/api/jobs');
       await s.fetch('GET', '/api/deployments/pr-1/runtime');
