@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`--dns-token-file`, and a rule about how inputs are supplied.** Every input control is now
+  settable both ways — a flag and an environment variable — so scripting a host does not mean
+  discovering which half of a pair happens to be env-only. Secrets are the deliberate exception:
+  argv is world-readable through `ps` for as long as a process lives, so a credential takes a
+  **path** (`--dns-token-file`) rather than a literal, or comes from the environment or a no-echo
+  prompt. Recorded as Go rule 18 in AGENTS.md, alongside the existing `PSTACK_CONFIG_KEY` shape.
+
 - **`init` refuses a re-run that would silently change the host.** It renders the control stack from
   its arguments alone, so a flag left off has always taken that flag's default — a new machine token
   (401s for every CI job holding the old one), a blanked DNS-01 credential (renewal fails weeks

@@ -199,7 +199,18 @@ func run(argv []string, io IO) *Exit {
 		if args.Challenge == "dns01" && args.DNSProvider == "" {
 			return fail("--challenge dns01 needs --dns-provider (or PSTACK_DNS_PROVIDER), e.g. cloudflare")
 		}
+		// The DNS-01 credential: `--dns-token-file <path>` or PSTACK_DNS_TOKEN. Both are accepted,
+		// neither puts the secret in argv — see the flag's comment in args.go.
 		token, hasDNSToken := io.Env("PSTACK_DNS_TOKEN")
+		if args.DNSTokenFile != "" {
+			b, err := os.ReadFile(args.DNSTokenFile)
+			if err != nil {
+				return fail("--dns-token-file: " + err.Error())
+			}
+			// Trailing newline is what every editor and `echo >` leaves; a credential with one is
+			// rejected by the provider as a wrong token, which reads as a permissions problem.
+			token, hasDNSToken = strings.TrimSpace(string(b)), true
+		}
 		// A host that already exists is re-rendered from these arguments alone, so anything this run
 		// would change WITHOUT being asked to is refused — see initguard.go. A first init reads no
 		// state and passes straight through, and so does `pstack upgrade`, which supplies every

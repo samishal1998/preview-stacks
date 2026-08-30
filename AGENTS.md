@@ -377,6 +377,18 @@ packages byte-compatible with it, and they stay after the port because the contr
     close them before the next statement; a nested `db.*` call is a permanent self-deadlock.
 17. **Every `Test…`/`t.Run` carries a `// negative control:` line naming the mutation that fails
     it**, and it was run. `go test -race -timeout 120s` is the test command, not an option.
+18. **Every input control is settable BOTH ways — a flag and an environment variable — except a
+    secret, which never takes a literal flag.** An operator scripting a host should not have to
+    discover which half of a pair happens to be env-only, so a new knob gets both, named for the
+    same thing (`--dns-provider` / `PSTACK_DNS_PROVIDER`), and the env is the `??`-style fallback
+    (rule 11 decides presence vs emptiness).
+
+    The exception is not negotiable and is not about taste: **argv is world-readable** through `ps`
+    and `/proc/<pid>/cmdline` for as long as the process lives, and a value in `Parsed` also lands
+    in the `t.Errorf("got %+v", p)` every parser test does. So a credential comes from the
+    environment, a no-echo prompt, or a `--…-file <path>` flag — the PATH may be an argument
+    because a path is not a secret. `PSTACK_CONFIG_KEY` (no flag, prompt or env) and
+    `--dns-token-file` are the two shapes; copy whichever fits.
 
 ## How to add things
 
