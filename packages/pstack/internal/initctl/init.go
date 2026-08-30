@@ -89,7 +89,7 @@ func defaultImage() string {
 // DNSTokenVar is lego's DNS-01 credential variable, per provider — the name Traefik expects the
 // token under.
 //
-// ONLY the providers verified in `docs/bootstrap.md` §8 are listed. A wrong variable name fails
+// ONLY the providers verified in `docs/bootstrap.md` §3 are listed. A wrong variable name fails
 // as "propagation timeout", which sends you debugging DNS instead of a typo, so an unknown
 // provider gets a CHANGEME line pointing at lego's list rather than a guess.
 //
@@ -719,7 +719,7 @@ func dnsEnvFile(provider, token string) string {
 	}
 	if !known {
 		return strings.Join(append(head,
-			`# provider "`+provider+`" is not one of the names verified in docs/bootstrap.md §8, so the`,
+			`# provider "`+provider+`" is not one of the names verified in docs/bootstrap.md §3, so the`,
 			"# variable it expects is NOT guessed here — a wrong name surfaces as an ACME \"propagation",
 			"# timeout\", which sends you debugging DNS instead of this line.",
 			"#",

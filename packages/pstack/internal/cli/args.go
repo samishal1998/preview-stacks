@@ -76,6 +76,11 @@ type Parsed struct {
 	// struct also keeps it out of the `t.Errorf("got %+v", p)` that every parser test does.
 	Config    string
 	ConfigURL string
+	// DNSTokenFile is `--dns-token-file`: the PATH to the DNS-01 credential, never the credential.
+	// Same reasoning as the passphrase above — a secret in argv is readable by every user on the
+	// box through `ps` for as long as the process lives. A path is not a secret, so it may travel
+	// here; what it points at never enters this struct.
+	DNSTokenFile string
 	Out       string
 	// In is `-i` — the file `push config` reads. The counterpart of Out.
 	In     string
@@ -155,6 +160,8 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		case "--dns-provider":
 			p.Typed["--dns-provider"] = true
 			p.DNSProvider = next(&i, p.DNSProvider)
+		case "--dns-token-file":
+			p.DNSTokenFile = next(&i, p.DNSTokenFile)
 		case "--tag":
 			p.Tag = next(&i, p.Tag)
 		case "--ui-dist":
@@ -307,7 +314,9 @@ func Usage(version string) string {
 		"init flags: --domain <preview.example.com>  --acme-email <you@example.com>",
 		"            --challenge http01|dns01        (default http01 — no DNS credential needed)",
 		"            --ui basic|advanced             (default basic — embedded, no extra container)",
-		"            --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)",
+		"            --dns-provider <lego-code>      (dns01 only)",
+		"            --dns-token-file <path>         the DNS-01 credential, or PSTACK_DNS_TOKEN.",
+		"                                            A path, never the token: argv is world-readable.",
 		"            --orchestrator swarm|compose    (default swarm — one manager; workers join from the Swarm page)",
 		"",
 		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator]",

@@ -1270,6 +1270,24 @@ PSTACK_DNS_TOKEN=<token> pstack init \
   --challenge dns01 --dns-provider cloudflare
 ```
 
+**The two inputs go to different places, on purpose.** `--dns-provider` is lego's provider code and
+is an ordinary flag (or `PSTACK_DNS_PROVIDER`). The **credential never goes on the command line** —
+it travels in `PSTACK_DNS_TOKEN` or `--dns-token-file <path>` (a path is not a secret; the token
+would be, and argv is readable by every user on the box through `ps`). `init` writes it to
+`control/dns.env` at mode `0600` under
+the variable name that provider expects. Traefik loads that file through `env_file:`; the pstack
+container deliberately does not mount it, so the credential reaches the thing that needs it and
+nothing else.
+
+`route53` and `gcloud` are **tokenless** — the instance profile or the attached service account
+satisfies the credential chain, so omit `PSTACK_DNS_TOKEN` entirely. For any provider outside the
+verified list, `init` writes `CHANGEME_VARIABLE_NAME=` rather than guessing the name, because a
+wrong one fails as an ACME *propagation timeout* and sends you debugging DNS instead of a typo.
+
+The verified provider→variable table, the Cloudflare permission pair, and what to do when a
+provider needs more than one variable are in
+[bootstrap.md §3 → Switching to DNS-01](bootstrap.md#switching-to-dns-01-opt-in-when-the-arithmetic-says-so).
+
 Everything `init` reads:
 
 | Flag | Environment | Default | Notes |
