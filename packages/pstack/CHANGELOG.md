@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`cloud-init --challenge dns01` rendered a host that could never get a certificate.** The
+  generated file emitted `--challenge dns01 --dns-provider …` but carried **no credential**, so the
+  host booted, wrote an empty variable into `dns.env`, and answered every ACME order with *"some
+  credentials information are missing"*. Its own header made it worse, saying "TLS: HTTP-01, so
+  there is no DNS credential anywhere in this file" — on the one file that needed one — because
+  that section was static prose regardless of the challenge.
+
+  The credential now travels on the rendered `init` call as `PSTACK_DNS_TOKEN` (from
+  `--dns-token-file` or the environment, like `init` itself), the header's TLS and credential
+  sections follow the challenge, and **`dns01` with no credential is refused** rather than rendering
+  a file whose host boots broken — the same rule an admin password with no account already follows.
+  HTTP-01 renders are byte-identical.
+
 ## 0.37.0 — 2026-08-31
 
 ### Added
