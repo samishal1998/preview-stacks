@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`--extra-domain` on `init` and `cloud-init`** (repeatable), so a host answers on extra hostnames
+  from its first boot rather than only after an API call. The case it exists for is a cutover: the
+  domain you actually want still points at the old box, so you stand the new one up with that
+  domain as the primary — **its routers exist immediately and start working the moment DNS moves,
+  with no pstack change** — and a temporary domain to use meanwhile, dropped from the Domains panel
+  afterwards.
+
+  It only ever adds: re-running `init` merges into whatever `/api/domains` already holds, because
+  removing a domain someone added through the UI is exactly the silent revert `init`'s guard exists
+  to refuse. A malformed one, or the primary named twice, is refused at render rather than at boot.
+
 ## 0.38.1 — 2026-08-31
 
 ### Fixed

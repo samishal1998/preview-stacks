@@ -136,6 +136,32 @@ func TestCloudInitGeneration(t *testing.T) {
 		}
 	})
 
+	t.Run("extra domains reach the init call, and a bad one is refused at render", func(t *testing.T) {
+		// negative control: drop the ExtraDomains loop from initFlags — the rendered host answers on
+		// the primary only, and the temporary domain the operator asked for silently does not exist.
+		// They find out when the hostname they were told to use does not resolve to anything.
+		a := base
+		a.ExtraDomains = []string{"temp-one.example.com", "temp-two.example.com"}
+		call := initCall(t, render(t, a))
+		for _, d := range a.ExtraDomains {
+			if !strings.Contains(call, "--extra-domain "+d) {
+				t.Errorf("%s is missing from the init call: %q", d, call)
+			}
+		}
+		// A typo must fail HERE, not on the host at boot where it is a cloud-init log nobody reads.
+		bad := base
+		bad.ExtraDomains = []string{"not a hostname"}
+		if _, err := RenderCloudInit(bad); err == nil {
+			t.Error("a malformed extra domain must be refused at render")
+		}
+		// The primary already has routers; naming it again would define the same one twice.
+		same := base
+		same.ExtraDomains = []string{same.Domain}
+		if _, err := RenderCloudInit(same); err == nil || !strings.Contains(err.Error(), "already the primary") {
+			t.Errorf("the primary must be refused as an extra: %v", err)
+		}
+	})
+
 	t.Run("dns01 without a credential is refused, not rendered broken", func(t *testing.T) {
 		// negative control: drop the DNSToken check in validate() — the render succeeds and hands
 		// over a file whose host boots, writes an EMPTY variable into dns.env, and answers every

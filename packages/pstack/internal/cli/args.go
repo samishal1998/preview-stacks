@@ -76,6 +76,17 @@ type Parsed struct {
 	// struct also keeps it out of the `t.Errorf("got %+v", p)` that every parser test does.
 	Config    string
 	ConfigURL string
+	// ExtraDomains is `--extra-domain` (repeatable): additional hostnames this host answers on, in
+	// place from the first boot rather than added afterwards.
+	//
+	// The case it exists for: the domain you actually want is still pointing at the OLD host, so you
+	// stand up the new one with that domain as the primary — its routers exist immediately and start
+	// working the moment DNS moves — and a temporary domain here to use meanwhile.
+	//
+	// It only ever ADDS. `init` merges these into whatever /api/domains already holds, because
+	// removing a domain the operator added through the UI on a re-run would be exactly the silent
+	// revert the guard exists to refuse.
+	ExtraDomains []string
 	// DNSTokenFile is `--dns-token-file`: the PATH to the DNS-01 credential, never the credential.
 	// Same reasoning as the passphrase above — a secret in argv is readable by every user on the
 	// box through `ps` for as long as the process lives. A path is not a secret, so it may travel
@@ -162,6 +173,10 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.DNSProvider = next(&i, p.DNSProvider)
 		case "--dns-token-file":
 			p.DNSTokenFile = next(&i, p.DNSTokenFile)
+		case "--extra-domain":
+			if d := next(&i, ""); d != "" {
+				p.ExtraDomains = append(p.ExtraDomains, d)
+			}
 		case "--tag":
 			p.Tag = next(&i, p.Tag)
 		case "--ui-dist":
@@ -322,6 +337,9 @@ func Usage(version string) string {
 		"            --challenge http01|dns01        (default http01 — no DNS credential needed)",
 		"            --ui basic|advanced             (default basic — embedded, no extra container)",
 		"            --dns-provider <lego-code>      (dns01 only)",
+		"            --extra-domain <host>           also answer on this domain (repeatable). For a primary",
+		"                                            whose DNS still points elsewhere: its routers wait, this",
+		"                                            one works now, and /api/domains drops it later.",
 		"            --dns-token-file <path>         the DNS-01 credential, or PSTACK_DNS_TOKEN.",
 		"                                            A path, never the token: argv is world-readable.",
 		"            --orchestrator swarm|compose    (default swarm — one manager; workers join from the Swarm page)",

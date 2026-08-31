@@ -172,6 +172,10 @@ type Answers struct {
 	AdminUser string
 	// AdminPassword is that account's password. Only read when AdminUser is set.
 	AdminPassword string
+	// ExtraDomains are additional hostnames the host answers on from its first boot, passed through
+	// to `init` as --extra-domain. The case: the primary's DNS still points at the old box, so its
+	// routers wait while one of these is usable now.
+	ExtraDomains []string
 	// DNSToken is the DNS-01 credential (PSTACK_DNS_TOKEN on the rendered init call). REQUIRED with
 	// `dns01`: without it the host boots, renders `dns.env` empty, and every ACME order fails with
 	// "some credentials information are missing" — a wildcard host that never gets a certificate,
@@ -255,6 +259,14 @@ func validate(a Answers) error {
 	// variable into dns.env and Traefik answers every order with "some credentials information are
 	// missing". Refuse it rather than hand over a file the operator will believe works — the same
 	// rule an admin password with no account follows.
+	for _, d := range a.ExtraDomains {
+		if !domainRe.MatchString(d) {
+			return &Error{"--extra-domain " + d + " is not a hostname"}
+		}
+		if strings.EqualFold(d, a.Domain) {
+			return &Error{"--extra-domain " + d + " is already the primary domain — it has routers either way"}
+		}
+	}
 	if a.Challenge == "dns01" && a.DNSToken == "" {
 		return &Error{"dns01 needs the credential too, or the host boots with an empty dns.env and never gets a certificate — pass --dns-token-file <path> or set PSTACK_DNS_TOKEN. It is embedded in the rendered file, which the provider stores as instance metadata"}
 	}
@@ -361,6 +373,9 @@ func RenderCloudInit(a Answers) (string, error) {
 	var initFlags []string
 	if a.Challenge == "dns01" {
 		initFlags = append(initFlags, "--challenge dns01", "--dns-provider "+a.DNSProvider)
+	}
+	for _, d := range a.ExtraDomains {
+		initFlags = append(initFlags, "--extra-domain "+d)
 	}
 	if a.UI == "advanced" {
 		initFlags = append(initFlags, "--ui advanced")

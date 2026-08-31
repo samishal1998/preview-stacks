@@ -99,6 +99,11 @@ healthcheck. Idempotent: re-running it IS the upgrade path.
       --dns-provider <code>      lego provider code; dns01 only
       --dns-token-file <path>    the DNS-01 credential, or PSTACK_DNS_TOKEN. A PATH, never the
                                  token itself: argv is world-readable through ps
+      --extra-domain <host>      also answer on this domain (repeatable). For standing a host up
+                                 on a primary whose DNS still points at the OLD box: the primary's
+                                 routers are in place and start working the moment DNS moves, and
+                                 this one is usable meanwhile. It only ADDS — remove it later from
+                                 the Domains panel or PUT /api/domains
       --ui basic|advanced        default basic (embedded, no extra container)
       --orchestrator swarm|compose
       --force                    proceed even though this run would change something you did
@@ -114,7 +119,7 @@ Also reads PSTACK_TOKEN: absent on an existing host, a NEW machine token is mint
 job holding the old one starts getting 401s.`,
 		flags: []string{
 			"--domain", "--acme-email", "--challenge", "--dns-provider", "--dns-token-file",
-			"--ui", "--orchestrator", "--force", "--dry-run", "--help",
+			"--extra-domain", "--ui", "--orchestrator", "--force", "--dry-run", "--help",
 		},
 	},
 	"upgrade": {
