@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **An added domain's `control.` served the wrong console on an advanced-UI host.** It pointed at
+  the API container unconditionally, so `control.<added-domain>` showed the embedded basic UI while
+  `control.<primary>` showed the SPA — the same console with two answers depending on which
+  hostname you typed. It now follows the host, detected from the running control stack rather than
+  stored, and is re-derived when the control plane restarts, so `pstack ui advanced` heals domains
+  added before the switch. `api.` and the wake catch-all still point at the API container, which is
+  correct: the SPA calls that hostname rather than being served by it.
+
 ## 0.38.0 — 2026-08-31
 
 ### Changed

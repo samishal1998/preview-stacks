@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { bootServer, tmpd, type Booted } from '../harness/server.ts';
-import { ALWAYS_OK, dockerShim } from '../harness/docker-shim.ts';
+import { ALWAYS_OK, arm, dockerShim } from '../harness/docker-shim.ts';
 
 async function boot(tag: string) {
   const routingDir = tmpd('domains-dynamic');
@@ -22,7 +22,44 @@ async function boot(tag: string) {
 const j = (s: Booted, method: string, path: string, body?: unknown) =>
   fetch(`${s.base}${path}`, { method, headers: s.H, body: body === undefined ? undefined : JSON.stringify(body) });
 
+/** A docker whose control project contains the advanced-UI container. */
+const ADVANCED_SHIM = [
+  arm('ps -aq --filter label=com.docker.compose.project=pstack-control', 'u1'),
+  arm(
+    'inspect u1',
+    JSON.stringify([
+      {
+        Id: 'u1',
+        Name: '/pstack-control-advanced-ui-1',
+        Config: { Image: 'pstack-ui:local', Labels: { 'com.docker.compose.service': 'advanced-ui' } },
+        State: { Status: 'running' },
+      },
+    ]),
+  ),
+].join('\n');
+
 describe('the hostnames this host answers on', () => {
+  test('an added domain serves the console this host actually runs', async () => {
+    // negative control: hardcode the API service for the console router — control.<added-domain>
+    // serves the EMBEDDED basic UI while control.<primary> serves the SPA, and the operator sees
+    // two different consoles depending on which hostname they typed. Reported from a real host.
+    const routingDir = tmpd('domains-ui');
+    mkdirSync(routingDir, { recursive: true });
+    const docker = dockerShim(ADVANCED_SHIM);
+    const s = await bootServer({ tag: 'domains-ui', routingDir, domain: 'preview.old.com', pathPrefix: docker.dir });
+    try {
+      expect(((await (await j(s, 'GET', '/api/domains')).json()) as { console: string }).console).toBe('advanced');
+      expect((await j(s, 'PUT', '/api/domains', { domains: ['preview.new.com'] })).status).toBe(200);
+      const body = await (await j(s, 'GET', '/api/routing/pstack-domains.yml')).text();
+      expect(body).toContain('advanced-ui@docker');
+      // The API and the waking page stay on the API container whatever the console serves.
+      expect(body).toContain('pstack@docker');
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  }, 30_000);
+
   test('adding a domain writes its routers and reads back derived from them', async () => {
     // negative control: store the list in a side channel instead of deriving it from the file —
     // the two disagree the first time anything touches the directory, and the API reports a domain

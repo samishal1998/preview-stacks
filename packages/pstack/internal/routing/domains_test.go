@@ -100,6 +100,37 @@ func TestEachDomainGetsConsoleAPIAndAWakeRouter(t *testing.T) {
 	}
 }
 
+func TestTheConsoleRouterFollowsTheHostsUI(t *testing.T) {
+	// negative control: hardcode apiService for the console router — an added domain serves the
+	// EMBEDDED basic UI on control.<d> while control.<primary> serves the SPA. Same console, two
+	// answers depending on which hostname you typed, and nothing says why. That shipped.
+	adv := New(t.TempDir())
+	if _, err := adv.SetDomains([]string{"preview.new.com"}, DomainOptions{ConsoleService: AdvancedUIService}); err != nil {
+		t.Fatal(err)
+	}
+	r := routersOf(t, adv)
+	if got := r.GetMap("pstack-ui-preview-new-com").GetString("service"); got != "advanced-ui@docker" {
+		t.Errorf("the console must follow the host's UI: %q", got)
+	}
+	// The API is the API on every host — the SPA CALLS this hostname, it is not served by it.
+	if got := r.GetMap("pstack-api-preview-new-com").GetString("service"); got != "pstack@docker" {
+		t.Errorf("api must stay the API: %q", got)
+	}
+	// So must the wake catch-all: the waking page is rendered by the API.
+	if got := r.GetMap("pstack-wake-preview-new-com").GetString("service"); got != "pstack@docker" {
+		t.Errorf("wake must stay the API: %q", got)
+	}
+
+	// A basic host serves the console from the API container, which is the default.
+	basic := New(t.TempDir())
+	if _, err := basic.SetDomains([]string{"preview.new.com"}, DomainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := routersOf(t, basic).GetMap("pstack-ui-preview-new-com").GetString("service"); got != "pstack@docker" {
+		t.Errorf("a basic host serves the console from the API: %q", got)
+	}
+}
+
 func TestDomainsRefusalsAndNormalisation(t *testing.T) {
 	// negative control: drop the Primary equality check — the added domain renders a SECOND
 	// pstack-ui router for a hostname the container's labels already serve, and Traefik deletes
