@@ -299,6 +299,11 @@ func New(o Options) (*Server, error) {
 		TickMs: o.SchedulerTickMs,
 	})
 	s.reindex()
+	// Point every added domain's console at the UI this host runs NOW. `pstack ui advanced` recreates
+	// this container, so the rewrite on the way back up is what stops `control.<added-domain>` from
+	// serving the old console after a UI switch. Idempotent: it rewrites the same bytes when nothing
+	// changed, and does nothing at all when no domain has been added.
+	s.reconcileDomains()
 	return s, nil
 }
 

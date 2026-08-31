@@ -15,10 +15,56 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 )
+
+// consoleService is what an added domain's `control.<d>` must target: the SPA when this host runs
+// the advanced UI, otherwise the API container that serves the embedded one.
+//
+// DERIVED from the running control stack rather than a stored setting, for the same reason the
+// certificate mode is: `pstack ui advanced` adds a container and re-renders the primary router, and
+// a setting written when the domain was added would still say `basic` afterwards.
+func (s *Server) consoleService() string {
+	for _, c := range inspect.ControlRuntime(s.host).Containers {
+		if c.Service != nil && *c.Service == advancedUIService {
+			return routing.AdvancedUIService
+		}
+	}
+	return ""
+}
+
+// advancedUIService is the compose service name `init` gives the SPA container.
+const advancedUIService = "advanced-ui"
+
+// domainOptions is what the renderer needs to know about this host, in one place so the PUT and the
+// boot-time reconcile cannot disagree about it.
+func (s *Server) domainOptions() routing.DomainOptions {
+	return routing.DomainOptions{
+		Primary:        s.opts.Domain,
+		Mode:           string(s.challenge()),
+		ConsoleService: s.consoleService(),
+	}
+}
+
+// reconcileDomains rewrites the domains file from the host as it is NOW.
+//
+// Called at startup, which is what makes `pstack ui advanced` heal an added domain: that command
+// re-runs init, which recreates this container, and the rewrite on the way back up points every
+// `control.<d>` at the SPA that now exists. Without it the primary domain would serve the new
+// console and every added domain would still serve the old one.
+func (s *Server) reconcileDomains() {
+	existing := s.routing.Domains()
+	if len(existing) == 0 {
+		return
+	}
+	if _, err := s.routing.SetDomains(existing, s.domainOptions()); err != nil {
+		s.opts.Log("domains: could not reconcile " + strings.Join(existing, ", ") + ": " + err.Error())
+	}
+}
 
 func (s *Server) domainsGet(w http.ResponseWriter) error {
 	extra := s.routing.Domains()
@@ -28,9 +74,20 @@ func (s *Server) domainsGet(w http.ResponseWriter) error {
 		"primary", s.opts.Domain,
 		"domains", extra,
 		"mode", string(s.challenge()),
+		// Which console `control.<d>` serves — the SPA on an advanced host, the embedded UI
+		// otherwise. Shown because "why does this hostname look different" is the question it
+		// answers.
+		"console", consoleName(s.consoleService()),
 		"note", domainsNote(len(extra), string(s.challenge())),
 	))
 	return nil
+}
+
+func consoleName(service string) string {
+	if service == routing.AdvancedUIService {
+		return "advanced"
+	}
+	return "basic"
 }
 
 func domainsNote(n int, mode string) string {
@@ -68,7 +125,7 @@ func (s *Server) domainsPut(w http.ResponseWriter, r *http.Request) error {
 		}
 		want = append(want, sv)
 	}
-	stored, err := s.routing.SetDomains(want, routing.DomainOptions{Primary: s.opts.Domain, Mode: string(s.challenge())})
+	stored, err := s.routing.SetDomains(want, s.domainOptions())
 	if err != nil {
 		if routing.IsError(err) {
 			writeError(w, 400, err.Error())

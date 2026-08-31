@@ -49,9 +49,13 @@ import (
 // wildcard pointer: it is derived state, and a hand edit would make the API's answer a lie.
 const DomainsYAML = "pstack-domains.yml"
 
-// The service the routers point at — see the package comment on why the suffix is not optional and
-// why it is `@docker` in both orchestrator modes.
-const controlService = "pstack@docker"
+// The API service every `api.<d>` router points at — see the package comment on why the suffix is
+// not optional and why it is `@docker` in both orchestrator modes.
+const apiService = "pstack@docker"
+
+// AdvancedUIService is what `control.<d>` targets on a host running the advanced UI. On a basic
+// host the console IS the API container, so it targets apiService instead.
+const AdvancedUIService = "advanced-ui@docker"
 
 // A hostname this host could plausibly answer on. Deliberately strict: it becomes a Traefik rule and
 // a regexp, and an unvalidated string reaches both.
@@ -70,6 +74,22 @@ type DomainOptions struct {
 	// Mode is the host's certificate mode (http01 | dns01 | dns-persist-01 | unknown). It decides
 	// only the TLS block; see tlsFor.
 	Mode string
+	// ConsoleService is the Traefik service `control.<d>` targets. Empty means the API container,
+	// which is what a BASIC host serves the console from.
+	//
+	// It exists because the primary domain's own router already makes this choice — `init` renders
+	// `pstack-ui.service=advanced-ui` on an advanced host — and an added domain that ignored it
+	// served the embedded basic UI on `control.<new-domain>` while `control.<primary>` served the
+	// SPA. Same console, two different answers depending on which hostname you typed.
+	ConsoleService string
+}
+
+// consoleService is the service the console router targets, defaulting to the API container.
+func (o DomainOptions) consoleService() string {
+	if o.ConsoleService != "" {
+		return o.ConsoleService
+	}
+	return apiService
 }
 
 // Domains is every additional domain, sorted. Derived from the file; empty when there is none.
@@ -198,12 +218,14 @@ func renderDomains(domains []string, o DomainOptions) string {
 		b.WriteString("    pstack-ui-" + s + ":\n")
 		b.WriteString("      rule: \"Host(`control." + d + "`)\"\n")
 		b.WriteString("      entryPoints: [websecure]\n")
-		b.WriteString("      service: \"" + controlService + "\"\n")
+		b.WriteString("      service: \"" + o.consoleService() + "\"\n")
 		b.WriteString(tlsFor(d, o.Mode, true))
+		// The API is the API on every host: `api.<d>` never points at the SPA, whatever the console
+		// serves, because the advanced UI calls this hostname rather than being served by it.
 		b.WriteString("    pstack-api-" + s + ":\n")
 		b.WriteString("      rule: \"Host(`api." + d + "`)\"\n")
 		b.WriteString("      entryPoints: [websecure]\n")
-		b.WriteString("      service: \"" + controlService + "\"\n")
+		b.WriteString("      service: \"" + apiService + "\"\n")
 		b.WriteString(tlsFor(d, o.Mode, false))
 		// WAKE-ON-CALL for this domain. Priority 1 — the lowest — so a live preview's own router
 		// always wins; this only catches hostnames nothing else claims, which is what a sleeping
@@ -213,7 +235,7 @@ func renderDomains(domains []string, o DomainOptions) string {
 		b.WriteString("      rule: \"HostRegexp(`^[a-z0-9-]+\\\\." + strings.ReplaceAll(d, ".", "\\\\.") + "$`)\"\n")
 		b.WriteString("      priority: 1\n")
 		b.WriteString("      entryPoints: [websecure]\n")
-		b.WriteString("      service: \"" + controlService + "\"\n")
+		b.WriteString("      service: \"" + apiService + "\"\n")
 		b.WriteString("      tls: {}\n")
 	}
 	return b.String()

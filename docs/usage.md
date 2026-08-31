@@ -1604,6 +1604,11 @@ pstack api tls domains-set --data '{"domains":["preview.new-company.com"]}'
 seconds, with no re-init, no restart and no downtime. The list is the file: `GET /api/domains`
 reads it back out of the routers it wrote, so the two cannot disagree.
 
+Each added domain's **`control.` serves whatever console this host runs** — the advanced SPA when
+it has one, the embedded UI otherwise — detected from the running control stack rather than stored,
+so `pstack ui advanced` heals existing domains when the control plane restarts. `api.` and the wake
+catch-all always point at the API container, whatever the console serves.
+
 **The primary domain is not in that list and cannot be removed from it.** Its routers are labels on
 the pstack container, deliberately: whatever goes wrong in a dynamic file, the hostname you would
 use to undo it still answers. That is also why this is a file rather than more labels — a label
