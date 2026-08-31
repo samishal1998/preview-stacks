@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.38.0 — 2026-08-31
+
+### Changed
+
+- **`pstack cloud-init --challenge dns01` now refuses without a credential**, where it previously
+  rendered a file. Nothing that worked stops working: the file it used to render produced a host
+  that wrote an empty `dns.env` and never got a certificate. But a script calling it will now exit
+  3 instead of silently emitting that file — pass `--dns-token-file <path>` or set
+  `PSTACK_DNS_TOKEN`. See Fixed below.
 
 ### Added
 
