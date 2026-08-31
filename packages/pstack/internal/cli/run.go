@@ -29,6 +29,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
@@ -245,6 +246,24 @@ func run(argv []string, io IO) *Exit {
 		})
 		if err != nil {
 			return &Exit{Code: ExitFailed, Msg: err.Error()}
+		}
+		// Extra domains, once the control stack is up and its dynamic directory exists. MERGED into
+		// whatever is already registered: `init` may not remove a domain someone added through the
+		// UI, which would be the silent revert the guard above refuses everywhere else.
+		if len(args.ExtraDomains) > 0 && !args.DryRun {
+			store := routing.New(routing.DynamicDir(dataDir))
+			want := append(store.Domains(), args.ExtraDomains...)
+			console := ""
+			if args.UI == "advanced" {
+				console = routing.AdvancedUIService
+			}
+			stored, err := store.SetDomains(want, routing.DomainOptions{
+				Primary: args.Domain, Mode: args.Challenge, ConsoleService: console,
+			})
+			if err != nil {
+				return &Exit{Code: ExitFailed, Msg: "the control stack is up, but the extra domains were refused: " + err.Error()}
+			}
+			fmt.Fprintln(out, "  also answering on: "+strings.Join(stored, ", "))
 		}
 		return nil
 
@@ -527,7 +546,8 @@ func cloudInit(args *Parsed, io IO) *Exit {
 		Domain: domain, AcmeEmail: acmeEmail, SSHKey: sshKey, DashboardPassword: dashboardPassword,
 		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator,
 		AdminUser: adminUser, AdminPassword: adminPassword, Token: apiToken, DNSToken: dnsToken,
-		ConfigRepo: configRepo, Distro: args.Distro,
+		ExtraDomains: args.ExtraDomains,
+		ConfigRepo:   configRepo, Distro: args.Distro,
 		ConfigSealed: sealed, ConfigURL: args.ConfigURL, ConfigKey: configKey,
 	})
 	if err != nil {

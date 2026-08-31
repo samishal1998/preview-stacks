@@ -1604,6 +1604,23 @@ pstack api tls domains-set --data '{"domains":["preview.new-company.com"]}'
 seconds, with no re-init, no restart and no downtime. The list is the file: `GET /api/domains`
 reads it back out of the routers it wrote, so the two cannot disagree.
 
+**Standing a host up on a domain that is not yours yet.** `init` and `cloud-init` take
+`--extra-domain <host>` (repeatable), which registers the domain from the first boot:
+
+```bash
+pstack init --domain preview.new-company.com --acme-email ops@example.com \
+  --extra-domain preview-temp.example.com
+```
+
+The case it exists for is a cutover. `preview.new-company.com` is still pointing at the old box, so
+nothing under it resolves here yet — but **its routers exist from the moment `init` runs**, so when
+you move the DNS record it simply starts working, with no pstack change at all. Meanwhile
+`preview-temp.example.com` is usable. Afterwards, drop the temporary one from the **Domains** panel
+or with a `PUT`; nothing else needs touching.
+
+`--extra-domain` only ever **adds**. Re-running `init` merges into whatever `/api/domains` already
+holds, so a domain someone added through the UI is never removed by an upgrade.
+
 Each added domain's **`control.` serves whatever console this host runs** — the advanced SPA when
 it has one, the embedded UI otherwise — detected from the running control stack rather than stored,
 so `pstack ui advanced` heals existing domains when the control plane restarts. `api.` and the wake

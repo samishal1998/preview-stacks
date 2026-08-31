@@ -114,3 +114,30 @@ func TestHelpForOneCommandIsNotTheWholeManual(t *testing.T) {
 		t.Fatalf("bare --help is the manual: help=%v cmd=%q", bare.Help, bare.Cmd)
 	}
 }
+
+func TestExtraDomainIsRepeatable(t *testing.T) {
+	// negative control: assign instead of append in the --extra-domain case — only the LAST one
+	// survives, and a host asked to answer on two temporary domains answers on one, silently.
+	p, err := ParseArgs([]string{"init", "--extra-domain", "a.example.com", "--extra-domain", "b.example.com"},
+		func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.ExtraDomains, ",") != "a.example.com,b.example.com" {
+		t.Fatalf("both must survive: %v", p.ExtraDomains)
+	}
+	// And the flag is offered by the shell and documented on the page, per rule 18's spirit.
+	page := CommandHelp("init")
+	if !strings.Contains(page, "--extra-domain") {
+		t.Error("init's page does not document --extra-domain")
+	}
+	found := false
+	for _, f := range completionFlags("init") {
+		if f == "--extra-domain" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the shell is not offered --extra-domain")
+	}
+}
