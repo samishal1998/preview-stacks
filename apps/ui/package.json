@@ -1,6 +1,6 @@
 {
   "name": "@samyx/preview-stacks-ui",
-  "version": "0.38.0",
+  "version": "0.38.1",
   "private": false,
   "description": "The advanced web UI for preview-stacks — an opt-in SPA that talks to the pstack HTTP API.",
   "type": "module",
