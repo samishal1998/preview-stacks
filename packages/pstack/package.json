@@ -1,6 +1,6 @@
 {
   "name": "@samyx/preview-stacks",
-  "version": "0.38.1",
+  "version": "0.39.0",
   "private": true,
   "description": "Declarative lifecycle for ephemeral per-PR preview stacks: isolation axes with provision/destroy/leak-verification, over Docker Compose or Swarm. One static Go binary.",
   "repository": {
