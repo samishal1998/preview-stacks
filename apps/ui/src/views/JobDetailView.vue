@@ -8,11 +8,11 @@
  * to pick up `outcome`, which only exists after the job finishes.
  *
  * A QUEUED JOB HAS A STREAM TOO, and it is open and silent until the job dispatches. That is the
- * one case where "no events yet" is not a broken connection, so the page says what it is waiting
- * for instead of showing an empty log: the panel reads "waiting to start", and a banner above it
- * says WHY — behind its own stack, or behind the host's job cap. The first line to arrive IS the
- * dispatch, and nothing else would re-fetch, so it triggers one `load()`; without that the badge
- * would still read "Queued" while output scrolled past underneath it.
+ * one case where "no events yet" is not a broken connection, so the page says it is waiting instead
+ * of showing an empty log, and a banner above says which wait it is — behind its own stack, or
+ * behind the host's job cap. The first line to arrive IS the dispatch, and nothing else would
+ * re-fetch, so it triggers one `load()`; without that the badge would still read "Queued" while
+ * output scrolled past underneath it.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
@@ -223,11 +223,6 @@ onBeforeUnmount(closeStream);
         variant="danger"
         :pending="cancelling"
         :confirm="queued ? 'Drop it? It never ran.' : 'Stop it? Nothing is undone.'"
-        :title="
-          queued
-            ? 'It has not started, so there is nothing left behind to clean up.'
-            : 'Kills the command in flight. Anything already created or destroyed stays that way.'
-        "
         @run="cancel"
       >
         {{ queued ? 'Drop' : 'Stop' }}
@@ -236,31 +231,25 @@ onBeforeUnmount(closeStream);
 
     <!--
       A queued job and a broken page look identical — an open connection, an empty log, nothing
-      moving. So this says which it is, and WHY it waits, because the two waits have different
+      moving. So this says which it is, and WHICH wait it is, because the two waits have different
       fixes: behind its own stack, wait or stop the job ahead; behind the host's cap, raise
       PSTACK_MAX_JOBS or deploy fewer things at once. Neutral chrome on purpose — waiting is the
       system working, not an alarm.
     -->
     <section v-if="queued" class="panel">
-      <b>Waiting to start — nothing has run yet.</b>
+      <b>Waiting to start.</b>
       <p v-if="wait?.kind === 'stack'" class="mute">
+        Behind
         <RouterLink :to="`/jobs/${encodeURIComponent(wait.blocker.id)}`">{{
           actionLabel(wait.blocker.action)
         }}</RouterLink>
-        is already running on <code>{{ job?.stack }}</code
-        >. One job runs per stack at a time — a teardown racing a deploy over the same database is
-        the failure that rule exists to prevent — so this one starts when that one ends.
+        on <code>{{ job?.stack }}</code
+        >.
       </p>
       <p v-else-if="wait?.kind === 'slot'" class="mute">
-        Nothing is running on <code>{{ job?.stack }}</code
-        >, so the wait is host-wide: {{ wait.running }} jobs hold a slot across every stack, and the
-        host runs at most <code>PSTACK_MAX_JOBS</code> at once (4 unless this server was told
-        otherwise). This one starts as soon as a slot frees.
+        No free job slot — {{ wait.running }} running host-wide.
       </p>
-      <p v-else class="mute">
-        It starts once its own stack is free and the host has a spare job slot.
-      </p>
-      <p class="mute">Dropping it now costs nothing — it has not touched anything yet.</p>
+      <p v-else class="mute">Waiting for its stack and a job slot.</p>
     </section>
 
     <!--
@@ -268,21 +257,17 @@ onBeforeUnmount(closeStream);
       a stopped job leaves partial state to hunt for, a superseded one cannot, because it never ran.
     -->
     <section v-if="job?.state === 'superseded'" class="panel">
-      <b>Superseded — this job never ran.</b>
+      <b>Superseded — never ran.</b>
       <p class="mute">
+        Replaced while queued by
         <template v-if="replacement">
-          A newer
           <RouterLink :to="`/jobs/${encodeURIComponent(replacement.id)}`">{{
             actionLabel(replacement.action).toLowerCase()
           }}</RouterLink>
-          for <code>{{ job.stack }}</code> replaced it while it was queued.
         </template>
-        <template v-else>
-          A newer job for <code>{{ job.stack }}</code> replaced it while it was queued.
-        </template>
-        The queue is one deep, so a burst of pushes runs the first deploy and then exactly one more
-        carrying the newest spec. Nothing was created or destroyed here — there is no partial state
-        to go looking for, and nothing to verify.
+        <template v-else>a newer job</template>
+        for <code>{{ job.stack }}</code
+        >.
       </p>
     </section>
 
@@ -292,10 +277,7 @@ onBeforeUnmount(closeStream);
     -->
     <section v-if="job?.state === 'cancelled'" class="panel banner-panel warn">
       <b>Stopped by {{ job.cancelledBy ?? 'an operator' }} — nothing was undone.</b>
-      <p>
-        Whatever this job had already created or destroyed is still that way. Run
-        <b>Verify</b> on the deployment to see what actually exists.
-      </p>
+      <p>Run <b>Verify</b> to see what exists.</p>
     </section>
 
     <ErrorNote v-if="error" :text="error" />
@@ -306,10 +288,7 @@ onBeforeUnmount(closeStream);
     -->
     <section v-if="leaks.length" class="panel leaked-banner">
       <strong>Leaked:</strong> {{ leaks.join(', ') }}
-      <div class="mute">
-        These axes' <code>assert_gone</code> failed, so the resources are still present. They will
-        not be retried — tear them down by hand, then re-run <code>verify</code>.
-      </div>
+      <div class="mute">Still present, not retried — remove by hand.</div>
     </section>
 
     <section v-if="job?.error" class="panel">
@@ -331,7 +310,7 @@ onBeforeUnmount(closeStream);
           loading
             ? 'Loading…'
             : queued
-              ? 'Waiting to start — there is no output until it does.'
+              ? 'Waiting to start.'
               : 'No output.'
         "
       >
@@ -346,9 +325,8 @@ onBeforeUnmount(closeStream);
     <section v-if="job?.outcome" class="panel">
       <div class="phead">
         <h2 class="phead-title">Steps</h2>
-        <span v-if="unverifiable" class="mute">
-          {{ unverifiable }} unverifiable — no <code>assert_gone</code>, so nothing was checked
-        </span>
+        <!-- "unverifiable" is the third state: not gone, not present — nothing checked it. -->
+        <span v-if="unverifiable" class="mute">{{ unverifiable }} unverifiable</span>
       </div>
       <StepList :steps="job.outcome.steps" />
     </section>

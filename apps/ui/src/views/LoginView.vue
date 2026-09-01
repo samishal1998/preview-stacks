@@ -15,7 +15,6 @@ import { useRoute, useRouter } from 'vue-router';
 import { authState, checkAuth, login } from '../composables/useAuth';
 import { api } from '../api/client';
 import ActionButton from '../components/ActionButton.vue';
-import InfoHint from '../components/InfoHint.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
 import SsoMark from '../components/SsoMark.vue';
 
@@ -83,34 +82,20 @@ async function submit(): Promise<void> {
       <h1 style="font-size: var(--t-xl); margin-bottom: var(--s2)">Sign in</h1>
 
       <template v-if="authState.hasUsers === false">
-        <p class="dim">
-          No accounts exist on this server yet — create the first one, then sign in.
-        </p>
         <!--
           A curl block used to sit here permanently, on the FIRST screen anyone sees. It is needed
           exactly once per host and by one person; behind the button it costs a click then and
           nothing on every later visit — and it is generated, so it cannot drift from the route.
         -->
         <div class="banner plain" style="margin-top: var(--s3)">
-          <b>Create the first account</b>
-          <p>
-            This has to be done with the host token, from a terminal — a browser has no way to prove
-            it is allowed to claim a fresh server.
-          </p>
+          <b>No accounts yet — create the first one.</b>
+          <p class="mute">Needs the host token.</p>
           <EquivalentCommand
             what="creating the first account"
             method="POST"
             path="/api/auth/bootstrap"
             :body="{ username: 'you', password: '…' }"
           />
-          <p class="mute" style="margin-top: var(--s3)">
-            It can also be set up ahead of time when the host is first provisioned.
-            <InfoHint label="how">
-              Set the admin username and password in the environment before running the setup
-              command on the host. They are honoured only while no account exists, so they cannot
-              overwrite one later.
-            </InfoHint>
-          </p>
         </div>
       </template>
 
@@ -138,13 +123,7 @@ async function submit(): Promise<void> {
             {{ pending ? 'Signing in…' : 'Sign in' }}
           </ActionButton>
           <span class="grow" />
-          <RouterLink to="/settings" class="mute">
-            Use a token instead
-            <InfoHint label="token access" align="end">
-              A bearer token in Settings — the machine token from <code>pstack init</code>, or a
-              personal token from your account — authenticates every request without a session.
-            </InfoHint>
-          </RouterLink>
+          <RouterLink to="/settings" class="mute">Use a token instead</RouterLink>
         </div>
       </form>
 

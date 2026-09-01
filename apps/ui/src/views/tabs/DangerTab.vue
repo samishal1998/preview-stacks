@@ -84,7 +84,7 @@ async function copyShare(): Promise<void> {
     await navigator.clipboard.writeText(shareLink.value.url);
     toast('ok', 'Link copied.');
   } catch {
-    toast('error', 'Could not reach the clipboard — select the link and copy it.');
+    toast('error', 'Copy failed.');
   }
 }
 
@@ -107,14 +107,16 @@ async function cancelStack(): Promise<void> {
   // "Nothing was outstanding" is an ANSWER, not a failure — the operator asked whether anything was
   // running and the reply is no. Saying "stopped 0 jobs" would read as a bug.
   const n = r.body.cancelled.length;
-  toast(
-    n ? 'ok' : 'info',
-    n
-      ? `Stopped ${n} job${n > 1 ? 's' : ''} on ${r.body.stack}. ${r.body.warning}`
-      : `Nothing was running or queued on ${r.body.stack}.`,
-  );
+  toast(n ? 'ok' : 'info', n ? `Stopped ${n} job${n > 1 ? 's' : ''}.` : 'Nothing was running or queued.');
+  // Cancelling a RUNNING job undoes nothing it had already done, so the stack can be half
+  // provisioned — a queued job never ran and leaves nothing behind. `state` is what the server
+  // itself branches its `warning` on; matching that prose instead would break when it is reworded.
+  interrupted.value = r.body.cancelled.some((j) => j.state === 'running');
   void loadDeployments();
 }
+
+/** A running job was cut off mid-flight, so partial changes survive until Verify says otherwise. */
+const interrupted = ref(false);
 
 const downVerify = ref(true);
 const forceTyped = ref('');
@@ -137,7 +139,7 @@ async function forget(): Promise<void> {
   pending.value = '';
 
   if (r.ok) {
-    toast('ok', `Forgot ${dep.id}. Nothing was torn down.`);
+    toast('ok', 'Forgotten.');
     void loadDeployments();
     void router.push('/deployments');
     return;
@@ -154,14 +156,7 @@ async function forget(): Promise<void> {
       <h2 class="section" style="margin-bottom: var(--s3)">Sleep</h2>
       <p class="dim">
         Takes the {{ dep.detail.orchestrator === 'swarm' ? 'swarm stack' : 'compose project' }} down and
-        <b>keeps its volumes and every axis</b>. The next request to any of its hostnames brings it
-        back — the visitor sees “spinning up…” for the length of a deploy — and so does <b>Wake</b> in
-        the header.
-        <InfoHint label="what sleep runs">
-          <code>{{ dep.detail.orchestrator === 'swarm' ? 'docker stack rm' : 'docker compose down' }}</code>
-          — without <code>-v</code>, which is the whole difference from tearing down. A spec can
-          schedule this itself with a <code>sleep:</code> block (idle / after).
-        </InfoHint>
+        <b>keeps its volumes</b>. Any request to its hostnames wakes it.
       </p>
       <div class="row" style="margin-top: var(--s3)">
         <ActionButton
@@ -191,12 +186,10 @@ async function forget(): Promise<void> {
         />
       </div>
       <p class="dim">
-        A URL that opens <b>this deployment only</b>, for someone without an account. It carries a
-        signed token that reaches exactly the views below until it expires.
-        <InfoHint label="what a link can and cannot do">
-          Read-only, and scoped: details and logs of this deployment, nothing else — no actions, no
-          terminal, no other deployment. There is no per-link revocation; rotating the host's
-          PSTACK_TOKEN invalidates every link at once, so keep the expiry short.
+        Read-only, and this deployment only.
+        <InfoHint label="revoking a link">
+          No per-link revocation — rotating the host's PSTACK_TOKEN kills every link at once. Keep
+          the expiry short.
         </InfoHint>
       </p>
       <div class="row" style="margin-top: var(--s3); flex-wrap: wrap; gap: var(--s3)">
@@ -227,10 +220,10 @@ async function forget(): Promise<void> {
         </ActionButton>
       </div>
       <div v-if="shareLink" class="banner ok" style="margin-top: var(--s3)">
-        <b>Your link — copy it now.</b>
+        <b>Shown once — copy it now.</b>
         <p>
-          Opens {{ shareLink.views.join(' and ') }} of <b>{{ dep.id }}</b> until
-          {{ new Date(shareLink.expiresAt).toLocaleString() }}. It is shown once and stored nowhere.
+          Opens {{ shareLink.views.join(' and ') }} until
+          {{ new Date(shareLink.expiresAt).toLocaleString() }}.
         </p>
         <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ shareLink.url }}</pre>
         <div class="row">
@@ -246,20 +239,14 @@ async function forget(): Promise<void> {
       <h2 class="section" style="margin-bottom: var(--s3)">Tear down</h2>
 
       <p v-if="!dep.detail" class="mute">
-        Unavailable until this deployment's variables are filled in — without them its stack has no
-        name to act on. Set them under
-        <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">
-          Config &amp; variables </RouterLink
-        >first.
+        Needs this deployment's
+        <RouterLink :to="`/deployments/${encodeURIComponent(dep.id)}/config`">variables</RouterLink>.
       </p>
 
       <template v-else>
         <div v-if="tokenMissing" class="banner warn">
-          <b>No access token set.</b>
-          <p>
-            Every action below will be refused. Add your token under
-            <RouterLink to="/settings">Settings</RouterLink>.
-          </p>
+          <b>No access token set — every action below is refused.</b>
+          <p>Add yours under <RouterLink to="/settings">Settings</RouterLink>.</p>
         </div>
 
         <p class="dim">
@@ -285,36 +272,19 @@ async function forget(): Promise<void> {
         </div>
 
         <p v-if="busy" class="hint">
-          Something is already running on <b>{{ dep.detail.stack }}</b> — tearing down
-          <b>cancels it first</b>.
-          <InfoHint label="what happens to the job that is running">
-            One job runs per stack at a time; a teardown racing a deploy over the same database
-            would corrupt it. A second <em>deploy</em> therefore waits its turn (and a third
-            replaces the one waiting). A teardown does not wait: it stops the running job, drops
-            anything queued behind it, and runs. Whatever the stopped job had already done is
-            <b>not</b> undone — which is what tearing down is about to deal with anyway.
-          </InfoHint>
+          A job is running on <b>{{ dep.detail.stack }}</b> — tearing down <b>cancels it first</b>.
         </p>
-        <p v-if="!downVerify" class="hint">
-          Nothing will check that teardown actually finished. A teardown that silently half-worked is
-          the exact failure this tool exists to catch — run <b>Verify</b> yourself afterwards.
-        </p>
+        <p v-if="!downVerify" class="hint">Nothing will check that the teardown finished.</p>
 
         <!--
           Gate 1 of 2. The typed name is the point: a checkbox is one stray click, typing the stack
           name is a decision.
         -->
         <div v-if="isShared" class="banner leaked">
-          <b>Shared — read this before tearing down.</b>
+          <b>Shared stack.</b>
           <p>
-            Tearing this down <b>deletes its stored data</b>: the TLS certificates, the shared
-            database or queue, admin credentials. Nothing here recreates them, so
-            <b>every preview on this host breaks</b> until someone rebuilds it by hand. The button is
-            the same one that is routine on a single preview.
-            <InfoHint label="what tearing down runs">
-              <code>{{ dep.detail.orchestrator === 'swarm' ? 'docker stack rm, then docker volume rm on its volumes' : 'docker compose down -v' }}</code>
-              — removing the volumes is what makes this different from sleeping.
-            </InfoHint>
+            This deletes the volumes <b>every preview on this host</b> depends on, and nothing here
+            recreates them.
           </p>
           <div class="field" style="margin-top: var(--s3); max-width: 380px">
             <label :for="`confirm-${dep.id}`">
@@ -329,9 +299,7 @@ async function forget(): Promise<void> {
               autocomplete="off"
             />
           </div>
-          <p v-if="forceTyped && !forceArmed" class="s-failed">
-            That does not match, so tearing down stays disabled.
-          </p>
+          <p v-if="forceTyped && !forceArmed" class="s-failed">Does not match.</p>
         </div>
 
         <!--
@@ -345,15 +313,16 @@ async function forget(): Promise<void> {
             :pending="cancelPending"
             :disabled="cancelPending"
             confirm="Stop everything? Nothing is undone."
-            title="Cancels the job running on this stack and drops the one queued behind it. Destroys nothing."
+            title="Cancels the running job and the one queued behind it. Destroys nothing."
             @run="cancelStack"
           >
             Stop everything on this stack
           </ActionButton>
-          <span class="mute">
-            The running job and the one waiting behind it, in one call — nothing is torn down, and
-            whatever the running job already did stays done.
-          </span>
+          <span class="mute">Destroys nothing; whatever already ran stays done.</span>
+        </div>
+
+        <div v-if="interrupted" class="banner warn" style="margin-top: var(--s3)">
+          <b>Stopped mid-run.</b> What it created before stopping is still there — run Verify.
         </div>
 
         <ErrorNote v-if="actionError" :text="actionError" title="The action was refused." />
@@ -365,19 +334,11 @@ async function forget(): Promise<void> {
     <section class="panel">
       <h2 class="section" style="margin-bottom: var(--s3)">Forget this deployment</h2>
 
-      <p v-if="!dep.detail" class="mute">
-        Unavailable until the variables are filled in: this stack's containers are counted before the
-        record can be forgotten, and that needs its name.
-      </p>
+      <p v-if="!dep.detail" class="mute">Needs this deployment's variables.</p>
       <template v-else>
         <p class="dim">
-          This removes the <em>record only</em> — <b>it never tears anything down</b>. Afterwards
-          nothing here knows how to remove whatever this deployment created.
-          <InfoHint label="when forgetting is refused">
-            Refused while any container for this stack still exists — and refused just as firmly when
-            docker cannot be reached, because “cannot confirm” is not evidence of absence. What is
-            deleted is the stored spec, compose file and metadata.
-          </InfoHint>
+          Removes the <em>record only</em> — <b>it never tears anything down</b>. Refused while any
+          container exists, or while Docker cannot confirm.
         </p>
         <div class="row" style="margin-top: var(--s3)">
           <label class="check">

@@ -19,8 +19,6 @@ import { ago, sentence, stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import HelpModal from '../components/HelpModal.vue';
-import InfoHint from '../components/InfoHint.vue';
 import RefreshButton from '../components/RefreshButton.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 
@@ -49,7 +47,7 @@ async function restart(service: string): Promise<void> {
     toast('error', problem(r, `restart ${service}`));
     return;
   }
-  toast('ok', `Restarting ${r.body.container} — back in a few seconds.`);
+  toast('ok', `Restarting ${r.body.container}.`);
   await load();
 }
 
@@ -81,7 +79,7 @@ async function saveDomains(next: string[]): Promise<void> {
     return;
   }
   newDomain.value = '';
-  toast('ok', 'Saved — Traefik picks these up within a couple of seconds.');
+  toast('ok', 'Domains saved.');
   await Promise.all([loadDomains(), loadTls()]);
 }
 
@@ -95,6 +93,15 @@ async function loadTls(): Promise<void> {
   if (r.ok) tls.value = r.body;
 }
 usePolling(loadTls, 30_000);
+
+// The two numbers that explain a control plane misbehaving, summed for the strip.
+const restarts = computed(() => (view.value?.containers ?? []).reduce((n, c) => n + c.restartCount, 0));
+const oomed = computed(() => (view.value?.containers ?? []).some((c) => c.oomKilled));
+// The primary is a hostname, not an entry in `domains` — but it is only there once init has set
+// one, so it is counted rather than assumed.
+const domainCount = computed(() =>
+  domains.value ? domains.value.domains.length + (domains.value.primary ? 1 : 0) : 0,
+);
 
 const daysLeft = computed(() => {
   if (!tls.value?.wildcard) return null;
@@ -117,7 +124,7 @@ async function storeWildcard(): Promise<void> {
   }
   certDraft.value = '';
   keyDraft.value = '';
-  toast('ok', 'Wildcard stored — new deploys inherit it now. Redeploy the rest below.');
+  toast('ok', 'Stored — redeploy all stacks.');
   redeployed.value = null; // that summary described a run under the previous mode
   await loadTls();
 }
@@ -132,7 +139,7 @@ async function removeWildcard(): Promise<void> {
     toast('error', problem(r, 'remove the wildcard'));
     return;
   }
-  toast('ok', 'Removed — back to Traefik-native resolution. Redeploy the stacks below.');
+  toast('ok', 'Removed — redeploy all stacks.');
   redeployed.value = null;
   await loadTls();
 }
@@ -148,7 +155,7 @@ async function redeployAll(): Promise<void> {
     return;
   }
   redeployed.value = r.body;
-  toast('ok', `Redeploying ${r.body.started.length} stack${r.body.started.length === 1 ? '' : 's'}; ${r.body.skipped.length} skipped.`);
+  toast('ok', `Redeploying ${r.body.started.length}, skipped ${r.body.skipped.length}.`);
 }
 </script>
 
@@ -156,34 +163,19 @@ async function redeployAll(): Promise<void> {
   <div>
     <div class="page-head">
       <div>
-        <h1>
-          Control stack
-          <HelpModal title="Why restarts are the headline here">
-            <p>
-              <b>A restarting Traefik quietly breaks TLS issuance.</b> Its certificate challenges
-              live in process memory, so every restart abandons whatever was mid-flight — the failed
-              attempts still count against Let's Encrypt's weekly limits, and every container on
-              this page keeps reporting <code>running</code>. A climbing restart count with an
-              <b>OOM</b> badge is that story told in two cells.
-            </p>
-            <p>
-              <b>Restart is the only action, and never for pstack.</b> The server refuses to restart
-              its own container — it is the process answering the request, and if its image were
-              broken, the thing that could repair this host would die with it. From the host:
-              <code>docker compose -p pstack-control restart pstack</code>.
-            </p>
-            <p>
-              <b>Restarting traefik drops every connection for a few seconds</b> — every preview,
-              this page included. The containers themselves keep running; only routing blinks.
-            </p>
-          </HelpModal>
-        </h1>
-        <div class="sub">
-          The machinery previews run behind, with the counters that catch it misbehaving
-          <InfoHint label="where this comes from">
-            <code>docker inspect</code> over the control project's containers, every ten seconds.
-            Restart counts and OOM flags are docker's own, since this process last recreated nothing.
-          </InfoHint>
+        <h1>Control stack</h1>
+        <!--
+          The vitals, not a sentence about them. Restarts and OOM are here rather than buried in the
+          table because they are the two numbers that explain a control plane misbehaving — a
+          restarting Traefik loses in-flight certificate issuance while every container still reads
+          `running`. Why that matters is docs/usage.md's job, not this page's.
+        -->
+        <div v-if="view?.reachable" class="vitals">
+          <span :class="restarts ? 'v-warn' : ''">{{ restarts }} restarts</span>
+          <span v-if="oomed" class="v-fail">OOM</span>
+          <span v-if="tls">{{ tls.mode }}</span>
+          <span v-if="daysLeft !== null" :class="daysLeft < 21 ? 'v-fail' : ''">{{ daysLeft }}d cert</span>
+          <span v-if="domainCount">{{ domainCount }} domain{{ domainCount > 1 ? 's' : '' }}</span>
         </div>
       </div>
       <span class="grow" />
@@ -200,10 +192,9 @@ async function redeployAll(): Promise<void> {
       </div>
 
       <!-- Unknown is not "empty": a dead docker means NOTHING here is known. -->
-      <div v-if="!view.reachable" class="banner warn">
-        <b>Docker did not answer.</b>
-        <p>Nothing about the control stack is known right now — which is not the same as it being down.</p>
-      </div>
+      <!-- Unknown is not empty: a dead docker means nothing here is KNOWN. The distinction is the
+           point (invariant 10); the sentence explaining it is not. -->
+      <div v-if="!view.reachable" class="banner warn"><b>Docker isn't answering.</b> Nothing here is known.</div>
       <table v-else-if="view.containers.length" class="cards">
         <thead>
           <tr>
@@ -232,7 +223,7 @@ async function redeployAll(): Promise<void> {
               <span
                 v-if="c.oomKilled"
                 class="badge failed"
-                title="The kernel killed it for exceeding its memory limit. Its last restart was not a crash — it was this."
+                title="Killed by the kernel for exceeding its memory limit"
                 >OOM</span
               >
             </td>
@@ -252,7 +243,7 @@ async function redeployAll(): Promise<void> {
                 v-else-if="c.service === 'pstack'"
                 class="mute"
                 style="font-size: var(--t-sm)"
-                title="The server refuses to restart the container answering this request. Restart it from the host."
+                title="Restart this one from the host"
               >
                 host-only
               </span>
@@ -268,10 +259,7 @@ async function redeployAll(): Promise<void> {
           </tr>
         </tbody>
       </table>
-      <p v-else class="mute">
-        Docker lists no control containers — on a host serving this page, that means the project
-        label changed, not that nothing runs.
-      </p>
+      <p v-else class="mute">None listed — the project label changed, not the stack stopped.</p>
     </section>
 
     <!-- ============================ the hostnames ============================ -->
@@ -282,15 +270,10 @@ async function redeployAll(): Promise<void> {
         <span class="mute" style="font-size: var(--t-sm)">primary <span class="mono">{{ domains.primary || '—' }}</span></span>
       </div>
 
-      <p class="dim">{{ domains.note }}</p>
-
       <ul class="kvlist" style="margin: var(--s3) 0">
         <li>
           <span class="k mono">{{ domains.primary || 'not set' }}</span>
-          <span class="v mute">
-            primary — its routers are labels on the pstack container, so it keeps working whatever
-            else changes here. It cannot be removed from this page.
-          </span>
+          <span class="v mute">primary</span>
         </li>
         <li v-for="d in domains.domains" :key="d">
           <span class="k mono">{{ d }}</span>
@@ -317,11 +300,7 @@ async function redeployAll(): Promise<void> {
           Add
         </ActionButton>
       </div>
-      <p class="mute" style="font-size: var(--t-sm); margin-top: var(--s2)">
-        Adding a domain only makes this host <b>serve and wake</b> names under it. To move a
-        deployment, set <code>PREVIEW_DOMAIN</code> in its variables and redeploy it — one stack at a
-        time, and rolling back is that same stack.
-      </p>
+
     </section>
 
     <!-- ============================ the certificate mode ============================ -->
@@ -331,8 +310,6 @@ async function redeployAll(): Promise<void> {
         <span class="grow" />
         <span class="badge" :class="tls.mode === 'dns-persist-01' ? 'ok' : 'info'">{{ tls.mode }}</span>
       </div>
-
-      <p class="dim">{{ tls.note }}</p>
 
       <template v-if="tls.wildcard">
         <ul class="kvlist" style="margin: var(--s3) 0">
@@ -356,29 +333,21 @@ async function redeployAll(): Promise<void> {
           </li>
         </ul>
         <div v-if="can('admin')" class="row">
-          <ActionButton variant="danger" :pending="removing" :disabled="removing" @click="removeWildcard">
+          <ActionButton
+            variant="danger"
+            :pending="removing"
+            :disabled="removing"
+            confirm="Remove it? Deployed stacks lose TLS."
+            @run="removeWildcard"
+          >
             Remove wildcard
           </ActionButton>
-          <span class="mute" style="font-size: var(--t-sm)">
-            Stacks deployed under it then have no certificate until redeployed.
-          </span>
+          <span class="mute">Stacks deployed under it serve no certificate until redeployed.</span>
         </div>
       </template>
 
       <template v-if="can('admin')">
-        <p class="dim" style="margin-top: var(--s3)">
-          <template v-if="tls.wildcard">
-            <b>Renew or replace it.</b> Paste the new pair — it overwrites both halves in place and
-            Traefik picks it up immediately. Nothing needs redeploying for a renewal: the router
-            labels do not change, only the certificate behind them.
-          </template>
-          <template v-else>
-            <b>Bring your own wildcard.</b> Paste a certificate for <span class="mono">*.your-domain</span>
-            and its key — previews stop ordering per-hostname certificates the moment it lands, with no
-            re-init and no Traefik restart.
-          </template>
-          The key is stored 0600 and nothing ever returns it.
-        </p>
+        <p class="dim">Stored 0600. Never returned.</p>
         <div class="field">
           <label for="tls-cert">Certificate (PEM, leaf first, chain after)</label>
           <textarea id="tls-cert" v-model="certDraft" rows="5" class="mono" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
@@ -391,18 +360,13 @@ async function redeployAll(): Promise<void> {
           {{ tls.wildcard ? 'Replace wildcard' : 'Store wildcard' }}
         </ActionButton>
       </template>
-      <p v-else-if="!tls.wildcard" class="mute">
-        Storing a wildcard is an admin's: it changes what every hostname on this host presents.
-      </p>
+      <p v-else-if="!tls.wildcard" class="mute">Admin only.</p>
 
       <div class="row" style="margin-top: var(--s4); align-items: center">
         <ActionButton :pending="redeploying" :disabled="redeploying" @click="redeployAll">
           Redeploy all stacks
         </ActionButton>
-        <span class="mute" style="font-size: var(--t-sm)">
-          Router labels are stamped at deploy time — run this once after changing the mode. Asleep
-          stacks are skipped; they pick the new labels up when they wake.
-        </span>
+        <span class="mute">Router labels are stamped at deploy time. Asleep stacks pick them up on wake.</span>
       </div>
       <p v-if="redeployed" class="mute" style="margin-top: var(--s2)">
         Started {{ redeployed.started.length }} · skipped {{ redeployed.skipped.length

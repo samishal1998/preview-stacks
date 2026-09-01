@@ -312,10 +312,10 @@ function loadExample(): void {
         <div class="sub">
           {{
             replacing
-              ? 'Loaded from what is stored; saving replaces the record'
+              ? 'Saving replaces the record'
               : copyFrom
-                ? `Copied from ${copyFrom} — give it a new id, then edit`
-                : 'Stores a spec so it can be deployed'
+                ? `Copied from ${copyFrom} — give it a new id`
+                : 'Store a spec, then deploy it'
           }}
         </div>
       </div>
@@ -329,46 +329,38 @@ function loadExample(): void {
            an unrelated id field. -->
 
       <!--
-        A `PUT` REPLACES the whole record, and this form cannot pre-fill it: the API has no route
-        that returns a stored spec. Say that out loud, because a half-remembered spec pasted here
-        is still valid YAML — the server will accept it, and the axes the original declared simply
-        stop existing as far as the control plane knows, while whatever they created keeps running.
-      -->
-      <!--
         The one thing that makes duplicating dangerous, said before the form rather than after the
         submission: two records resolving to one stack drive the same compose project.
       -->
       <div v-if="copyFrom && !replacing" class="banner warn">
         <b>Change the stack, not just the id.</b>
         <p>
-          Two deployments that resolve to the same <code>stack</code> drive the same compose project —
-          <code>down</code> on either stops the other's containers. If the stack interpolates a variable
-          (<code>pr-${PR}</code>) give it a different value below; if it is a literal, edit the
-          <code>stack:</code> line.
+          Two deployments on one <code>stack</code> share a compose project — <code>down</code> on
+          either stops both.
           <template v-if="sourceState === 'withheld'">
-            The spec could not be copied without an access token —
-            <RouterLink to="/settings">add yours</RouterLink>.
+            <RouterLink to="/settings">Add a token</RouterLink> to copy the spec.
           </template>
         </p>
       </div>
 
+      <!--
+        A `PUT` replaces the whole record. The four source states stay distinct: withheld (no token)
+        is not the same as failed (no route, or an error), and neither is an empty form by choice.
+      -->
       <div v-if="replacing" class="banner" :class="sourceState === 'loaded' ? 'info' : 'warn'">
         <b>Replacing {{ id }}.</b>
-        <p v-if="sourceState === 'loading'">Loading what is stored…</p>
+        <p v-if="sourceState === 'loading'">Loading…</p>
         <p v-else-if="sourceState === 'loaded'">
-          Loaded from the stored record — edit it and save. Saving replaces the record outright, so
-          anything you delete here stops being tracked while whatever it created keeps running.
+          Saving replaces the record outright — anything you delete stops being tracked but keeps
+          running.
         </p>
         <p v-else-if="sourceState === 'withheld'">
-          The stored spec was not loaded: reading it needs an access token, because hooks routinely
-          carry a credential inline. <RouterLink to="/settings">Add your token</RouterLink> to edit
-          in place — otherwise paste the <b>complete</b> spec, since anything you leave out stops
-          being tracked.
+          Stored spec withheld — <RouterLink to="/settings">add your token</RouterLink>, or paste the
+          complete spec. Anything you leave out stops being tracked but keeps running.
         </p>
         <p v-else>
-          The stored spec could not be loaded, so this form is empty. Paste the <b>complete</b> spec
-          you want stored — anything you leave out stops being tracked while whatever it created keeps
-          running.
+          Stored spec unavailable. Paste the complete spec — anything you leave out stops being
+          tracked but keeps running.
         </p>
       </div>
 
@@ -378,11 +370,11 @@ function loadExample(): void {
         following it. Silent forks are the kind of thing discovered months later.
       -->
       <div v-if="forkWarning" class="banner warn">
-        <b>This deployment tracks the stored spec “{{ forkWarning }}”.</b>
+        <b>Tracks the stored spec “{{ forkWarning }}”.</b>
         <p>
-          Saving here writes a private copy and stops it following that spec. To change every
-          deployment using it, edit
-          <RouterLink :to="`/specs/${encodeURIComponent(forkWarning)}`">the spec</RouterLink> instead.
+          Saving forks it —
+          <RouterLink :to="`/specs/${encodeURIComponent(forkWarning)}`">edit the spec</RouterLink>
+          to change every deployment using it.
         </p>
       </div>
 
@@ -401,8 +393,7 @@ function loadExample(): void {
         <span class="mute" style="align-self: end; padding-bottom: 10px">
           Lower case
           <InfoHint label="allowed characters in a deployment id">
-            Starts with a letter or digit, then letters, digits, dot, dash or underscore. Up to 64
-            characters — <code>[a-z0-9][a-z0-9._-]{0,63}</code>.
+            <code>[a-z0-9][a-z0-9._-]{0,63}</code>
           </InfoHint>
         </span>
       </div>
@@ -427,10 +418,6 @@ function loadExample(): void {
           needs
           <b v-if="chosenSpec.requiredVars.length">{{ chosenSpec.requiredVars.join(', ') }}</b>
           <span v-else>no variables</span>.
-          <InfoHint label="why variables are required">
-            A missing variable is refused by name. It is never filled in with a blank, which would
-            silently give every deployment the same stack name.
-          </InfoHint>
         </p>
       </template>
 
@@ -453,28 +440,15 @@ function loadExample(): void {
             v-model="form.compose"
             rows="6"
             spellcheck="false"
-            placeholder="Written next to spec.yml, so a compose file named compose.yml resolves"
+            placeholder="Written next to spec.yml"
           />
         </div>
-        <p class="hint">
-          Hooks must be inline shell or an absolute path.
-          <InfoHint label="why a relative script path does not work">
-            A deployment directory only ever holds <code>spec.yml</code> and
-            <code>compose.yml</code>, and hooks run from there — so
-            <code>up: ./hooks/db.sh</code> has nothing to find.
-          </InfoHint>
-        </p>
+        <p class="hint">Hooks must be inline shell or an absolute path.</p>
       </template>
 
       <h2 class="section" style="margin: var(--s5) 0 var(--s3)">Variables</h2>
       <VarEditor v-model="vars" />
-      <p class="hint">
-        Saved with the deployment, so tearing it down later targets the same stack.
-        <InfoHint label="how variables are remembered">
-          They are stored on the server where it supports that, and in this browser either way — so
-          the actions on the deployment page send exactly these values.
-        </InfoHint>
-      </p>
+      <p class="hint">Saved with the deployment, so teardown targets the same stack.</p>
 
       <div class="row" style="margin-top: var(--s5)">
         <ActionButton variant="primary" :pending="submitting" :disabled="!canSubmit" @click="submit">
@@ -482,11 +456,6 @@ function loadExample(): void {
         </ActionButton>
         <span v-if="!result" class="mute" style="font-size: var(--t-sm)">
           Nothing is saved until the spec is valid
-          <InfoHint label="what happens on a rejected submission">
-            The spec is checked before anything is written, so a rejected submission leaves nothing
-            behind — and a replace never destroys a good record over a typo. Whether the deployment
-            is shared or isolated comes from the spec, not from this form.
-          </InfoHint>
         </span>
         <span v-if="result" class="s-ok">
           {{ result.created ? 'Created' : 'Replaced' }} — stack
@@ -508,14 +477,13 @@ function loadExample(): void {
         it can be deliberate, and refusing over a guess would be worse than saying so.
       -->
       <div v-if="result?.stackSharedWith?.length" class="banner warn">
-        <b>Another deployment already resolves to stack “{{ result.stack }}”.</b>
+        <b>Stack “{{ result.stack }}” is already in use.</b>
         <p>
           <template v-for="(o, i) in result.stackSharedWith" :key="o">
             <RouterLink :to="`/deployments/${encodeURIComponent(o)}`">{{ o }}</RouterLink
             ><span v-if="i < result.stackSharedWith.length - 1">, </span> </template
-          >— both records now drive the same compose project, so <code>down</code> on either stops the
-          other's containers and <code>verify</code> on either reports the other's leaks. If that was not
-          intended, change this one's <code>stack</code> and save again.
+          >— <code>down</code> on either stops both. Change this one's <code>stack</code> if that was
+          not intended.
         </p>
       </div>
 
@@ -525,11 +493,7 @@ function loadExample(): void {
         point is to reach the author while they are still looking at the file they just wrote.
       -->
       <div v-if="result?.swarmNotes?.length" class="banner warn">
-        <b>Swarm will not run this compose file as written.</b>
-        <p>
-          Some keys are dropped and others are rewritten — <code>docker stack deploy</code> reports
-          that once, to a terminal nobody is watching. Every change it makes to what you submitted:
-        </p>
+        <b>Swarm will change this compose file.</b>
         <ul>
           <li v-for="n in result.swarmNotes" :key="n">{{ n }}</li>
         </ul>

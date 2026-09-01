@@ -15,7 +15,7 @@
  *
  * What it cannot break: `control.<domain>` and `api.<domain>` are docker labels on the pstack
  * container, not file config. This page cannot lock you out of the page you would use to undo a bad
- * save. That is stated in the UI, because an operator hesitating over a save deserves to know it.
+ * save. That reassurance lives in docs/control-plane.md, not in this view.
  *
  * `previous` from a save is an in-session undo. There is deliberately no history on disk: the obvious
  * place to keep it is the one directory that must contain nothing but dynamic config.
@@ -35,9 +35,7 @@ import { stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
-import HelpModal from '../components/HelpModal.vue';
 import RefreshButton from '../components/RefreshButton.vue';
 import RouteTarget from '../components/RouteTarget.vue';
 
@@ -181,7 +179,7 @@ async function save(): Promise<void> {
   if (r.body.previous) undo.value = { name, content: r.body.previous };
   original.value = draft.value;
   openName.value = name;
-  toast('ok', `Saved ${name}. Traefik reloads within a second or two.`);
+  toast('ok', `Saved ${name}.`);
   void loadList();
 }
 
@@ -213,39 +211,8 @@ async function remove(): Promise<void> {
   <div>
     <div class="page-head">
       <div>
-        <h1>
-          Routing
-          <HelpModal title="How routing files work, and what can go wrong">
-            <p>
-              <b>Traefik reads this directory as a whole.</b> One file it cannot parse and it reports a
-              problem for the <em>directory</em> — so the symptom is other, unrelated routes
-              disappearing rather than an error about the file you just saved.
-            </p>
-            <p>
-              Saves here are checked before they are written and replace the old file in one step, so a
-              file that would break the directory never reaches Traefik in the first place.
-            </p>
-            <p>
-              <b>This page cannot lock you out.</b> It and the API are routed by their containers'
-              own settings, not by these files — no save here can take away the page you would use to
-              undo it.
-            </p>
-            <p>
-              What belongs here: shared middleware (sign-in prompts, rate limits, address
-              allow-lists), TLS options, the catch-all fallback, and routes to things running outside
-              this host's previews. A single preview's own routes are not here — those travel with the
-              deployment.
-            </p>
-          </HelpModal>
-        </h1>
-        <div class="sub">
-          Every route on this host, and the config files behind them
-          <InfoHint label="what belongs in these files">
-            Middleware (basic auth, rate limits, IP allow-lists), TLS options, the catch-all fallback
-            router, and routes to anything running outside compose. Per-PR routers are not here —
-            those are labels in each deployment's own compose file.
-          </InfoHint>
-        </div>
+        <h1>Routing</h1>
+        <div class="sub">Every route on this host, and the files behind them</div>
       </div>
       <span class="grow" />
       <button v-if="writable" class="btn primary" @click="startNew">New file</button>
@@ -258,7 +225,7 @@ async function remove(): Promise<void> {
     <div v-if="undo" class="banner info">
       <b>Replaced {{ undo.name }}.</b>
       <p>
-        The previous contents are still here for this session.
+        Previous contents kept for this session.
         <button class="btn sm" @click="revert">Put it back</button>
       </p>
     </div>
@@ -268,19 +235,12 @@ async function remove(): Promise<void> {
       <div class="phead">
         <h2 class="section">Live routes</h2>
         <span class="grow" />
-        <span class="mute" style="font-size: var(--t-sm)">
-          from container labels
-          <InfoHint label="why routes are not in the files below" align="end">
-            Traefik reads two providers. Per-PR routers are <b>labels on containers</b>, written by each
-            deployment's own compose file — so deploying a stack changes this list and never the files.
-            The files are the other provider: middleware, TLS options, the fallback router.
-          </InfoHint>
-        </span>
+        <span class="mute" style="font-size: var(--t-sm)">from container labels</span>
       </div>
 
       <div v-if="liveReachable === false" class="banner warn">
         <b>Docker did not answer.</b>
-        <p>Routes could not be listed — which is not the same as there being none.</p>
+        <p>Routes are unknown, not none.</p>
       </div>
 
       <div v-else-if="live.length" class="table-scroll">
@@ -337,11 +297,7 @@ async function remove(): Promise<void> {
         </table>
       </div>
 
-      <p v-else class="mute">
-        No container on this host declares a Traefik router. A deployment's routes come from labels in
-        its own compose file — open a deployment's <b>Containers &amp; routes</b> tab to see what is
-        missing.
-      </p>
+      <p v-else class="mute">No routes yet — deploy a stack.</p>
     </section>
 
     <!-- ============================ config files ============================ -->
@@ -355,24 +311,20 @@ async function remove(): Promise<void> {
       </div>
 
     <!--
-        The blast radius, stated once and up front — and the reassurance alongside it, because "this can
-        break everything" without "you will still be able to fix it" just makes people avoid the page.
+        The blast radius (one bad file can break the whole directory) is in docs/control-plane.md.
+        What stays here is only what gates an action: read-only, and the token these files need.
       -->
 
       <div v-if="writable === false" class="banner failed">
-        <b>Read-only: the API cannot write to this directory.</b>
-        <p>
-          The control stack mounts it into the API from 0.4.0 onward. Re-run
-          setup again on the host to pick up the mount — it is safe to repeat, and it recreates
-          the control containers.
-        </p>
+        <b>Read-only: the API cannot write here.</b>
+        <p>Re-run setup on the host to add the mount.</p>
       </div>
 
       <div v-else-if="!settings.token" class="banner info">
-        <b>Viewing needs a token too.</b>
+        <b>Viewing needs a token.</b>
         <p>
-          These files hold basic-auth hashes and forward-auth URLs, so their contents are not served
-          unauthenticated. <RouterLink to="/settings">Add your token</RouterLink>.
+          These files hold basic-auth hashes.
+          <RouterLink to="/settings">Add your token</RouterLink>.
         </p>
       </div>
 
@@ -387,9 +339,7 @@ async function remove(): Promise<void> {
           </span>
         </li>
       </ul>
-      <p v-else class="mute">
-        No files yet. Everything is routed by container labels, which is a perfectly good place to be.
-      </p>
+      <p v-else class="mute">No files yet — everything is routed by labels.</p>
     </section>
 
     <section v-if="openName !== null" class="panel">
@@ -416,10 +366,8 @@ async function remove(): Promise<void> {
       <SkeletonList v-if="loadingFile" :rows="4" />
 
       <div v-else-if="withheld" class="banner plain">
-        <b>Hidden without an access token.</b>
-        <p>
-          <RouterLink to="/settings">Add your token</RouterLink> to read and edit this file.
-        </p>
+        <b>Hidden without a token.</b>
+        <p><RouterLink to="/settings">Add your token</RouterLink> to edit this file.</p>
       </div>
 
       <template v-else>
@@ -440,8 +388,7 @@ async function remove(): Promise<void> {
         <template v-if="openName">
           <h2 class="section" style="margin: var(--s5) 0 var(--s3)">Delete this file</h2>
           <p class="dim">
-            Whatever it configures stops applying as soon as Traefik reloads. If it holds a router,
-            those hostnames stop resolving to anything.
+            Its routes and middleware stop applying on the next Traefik reload.
           </p>
           <div class="field" style="max-width: 340px">
             <label :for="`confirm-${openName}`">
