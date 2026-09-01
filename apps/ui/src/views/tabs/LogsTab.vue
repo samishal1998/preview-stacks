@@ -29,7 +29,6 @@ import { api, problem, query } from '../../api/client';
 import type { LogsResponse, RuntimeContainer, RuntimeResponse } from '../../api/types';
 import { dep } from '../../composables/useDeployment';
 import { sentence } from '../../composables/useFormat';
-import InfoHint from '../../components/InfoHint.vue';
 import SelectMenu from '../../components/SelectMenu.vue';
 import LogViewer from '../../components/LogViewer.vue';
 import type { LogRow } from '../../components/log-viewer-types';
@@ -317,7 +316,7 @@ const stateTone = (c: RuntimeContainer): string =>
       <button
         class="primary"
         :disabled="loading || following || !dep.detail?.compose"
-        :title="following ? 'Already streaming live.' : undefined"
+        :title="following ? 'Already streaming.' : undefined"
         @click="fetchLogs"
       >
         {{ loading ? 'Reading…' : logs ? 'Refresh' : 'Fetch' }}
@@ -327,10 +326,7 @@ const stateTone = (c: RuntimeContainer): string =>
 
     <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
     <!-- Guard on the field rather than calling and interpreting the failure after the fact. -->
-    <p v-else-if="!dep.detail.compose" class="mute">
-      This spec has no <code>compose:</code> section, so there are no compose logs to read. Its axes
-      may still have created resources — check those at their own source.
-    </p>
+    <p v-else-if="!dep.detail.compose" class="mute">No <code>compose:</code> section.</p>
 
     <template v-else>
       <div v-if="error" class="banner failed">{{ error }}</div>
@@ -342,14 +338,9 @@ const stateTone = (c: RuntimeContainer): string =>
       <div v-else-if="logs && !logs.ok" class="banner warn">
         <b>{{ dep.detail?.orchestrator === 'swarm' ? 'docker service logs' : 'Compose' }} exited non-zero.</b>
         <p>
-          <template v-if="dep.detail?.asleep">
-            This deployment is <b>asleep</b> — its containers are gone until something wakes it, and
-            there is nothing to read logs from.
-          </template>
-          <template v-else>
-            Most often the project does not exist yet (nothing has been brought up), or a profile is
-            missing. Any output it did produce is below.
-          </template>
+          <!-- Asleep and never-brought-up look identical from here; say which. -->
+          <template v-if="dep.detail?.asleep">Asleep — no containers to read.</template>
+          <template v-else>Usually nothing brought up yet; any output it produced is below.</template>
         </p>
       </div>
 
@@ -376,16 +367,14 @@ const stateTone = (c: RuntimeContainer): string =>
               {{ sentence(c.health ?? c.state) }}
             </span>
           </button>
-          <p v-if="!containers.length" class="hint">
-            No containers. Nothing has been brought up, or their profile is not selected.
-          </p>
+          <p v-if="!containers.length" class="hint">No containers.</p>
         </aside>
 
         <!-- ============================ the output ============================ -->
         <div class="logs-main">
           <div class="row" style="margin-bottom: var(--s3)">
             <div class="field grow">
-              <label for="lf">Search in these lines</label>
+              <label for="lf">Search</label>
               <input
                 id="lf"
                 v-model="filter"
@@ -398,11 +387,6 @@ const stateTone = (c: RuntimeContainer): string =>
             <label class="check">
               <input v-model="raw" type="checkbox" />
               Raw output
-              <InfoHint label="when raw matters">
-                The pretty view lifts each line's container prefix into a coloured column and its
-                timestamp into the time gutter. Raw is the exact text the server sent — the form to
-                paste into a bug report or compare with someone else's copy.
-              </InfoHint>
             </label>
           </div>
 
@@ -416,27 +400,19 @@ const stateTone = (c: RuntimeContainer): string =>
               :empty-text="following ? 'Waiting for output…' : '(no output)'"
             />
             <p v-if="following" class="hint">
-              Following {{ current ? current.name : 'the whole stack' }} — new lines appear as they
-              are written, up to {{ MAX_FOLLOW_LINES.toLocaleString() }} kept on screen.
+              Following {{ current ? current.name : 'the whole stack' }} · last
+              {{ MAX_FOLLOW_LINES.toLocaleString() }} lines
             </p>
+            <!-- The redaction note stays: what is on screen is not the raw bytes on the host. -->
             <p v-else-if="logs" class="hint">
               {{ logs.lines ?? 0 }} line{{ (logs.lines ?? 0) === 1 ? '' : 's' }}
               <template v-if="current">from <b>{{ current.name }}</b></template>
               <template v-else>across the stack</template>
-              <template v-if="logs.since">, last {{ logs.since }}</template>, tail {{ logs.tail }}.
-              Redacted on the host before sending: credentials inside URLs,
-              <code>NAME=value</code> pairs whose name reads as a secret, and this server's own token.
-              <InfoHint label="why this is not live">
-                Fetched on demand, never polled: an auto-refresh against a chatty stack would hammer
-                the host that runs everyone else's previews.
-              </InfoHint>
+              <template v-if="logs.since">, last {{ logs.since }}</template>, tail
+              {{ logs.tail }} · secrets redacted on the host.
             </p>
           </template>
-          <p v-else-if="!loading" class="mute">
-            Press <b>Fetch</b> for the last lines, or <b>Follow</b> to stream them live{{
-              current ? ` from ${current.name}` : ''
-            }}.
-          </p>
+          <p v-else-if="!loading" class="mute">Fetch the last lines, or follow live.</p>
         </div>
       </div>
     </template>

@@ -7,7 +7,7 @@
  * a green verify on an unverifiable axis is exactly the false confidence this tool exists to
  * remove.
  */
-import { dep, isShared, unverifiableAxes } from '../../composables/useDeployment';
+import { dep, unverifiableAxes } from '../../composables/useDeployment';
 import type { HookName } from '../../api/types';
 import InfoHint from '../../components/InfoHint.vue';
 
@@ -17,9 +17,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
 
 <template>
   <section class="panel">
-    <h2 class="section" style="margin-bottom: var(--s3)">
-      Axes <span class="mute">(provisioned in order, destroyed in reverse)</span>
-    </h2>
+    <h2 class="section" style="margin-bottom: var(--s3)">Axes</h2>
 
     <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
     <template v-else>
@@ -31,9 +29,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
               hooks
               <InfoHint label="what the four hooks do">
                 <code>up</code> provisions · <code>assert_live</code> checks it exists ·
-                <code>down</code> destroys · <code>assert_gone</code> proves it is gone. Hook
-                <em>bodies</em> are never sent to this page — a hook is a shell string that routinely
-                carries a token inline.
+                <code>down</code> destroys · <code>assert_gone</code> proves it is gone.
               </InfoHint>
             </th>
             <th>Teardown provable?</th>
@@ -63,32 +59,19 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
             </td>
           </tr>
           <tr v-if="!dep.detail.axes.length">
-            <td colspan="3" class="mute">
-              No axes<span v-if="isShared">
-                — a shared singleton has nothing to isolate and nothing to prove gone</span
-              >.
-            </td>
+            <td colspan="3" class="mute">No axes.</td>
           </tr>
         </tbody>
       </table>
 
+      <!-- The third state, stated once: a green `verify` is silence about these axes, never a pass.
+           Colouring them green is the false confidence this tool exists to remove. -->
       <div v-if="unverifiableAxes.length" class="banner warn">
         <b>
           {{ unverifiableAxes.length === 1 ? '1 axis cannot' : `${unverifiableAxes.length} axes cannot` }}
           be verified: {{ unverifiableAxes.join(', ') }}.
         </b>
-        <p>
-          They define no <code>assert_gone</code>, so a green <code>verify</code> is
-          <em>silence</em> about them, not proof they are gone. Add an <code>assert_gone</code> that
-          <b>fails closed</b>.
-          <InfoHint label="how to write an assert_gone that fails closed">
-            Check the probe can work, <em>then</em> assert absence:
-            <code>&lt;probe-is-usable&gt; || exit 1</code>, then
-            <code>! &lt;probe-for-this-resource&gt;</code>. A bare <code>! &lt;probe&gt;</code> exits
-            0 whenever the probe itself fails — a missing CLI, an expired token — turning “I could not
-            tell” into “it is gone”.
-          </InfoHint>
-        </p>
+        <p>A green <code>verify</code> says nothing about them — it is not a pass.</p>
       </div>
     </template>
   </section>
