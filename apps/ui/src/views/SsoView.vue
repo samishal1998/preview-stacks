@@ -41,8 +41,6 @@ import { sentence } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import HelpModal from '../components/HelpModal.vue';
-import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
 import SkeletonList from '../components/SkeletonList.vue';
@@ -126,7 +124,7 @@ type Editing = {
   /** null while adding; otherwise the stored key being edited. The key is the row's identity. */
   originalKey: string | null;
   key: string;
-  /** The preset the config came from, for the setup walkthrough and the template flow. */
+  /** The preset the config came from, for the setup link and the template flow. */
   preset: SsoPreset | null;
   form: SsoConfig;
   secret: string;
@@ -318,7 +316,7 @@ async function save(): Promise<void> {
     return;
   }
   formError.value = '';
-  toast('ok', e.form.mode === 'oidc' ? 'Saved — the issuer answered, so the settings are known good.' : 'Saved.');
+  toast('ok', 'Saved.');
   editing.value = null;
   void load();
 }
@@ -329,7 +327,7 @@ async function remove(entry: SsoProviderEntry): Promise<void> {
     listError.value = problem(r, 'remove the provider');
     return;
   }
-  toast('ok', `Removed ${entry.key}. Existing accounts keep working.`);
+  toast('ok', `Removed ${entry.key}. Its accounts keep working.`);
   void load();
 }
 
@@ -338,7 +336,7 @@ async function copyCallback(): Promise<void> {
     await navigator.clipboard.writeText(callbackUrl.value);
     toast('ok', 'Copied.');
   } catch {
-    toast('error', 'Could not reach the clipboard — select the text and copy it.');
+    toast('error', 'Copy failed.');
   }
 }
 
@@ -378,42 +376,8 @@ function rulesLine(c: SsoConfig): string {
   <div>
     <div class="page-head">
       <div>
-        <h1>
-          Single sign-on
-          <HelpModal title="How single sign-on works here">
-            <p>
-              <b>This service is the relying party and nothing more.</b> You register an OAuth or
-              OIDC application in your own organisation and paste its client id and secret here. Your
-              directory stays yours — no accounts are copied, and nothing is synchronised.
-            </p>
-            <p>
-              <b>Anyone who authenticates gets an account</b>, created on their first sign-in. That is
-              deliberate: your provider already decides who may authenticate (Workspace restricts to
-              internal users, a GitHub app can be org-approved), and duplicating that policy here
-              would just be a second list to keep in step. Narrow it with the sign-in rules on each
-              provider if you need to.
-            </p>
-            <p>
-              <b>Identity is the provider's subject, not the email.</b> Someone changing their
-              address keeps their account, their history and their tokens. An address is only used to
-              adopt an account that already exists here, and only when the provider says it is
-              verified.
-            </p>
-            <p>
-              <b>Several providers share the accounts.</b> Each shows up as its own button on the
-              login page, and the same person arriving from the same directory is the same account —
-              nothing about local accounts or personal tokens changes either way.
-            </p>
-          </HelpModal>
-        </h1>
-        <div class="sub">
-          Let people sign in with the identity providers you already run
-          <InfoHint label="what is stored">
-            One row per provider: the endpoints, the client id, and the client secret. The secret has
-            no read path — this page only learns whether one is stored, and leaving the field empty
-            keeps it.
-          </InfoHint>
-        </div>
+        <h1>Single sign-on</h1>
+        <div class="sub">Sign in with the identity providers you already run</div>
       </div>
       <span class="grow" />
       <button v-if="loaded && !listError && !editing && !showPicker" class="primary" @click="picking = true">Add provider</button>
@@ -439,10 +403,8 @@ function rulesLine(c: SsoConfig): string {
           <label class="check"><input v-model="editing.form.enabled" type="checkbox" /> Enabled</label>
         </div>
 
-        <!-- The walkthrough: where to create the app, in the preset's own words. -->
+        <!-- Where to create the app. The preset's own `setupHint` prose is deliberately not drawn. -->
         <div v-if="editing.preset" class="banner plain">
-          <b>Register the app with {{ editing.preset.label }}</b>
-          <p>{{ editing.preset.setupHint }}</p>
           <p>
             <a :href="editing.preset.setupUrl" target="_blank" rel="noopener">
               Create the app in {{ editing.preset.label }} →
@@ -457,27 +419,19 @@ function rulesLine(c: SsoConfig): string {
             <code class="sso-url">{{ callbackUrl }}</code>
             <button type="button" @click="copyCallback">Copy</button>
           </div>
-          <p class="hint">
-            Paste this into the provider's application as the redirect / callback URL. It has to
-            match byte for byte, and it is the same for every provider on this host — a mismatch is
-            the single most common reason the exchange fails, and the provider's error rarely says
-            so.
-          </p>
+          <p class="hint">Must match the provider's registered callback exactly.</p>
         </div>
 
         <div v-if="!editing.originalKey" class="field">
           <label for="sso-key">Key</label>
           <input id="sso-key" v-model="editing.key" type="text" spellcheck="false" class="sso-key" />
-          <p class="hint">
-            This host's name for the provider — it appears in the sign-in URL and in exports, never
-            to the person signing in. Lowercase letters, digits and dashes.
-          </p>
+          <p class="hint">Lowercase letters, digits, dashes.</p>
         </div>
 
         <div class="field">
           <label for="sso-label">Button text</label>
           <input id="sso-label" v-model="editing.form.label" type="text" :placeholder="editing.preset?.label || 'Acme SSO'" />
-          <p class="hint">The login page draws it as “Continue with {{ editing.form.label || editing.preset?.label || '…' }}”.</p>
+          <p class="hint">“Continue with {{ editing.form.label || editing.preset?.label || '…' }}”</p>
         </div>
 
         <!-- ── OIDC: the issuer. A template preset assembles it from the placeholder(s). -->
@@ -490,22 +444,13 @@ function rulesLine(c: SsoConfig): string {
             <div class="field">
               <label>Issuer</label>
               <code class="sso-url" :data-incomplete="assembledDiscovery.includes('<') || undefined">{{ assembledDiscovery }}</code>
-              <p class="hint">
-                Assembled from the value{{ placeholderNames.length > 1 ? 's' : '' }} above —
-                {{ editing.preset?.label }} gives every account its own issuer, so there is no single
-                URL a preset could carry. It is fetched when you save, so a typo is refused here
-                rather than at someone's first login.
-              </p>
+              <p class="hint">Fetched when you save.</p>
             </div>
           </template>
           <div v-else class="field">
             <label for="sso-issuer">Issuer</label>
             <input id="sso-issuer" v-model="editing.form.discoveryUrl" type="text" spellcheck="false" placeholder="https://accounts.google.com" />
-            <p class="hint">
-              Or the full <code>…/.well-known/openid-configuration</code> URL. Everything but the
-              client id and secret is discovered from it, and it is fetched when you save — so a typo
-              is refused here rather than at someone's first login.
-            </p>
+            <p class="hint">Fetched when you save.</p>
           </div>
         </template>
 
@@ -518,7 +463,7 @@ function rulesLine(c: SsoConfig): string {
           <input id="sso-secret" v-model="editing.secret" type="password" spellcheck="false" autocomplete="new-password" />
           <p class="hint">
             Write-only.
-            {{ editing.secretSet ? 'A secret is stored — leave this empty to keep it.' : 'Stored on save and never returned by any route.' }}
+            {{ editing.secretSet ? 'Leave empty to keep the stored secret.' : 'Never returned once saved.' }}
           </p>
         </div>
 
@@ -544,36 +489,18 @@ function rulesLine(c: SsoConfig): string {
           <div class="field">
             <label for="sso-userinfo">User info URL</label>
             <input id="sso-userinfo" v-model="editing.form.userInfoUrl" type="text" spellcheck="false" />
-            <p class="hint">Leave empty to take the identity from the token response alone — a subject and nothing else.</p>
           </div>
           <div class="field">
             <label for="sso-emails">Emails URL <span class="mute">(optional)</span></label>
             <input id="sso-emails" v-model="editing.form.emailsUrl" type="text" spellcheck="false" />
-            <p class="hint">
-              Only consulted when the profile carries no address — which is GitHub's default. Filled
-              in automatically for a preset, and needed only if you pointed the user info URL at your
-              own host.
-            </p>
           </div>
           <div class="field">
             <label for="sso-groups-url">Groups URL <span class="mute">(optional)</span></label>
             <input id="sso-groups-url" v-model="editing.form.groupsUrl" type="text" spellcheck="false" />
-            <p class="hint">
-              Where this host asks which groups someone is in. Only consulted when there is a group
-              rule below. Filled in automatically for a preset — but only while the user info URL is
-              still the preset's, because a self-hosted host's token must not be sent to the public
-              one, so a self-hosted provider needs this typed.
-            </p>
           </div>
 
-          <h3 class="section" style="margin-top: var(--s4)">
-            Claim mapping
-            <InfoHint label="what this is">
-              Which key of the provider's user response holds each field. Flat lookups, not
-              expressions. A preset fills these in; you only touch them for a provider nobody has
-              written a preset for.
-            </InfoHint>
-          </h3>
+          <!-- Which key of the provider's user response holds each field; a preset fills these in. -->
+          <h3 class="section" style="margin-top: var(--s4)">Claim mapping</h3>
           <div class="row" style="flex-wrap: wrap; gap: var(--s3)">
             <div v-for="k in (['subject', 'username', 'email', 'name', 'avatar'] as const)" :key="k" class="field inline">
               <label :for="`cm-${k}`">{{ k }}</label>
@@ -585,23 +512,15 @@ function rulesLine(c: SsoConfig): string {
 
       <!-- ============================ who gets in ============================ -->
       <section class="panel">
-        <div class="phead"><h2 class="section">Who gets an account, and as what</h2></div>
+        <div class="phead"><h2 class="section">Who gets in</h2></div>
         <p class="dim">
-          By default, anyone this provider lets authenticate. It already owns that decision; this is
-          only here for the case where the application you registered is broader than the people who
-          should reach this control plane. <b>Any one entry in a list is enough to satisfy that
-          list, and every list you fill in has to be satisfied</b> — fill all three in and a login
-          needs a listed domain, a matching username, and one of the groups. A list left empty is not
-          a rule at all: it lets everyone past that check, it does not lock everyone out.
+          Every filled list must match; empty lists restrict nobody.
         </p>
         <div class="field">
           <label for="sso-domains">Allowed email domains</label>
           <input id="sso-domains" v-model="editing.domains" type="text" spellcheck="false" placeholder="example.com, corp.example" />
           <p class="hint">
-            Comma-separated; subdomains count. Empty means no restriction. <b>Non-empty means a login
-            with no email address at all is refused too</b> — a provider that hides the address (a
-            private GitHub profile with no <code>user:email</code> scope) cannot be checked, so it is
-            not waved through.
+            Comma-separated; subdomains count. <b>When set, a login with no address is refused.</b>
           </p>
         </div>
 
@@ -609,12 +528,8 @@ function rulesLine(c: SsoConfig): string {
           <label for="sso-usernames">Allowed usernames</label>
           <input id="sso-usernames" v-model="editing.usernames" type="text" spellcheck="false" placeholder="octocat, qa-[0-9]*" />
           <p class="hint">
-            Comma-separated patterns, case-insensitive: <code>*</code>, <code>?</code> and
-            <code>[0-9]</code> classes. Empty means no restriction. <b>Non-empty means a login whose
-            provider sends no username is refused too</b> — so this is a rule for a provider that
-            actually has usernames (GitHub's <code>login</code>, GitLab's <code>username</code>). On
-            an OpenID Connect issuer that sends no <code>preferred_username</code> it refuses
-            everyone rather than nobody, so set it only where you know the provider sends one.
+            Comma-separated patterns: <code>*</code>, <code>?</code>, <code>[0-9]</code>.
+            <b>When set, a login with no username is refused.</b>
           </p>
         </div>
 
@@ -622,26 +537,16 @@ function rulesLine(c: SsoConfig): string {
           <label for="sso-groups">Required groups</label>
           <input id="sso-groups" v-model="editing.groups" type="text" spellcheck="false" placeholder="acme, acme/backend" />
           <p class="hint">
-            Comma-separated, and <b>exact names, not patterns</b> — an organisation login, or a group
-            path like <code>acme/backend</code>. Case-insensitive. Empty means no restriction.
-            Non-empty makes every sign-in ask the provider for that person's groups, so it needs the
-            OAuth scope that endpoint requires: <b>add it to Scopes above, or the save is refused</b>
-            — and the refusal names the scope. It also needs a provider whose group list this host
-            knows how to read, which the save checks by name. If that call does not answer, the
-            sign-in is refused rather than allowed.
+            <b>Exact names, not patterns</b>, comma-separated. Needs the matching scope above, or
+            the save is refused.
           </p>
         </div>
-        <p v-else class="hint">
-          A group rule needs a provider whose groups endpoint this host knows how to read — an OAuth
-          2.0 preset (GitHub, GitLab), not a discovered OpenID Connect issuer — so there is none
-          here.
-        </p>
 
         <!-- Never rendered before today, while the form quietly sent `admin`. Every account this
              provider mints is created at this role, so it is the one field on the page that decides
              what a stranger who completes the OAuth flow can do. -->
         <div class="field">
-          <label for="sso-role">Role for the accounts it creates</label>
+          <label for="sso-role">New account role</label>
           <SelectMenu
             id="sso-role"
             v-model="roleChoice"
@@ -649,13 +554,8 @@ function rulesLine(c: SsoConfig): string {
             :options="roleOptions"
           />
           <p class="hint">
-            Applied when an account is created here — on someone's first sign-in — and never after:
-            promoting or demoting a person later is done in Accounts, and this does not reach back
-            and change them.
-            <b>The host default follows Settings</b> rather than being copied in now, so raising or
-            lowering it there moves this provider with it.
-            {{ hostDefaultRole ? `It is ${hostDefaultRole} today.` : '' }}
-            Picking a role here pins this provider to it instead.
+            Set at first sign-in. Host default follows
+            <RouterLink to="/settings">Settings</RouterLink>.
           </p>
         </div>
       </section>
@@ -678,11 +578,7 @@ function rulesLine(c: SsoConfig): string {
           <span class="grow" />
           <button v-if="providers.length" class="ghost" @click="picking = false">Cancel</button>
         </div>
-        <p class="dim">
-          Pick where your team already signs in. A preset knows the provider's endpoints and its
-          quirks — the only things it cannot know are the client id and secret you get when you
-          register the app, and the form that opens says exactly where to do that.
-        </p>
+        <p class="dim">Pick where your team already signs in.</p>
         <div class="sso-tiles">
           <button v-for="t in pickerTiles" :key="t.id" class="sso-tile" @click="startAdd(t)">
             <SsoMark :preset="t.preset?.key ?? 'custom'" :size="22" />
@@ -719,18 +615,11 @@ function rulesLine(c: SsoConfig): string {
             </div>
           </div>
         </div>
-        <p class="mute" style="font-size: var(--t-sm); margin-top: var(--s3)">
-          Removing a provider does not delete anyone. Those accounts keep their personal tokens, and
-          pointing the same provider back at this host re-links them by subject.
-        </p>
       </section>
 
       <section class="panel">
         <div class="phead"><h2 class="section">Callback URL</h2></div>
-        <p class="dim">
-          The redirect URI to register with every provider — one URL for all of them, built by the
-          server so it cannot drift from the one the sign-in flow actually sends.
-        </p>
+        <p class="dim">Register this with every provider.</p>
         <div class="row sso-copy">
           <code class="sso-url">{{ callbackUrl }}</code>
           <button type="button" @click="copyCallback">Copy</button>

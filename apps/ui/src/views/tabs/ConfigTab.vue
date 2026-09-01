@@ -1,16 +1,14 @@
 <script setup lang="ts">
 /**
  * Variables (what we SEND) and declared env (what the spec DECLARES). Two different things, on
- * purpose, and the tab explains the difference rather than merging them into one table.
+ * purpose, kept in separate sections rather than merged into one table.
  */
 import { computed } from 'vue';
 import { sentence } from '../../composables/useFormat';
 import { applyVars, dep, persistVars, row } from '../../composables/useDeployment';
-import InfoHint from '../../components/InfoHint.vue';
 
 import { conflictingVars } from '../../composables/useVars';
 import VarEditor from '../../components/VarEditor.vue';
-import HelpModal from '../../components/HelpModal.vue';
 
 /** A count, not the raw query string — `?PR=7&REGION=eu` beside a button is machine talk. */
 const varCount = computed(() => Object.keys(dep.vars ?? {}).length);
@@ -37,18 +35,6 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
       -->
       <p class="hint">
         Remembered in this browser. Another browser, a CI job or the command line supplies its own.
-        <HelpModal title="Why the same variables have to be used for both">
-          <p>
-            These variables are part of how this deployment's name is worked out. Deploy with one
-            value and tear down with another and the two commands are pointing at
-            <b>different things</b> — the teardown finishes successfully having removed nothing, and
-            the original is still running.
-          </p>
-          <p>
-            They are kept per deployment in this browser only, which is what keeps them matched
-            <em>here</em>. Nothing carries them to anywhere else.
-          </p>
-        </HelpModal>
       </p>
 
       <VarEditor v-model="dep.vars" @change="persistVars" />
@@ -61,13 +47,7 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
       </div>
 
       <p class="hint">
-        Add any variable you need — the list below is what the spec declares, not everything it
-        uses.
-        <InfoHint label="why the two differ">
-          A spec can consume a variable without declaring it, for instance by building its stack
-          name out of one. If a variable is missing, the error you get when the spec fails to
-          resolve names it exactly — that message is the authoritative list.
-        </InfoHint>
+        Add any variable you need — the list below is only what the spec declares.
       </p>
     </section>
 
@@ -78,10 +58,7 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
     -->
     <section v-if="storedList.length" class="panel">
       <h2 class="section" style="margin-bottom: var(--s3)">Stored on the server</h2>
-      <p class="dim" style="font-size: var(--t-sm)">
-        Kept with the deployment on the server, so deploying and tearing down agree without anyone
-        passing anything. Anything set above overrides these.
-      </p>
+      <p class="dim" style="font-size: var(--t-sm)">Anything set above overrides these.</p>
       <ul class="kvlist" style="margin-top: var(--s3)">
         <li v-for="[k, v] in storedList" :key="k">
           <span class="k"><b>{{ k }}</b></span>
@@ -90,15 +67,8 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
       </ul>
 
       <div v-if="clashes.length" class="banner warn">
-        <b>Your request variables disagree with the stored ones:</b>
-        <b>{{ clashes.join(', ') }}</b
-        >.
-        <p>
-          Both resolve, so nothing will error — they simply resolve to <em>different stacks</em>.
-          That is the dangerous shape: an action sent from this page would target one stack while
-          the CLI, CI, or another browser targets the other. Clear the override above unless you
-          mean it.
-        </p>
+        <b>Overridden: {{ clashes.join(', ') }}.</b>
+        <p>This page and the CLI resolve to different stacks. Clear the override unless you mean it.</p>
       </div>
     </section>
 
@@ -152,9 +122,7 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
           Deny-by-default by name, decided on the host.
         -->
         <p class="hint">
-          A <b>masked</b> value was redacted on the host because its name reads as a secret. The
-          real value was never sent to this page, so there is <b>nothing to reveal</b> — only its
-          length is shown. Read it on the host if you need it.
+          A <b>masked</b> value was never sent to this page — there is nothing to reveal.
         </p>
       </template>
     </section>

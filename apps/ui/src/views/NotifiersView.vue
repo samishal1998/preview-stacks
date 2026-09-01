@@ -18,7 +18,6 @@ import { sentence, stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
@@ -148,7 +147,7 @@ async function test(n: NotifierRow): Promise<void> {
   const res = r.body.result;
   // The endpoint's own answer, verbatim — "it failed" without the reason is the thing this page
   // exists to avoid.
-  if (res.ok) toast('ok', `${n.name} accepted the test delivery.`);
+  if (res.ok) toast('ok', 'Test delivered.');
   else toast('error', `${n.name}: ${res.error ?? `HTTP ${res.status}`}`);
   void load();
 }
@@ -211,14 +210,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
     <div class="page-head">
       <div>
         <h1>Notifiers</h1>
-        <div class="sub">
-          Where events on this host get sent
-          <InfoHint label="what a notifier is">
-            A registration that receives events — a teardown that leaked, a deployment created, a job
-            that failed. Webhooks today; the server decides what other kinds exist, and this page
-            renders whatever it offers.
-          </InfoHint>
-        </div>
+        <div class="sub">Where events on this host get sent</div>
       </div>
       <span class="grow" />
       <RefreshButton :run="load" />
@@ -228,8 +220,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
 
     <section v-if="unsupported" class="panel">
       <div class="banner plain">
-        <b>This server has no notifiers.</b>
-        <p>It is an older build of pstack. Upgrade the host to register webhooks.</p>
+        <b>This server has no notifiers. Upgrade the host.</b>
       </div>
     </section>
 
@@ -241,16 +232,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
       -->
       <!-- Only a signing type ever produces one; see `signs` in notify.ts. -->
       <div v-if="revealed" class="banner ok">
-        <b>Signing secret for “{{ revealed.name }}” — copy it now.</b>
-        <p>
-          This is the only time it is shown — the server keeps no way to show it again. Your
-          receiver uses it to check that a delivery really came from here.
-          <InfoHint label="how a receiver checks it">
-            Each delivery carries a signature header computed from this secret and the exact body
-            sent. Recompute it on your side and compare; a mismatch means the delivery was not sent
-            by this host, or was altered on the way.
-          </InfoHint>
-        </p>
+        <b>Signing secret for “{{ revealed.name }}” — shown once. Copy it now.</b>
         <pre class="code">{{ revealed.secret }}</pre>
         <div class="row">
           <button class="btn" @click="revealed = null">I have stored it</button>
@@ -316,10 +298,6 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                     <span v-if="queued > 0" class="badge busy">
                       <span class="dot pulse" />{{ queued }} queued
                     </span>
-                    <span class="mute" style="font-size: var(--t-xs)">
-                      Events wait their turn per notifier — one delivery at a time, so a slow
-                      receiver cannot starve the others.
-                    </span>
                     <span class="grow" />
                     <RefreshButton :run="reloadDeliveries" />
                   </div>
@@ -352,7 +330,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                         variant="ghost"
                         :pending="redelivering === d.id"
                         confirm="Send it again?"
-                        title="Sends this exact event again, with its original id so a receiver that already handled it can dedupe."
+                        title="Sends this event again with its original id, so a receiver can dedupe."
                         @run="redeliver(d)"
                       >
                         Redeliver
@@ -365,9 +343,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
             </template>
           </tbody>
         </table>
-        <p v-else class="mute">
-          Nothing registered. Events still happen — nobody is being told about them.
-        </p>
+        <p v-else class="mute">No notifiers yet. Add one below.</p>
       </section>
 
       <section class="panel">
@@ -395,14 +371,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
           />
         </div>
 
-        <h2 class="section" style="margin: var(--s5) 0 var(--s3)">
-          Events
-          <InfoHint label="which events to pick">
-            <b>All events</b> also covers events added in later versions — a specific list does not,
-            and the failure mode of that is silence nobody can explain. <code>job.leaked</code> is the
-            one worth alerting on: a teardown ran and something survived it.
-          </InfoHint>
-        </h2>
+        <h2 class="section" style="margin: var(--s5) 0 var(--s3)">Events</h2>
         <div class="row">
           <label class="check">
             <input
@@ -430,21 +399,12 @@ async function redeliver(d: DeliveryRow): Promise<void> {
           </ActionButton>
         </div>
 
+        <!-- The signing/URL split is the secret interlock: one type hands out a secret once, the
+             other's URL *is* the credential. One line each, so the difference stays visible. -->
         <p v-if="chosenType?.signs !== false" class="hint">
-          Deliveries are signed with a secret shown once at registration, retried twice on failure,
-          and logged here.
-          <InfoHint label="how a receiver verifies a delivery">
-            Recompute <code>HMAC-SHA256(secret, `${timestamp}.${rawBody}`)</code> and compare against
-            <code>X-Pstack-Signature</code>, using the <em>raw</em> body — re-serialising it changes
-            the bytes. Reject anything whose <code>X-Pstack-Timestamp</code> is more than five minutes
-            old, and dedupe on <code>X-Pstack-Delivery</code>: delivery is at-least-once, and that id
-            is stable across retries.
-          </InfoHint>
+          Signed with a secret shown once, at registration.
         </p>
-        <p v-else class="hint">
-          The webhook URL is the credential — it is stored write-only and scrubbed from logs, and no
-          signing secret is involved. Deliveries are retried twice on failure and logged here.
-        </p>
+        <p v-else class="hint">The webhook URL is the credential — stored write-only.</p>
       </section>
     </template>
   </div>

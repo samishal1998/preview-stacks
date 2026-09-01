@@ -62,7 +62,6 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
     <div class="page-head">
       <div>
         <h1>Dashboard</h1>
-        <div class="sub">Everything running on this host.</div>
       </div>
       <span class="grow" />
       <RefreshButton :run="refreshAll" />
@@ -75,11 +74,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
     <div v-if="leakedJobs.length" class="banner leaked land">
       <b>{{ leakedJobs.length }} teardown(s) left something behind.</b>
       <p>
-        Something survived being torn down, and nothing else is going to remove it.
-        <InfoHint label="what was already cleaned up">
-          <code>compose down -v</code> removed the containers, volumes and networks — whatever is
-          left is outside compose's reach.
-        </InfoHint>
+        Nothing else will remove it.
         <RouterLink
           v-for="j in leakedJobs.slice(0, 3)"
           :key="j.id"
@@ -96,10 +91,8 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
         <div class="phead">
           <h2 class="section">Control stack</h2>
           <InfoHint label="why there are no actions here">
-            pstack itself runs in this stack, so starting or stopping it here would kill the process
-            handling the request — and a failed self-upgrade would leave the host with no control
-            plane and no way back in. It is managed from the host instead.
-            <template v-if="control?.managedBy">Managed by {{ control.managedBy }}.</template>
+            pstack runs in this stack, so it is managed from the
+            host<template v-if="control?.managedBy"> by {{ control.managedBy }}</template>.
           </InfoHint>
           <span v-if="control?.project" class="badge">{{ control.project }}</span>
           <span class="grow" />
@@ -116,24 +109,14 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           -->
           <div v-if="!control.reachable" class="banner warn">
             <b>Docker did not answer.</b>
-            <p>
-              Check Docker is running, then refresh.
-              <InfoHint label="why this is not the same as nothing running">
-                This is <em>not</em> the same as “nothing is running”: the control stack may be
-                perfectly healthy while this process cannot reach the Docker socket.
-              </InfoHint>
-            </p>
+            <p>State unknown — the stack may be running.</p>
           </div>
           <div v-else-if="control.parseError" class="banner warn">
             <b>Docker's answer could not be read.</b>
-            <p>Service state is unknown for this refresh; the stack itself may be fine.</p>
+            <p>State unknown for this refresh.</p>
           </div>
           <div v-else-if="!control.services.length" class="banner failed">
             <b>Nothing is running in this project.</b>
-            <p>
-              Docker answered clearly, so the control stack really is down — yet you are reading a
-              page it serves. You are most likely reaching it by some other route.
-            </p>
           </div>
 
           <table v-if="control.services.length" class="cards">
@@ -206,15 +189,11 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             </div>
 
             <p v-if="summary.unresolved" class="hint">
-              {{ summary.unresolved }} deployment(s) are missing variables.
-              <RouterLink to="/deployments">Open one and set them.</RouterLink>
+              {{ summary.unresolved }} deployment(s) need variables.
+              <RouterLink to="/deployments">Set them →</RouterLink>
             </p>
             <p v-else-if="summary.unknown" class="hint">
-              “Unknown” means it could not be determined
-              <InfoHint label="what unknown means">
-                — <em>not</em> that the deployment is idle. An unknown is never counted as a zero,
-                which is how a live stack gets reported as torn down.
-              </InfoHint>
+              Unknown is not zero — state could not be determined.
             </p>
           </template>
         </section>
@@ -240,13 +219,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
                 </span>
               </span>
             </li>
-            <li v-if="!recentJobs.length" class="mute">
-              No jobs yet.
-              <InfoHint label="how long job history is kept">
-                History is held in memory, so restarting the server clears it. A job record is the
-                transcript of an attempt, not the truth about what exists now.
-              </InfoHint>
-            </li>
+            <li v-if="!recentJobs.length" class="mute">No jobs yet.</li>
           </ul>
         </section>
       </div>

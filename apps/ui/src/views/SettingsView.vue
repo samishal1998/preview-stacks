@@ -28,7 +28,7 @@
  *
  * ── LOWERING THE CAP CANCELS NOTHING ─────────────────────────────────────────────────────────────
  *
- * Said beside the field, not only in the toast afterwards. Jobs already running run to completion;
+ * Said beside the field, where it stays true; the toast only says it saved. Jobs already running
  * the cap applies to the next dispatch. Someone typing 1 while four jobs run must not read the
  * confirmation as "three were just killed" — which is also why the running and waiting counts sit
  * next to the input rather than a page away in Jobs.
@@ -70,9 +70,9 @@ const reveal = ref(false);
  */
 const tokenShape = computed(() => {
   const t = settings.token;
-  if (t.startsWith('pstack_pat_')) return 'Looks like a personal token.';
-  if (/^[0-9a-f]{40,}$/i.test(t)) return 'Looks like a machine token.';
-  return `${t.length} characters — this does not look like a pstack token.`;
+  if (t.startsWith('pstack_pat_')) return 'Personal token.';
+  if (/^[0-9a-f]{40,}$/i.test(t)) return 'Machine token.';
+  return `${t.length} characters — not a pstack token.`;
 });
 
 /**
@@ -153,9 +153,9 @@ async function save(key: SettingKey, value: number | string): Promise<void> {
     );
   }
   resetDrafts();
-  // The server's own words for what a cap change did and did not do — paraphrasing it here is how
-  // the two drift.
-  toast('ok', r.body.note ?? 'Saved.');
+  // The server's `note` says what a cap change did and did not do; that fact is on the page beside
+  // the field, so the toast stays a toast.
+  toast('ok', 'Saved.');
 }
 
 /**
@@ -173,22 +173,11 @@ function mayWrite(r: SettingRow | null): boolean {
 /** Empty when they may write it; otherwise the sentence rendered under the disabled control. */
 function whyReadOnly(r: SettingRow | null): string {
   if (!r || mayWrite(r)) return '';
-  return `Changing this needs the ${r.minRole} role — your account can read it, not set it.`;
+  return `Needs the ${r.minRole} role.`;
 }
 
-/**
- * Where the value came from. Stated as a FACT about the host, never as an instruction: a viewer
- * reads this line too, and "save a value here to override it" is advice for someone else.
- */
-function sourceLine(r: SettingRow): string {
-  if (r.source === 'db') return 'Set here and stored on the host — it survives a restart.';
-  if (r.source === 'env') {
-    const n = host.value?.env.PSTACK_MAX_JOBS;
-    return `From PSTACK_MAX_JOBS${n === null || n === undefined ? '' : ` (${n})`} in the server's environment, which supplies the default and no longer the last word.`;
-  }
-  return 'The value the binary ships with — nobody has set it, and nothing in the environment supplies one.';
-}
-// Not "your choice": a viewer reads this line too, and whoever set it may not be the person looking.
+// Where the value came from — a fact about the host, never an instruction: a viewer reads this line
+// too, and whoever set it may not be the person looking. Precedence itself lives in docs/usage.md.
 const SOURCE_LABEL: Record<SettingRow['source'], string> = {
   db: 'Set here',
   env: 'From the environment',
@@ -224,9 +213,8 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
     <div class="page-head">
       <div>
         <h1>Settings</h1>
-        <!-- Panel by panel, because two of the three are this browser's and one is the host's, and
-             a page-level "nothing here is sent to the server" would now be a lie about the third. -->
-        <div class="sub">Some of this is yours alone; some of it is the whole host's. Each panel says which.</div>
+        <!-- No page-level subtitle: two panels are this browser's and one is the host's, so each
+             says which in its own line — a claim at the top would be a lie about one of them. -->
       </div>
     </div>
 
@@ -234,10 +222,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
          reads as a text editor, not a form — see the rule in app.css. -->
     <section class="panel settings-form">
       <h2 class="phead-title">Connection</h2>
-      <p class="mute hint">
-        Stored in this browser, by this browser. Nothing on this panel is sent anywhere, nobody else
-        sees it, and there is nothing to save — every box writes through as you type.
-      </p>
+      <p class="mute hint">Stored in this browser. Nothing here is sent anywhere.</p>
 
       <div class="field">
         <label for="apiBase">API base URL</label>
@@ -248,14 +233,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
           spellcheck="false"
           placeholder="(same origin)"
         />
-        <div class="mute hint">
-          Leave it empty unless you are pointing this page at another host.
-          <InfoHint label="about the API base URL">
-            Empty means same-origin, which is how the control stack serves this page — the browser
-            never makes a cross-origin request, so there is no CORS to configure. Set an absolute
-            URL only for a development session against a remote host.
-          </InfoHint>
-        </div>
+        <div class="mute hint">Empty means same origin.</div>
       </div>
 
       <div class="field">
@@ -305,12 +283,8 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
           </span>
         </div>
         <div class="mute hint">
-          Authenticates every request — signing in with an account does the same job, so set this
-          only for token-based access (the machine token, or a personal token from your account).
-          <template v-if="authEnforced === false">
-            This server is not asking for one — it only accepts connections from this machine, so a
-            token here is harmless but unnecessary.
-          </template>
+          Only needed for token-based access; signing in does the same job.
+          <template v-if="authEnforced === false">This server is not asking for one.</template>
         </div>
       </div>
 
@@ -321,8 +295,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
         <span v-if="state.health" class="mute">
           Connected to pstack {{ state.health.version }}
           <InfoHint label="where data is stored">
-            Deployment records and stored specs live in
-            <code>{{ state.health.dataDir }}</code> on the host.
+            Data directory: <code>{{ state.health.dataDir }}</code>
           </InfoHint>
         </span>
         <span v-else-if="state.healthError" class="bad">{{ state.healthError }}</span>
@@ -332,16 +305,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
     <!-- ===================== the host's own settings — everyone sees these ===================== -->
     <section class="panel settings-form">
       <h2 class="phead-title">This host</h2>
-      <p class="mute hint">
-        Stored on the server, in force for everybody, and saved on purpose — a box that wrote
-        through on every keystroke would set the limit to 1 on the way to typing 12.
-        <InfoHint label="which value wins">
-          Database, then environment, then the value the binary ships with. Something saved here
-          outranks <code>PSTACK_MAX_JOBS</code> and is not undone by the next restart — and a host
-          where nobody ever saves anything keeps behaving exactly as it did before this panel
-          existed.
-        </InfoHint>
-      </p>
+      <p class="mute hint">Stored on the server, in force for everybody.</p>
 
       <ErrorNote v-if="hostError" :text="hostError" title="Host settings." />
 
@@ -377,22 +341,13 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
             </ActionButton>
             <span class="mute" style="font-size: var(--t-xs)">
               {{ running }} running · {{ waiting }} waiting
-              <InfoHint label="what waiting means">
-                A waiting job is not necessarily waiting for a slot: a stack runs one job at a time,
-                so a job can be queued behind another on its own stack while the host is nowhere near
-                this limit. The Jobs page says which, per job.
-              </InfoHint>
             </span>
           </div>
           <div class="mute hint">
-            The most jobs this host runs at once, across every stack. It applies from the moment you
-            save it — no restart. <b>Lowering it cancels nothing:</b> jobs already running run to
-            completion, and the new limit applies to the next job that starts. Raising it starts
-            whatever has been waiting for a slot.
+            Most jobs at once, across every stack. <b>Lowering it cancels nothing.</b>
           </div>
           <div v-if="maxJobs" class="mute hint">
-            <b>{{ SOURCE_LABEL[maxJobs.source] }}.</b> {{ sourceLine(maxJobs) }}
-            {{ whyReadOnly(maxJobs) }}
+            <b>{{ SOURCE_LABEL[maxJobs.source] }}.</b> {{ whyReadOnly(maxJobs) }}
           </div>
         </div>
 
@@ -416,24 +371,18 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
               Save
             </ActionButton>
           </div>
-          <div class="mute hint">
-            What an account gets when it is created without a role being named — the API's
-            <code>POST /api/users</code>, and any sign-on provider left to inherit the host default.
-            It never widens what anyone may do: creating accounts is admin's either way. Accounts
-            that already exist keep the role they have.
-          </div>
+          <div class="mute hint">New accounts only; existing ones keep their role.</div>
           <div v-if="defaultRole" class="mute hint">
-            <b>{{ SOURCE_LABEL[defaultRole.source] }}.</b> {{ sourceLine(defaultRole) }}
-            {{ whyReadOnly(defaultRole) }}
+            <b>{{ SOURCE_LABEL[defaultRole.source] }}.</b> {{ whyReadOnly(defaultRole) }}
           </div>
         </div>
       </template>
-      <p v-else-if="!hostLoaded" class="mute hint">Reading the host's settings…</p>
+      <p v-else-if="!hostLoaded" class="mute hint">Reading…</p>
     </section>
 
     <section class="panel">
       <h2 class="phead-title">Appearance</h2>
-      <p class="mute hint">This browser's too — and applied the moment you pick it.</p>
+      <p class="mute hint">Stored in this browser.</p>
 
       <div class="field">
         <label for="theme">Theme</label>
@@ -459,10 +408,6 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
               { value: 'none', label: 'No animation' },
             ]"
           />
-        <div class="mute hint">
-          “Follow the system” uses your device's reduce-motion setting. The other two override it,
-          in either direction.
-        </div>
       </div>
     </section>
   </div>

@@ -21,7 +21,6 @@ import { useRoute } from 'vue-router';
 import { api, problem } from '../../api/client';
 import type { RuntimeResponse } from '../../api/types';
 import ErrorNote from '../../components/ErrorNote.vue';
-import InfoHint from '../../components/InfoHint.vue';
 import SelectMenu from '../../components/SelectMenu.vue';
 
 const route = useRoute();
@@ -54,7 +53,7 @@ async function loadContainers() {
     `/api/deployments/${encodeURIComponent(id.value)}/runtime`,
   );
   if (!r.ok) {
-    loadError.value = problem(r, "list this deployment's containers");
+    loadError.value = problem(r, 'list containers');
     return;
   }
   loadError.value = '';
@@ -136,11 +135,10 @@ async function connect() {
     state.value = 'closed';
     // A close CODE alone tells an operator nothing. 1006 in particular is the browser's "it just
     // went away", which here almost always means the upgrade was refused.
-    closeReason.value =
-      e.reason || (e.code === 1006 ? 'the connection dropped (the upgrade may have been refused)' : `code ${e.code}`);
+    closeReason.value = e.reason || (e.code === 1006 ? 'connection dropped' : `code ${e.code}`);
   };
   ws.onerror = () => {
-    if (state.value === 'connecting') closeReason.value = 'could not open the connection';
+    if (state.value === 'connecting') closeReason.value = 'could not connect';
   };
   t.onData((d) => {
     if (ws.readyState === WebSocket.OPEN) ws.send(d);
@@ -174,19 +172,12 @@ onBeforeUnmount(teardown);
 
 <template>
   <section class="stack">
+    <!-- No pty: without this line the missing prompt and dead Ctrl-C read as a broken terminal. -->
     <div class="banner warn">
-      <b>No TTY.</b> The shell runs without a terminal device, so there is no prompt, no
-      <code>Ctrl-C</code>, and no full-screen programs (<code>top</code>, <code>vim</code>). Type a
-      command and press Enter.
-      <InfoHint label="why">
-        A pseudo-terminal needs a wrapper (<code>script</code>) whose flags differ across
-        distributions, and it was never verified on a real host — so pstack ships the half it can
-        stand behind. Everything an operator usually opens a shell for (<code>ls</code>,
-        <code>cat</code>, <code>env</code>, <code>psql</code>, a migration) works.
-      </InfoHint>
+      <b>No TTY</b> — no prompt, no <code>Ctrl-C</code>, no full-screen programs.
     </div>
 
-    <ErrorNote v-if="loadError" :text="loadError" title="Could not list this deployment's containers." />
+    <ErrorNote v-if="loadError" :text="loadError" title="Could not list containers." />
 
     <div class="row wrap" style="gap: var(--s3); align-items: end">
       <label class="field">
@@ -210,18 +201,14 @@ onBeforeUnmount(teardown);
       <span v-if="state === 'open'" class="badge ok"><span class="dot pulse" />connected</span>
     </div>
 
-    <p v-if="!running.length && !loadError" class="hint">
-      Nothing is running for this deployment, so there is nothing to open a shell in.
-    </p>
+    <p v-if="!running.length && !loadError" class="hint">Nothing is running.</p>
 
     <p v-if="state === 'closed' && closeReason" class="hint">Session ended — {{ closeReason }}.</p>
 
     <div ref="host" class="terminal-host" :data-state="state" />
 
-    <p class="hint">
-      Every session is recorded — who, which container, when — and the record is written when the
-      shell opens, so a session that dies with the process still leaves one.
-    </p>
+    <!-- Audit interlock: the operator is told before typing that the session is on the record. -->
+    <p class="hint">Every session is recorded — who, which container, when.</p>
   </section>
 </template>
 

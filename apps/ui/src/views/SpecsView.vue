@@ -8,7 +8,7 @@
  * torn down — so knowing the count before you try is the difference between a plan and a 409.
  *
  * A server built before named specs answers 404 here. That is a capability difference, not an
- * error, so it gets its own explanation instead of a red banner.
+ * error, so it gets its own plain banner instead of a red one.
  */
 import { computed, ref } from 'vue';
 import { sentence } from '../composables/useFormat';
@@ -75,13 +75,7 @@ const shown = computed(() => {
     <div class="page-head">
       <div>
         <h1>Specs</h1>
-        <div class="sub">
-          Stored once, used by any number of deployments
-          <InfoHint label="why store a spec">
-            Without this, every deployment carries its own copy — 50 open pull requests meant 50
-            identical files, and fixing a teardown step meant re-submitting it 50 times.
-          </InfoHint>
-        </div>
+        <div class="sub">Stored once, used by any number of deployments</div>
       </div>
       <span class="grow" />
       <RefreshButton :run="load" />
@@ -89,13 +83,11 @@ const shown = computed(() => {
 
     <ErrorNote v-if="error" :text="error" title="Could not load the specs." />
 
+    <!-- Not an empty list: this host cannot store specs at all (404, an older build). The two
+         states have to stay tellable apart, so this banner is not the empty state below. -->
     <section v-if="unsupported" class="panel">
       <div class="banner plain">
-        <b>This server has no stored specs.</b>
-        <p>
-          It is an older build of pstack — every deployment carries its own copy of its spec, which
-          still works. Upgrade the host to store specs and reference them by name.
-        </p>
+        <b>This host is too old to store specs.</b>
       </div>
     </section>
 
@@ -116,8 +108,7 @@ const shown = computed(() => {
               <th>
                 needs
                 <InfoHint label="what needs means">
-                  Variables the spec uses but does not set. Every deployment referencing it must
-                  supply these, which is how one spec serves many stacks.
+                  Variables the spec uses but does not set.
                 </InfoHint>
               </th>
               <th>Used by</th>
@@ -137,13 +128,11 @@ const shown = computed(() => {
               </td>
               <td data-label="needs">
                 <span v-if="s.requiredVars.length">{{ s.requiredVars.join(', ') }}</span>
-                <span v-else class="mute">nothing</span>
+                <span v-else class="mute">none</span>
               </td>
               <td data-label="used by">
-                <span v-if="users.get(s.name)?.length">
-                  {{ users.get(s.name)!.length }} deployment(s)
-                </span>
-                <span v-else class="mute">nothing yet</span>
+                <span v-if="users.get(s.name)?.length">{{ users.get(s.name)!.length }}</span>
+                <span v-else class="mute">none</span>
               </td>
               <td class="dim nowrap" data-label="updated"><RelativeTime :at="s.updatedAt" /></td>
             </tr>
@@ -156,16 +145,10 @@ const shown = computed(() => {
 
       <!--
         Honest empty state. This page cannot create a spec yet, so pointing at "New spec" would be a
-        dead end — it names the way that does work instead.
+        dead end — the generated command below is the way that does work.
       -->
       <div v-else class="banner plain">
-        <b>No specs stored yet.</b>
-        <p>
-          A deployment can carry its own spec inline — see
-          <RouterLink to="/submit">Submit</RouterLink> — and that is all you need for a one-off.
-          Storing one here pays off when several deployments share it.
-        </p>
-        <p class="mute">This page cannot store one yet — the command below does.</p>
+        <b>No specs yet — store one below.</b>
         <EquivalentCommand
           what="storing a spec"
           method="PUT"
