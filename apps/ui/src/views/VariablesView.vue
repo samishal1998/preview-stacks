@@ -29,7 +29,6 @@ import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RefreshButton from '../components/RefreshButton.vue';
@@ -46,10 +45,9 @@ const vars = computed(() => entries.value.filter((e) => !e.secret));
 const secrets = computed(() => entries.value.filter((e) => e.secret));
 
 const varPairs = computed<VarPair[]>(() => vars.value.map((e) => ({ k: e.name, v: e.value ?? '' })));
-/** Names with no values — see the header. The comment travels with the `.env` export. */
+/** Names with no values — see the header. `WITHHELD` travels with the `.env` export. */
 const secretPairs = computed<VarPair[]>(() => secrets.value.map((e) => ({ k: e.name, v: '' })));
-const WITHHELD =
-  'Secret VALUES are not included: this server has no route that returns one.\nEach name is listed with an empty value for you to fill in.';
+const WITHHELD = 'Values are never exported. Fill each one in.';
 
 const form = ref({ name: '', value: '', secret: false });
 const saving = ref(false);
@@ -121,7 +119,7 @@ async function importEntries(secret: boolean, pairs: VarPair[]): Promise<void> {
   const noun = secret ? 'secret' : 'variable';
   const stored = pairs.length - failed.length;
   if (failed.length) {
-    listError.value = `Stored ${stored} of ${pairs.length} ${noun}s — ${failed.join(', ')} could not be stored.`;
+    listError.value = `Stored ${stored} of ${pairs.length}. Failed: ${failed.join(', ')}.`;
   } else {
     listError.value = '';
     toast('ok', `Stored ${stored} ${noun}${stored === 1 ? '' : 's'}.`);
@@ -138,7 +136,7 @@ async function remove(e: Entry): Promise<void> {
     listError.value = problem(r, `delete ${e.name}`);
     return;
   }
-  toast('ok', `Deleted ${e.name}. Specs referencing it will fail to resolve until it exists again.`);
+  toast('ok', `Deleted ${e.name}. Specs using it will not resolve.`);
   if (editing.value?.name === e.name) cancelEdit();
   void load();
 }
@@ -150,13 +148,8 @@ async function remove(e: Entry): Promise<void> {
       <div>
         <h1>Variables &amp; secrets</h1>
         <div class="sub">
-          Host-level values every spec can reference
-          <InfoHint label="how a spec uses these">
-            Write <code>${vars.NAME}</code> or <code>${secrets.NAME}</code> anywhere a spec
-            interpolates — the <code>env:</code> block, hooks, compose settings. The spelling is
-            deliberate: plain <code>${NAME}</code> keeps meaning "whatever the request supplied", so
-            the two can never collide.
-          </InfoHint>
+          Host-level values every spec can reference. Deleting one stops the specs using it from
+          resolving.
         </div>
       </div>
       <span class="grow" />
@@ -168,7 +161,7 @@ async function remove(e: Entry): Promise<void> {
     <section v-if="unsupported" class="panel">
       <div class="banner plain">
         <b>This server has no variable store.</b>
-        <p>It is an older build of pstack. Upgrade the host to use host-level variables.</p>
+        <p>Upgrade the host to use these.</p>
       </div>
     </section>
 
@@ -177,10 +170,6 @@ async function remove(e: Entry): Promise<void> {
         <section class="panel">
           <div class="phead">
             <h2 class="section">Variables</h2>
-            <InfoHint label="what belongs here">
-              Configuration that is fine to read back: a region, an image tag, the log level a
-              preview should run at. Referenced as <code>${vars.NAME}</code>.
-            </InfoHint>
             <span class="grow" />
             <span class="mute" style="font-size: var(--t-xs)">{{ vars.length }}</span>
           </div>
@@ -209,25 +198,16 @@ async function remove(e: Entry): Promise<void> {
               </tr>
             </tbody>
           </table>
-          <p v-else class="hint">No variables yet.</p>
+          <p v-else class="hint">Add your first variable below.</p>
 
           <VarIO :pairs="varPairs" :busy="importing" skip-empty @apply="importVars">
-            <p class="hint" style="margin-top: 0">
-              Each name is stored on this host as a variable. A name already here is overwritten;
-              names this paste does not mention are left alone, and nothing is deleted.
-            </p>
+            <p class="hint" style="margin-top: 0">Overwrites matching names. Deletes nothing.</p>
           </VarIO>
         </section>
 
         <section class="panel">
           <div class="phead">
             <h2 class="section">Secrets</h2>
-            <InfoHint label="what makes a secret different">
-              The value is write-only: no page and no API route ever returns it, and it is scrubbed
-              from job and container logs by content. Referenced as <code>${secrets.NAME}</code> —
-              refused in <code>stack:</code>, because a stack name appears in container names and
-              hostnames that cannot be redacted.
-            </InfoHint>
             <span class="grow" />
             <span class="mute" style="font-size: var(--t-xs)">{{ secrets.length }}</span>
           </div>
@@ -254,17 +234,13 @@ async function remove(e: Entry): Promise<void> {
               </tr>
             </tbody>
           </table>
-          <p v-else class="hint">No secrets yet.</p>
+          <p v-else class="hint">Add your first secret below.</p>
 
           <!--
             Said on the page, not only in the copied file: an export that cannot contain the thing
             it lists has to admit that where the button is.
           -->
-          <p class="hint">
-            A copied secret list contains <b>names only</b> — no page and no route can read a value
-            back, so each line is exported empty for you to fill in. Pasting one back therefore
-            changes nothing until you type the values in.
-          </p>
+          <p class="hint">A copied list carries <b>names only</b> — values cannot be read back.</p>
           <VarIO
             :pairs="secretPairs"
             :note="WITHHELD"
@@ -273,9 +249,7 @@ async function remove(e: Entry): Promise<void> {
             @apply="importSecrets"
           >
             <p class="hint" style="margin-top: 0">
-              Each name is stored as a <b>secret</b>: write-only from the moment it lands. A name
-              already here is replaced; a line with no value is skipped, so a round-trip of this
-              page's own export leaves every secret as it was.
+              Stored <b>write-only</b>. Empty lines are skipped, never stored over a live secret.
             </p>
           </VarIO>
         </section>
@@ -311,18 +285,17 @@ async function remove(e: Entry): Promise<void> {
             </label>
           </div>
           <p v-if="form.name && !NAME.test(form.name)" class="s-failed" style="margin-top: var(--s2)">
-            Letters, digits and _ only, not starting with a digit — it has to be referenceable in a spec.
+            Letters, digits and _ only, not starting with a digit.
           </p>
 
           <div class="row" style="margin-top: var(--s3)">
             <label class="check">
               <input v-model="form.secret" type="checkbox" :disabled="editing?.secret === true" />
-              Secret — the value can never be read back
+              Secret — the value is never shown again
             </label>
           </div>
           <p v-if="editing?.secret" class="hint">
-            A secret cannot be turned back into a readable variable — that would reveal a value
-            stored write-only. Delete it and create a variable instead, re-entering the value.
+            A secret cannot become a readable variable. Delete it and add a variable instead.
           </p>
 
           <div class="row" style="margin-top: var(--s4)">

@@ -24,9 +24,7 @@ import { settings } from '../composables/useSettings';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import InfoHint from '../components/InfoHint.vue';
 import SkeletonList from '../components/SkeletonList.vue';
-import HelpModal from '../components/HelpModal.vue';
 import RefreshButton from '../components/RefreshButton.vue';
 
 const entries = ref<RegistryEntry[]>([]);
@@ -77,14 +75,9 @@ async function save(): Promise<void> {
   // Cleared immediately: there is no reason for a password to stay in a form field after it is stored,
   // and the page cannot read it back to re-populate one.
   password.value = '';
-  const stored = r.body.registry;
-  if (stored && stored !== host.value) {
-    // Docker Hub's canonical key differs from what anyone types; saying so avoids "I stored it and it
-    // still is not used".
-    toast('ok', `Stored for ${stored} — Docker Hub's canonical key.`);
-  } else {
-    toast('ok', `Stored for ${stored || host.value}. It applies to the next pull.`);
-  }
+  // The server's key, not the typed one: Docker Hub canonicalises, and the list below reloads with
+  // whatever it stored — so the toast does not have to explain the difference.
+  toast('ok', `Stored for ${r.body.registry || host.value}.`);
   host.value = '';
   username.value = '';
   void load();
@@ -106,15 +99,7 @@ async function forget(registry: string): Promise<void> {
     <div class="page-head">
       <div>
         <h1>Registries</h1>
-        <div class="sub">
-          Credentials for pulling private images
-          <InfoHint label="why a host login is not enough">
-            A pull is authenticated by the docker <em>client</em>, not the daemon: it reads its own
-            <code>config.json</code> and hands the credential over. pstack's client runs inside the
-            control container, so a <code>docker login</code> on the host writes a file it cannot see —
-            and the pull fails on a host that is logged in.
-          </InfoHint>
-        </div>
+        <div class="sub">Credentials for pulling private images</div>
       </div>
       <span class="grow" />
       <RefreshButton :run="load" />
@@ -122,22 +107,9 @@ async function forget(registry: string): Promise<void> {
 
     <ErrorNote v-if="listError" :text="listError" title="Could not load the registry credentials." />
 
+    <!-- Gates the form below: this host can list credentials but not store one. -->
     <div v-if="writable === false" class="banner failed">
-      <b>Credentials cannot be saved here yet.</b>
-      <p>
-        Re-run setup on the host — it is safe to repeat.
-        <HelpModal title="Why this happens">
-          <p>
-            Saving a credential needs a writable directory that the control stack only started
-            providing in version 0.7.0. A host set up before then does not have it, so this page can
-            list credentials but not add one.
-          </p>
-          <p>
-            Re-running setup is safe to repeat and recreates the control containers with the
-            directory in place. Nothing already stored is lost.
-          </p>
-        </HelpModal>
-      </p>
+      <b>Credentials cannot be saved here. Re-run setup on the host.</b>
     </div>
 
     <!--
@@ -146,13 +118,10 @@ async function forget(registry: string): Promise<void> {
       every pull fails and an empty list looks like the reason.
     -->
     <div v-if="helpers.length" class="banner warn">
-      <b>This file uses a credential helper, which will not work here.</b>
-      <p>
-        Found: <span class="mono">{{ helpers.join(', ') }}</span>. A helper keeps the secret outside the
-        file — in an OS keychain, usually — and the helper binary does not exist in this container, so
-        pulls from private registries will fail. Add the credential below instead, which
-        stores it in the file.
-      </p>
+      <b>
+        Credential helper <span class="mono">{{ helpers.join(', ') }}</span> — private pulls will
+        fail here. Add the credential below.
+      </b>
     </div>
 
     <section class="panel">
@@ -176,21 +145,13 @@ async function forget(registry: string): Promise<void> {
           </span>
         </li>
       </ul>
-      <p v-else class="mute">
-        Nothing stored. Public images need no credential — this is only for a private registry.
-      </p>
+      <p v-else class="mute">No credentials yet. Add one below.</p>
     </section>
 
     <section class="panel">
       <h2 class="section" style="margin-bottom: var(--s3)">Add a credential</h2>
 
-      <p class="dim">
-        Applies to the <b>next pull</b> — nothing needs restarting.
-        <InfoHint label="why no restart is needed">
-          The docker client re-reads <code>config.json</code> on every invocation, so there is no cache
-          to bust. Storing one now is enough for a deploy started a second later.
-        </InfoHint>
-      </p>
+      <p class="dim">Applies to the next pull.</p>
 
       <div class="field" style="max-width: 380px">
         <label for="host">Registry</label>
@@ -202,9 +163,6 @@ async function forget(registry: string): Promise<void> {
           spellcheck="false"
           autocomplete="off"
         />
-        <div class="mute hint">
-          Docker Hub is stored under its canonical key.
-        </div>
       </div>
 
       <div class="field" style="max-width: 380px">
@@ -215,10 +173,8 @@ async function forget(registry: string): Promise<void> {
       <div class="field" style="max-width: 380px">
         <label for="pass">Password or token</label>
         <input id="pass" v-model="password" type="password" autocomplete="off" spellcheck="false" />
-        <div class="mute hint">
-          Prefer a token scoped to reading packages. Stored on the host as reversible base64, exactly as
-          Stored the same way a terminal login stores it — never sent back to this page.
-        </div>
+        <!-- The secret interlock: reversible base64 on the host, and no read path back here. -->
+        <div class="mute hint">Stored write-only, as reversible base64 — never shown again.</div>
       </div>
 
       <ErrorNote v-if="formError" :text="formError" title="Could not store this credential." />
@@ -229,11 +185,6 @@ async function forget(registry: string): Promise<void> {
         </ActionButton>
         <span v-if="!settings.token" class="mute">Storing needs an access token.</span>
       </div>
-
-      <p class="hint">
-        Or from the host, which writes the same file:
-        <span class="mono">docker login --config {{ dir || '<DATA_DIR>/control/docker' }} &lt;registry&gt;</span>
-      </p>
     </section>
   </div>
 </template>

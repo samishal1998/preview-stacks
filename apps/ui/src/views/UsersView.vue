@@ -40,7 +40,6 @@ import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
 import ErrorNote from '../components/ErrorNote.vue';
-import InfoHint from '../components/InfoHint.vue';
 import RelativeTime from '../components/RelativeTime.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RefreshButton from '../components/RefreshButton.vue';
@@ -119,7 +118,7 @@ async function createUser(): Promise<void> {
     listError.value = problem(r, 'create this account');
     return;
   }
-  toast('ok', `Created ${r.body.user.username} as a ${r.body.user.role}.`);
+  toast('ok', `Created ${r.body.user.username}.`);
   newUser.value = { username: '', password: '', role: 'viewer' };
   void load();
 }
@@ -150,7 +149,7 @@ async function changeRole(u: User, role: string): Promise<void> {
     // or the UI keeps offering what the server will now refuse. (The server needs no prompting:
     // every request looks the role up fresh.)
     await checkAuth();
-    toast('ok', `You are now a ${role}. What this app offers you changed with it.`);
+    toast('ok', `You are now a ${role}.`);
   } else {
     toast('ok', `${u.username} is now a ${role}.`);
   }
@@ -167,13 +166,11 @@ async function changePassword(): Promise<void> {
   }
   pwFor.value = null;
   pwValue.value = '';
-  // Not a footnote: the change signs that user out everywhere, and if it was YOU, the next request
-  // is a 401. Saying so here is the difference between an expected step and an apparent bug.
+  // If it was YOU, the next request is a 401 — the toast says to sign in again so that reads as an
+  // expected step rather than a bug. The dialog carried the full warning before the change.
   toast(
     'ok',
-    u.id === authState.user?.id
-      ? `Password changed. You have been signed out everywhere — sign in again.`
-      : `Password changed. ${u.username} has been signed out everywhere.`,
+    u.id === authState.user?.id ? `Changed — sign in again.` : `Password changed.`,
   );
   void load();
 }
@@ -189,7 +186,7 @@ async function createToken(): Promise<void> {
   revealed.value = {
     what: `Personal token “${newToken.value.trim()}”`,
     value: r.body.token,
-    note: 'Send it as a bearer token. The server stores only a hash, so this is the only time it is shown.',
+    note: 'Shown once — the server keeps only a hash. It can do anything your account can.',
   };
   newToken.value = '';
   void load();
@@ -211,14 +208,7 @@ async function removeToken(t: Token): Promise<void> {
     <div class="page-head">
       <div>
         <h1>Users &amp; access</h1>
-        <div class="sub">
-          Who can sign in, and the tokens they use from scripts
-          <InfoHint label="how access works here">
-            Three kinds of caller. The host token from the environment is the root credential CI
-            holds. An account signs in with a password and gets a browser session. A personal token
-            belongs to one account and is what a script uses — it can do anything that account can.
-          </InfoHint>
-        </div>
+        <div class="sub">Accounts and personal tokens</div>
       </div>
       <span class="grow" />
       <RefreshButton :run="load" />
@@ -228,6 +218,8 @@ async function removeToken(t: Token): Promise<void> {
 
     <div v-if="revealed" class="banner ok">
       <b>{{ revealed.what }} — copy it now.</b>
+      <!-- The one-line interlock: there is no read path on the server, so this really is the only
+           time the value exists anywhere but the clipboard. -->
       <p>{{ revealed.note }}</p>
       <pre class="code">{{ revealed.value }}</pre>
       <div class="row">
@@ -329,7 +321,7 @@ async function removeToken(t: Token): Promise<void> {
               @update:model-value="(v) => (newUser.role = v as Role)"
             />
           </div>
-          <p class="hint">At least 8 characters. A new account starts as a viewer unless you say otherwise.</p>
+          <p class="hint">At least 8 characters.</p>
           <div class="row">
             <button class="primary" type="submit" :disabled="!canCreateUser">Add account</button>
             <span class="grow" />
@@ -341,20 +333,14 @@ async function removeToken(t: Token): Promise<void> {
             :body="{ username: newUser.username || 'alice', password: '…', role: newUser.role }"
           />
         </form>
-        <!-- Not an apology for a missing button: it says who to ask, which is the thing the reader
-             actually needs. Reading the roster is every account's; changing it is admin's. -->
-        <p v-else class="hint">
-          Only an admin can add an account or change a role. Ask one of the admins above.
-        </p>
+        <!-- Not an apology for a missing button: reading the roster is every account's, changing it
+             is admin's, and the roster above already names who to ask. -->
+        <p v-else class="hint">Only an admin can add accounts or change roles.</p>
       </section>
 
       <section class="panel">
         <div class="phead">
           <h2 class="section">Your API tokens</h2>
-          <InfoHint label="when to use one">
-            A script or a CI job signing in as you. It carries whatever you can do, so give each one
-            a name you will recognise later and revoke the ones you stop using.
-          </InfoHint>
         </div>
 
         <SkeletonList v-if="!loaded" :rows="2" />
@@ -384,14 +370,15 @@ async function removeToken(t: Token): Promise<void> {
             </tr>
           </tbody>
         </table>
+        <!-- Two different facts, not one empty list: the host token cannot own tokens at all. -->
         <p v-else class="hint">
-          {{ authState.root ? 'The host token is not an account, so it has no personal tokens.' : 'No tokens yet.' }}
+          {{ authState.root ? 'The host token has no personal tokens.' : 'No tokens yet — name one below.' }}
         </p>
 
         <form v-if="!authState.root" class="stack-form" @submit.prevent="createToken">
           <h3>New token</h3>
           <label class="field">
-            <span>What is it for</span>
+            <span>Name</span>
             <input v-model="newToken" type="text" placeholder="ci-deploy" autocomplete="off" />
           </label>
           <div class="row">
@@ -412,9 +399,10 @@ async function removeToken(t: Token): Promise<void> {
       <div v-if="pwFor" class="scrim" @click.self="pwFor = null">
         <div class="sheet" role="dialog" aria-modal="true" aria-label="Change password">
           <h3>Change password for {{ pwFor.username }}</h3>
+          <!-- The interlock, one line: this ends every session and revokes every personal token. -->
           <p class="hint">
-            This signs {{ pwFor.id === authState.user?.id ? 'you' : 'them' }} out everywhere —
-            every session and personal token is revoked.
+            Signs {{ pwFor.id === authState.user?.id ? 'you' : 'them' }} out everywhere and revokes
+            {{ pwFor.id === authState.user?.id ? 'your' : 'their' }} tokens.
           </p>
           <label class="field">
             <span>New password</span>

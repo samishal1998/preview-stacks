@@ -105,12 +105,7 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
   <div class="page">
     <header class="page-head">
       <h1>Apply a configuration</h1>
-      <p class="dim">
-        A sealed <code>pstack pull config</code> export from another host: accounts, API tokens,
-        variables and secrets, notifiers, sign-on, registry logins, routing files and named specs.
-        It <b>creates what is missing and never overwrites</b>, so applying one twice changes
-        nothing the second time.
-      </p>
+      <p class="dim">A sealed export from another host. Creates what is missing, never overwrites.</p>
     </header>
 
     <section class="card">
@@ -129,10 +124,7 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
           placeholder="the passphrase this file was sealed with"
           @input="clearPreview"
         />
-        <small class="dim">
-          Sent to this host so it can open the file. That is safe in a way exporting would not be:
-          everything inside is about to be stored here in plain text regardless.
-        </small>
+        <small class="dim">Sent to this host to open the file.</small>
       </label>
 
       <div class="row">
@@ -149,7 +141,7 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
           :disabled="!preview || !!busy"
           @click="run('apply')"
         />
-        <small class="dim" v-if="!preview && !applied">Preview first — Apply stays disabled until you have seen what this file does.</small>
+        <small class="dim" v-if="!preview && !applied">Preview before applying.</small>
       </div>
     </section>
 

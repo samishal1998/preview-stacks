@@ -74,17 +74,6 @@ const running = computed(() => rt.value?.containers.filter((c) => c.state === 'r
  */
 const hasNode = computed(() => rt.value?.containers.some((c) => c.node) ?? false);
 
-/**
- * The preview domain, for the `init` line in the TLS hint — derived from where this page is served
- * rather than asked for, because `control.<domain>` and `api.<domain>` are the only two hostnames
- * that reach it.
- *
- * A guess, and a visible one: browse by IP or through a tunnel and you get that back, which reads as
- * obviously-not-your-domain in a command you are about to paste. Better than a placeholder nobody
- * can act on, and the alternative — a `domain` field on this response — would exist only for a
- * snippet.
- */
-const domain = computed(() => location.host.replace(/^(control|api)\./, ''));
 
 /**
  * The part of a container's name worth reading in a table cell.
@@ -162,11 +151,7 @@ function urlFor(c: RuntimeContainer): string | null {
         their live preview is gone.
       -->
       <div v-if="!rt.reachable" class="banner warn">
-        <b>Docker did not answer.</b>
-        <p>
-          Nothing below could be determined — this is not the same as nothing running. Check the
-          daemon and the socket mount, then refresh.
-        </p>
+        <b>Docker did not answer — this is not the same as nothing running.</b>
       </div>
 
       <template v-else>
@@ -179,10 +164,6 @@ function urlFor(c: RuntimeContainer): string | null {
         </div>
         <div v-if="!rt.findings.length && rt.containers.length" class="banner ok">
           <b>Nothing looks wrong.</b>
-          <p>
-            Every container is attached to the ingress network and every router has a rule and a port.
-            If a hostname still fails, the next suspects are DNS and the certificate.
-          </p>
         </div>
 
         <!-- ============================ routing ============================ -->
@@ -192,49 +173,10 @@ function urlFor(c: RuntimeContainer): string | null {
             <span class="grow" />
             <span class="mute" style="font-size: var(--t-sm)">
               TLS: {{ rt.challenge === 'unknown' ? 'unknown' : rt.challenge }}
-              <InfoHint label="why the TLS mode matters here" align="end">
-                Under HTTP-01 every per-PR router needs <code>tls.certresolver=le</code>, because each
-                hostname resolves its own certificate. Under DNS-01 — and under
-                <code>dns-persist-01</code>, where the host serves a wildcard you supplied — that
-                inverts: one certificate covers every preview, and a per-PR certresolver makes each PR
-                order its own and burn the weekly limit. Read from what the host actually has: a
-                stored wildcard if there is one, otherwise the running Traefik's own flags.
-                <!--
-                  The switch is NAMED, not offered, and deliberately not spelled out as a
-                  ready-to-paste `init` line. `init` re-renders the control stack from its ARGUMENTS
-                  ALONE — it reads nothing back — so a snippet here that omitted `--ui advanced`,
-                  `--orchestrator` or PSTACK_TOKEN would silently revert the UI, flip the
-                  orchestrator, or mint a new machine token and 401 every CI job on the host. This
-                  page cannot know any of those three: none is on the runtime payload and no route
-                  exposes them.
-
-                  So it points at the command that DOES know. `pstack upgrade -n` prints the host's
-                  own init line, built by the same `initFlags` an upgrade uses to re-init without
-                  changing anything nobody asked to change.
-                -->
-                <p style="margin-top: var(--s2)">
-                  <b>To stop per-PR ordering without touching the host,</b> store a wildcard you
-                  obtained yourself on the <RouterLink to="/control">Control stack</RouterLink> page —
-                  no re-init, no restart, and the redeploy is a button there.
-                </p>
-                <p>
-                  <b>Moving Traefik's own resolver to DNS-01 is a host command</b> — and not one to
-                  type from memory: <code>init</code> re-renders from its arguments alone, so every
-                  flag you omit silently reverts to its default. Ask the host for its own line first:
-                </p>
-                <pre
-                  class="code"
-                  style="white-space: pre-wrap; margin: var(--s1) 0"
-                >ssh {{ domain }}
-pstack upgrade -n | grep 'pstack init'</pre>
-                <p>
-                  Re-run that line with <code>--challenge dns01 --dns-provider …</code> added and
-                  <code>PSTACK_TOKEN</code> from <code>control/.env</code>, then
-                  <b>redeploy every stack</b>: routers are labelled at deploy time, so the ones
-                  already up still carry <code>certresolver=le</code> and would each order their own
-                  certificate instead of inheriting the wildcard. Full playbook, rollback included:
-                  <code>docs/tls-challenge.md</code>.
-                </p>
+              <!-- The mode itself is a concept docs/tls-challenge.md owns; this only says where
+                   it is changed. -->
+              <InfoHint label="where to change the TLS mode" align="end">
+                Change it on the <RouterLink to="/control">Control stack</RouterLink> page.
               </InfoHint>
             </span>
           </div>
@@ -254,16 +196,7 @@ pstack upgrade -n | grep 'pstack init'</pre>
               <thead>
                 <tr>
                   <th>URL</th>
-                  <th>
-                    Forwards to
-                    <InfoHint label="how a URL reaches a port">
-                      Traefik's docker provider resolves the container's IP on
-                      <code>preview-ingress</code> and dials it on the port from
-                      <code>loadbalancer.server.port</code> — it does <em>not</em> use
-                      <code>service:port</code> DNS. So the port here is the one inside the container,
-                      and publishing a host port is unnecessary.
-                    </InfoHint>
-                  </th>
+                  <th>Forwards to</th>
                   <th>Router</th>
                   <th>TLS</th>
                 </tr>
@@ -306,22 +239,7 @@ pstack upgrade -n | grep 'pstack init'</pre>
             labels — the deployment's own compose file does — so the fix is in the user's file.
           -->
           <div v-else class="banner warn">
-            <b>No routes. Traefik has not been told about this deployment.</b>
-            <p>
-              Routes come from labels in <em>your</em> compose file, not from pstack and not from the
-              <RouterLink to="/routing">Routing</RouterLink> page (that is Traefik's file provider —
-              middleware and TLS options, not per-PR routers). A reachable service needs four things:
-            </p>
-            <pre class="code">labels:
-  - traefik.enable=true                     # the host runs exposedbydefault=false
-  - traefik.docker.network=preview-ingress  # which network Traefik should dial
-  - traefik.http.routers.&lt;name&gt;-${STACK}.rule=Host(`&lt;name&gt;-${STACK}.${PREVIEW_DOMAIN}`)
-  - traefik.http.services.&lt;name&gt;-${STACK}.loadbalancer.server.port=80
-networks: [default, preview-ingress]        # and preview-ingress: { external: true }</pre>
-            <p class="mute">
-              Put <code>${STACK}</code> in the router and service names: Traefik's namespace is global
-              across the host, so two deployments sharing a router name serve each other's containers.
-            </p>
+            <b>No routes — Traefik labels come from your compose file.</b>
           </div>
         </section>
 
@@ -381,7 +299,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                   <td v-if="hasNode" data-label="node">
                     <div class="cell-clip" :title="c.node ?? undefined">{{ c.node ?? '—' }}</div>
                     <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
-                    <span v-if="c.remote" class="badge" title="runs on another swarm node — logs reach it through the manager; a shell and stop/start do not">remote</span>
+                    <span v-if="c.remote" class="badge" title="on another node — logs reach it, a shell and stop/start do not">remote</span>
                   </td>
                   <td data-label="state">
                     <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
@@ -433,8 +351,8 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                     <!-- None of these reach a task on another node; docker's verbs are node-local. -->
                     <!-- And none of them reach a one-shot job's row, which stands for the SERVICE:
                          there is no container behind its name, so the verbs could only fail. -->
-                    <span v-if="c.job" class="badge" title="a one-shot job — it runs to completion; there is no long-lived container to start, stop, or open a shell in">one-shot</span>
-                    <span v-else-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="runs on another swarm node — redeploy the stack, or act on the worker itself">
+                    <span v-if="c.job" class="badge" title="a one-shot job — no container to start, stop, or shell into">one-shot</span>
+                    <span v-else-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="on another node — redeploy the stack, or act on the worker itself">
                       on {{ c.node }}
                     </span>
                     <ActionButton
@@ -455,7 +373,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
                       :pending="busy === `stop:${c.name}`"
                       :disabled="!!busy"
                       confirm="Stop it?"
-                      title="Stops this container only. It stays stopped until something starts it."
+                      title="This container only — it stays stopped until something starts it."
                       @run="act(c, 'stop')"
                     >
                       Stop
@@ -502,10 +420,7 @@ networks: [default, preview-ingress]        # and preview-ingress: { external: t
               </tbody>
             </table>
           </div>
-          <p v-else class="mute">
-            No containers for this stack. If you expected some, check that their profile is one the
-            spec selects — a service behind a profile that is not enabled is never started.
-          </p>
+          <p v-else class="mute">No containers for this stack.</p>
         </section>
       </template>
     </template>

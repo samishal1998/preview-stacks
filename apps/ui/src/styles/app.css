@@ -2318,3 +2318,29 @@ input[type='radio']:disabled {
 :root[data-motion='none'] .refresh-icon.spin {
   animation: none;
 }
+
+/*
+ * The vitals strip — a control plane's instrument row, under the page title.
+ *
+ * Numbers, not sentences: it replaced three paragraphs explaining why restarts and OOM kills
+ * matter. Monospaced and tabular so the digits hold their column as they change on the poll, and
+ * COLOURLESS until something is wrong — a healthy control plane should read as one quiet grey line,
+ * which is what makes the red mean anything.
+ */
+.vitals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s3);
+  margin-top: var(--s2);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-mute);
+}
+.vitals > * + *::before {
+  content: '·';
+  margin-right: var(--s3);
+  color: var(--line);
+}
+.vitals .v-warn { color: var(--leak); }
+.vitals .v-fail { color: var(--fail); }

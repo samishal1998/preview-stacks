@@ -5,7 +5,7 @@
  * THE SOURCE IS A RESTRICTED READ. Everything else on this API can be read without a token, but a
  * spec's hook bodies are shell strings that routinely carry a credential inline, so the server sends
  * `source` only to an authenticated request and sets `sourceWithheld` otherwise. That is why this
- * one view uses `getAuthed`, and why "no token" renders an explanation rather than an empty editor —
+ * one view uses `getAuthed`, and why "no token" renders a named banner rather than an empty editor —
  * a blank box would read as an empty spec, which is a different and much more alarming fact.
  */
 import { computed, ref, watch } from 'vue';
@@ -76,7 +76,6 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
     <section v-if="missing" class="panel">
       <div class="banner failed">
         <b>No spec named “{{ name }}”.</b>
-        <p>It may have been deleted, or this is an older link.</p>
       </div>
     </section>
 
@@ -88,14 +87,12 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
             <span class="k">
               Needs
               <InfoHint label="what needs means">
-                Variables the spec uses but does not set. Every deployment referencing it supplies
-                these, which is how one spec serves many stacks — and a missing one is refused by
-                name rather than filled in blank.
+                Variables the spec uses but does not set.
               </InfoHint>
             </span>
             <span class="v">
               <b v-if="spec.requiredVars.length">{{ spec.requiredVars.join(', ') }}</b>
-              <span v-else class="mute">nothing — every value is fixed by the spec</span>
+              <span v-else class="mute">nothing</span>
             </span>
           </li>
           <li>
@@ -109,13 +106,8 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
                   style="margin-right: 10px"
                   >{{ d.id }}</RouterLink
                 >
-                <InfoHint label="why this matters">
-                  Deleting a spec while a deployment still references it is refused: that deployment
-                  could no longer be resolved, and one that cannot be resolved can never be torn
-                  down.
-                </InfoHint>
               </template>
-              <span v-else class="mute">no deployments reference it</span>
+              <span v-else class="mute">none</span>
             </span>
           </li>
           <li><span class="k">Created</span><span class="v">{{ stamp(spec.createdAt) }}</span></li>
@@ -135,14 +127,11 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
         -->
         <div v-if="spec.sourceWithheld" class="banner plain">
           <b>Hidden without an access token.</b>
-          <p>
-            A spec's hooks are shell commands, and they often carry a password or an API token
-            inline — so the server does not send the file to an unauthenticated reader.
-            <RouterLink to="/settings">Add your token</RouterLink> to see it.
-          </p>
+          <p><RouterLink to="/settings">Add your token</RouterLink> to see it.</p>
         </div>
         <pre v-else-if="spec.source" class="code">{{ spec.source }}</pre>
-        <p v-else class="mute">The server returned no source for this spec.</p>
+        <!-- Withheld above, genuinely empty here — the two must not read the same. -->
+        <p v-else class="mute">No source.</p>
       </section>
     </template>
   </div>
