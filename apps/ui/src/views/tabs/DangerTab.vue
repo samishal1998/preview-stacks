@@ -84,7 +84,7 @@ async function copyShare(): Promise<void> {
     await navigator.clipboard.writeText(shareLink.value.url);
     toast('ok', 'Link copied.');
   } catch {
-    toast('error', 'Copy failed.');
+    toast('error', 'Copy failed — select it and copy by hand.');
   }
 }
 
@@ -325,7 +325,7 @@ async function forget(): Promise<void> {
           <b>Stopped mid-run.</b> What it created before stopping is still there — run Verify.
         </div>
 
-        <ErrorNote v-if="actionError" :text="actionError" title="The action was refused." />
+        <ErrorNote v-if="actionError" :text="actionError" />
         <ConflictNote v-if="conflict" :conflict="conflict" :job-id="conflictJobId" />
       </template>
     </section>

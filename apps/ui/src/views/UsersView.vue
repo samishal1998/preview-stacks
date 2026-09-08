@@ -36,6 +36,9 @@ import { api, problem } from '../api/client';
 import { ROLES, type Role, type User, type UsersResponse } from '../api/types';
 import { authState, can, checkAuth } from '../composables/useAuth';
 import { sentence } from '../composables/useFormat';
+import {
+  DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogClose,
+} from 'reka-ui';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import EquivalentCommand from '../components/EquivalentCommand.vue';
@@ -118,7 +121,7 @@ async function createUser(): Promise<void> {
     listError.value = problem(r, 'create this account');
     return;
   }
-  toast('ok', `Created ${r.body.user.username}.`);
+  toast('ok', `Added ${r.body.user.username}.`);
   newUser.value = { username: '', password: '', role: 'viewer' };
   void load();
 }
@@ -394,11 +397,13 @@ async function removeToken(t: Token): Promise<void> {
       </section>
     </div>
 
-    <!-- Password change: a dialog, because it is a distinct decision about one row. -->
-    <Transition name="fade">
-      <div v-if="pwFor" class="scrim" @click.self="pwFor = null">
-        <div class="sheet" role="dialog" aria-modal="true" aria-label="Change password">
-          <h3>Change password for {{ pwFor.username }}</h3>
+    <!-- Password change: a dialog, because it is a distinct decision about one row. Reka owns
+         modality — hand-rolling it declared `aria-modal` without the focus trap it promises. -->
+    <DialogRoot :open="!!pwFor" @update:open="(v: boolean) => !v && (pwFor = null)">
+      <DialogPortal>
+        <DialogOverlay class="scrim help-scrim" />
+        <DialogContent v-if="pwFor" class="sheet" aria-label="Change password">
+          <DialogTitle as="h3">Change password for {{ pwFor.username }}</DialogTitle>
           <!-- The interlock, one line: this ends every session and revokes every personal token. -->
           <p class="hint">
             Signs {{ pwFor.id === authState.user?.id ? 'you' : 'them' }} out everywhere and revokes
@@ -412,11 +417,11 @@ async function removeToken(t: Token): Promise<void> {
             <button class="primary" :disabled="pwValue.length < 8" @click="changePassword">
               Change password
             </button>
-            <button class="ghost" @click="pwFor = null">Cancel</button>
+            <DialogClose class="ghost">Cancel</DialogClose>
           </div>
-        </div>
-      </div>
-    </Transition>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </div>
 </template>
 

@@ -50,10 +50,20 @@
 
   --fg: #eef2f8;
   --fg-dim: #a4afbe;
-  --fg-mute: #78838f;
+  --fg-mute: #858f9c;
 
   --accent: #4a9dff;
   --accent-soft: rgba(74, 157, 255, 0.18);
+  /*
+   * THE INK ON AN ACCENT FILL, and the fill's own gradient.
+   *
+   * White on this blue is 2.78:1 — it was the shipped default. Dark ink is 6.81:1, so the fill
+   * stays bright and the LIFT goes on the top stop: lightening only ever helps dark ink.
+   * Light inverts both (white ink, so the fill must not lighten) — see that block.
+   */
+  --accent-fg: #0e1116;
+  --accent-grad: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff) 0%, var(--accent) 100%);
+  --accent-grad-hover: linear-gradient(180deg, color-mix(in srgb, var(--accent) 78%, #fff) 0%, color-mix(in srgb, var(--accent) 94%, #fff) 100%);
   --ok: #35d17e;
   --ok-soft: rgba(53, 209, 126, 0.17);
   --fail: #ff6159;
@@ -82,6 +92,12 @@
   --hover-strong: rgba(255, 255, 255, 0.07);
   --press: rgba(0, 0, 0, 0.18);
 
+  --svc-0: #7aa2f7;
+  --svc-1: #9ece6a;
+  --svc-2: #e0af68;
+  --svc-3: #bb9af7;
+  --svc-4: #7dcfff;
+  --svc-5: #f7768e;
   --skel: linear-gradient(90deg, #1c212a 0%, #262d38 50%, #1c212a 100%);
 }
 
@@ -102,10 +118,16 @@
 
     --fg: #14181e;
     --fg-dim: #57616f;
-    --fg-mute: #7d8794;
+    --fg-mute: #636c77;
 
-    --accent: #1f6feb;
-    --accent-soft: rgba(31, 111, 235, 0.1);
+    --accent: #1257c9;
+    --accent-soft: rgba(18, 87, 201, 0.1);
+    /* White ink, so the fill DROPS its bottom stop instead of lifting its top — still lit from
+       above, and white never falls below 6.50:1. The hue is darkened from #1f6feb because the old
+       one also failed as TEXT on every light surface (4.09:1). */
+    --accent-fg: #ffffff;
+    --accent-grad: linear-gradient(180deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 88%, #000) 100%);
+    --accent-grad-hover: linear-gradient(180deg, color-mix(in srgb, var(--accent) 94%, #000) 0%, color-mix(in srgb, var(--accent) 80%, #000) 100%);
     --ok: #1a7f37;
     --ok-soft: rgba(26, 127, 55, 0.1);
     --fail: #cf222e;
@@ -129,6 +151,12 @@
     --hover-strong: rgba(16, 24, 40, 0.06);
     --press: rgba(16, 24, 40, 0.07);
 
+    --svc-0: #185ff7;
+    --svc-1: #507725;
+    --svc-2: #94621b;
+    --svc-3: #8141f5;
+    --svc-4: #0071b4;
+    --svc-5: #d9072e;
     --skel: linear-gradient(90deg, #e9edf2 0%, #f6f8fa 50%, #e9edf2 100%);
   }
 }
@@ -149,10 +177,16 @@
 
   --fg: #14181e;
   --fg-dim: #57616f;
-  --fg-mute: #7d8794;
+  --fg-mute: #636c77;
 
-  --accent: #1f6feb;
-  --accent-soft: rgba(31, 111, 235, 0.1);
+  --accent: #1257c9;
+  --accent-soft: rgba(18, 87, 201, 0.1);
+  /* White ink, so the fill DROPS its bottom stop instead of lifting its top — still lit from
+     above, and white never falls below 6.50:1. The hue is darkened from #1f6feb because the old
+     one also failed as TEXT on every light surface (4.09:1). */
+  --accent-fg: #ffffff;
+  --accent-grad: linear-gradient(180deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 88%, #000) 100%);
+  --accent-grad-hover: linear-gradient(180deg, color-mix(in srgb, var(--accent) 94%, #000) 0%, color-mix(in srgb, var(--accent) 80%, #000) 100%);
   --ok: #1a7f37;
   --ok-soft: rgba(26, 127, 55, 0.1);
   --fail: #cf222e;
@@ -175,6 +209,12 @@
   --hover-strong: rgba(16, 24, 40, 0.06);
   --press: rgba(16, 24, 40, 0.07);
 
+  --svc-0: #185ff7;
+  --svc-1: #507725;
+  --svc-2: #94621b;
+  --svc-3: #8141f5;
+  --svc-4: #0071b4;
+  --svc-5: #d9072e;
   --skel: linear-gradient(90deg, #e9edf2 0%, #f6f8fa 50%, #e9edf2 100%);
 }
 

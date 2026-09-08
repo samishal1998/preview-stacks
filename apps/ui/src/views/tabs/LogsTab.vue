@@ -362,7 +362,7 @@ const stateTone = (c: RuntimeContainer): string =>
               {{ c.service ?? c.name }}
               <span v-if="c.restartCount > 0" class="badge warn">{{ c.restartCount }}×</span>
             </span>
-            <span class="clist-sub mono">{{ c.name }}</span>
+            <span class="clist-sub mono" :title="c.name">{{ c.name }}</span>
             <span class="clist-state" :class="stateTone(c)">
               {{ sentence(c.health ?? c.state) }}
             </span>

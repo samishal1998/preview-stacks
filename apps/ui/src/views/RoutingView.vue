@@ -376,7 +376,7 @@ async function remove(): Promise<void> {
           <textarea id="content" v-model="draft" rows="18" spellcheck="false" />
         </div>
 
-        <ErrorNote v-if="fileError" :text="fileError" title="Traefik would not accept this." />
+        <ErrorNote v-if="fileError" :text="fileError" />
 
         <div class="row" style="margin-top: var(--s4)">
           <ActionButton variant="primary" :pending="saving" :disabled="!canSave" @click="save">

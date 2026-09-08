@@ -195,6 +195,7 @@ defineExpose({ show });
               class="palette-row"
               :data-on="i === cursor"
               @click="choose(r.it)"
+              @focus="cursor = i"
               @mousemove="cursor = i"
             >
               <span class="palette-label">{{ r.it.label }}</span>

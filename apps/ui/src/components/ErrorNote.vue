@@ -16,7 +16,7 @@ defineProps<{ text: string; title?: string }>();
 
 <template>
   <div class="banner failed" role="alert">
-    <b>{{ title ?? 'The server refused this.' }}</b>
+    <b>{{ title ?? 'That did not work.' }}</b>
     <pre class="raw">{{ text }}</pre>
   </div>
 </template>

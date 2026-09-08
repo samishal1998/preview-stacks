@@ -115,7 +115,7 @@ export async function act(
       void router.push(`/jobs/${encodeURIComponent(job.id)}`);
       return;
     }
-    actionError.value = 'The action was accepted, but the response carried nothing to follow.';
+    actionError.value = 'Started, but no job to follow — check Jobs.';
     return;
   }
   if (r.status === 409) return onConflict(r.body);

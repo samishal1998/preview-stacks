@@ -98,7 +98,7 @@ async function save(): Promise<void> {
     return;
   }
   listError.value = '';
-  toast('ok', `Stored ${form.value.name}.`);
+  toast('ok', `${editing.value ? 'Saved' : 'Added'} ${form.value.name}.`);
   cancelEdit();
   void load();
 }
