@@ -306,7 +306,6 @@ const stateTone = (c: RuntimeContainer): string =>
         Timestamps
       </label>
       <button
-        :class="following ? 'danger' : ''"
         :disabled="!dep.detail?.compose"
         :title="following ? 'Stop streaming' : 'Stream new lines as they arrive'"
         @click="toggleFollow"
@@ -329,7 +328,7 @@ const stateTone = (c: RuntimeContainer): string =>
     <p v-else-if="!dep.detail.compose" class="mute">No <code>compose:</code> section.</p>
 
     <template v-else>
-      <div v-if="error" class="banner failed">{{ error }}</div>
+      <div v-if="error" role="alert" class="banner failed">{{ error }}</div>
 
       <!--
         `ok: false` means compose exited non-zero. Usually "no such project" because the stack was

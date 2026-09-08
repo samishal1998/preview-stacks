@@ -109,7 +109,7 @@ async function submit(): Promise<void> {
           <input id="p" v-model="password" type="password" autocomplete="current-password" />
         </div>
 
-        <div v-if="error" class="banner failed" style="margin-top: var(--s3)">
+        <div v-if="error" role="alert" class="banner failed" style="margin-top: var(--s3)">
           <p>{{ error }}</p>
         </div>
 

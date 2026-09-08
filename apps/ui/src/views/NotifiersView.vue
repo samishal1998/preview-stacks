@@ -235,7 +235,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
         <b>Signing secret for “{{ revealed.name }}” — shown once. Copy it now.</b>
         <pre class="code">{{ revealed.secret }}</pre>
         <div class="row">
-          <button class="btn" @click="revealed = null">I have stored it</button>
+          <button class="btn" @click="revealed = null">Dismiss</button>
         </div>
       </div>
 
@@ -244,20 +244,20 @@ async function redeliver(d: DeliveryRow): Promise<void> {
           <h2 class="section">Registered</h2>
         </div>
 
-        <SkeletonList v-if="!loaded" :rows="2" />
-        <table v-else-if="notifiers.length" class="cards">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Events</th>
-              <th>Last delivery</th>
-              <th></th>
+        <SkeletonList v-if="!loaded" :rows="2" tall />
+        <table v-else-if="notifiers.length" role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Name</th>
+              <th role="columnheader">Events</th>
+              <th role="columnheader">Last delivery</th>
+              <th role="columnheader"></th>
             </tr>
           </thead>
-          <tbody class="stagger">
+          <tbody role="rowgroup" class="stagger">
             <template v-for="(n, i) in notifiers" :key="n.id">
-              <tr :style="{ '--i': i }">
-                <td class="name" data-label="name">
+              <tr role="row" :style="{ '--i': i }">
+                <td role="cell" class="name" data-label="name">
                   {{ n.name }}
                   <div class="mute" style="font-size: var(--t-sm)">
                     <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
@@ -265,11 +265,11 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                     {{ sentence(n.type) }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
                   </div>
                 </td>
-                <td data-label="events">
-                  <span v-if="n.events.includes('*')" class="badge">all events</span>
+                <td role="cell" data-label="events">
+                  <span v-if="n.events.includes('*')" class="badge">All events</span>
                   <span v-else>{{ n.events.join(', ') }}</span>
                 </td>
-                <td data-label="last delivery">
+                <td role="cell" data-label="last delivery">
                   <span v-if="!n.lastStatus" class="mute">never</span>
                   <span v-else :class="n.lastStatus === 'ok' ? 's-ok' : 's-failed'">
                     {{ n.lastStatus }}
@@ -278,9 +278,9 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                     <RelativeTime :at="n.lastAt" />
                   </div>
                 </td>
-                <td data-label="">
+                <td role="cell" data-label="">
                   <div class="row" style="justify-content: flex-end">
-                    <span v-if="!n.enabled" class="badge off">disabled</span>
+                    <span v-if="!n.enabled" class="badge off">Disabled</span>
                     <button class="ghost sm" @click="showDeliveries(n)">
                       {{ openDeliveries === n.id ? 'Hide' : 'Deliveries' }}
                     </button>
@@ -292,8 +292,8 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                   </div>
                 </td>
               </tr>
-              <tr v-if="openDeliveries === n.id" :key="`d${n.id}`">
-                <td colspan="4">
+              <tr v-if="openDeliveries === n.id" :key="`d${n.id}`" role="row">
+                <td role="cell" colspan="4">
                   <div class="row" style="margin-bottom: var(--s2)">
                     <span v-if="queued > 0" class="badge busy">
                       <span class="dot pulse" />{{ queued }} queued

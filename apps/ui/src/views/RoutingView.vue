@@ -216,7 +216,6 @@ async function remove(): Promise<void> {
       </div>
       <span class="grow" />
       <button v-if="writable" class="btn primary" @click="startNew">New file</button>
-      <span class="grow" />
       <RefreshButton :run="refreshAll" />
     </div>
 
@@ -244,7 +243,7 @@ async function remove(): Promise<void> {
       </div>
 
       <div v-else-if="live.length" class="table-scroll">
-        <table class="cards tbl-fixed t-live">
+        <table role="table" class="cards tbl-fixed t-live">
           <!--
             Host-wide, so every identifier here is longer than its per-deployment equivalent: routers
             and projects both carry the stack name. URL still wraps rather than clips — it is the one
@@ -256,17 +255,17 @@ async function remove(): Promise<void> {
             <col style="width: 20%" />
             <col style="width: 22%" />
           </colgroup>
-          <thead>
-            <tr>
-              <th>URL</th>
-              <th>Forwards to</th>
-              <th>Deployment</th>
-              <th>Router</th>
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">URL</th>
+              <th role="columnheader">Forwards to</th>
+              <th role="columnheader">Deployment</th>
+              <th role="columnheader">Router</th>
             </tr>
           </thead>
-          <tbody class="stagger">
-            <tr v-for="(r, i) in live" :key="`${r.container}-${r.router}`" :style="{ '--i': i }">
-              <td class="cell-wrap" data-label="url">
+          <tbody role="rowgroup" class="stagger">
+            <tr v-for="(r, i) in live" :key="`${r.container}-${r.router}`" role="row" :style="{ '--i': i }">
+              <td role="cell" class="cell-wrap" data-label="url">
                 <div v-for="h in r.hosts" :key="h">
                   <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
                     {{ h }}
@@ -275,10 +274,10 @@ async function remove(): Promise<void> {
                 </div>
                 <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
               </td>
-              <td data-label="forwards to">
+              <td role="cell" data-label="forwards to">
                 <RouteTarget :route="r" />
               </td>
-              <td data-label="deployment">
+              <td role="cell" data-label="deployment">
                 <RouterLink
                   v-if="r.project"
                   class="cell-clip"
@@ -289,7 +288,7 @@ async function remove(): Promise<void> {
                 </RouterLink>
                 <span v-else class="mute">—</span>
               </td>
-              <td class="dim" data-label="router">
+              <td role="cell" class="dim" data-label="router">
                 <span class="cell-clip" :title="r.router">{{ r.router }}</span>
               </td>
             </tr>
@@ -345,7 +344,7 @@ async function remove(): Promise<void> {
     <section v-if="openName !== null" class="panel">
       <div class="phead">
         <h2 class="section">{{ openName === '' ? 'New file' : openName }}</h2>
-        <span v-if="dirty" class="badge warn">unsaved</span>
+        <span v-if="dirty" class="badge warn">Unsaved</span>
         <span class="grow" />
         <button class="ghost sm" @click="close">Close</button>
       </div>

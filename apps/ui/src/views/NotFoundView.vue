@@ -20,11 +20,7 @@ const route = useRoute();
     </div>
 
     <section class="panel">
-      <p class="mute">
-        If you followed a link to a deployment that has since been forgotten, it will not resolve —
-        the control plane only knows deployments that are still in its registry.
-      </p>
-      <div class="row" style="margin-top: 12px; gap: 8px">
+      <div class="row">
         <RouterLink class="btn" to="/">Dashboard</RouterLink>
         <RouterLink class="btn" to="/deployments">Deployments</RouterLink>
         <RouterLink class="btn" to="/jobs">Jobs</RouterLink>

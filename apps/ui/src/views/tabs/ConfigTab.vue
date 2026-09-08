@@ -79,22 +79,22 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
 
       <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
       <template v-else>
-        <table class="cards">
-          <thead>
-            <tr>
-              <th>Key</th>
-              <th>Value</th>
-              <th>Visibility</th>
-              <th>Length</th>
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Key</th>
+              <th role="columnheader">Value</th>
+              <th role="columnheader">Visibility</th>
+              <th role="columnheader">Length</th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="e in dep.detail.env" :key="e.key">
-              <td class="name" data-label="key">{{ e.key }}</td>
-              <td class="name" :class="{ masked: e.visibility === 'masked' }" data-label="value">
+          <tbody role="rowgroup">
+            <tr v-for="e in dep.detail.env" :key="e.key" role="row">
+              <td role="cell" class="name" data-label="key">{{ e.key }}</td>
+              <td role="cell" class="name" :class="{ masked: e.visibility === 'masked' }" data-label="value">
                 {{ e.value }}
               </td>
-              <td data-label="visibility">
+              <td role="cell" data-label="visibility">
                 <span class="badge" :class="e.visibility === 'masked' ? 'warn' : ''">
                   {{ sentence(e.visibility) }}
                 </span>
@@ -104,13 +104,13 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
                 var is the interesting case: declared, never set — usually a hook about to fail on
                 an empty credential.
               -->
-              <td class="dim" data-label="length">
+              <td role="cell" class="dim" data-label="length">
                 {{ e.length }} chars
                 <span v-if="e.length === 0" class="badge warn" style="margin-left: 6px">never set</span>
               </td>
             </tr>
-            <tr v-if="!dep.detail.env.length">
-              <td colspan="4" class="mute">This spec declares no <code>env:</code> block.</td>
+            <tr v-if="!dep.detail.env.length" role="row">
+              <td role="cell" colspan="4" class="mute">This spec declares no <code>env:</code> block.</td>
             </tr>
           </tbody>
         </table>

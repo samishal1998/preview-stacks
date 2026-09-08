@@ -389,13 +389,13 @@ function loadExample(): void {
             spellcheck="false"
             autocomplete="off"
           />
+          <span class="hint mute">
+            Lower case
+            <InfoHint label="allowed characters in a deployment id">
+              <code>[a-z0-9][a-z0-9._-]{0,63}</code>
+            </InfoHint>
+          </span>
         </div>
-        <span class="mute" style="align-self: end; padding-bottom: 10px">
-          Lower case
-          <InfoHint label="allowed characters in a deployment id">
-            <code>[a-z0-9][a-z0-9._-]{0,63}</code>
-          </InfoHint>
-        </span>
       </div>
 
       <!-- Offered only when this server actually has stored specs. -->

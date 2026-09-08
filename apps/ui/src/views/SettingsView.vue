@@ -307,7 +307,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
       <h2 class="phead-title">This host</h2>
       <p class="mute hint">Stored on the server, in force for everybody.</p>
 
-      <ErrorNote v-if="hostError" :text="hostError" title="Host settings." />
+      <ErrorNote v-if="hostError" :text="hostError" title="Could not read the host settings." />
 
       <template v-if="host">
         <div class="field">

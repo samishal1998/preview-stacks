@@ -85,7 +85,7 @@ const value = defineModel<string>({ required: true });
                   d="m5 13 4 4L19 7"
                   fill="none"
                   stroke="currentColor"
-                  stroke-width="2.5"
+                  stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
                 />

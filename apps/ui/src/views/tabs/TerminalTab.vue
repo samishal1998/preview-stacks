@@ -91,7 +91,7 @@ async function connect() {
     // half — CR to NL — is done server-side; see `crToNl` in api.ts.
     convertEol: true,
     fontSize: 13,
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    fontFamily: 'var(--mono, ui-monospace, monospace)',
     cursorBlink: true,
     theme: { background: '#0b0e14' },
   });
@@ -179,15 +179,15 @@ onBeforeUnmount(teardown);
 
     <ErrorNote v-if="loadError" :text="loadError" title="Could not list containers." />
 
-    <div class="row wrap" style="gap: var(--s3); align-items: end">
-      <label class="field">
-        <span>Container</span>
-        <SelectMenu v-model="container" label="Container" :disabled="state === 'open' || state === 'connecting'" :options="containerOptions" />
-      </label>
-      <label class="field">
-        <span>Shell</span>
-        <SelectMenu v-model="shell" label="Shell" :disabled="state === 'open' || state === 'connecting'" :options="SHELLS.map((s) => ({ value: s, label: s }))" />
-      </label>
+    <div class="row wrap" style="gap: var(--s3)">
+      <div class="field inline">
+        <label for="term-container">Container</label>
+        <SelectMenu id="term-container" v-model="container" label="Container" :disabled="state === 'open' || state === 'connecting'" :options="containerOptions" />
+      </div>
+      <div class="field inline">
+        <label for="term-shell">Shell</label>
+        <SelectMenu id="term-shell" v-model="shell" label="Shell" :disabled="state === 'open' || state === 'connecting'" :options="SHELLS.map((s) => ({ value: s, label: s }))" />
+      </div>
       <button
         v-if="state !== 'open'"
         class="primary"
@@ -198,7 +198,7 @@ onBeforeUnmount(teardown);
       </button>
       <button v-else @click="disconnect">Close shell</button>
       <span class="grow" />
-      <span v-if="state === 'open'" class="badge ok"><span class="dot pulse" />connected</span>
+      <span v-if="state === 'open'" class="badge ok"><span class="dot pulse" />Connected</span>
     </div>
 
     <p v-if="!running.length && !loadError" class="hint">Nothing is running.</p>

@@ -229,7 +229,7 @@ async function forget(): Promise<void> {
         <div class="row">
           <button @click="copyShare">Copy</button>
           <a :href="shareLink.url" target="_blank" rel="noopener">Open ↗</a>
-          <button @click="shareLink = null">Done</button>
+          <button @click="shareLink = null">Dismiss</button>
         </div>
       </div>
       <ErrorNote v-if="shareError" :text="shareError" title="No link was created." />
@@ -297,9 +297,13 @@ async function forget(): Promise<void> {
               :placeholder="dep.detail.stack"
               spellcheck="false"
               autocomplete="off"
+              :aria-describedby="`confirm-${dep.id}-err`"
+              :aria-invalid="!!forceTyped && !forceArmed"
             />
           </div>
-          <p v-if="forceTyped && !forceArmed" class="s-failed">Does not match.</p>
+          <p v-if="forceTyped && !forceArmed" :id="`confirm-${dep.id}-err`" class="s-failed">
+            Does not match.
+          </p>
         </div>
 
         <!--

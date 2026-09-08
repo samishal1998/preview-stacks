@@ -6,6 +6,7 @@
  * host's worth of previews — a few dozen rows, already in memory from the shell's poll.
  */
 import { computed, ref } from 'vue';
+import { Search } from 'lucide-vue-next';
 import { sentence } from '../composables/useFormat';
 import { loadDeployments, state, summary } from '../composables/useControlPlane';
 
@@ -63,10 +64,7 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
           place you are already looking, and the select's own options say what it filters.
         -->
         <div class="searchbox">
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-            <path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
+          <Search :size="16" aria-hidden="true" />
           <input
             id="q"
             v-model="q"
@@ -97,19 +95,19 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
       <SkeletonList v-else-if="!state.deploymentsLoaded" :rows="4" tall />
 
       <template v-else>
-        <table class="cards">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Kind</th>
-              <th>Stack</th>
-              <th>State</th>
-              <th>Updated</th>
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">ID</th>
+              <th role="columnheader">Kind</th>
+              <th role="columnheader">Stack</th>
+              <th role="columnheader">State</th>
+              <th role="columnheader">Updated</th>
             </tr>
           </thead>
-          <tbody class="stagger">
-            <tr v-for="(d, i) in rows" :key="d.id" :style="{ '--i': i }">
-              <td data-label="id">
+          <tbody role="rowgroup" class="stagger">
+            <tr v-for="(d, i) in rows" :key="d.id" role="row" :style="{ '--i': i }">
+              <td role="cell" data-label="id">
                 <RouterLink :to="`/deployments/${encodeURIComponent(d.id)}`">
                   {{ d.id }}
                 </RouterLink>
@@ -117,24 +115,27 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
                   spec: {{ d.specName }}
                 </div>
               </td>
-              <td data-label="kind"><span class="badge" :class="d.kind">{{ sentence(d.kind) }}</span></td>
-              <td class="name dim" data-label="stack">
+              <td role="cell" data-label="kind"><span class="badge" :class="d.kind">{{ sentence(d.kind) }}</span></td>
+              <td role="cell" class="name dim" data-label="stack">
                 <span v-if="d.stack">{{ d.stack }}</span>
                 <!--
                   No stack name means the spec could not be resolved with the variables this
                   listing had. It is not an error state for the deployment — it is a missing input.
                 -->
                 <span v-else class="badge warn" title="the spec could not be resolved without variables">
-                  needs variables
+                  Needs variables
                 </span>
               </td>
-              <td data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" :asleep="d.asleep" /></td>
-              <td class="dim nowrap" data-label="updated"><RelativeTime :at="d.updatedAt" /></td>
+              <td role="cell" data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" :asleep="d.asleep" /></td>
+              <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="d.updatedAt" /></td>
             </tr>
-            <tr v-if="!rows.length">
-              <td colspan="5" class="mute">
+            <tr v-if="!rows.length" role="row">
+              <td role="cell" colspan="5" class="mute">
                 <template v-if="state.deployments.length">
                   Nothing matches this filter.
+                  <button class="ghost sm" @click="q = ''; kind = 'all'; onlyLive = false">
+                    Clear filters
+                  </button>
                 </template>
                 <template v-else>
                   Nothing submitted yet — <RouterLink to="/submit">submit a spec</RouterLink> to
@@ -150,13 +151,9 @@ const unresolvedRows = computed(() => state.deployments.filter((d) => d.unresolv
           <b>{{ d.id }}</b> could not be resolved:
           <span class="mono">{{ d.unresolved }}</span>
           <p>
-            This listing resolves every spec with the <em>same</em> (empty) request variables, so a
-            spec with a <code>${VAR}</code> the server does not already hold will always appear
-            here.
             <RouterLink :to="`/deployments/${encodeURIComponent(d.id)}/config`">
               Set its variables
             </RouterLink>
-            and the detail view will resolve.
           </p>
         </div>
       </template>

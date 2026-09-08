@@ -197,7 +197,7 @@ onBeforeUnmount(() => {
       <span v-if="state" class="badge" :class="state.cls">{{ state.text }}</span>
     </div>
 
-    <div v-if="fatal" class="banner failed">
+    <div v-if="fatal" role="alert" class="banner failed">
       <b>{{ fatal }}</b>
       <p>Ask whoever shared it for a new link.</p>
     </div>
@@ -222,17 +222,17 @@ onBeforeUnmount(() => {
           <b>Docker did not answer.</b>
           <p>What is running could not be listed — not the same as nothing running.</p>
         </div>
-        <table v-else-if="runtime?.containers.length" class="cards" style="margin-top: var(--s3)">
-          <thead>
-            <tr><th>Service</th><th>Container</th><th>State</th><th>Health</th><th v-if="runtime.containers.some((c) => c.node)">Node</th></tr>
+        <table v-else-if="runtime?.containers.length" role="table" class="cards" style="margin-top: var(--s3)">
+          <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Service</th><th role="columnheader">Container</th><th role="columnheader">State</th><th role="columnheader">Health</th><th v-if="runtime.containers.some((c) => c.node)" role="columnheader">Node</th></tr>
           </thead>
-          <tbody>
-            <tr v-for="c in runtime.containers" :key="c.id">
-              <td data-label="service">{{ c.service ?? '—' }}</td>
-              <td data-label="container" class="mono">{{ c.name }}</td>
-              <td data-label="state"><span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span></td>
-              <td data-label="health">{{ c.health ? sentence(c.health) : '—' }}</td>
-              <td v-if="runtime.containers.some((x) => x.node)" data-label="node">{{ c.node ?? '—' }}</td>
+          <tbody role="rowgroup">
+            <tr v-for="c in runtime.containers" :key="c.id" role="row">
+              <td role="cell" data-label="service">{{ c.service ?? '—' }}</td>
+              <td role="cell" data-label="container" class="mono">{{ c.name }}</td>
+              <td role="cell" data-label="state"><span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span></td>
+              <td role="cell" data-label="health">{{ c.health ? sentence(c.health) : '—' }}</td>
+              <td v-if="runtime.containers.some((x) => x.node)" role="cell" data-label="node">{{ c.node ?? '—' }}</td>
             </tr>
           </tbody>
         </table>

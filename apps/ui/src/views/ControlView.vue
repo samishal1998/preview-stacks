@@ -195,30 +195,30 @@ async function redeployAll(): Promise<void> {
       <!-- Unknown is not empty: a dead docker means nothing here is KNOWN. The distinction is the
            point (invariant 10); the sentence explaining it is not. -->
       <div v-if="!view.reachable" class="banner warn"><b>Docker isn't answering.</b> Nothing here is known.</div>
-      <table v-else-if="view.containers.length" class="cards">
-        <thead>
-          <tr>
-            <th>Service</th>
-            <th>Image</th>
-            <th>State</th>
-            <th>Restarts</th>
-            <th>Memory limit</th>
-            <th>Started</th>
-            <th></th>
+      <table v-else-if="view.containers.length" role="table" class="cards">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">Service</th>
+            <th role="columnheader">Image</th>
+            <th role="columnheader">State</th>
+            <th role="columnheader">Restarts</th>
+            <th role="columnheader">Memory limit</th>
+            <th role="columnheader">Started</th>
+            <th role="columnheader"></th>
           </tr>
         </thead>
-        <tbody class="stagger">
-          <tr v-for="(c, i) in view.containers" :key="c.id" :style="{ '--i': i }">
-            <td class="name" data-label="service">
+        <tbody role="rowgroup" class="stagger">
+          <tr v-for="(c, i) in view.containers" :key="c.id" role="row" :style="{ '--i': i }">
+            <td role="cell" class="name" data-label="service">
               {{ c.service || c.name }}
-              <span v-if="c.service === 'pstack'" class="badge info" title="the container answering this page">this API</span>
+              <span v-if="c.service === 'pstack'" class="badge info" title="the container answering this page">This API</span>
             </td>
-            <td data-label="image" class="mono mute">{{ c.image }}</td>
-            <td data-label="state">
+            <td role="cell" data-label="image" class="mono mute">{{ c.image }}</td>
+            <td role="cell" data-label="state">
               <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
               <span v-if="c.health" class="mute" style="font-size: var(--t-sm)"> · {{ c.health }}</span>
             </td>
-            <td data-label="restarts">
+            <td role="cell" data-label="restarts">
               <span :class="c.restartCount > 0 ? 'badge warn' : 'mute'">{{ c.restartCount }}</span>
               <span
                 v-if="c.oomKilled"
@@ -227,9 +227,9 @@ async function redeployAll(): Promise<void> {
                 >OOM</span
               >
             </td>
-            <td data-label="memory" class="mono mute">{{ mem(c.memLimitBytes) }}</td>
-            <td data-label="started" class="mute">{{ c.startedAt ? ago(c.startedAt) : '—' }}</td>
-            <td data-label="">
+            <td role="cell" data-label="memory" class="mono mute">{{ mem(c.memLimitBytes) }}</td>
+            <td role="cell" data-label="started" class="mute">{{ c.startedAt ? ago(c.startedAt) : '—' }}</td>
+            <td role="cell" data-label="">
               <ActionButton
                 v-if="c.service && c.service !== 'pstack'"
                 variant="ghost"
@@ -284,7 +284,7 @@ async function redeployAll(): Promise<void> {
         </li>
       </ul>
 
-      <div v-if="can('maintainer')" class="row" style="align-items: flex-end; gap: var(--s3); flex-wrap: wrap">
+      <div v-if="can('maintainer')" class="row" style="gap: var(--s3); flex-wrap: wrap">
         <div class="field inline" style="flex: 1 1 18rem">
           <label for="new-domain">Add a domain</label>
           <input

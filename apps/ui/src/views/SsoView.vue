@@ -383,7 +383,7 @@ function rulesLine(c: SsoConfig): string {
       <button v-if="loaded && !listError && !editing && !showPicker" class="primary" @click="picking = true">Add provider</button>
     </div>
 
-    <ErrorNote v-if="listError" :text="listError" title="Single sign-on." />
+    <ErrorNote v-if="listError" :text="listError" title="Could not read the sign-on settings." />
     <SkeletonList v-if="!loaded" :rows="4" />
 
     <!-- ============================ the form: one provider ============================ -->

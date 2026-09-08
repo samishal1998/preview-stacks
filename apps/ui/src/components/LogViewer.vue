@@ -94,7 +94,17 @@ onBeforeUnmount(() => {});
       <slot name="actions" />
     </div>
 
-    <div ref="box" class="lv-box" role="log" aria-live="polite" @scroll.passive="onScroll">
+    <!-- `tabindex="0"`: Safari does not make an overflow scroller focusable on its own, so without
+         it the log is unscrollable without a mouse. A focusable region needs a name. -->
+    <div
+      ref="box"
+      class="lv-box"
+      role="log"
+      aria-label="Log output"
+      aria-live="polite"
+      tabindex="0"
+      @scroll.passive="onScroll"
+    >
       <p v-if="!rows.length" class="lv-empty">{{ emptyText ?? 'No output.' }}</p>
       <template v-for="r in rows" :key="r.key">
         <div v-if="r.separator" class="lv-sep"><span>{{ r.text }}</span></div>

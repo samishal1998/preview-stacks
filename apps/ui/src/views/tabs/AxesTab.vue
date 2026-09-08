@@ -21,24 +21,24 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
 
     <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
     <template v-else>
-      <table class="cards">
-        <thead>
-          <tr>
-            <th>Axis</th>
-            <th>
+      <table role="table" class="cards">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">Axis</th>
+            <th role="columnheader">
               hooks
               <InfoHint label="what the four hooks do">
                 <code>up</code> provisions · <code>assert_live</code> checks it exists ·
                 <code>down</code> destroys · <code>assert_gone</code> proves it is gone.
               </InfoHint>
             </th>
-            <th>Teardown provable?</th>
+            <th role="columnheader">Teardown provable?</th>
           </tr>
         </thead>
-        <tbody class="stagger">
-          <tr v-for="(a, i) in dep.detail.axes" :key="a.name" :style="{ '--i': i }">
-            <td class="name" data-label="axis">{{ a.name }}</td>
-            <td data-label="hooks">
+        <tbody role="rowgroup" class="stagger">
+          <tr v-for="(a, i) in dep.detail.axes" :key="a.name" role="row" :style="{ '--i': i }">
+            <td role="cell" class="name" data-label="axis">{{ a.name }}</td>
+            <td role="cell" data-label="hooks">
               <span
                 v-for="h in HOOKS"
                 :key="h"
@@ -48,7 +48,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
                 >{{ h }}</span
               >
             </td>
-            <td data-label="provable">
+            <td role="cell" data-label="provable">
               <span v-if="a.verifiable" class="badge ok">assert_gone</span>
               <span
                 v-else
@@ -58,8 +58,8 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
               >
             </td>
           </tr>
-          <tr v-if="!dep.detail.axes.length">
-            <td colspan="3" class="mute">No axes.</td>
+          <tr v-if="!dep.detail.axes.length" role="row">
+            <td role="cell" colspan="3" class="mute">No axes.</td>
           </tr>
         </tbody>
       </table>

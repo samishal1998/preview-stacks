@@ -15,6 +15,7 @@
  * and an operator who has to remember the exact spelling is back to using the sidebar. Ties break
  * toward earlier and more contiguous matches, so an exact prefix always wins.
  */
+import { Search } from 'lucide-vue-next';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api/client';
@@ -169,10 +170,7 @@ defineExpose({ show });
     <div v-if="open" class="scrim palette-scrim" @click.self="hide">
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
         <div class="palette-q">
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-            <path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
+          <Search :size="16" aria-hidden="true" />
           <input
             ref="input"
             v-model="q"
