@@ -73,7 +73,6 @@ onBeforeUnmount(() => {
         v-if="pinned || hovered"
         class="hint-bub"
         :class="[props.align === 'end' ? 'to-end' : 'to-start', props.side === 'top' ? 'above' : 'below']"
-        role="tooltip"
       >
         <slot />
       </span>

@@ -119,28 +119,28 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             <b>Nothing is running in this project.</b>
           </div>
 
-          <table v-if="control.services.length" class="cards">
-            <thead>
-              <tr>
-                <th>Service</th>
-                <th>State</th>
-                <th>Health</th>
-                <th>Image</th>
+          <table v-if="control.services.length" role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Service</th>
+                <th role="columnheader">State</th>
+                <th role="columnheader">Health</th>
+                <th role="columnheader">Image</th>
               </tr>
             </thead>
-            <tbody class="stagger">
-              <tr v-for="(s, i) in control.services" :key="s.name" :style="{ '--i': i }">
-                <td class="name" data-label="service">{{ s.name }}</td>
-                <td data-label="state" :class="s.state === 'running' ? 's-ok' : 's-failed'">
+            <tbody role="rowgroup" class="stagger">
+              <tr v-for="(s, i) in control.services" :key="s.name" role="row" :style="{ '--i': i }">
+                <td role="cell" class="name" data-label="service">{{ s.name }}</td>
+                <td role="cell" data-label="state" :class="s.state === 'running' ? 's-ok' : 's-failed'">
                   {{ s.state || '—' }}
                 </td>
-                <td
+                <td role="cell"
                   data-label="health"
                   :class="s.health === 'healthy' ? 's-ok' : s.health ? 's-failed' : ''"
                 >
                   {{ s.health || '—' }}
                 </td>
-                <td class="name dim" data-label="image">{{ s.image || '—' }}</td>
+                <td role="cell" class="name dim" data-label="image">{{ s.image || '—' }}</td>
               </tr>
             </tbody>
           </table>

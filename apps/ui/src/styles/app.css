@@ -72,7 +72,8 @@ a:hover {
 code,
 .mono {
   font-family: var(--mono);
-  font-size: 0.92em;
+  /* max(): 0.92em compounds below the 12px floor when the host is --t-xs. */
+  font-size: max(0.92em, var(--t-xs));
 }
 
 /* Focus must stay visible. An ops tool is used by keyboard under pressure. */
@@ -158,7 +159,7 @@ a:focus-visible {
   display: flex;
   flex-direction: column;
   gap: var(--s4);
-  box-shadow: var(--shadow);
+  box-shadow: var(--hairline), var(--shadow);
 }
 
 .brand {
@@ -167,7 +168,7 @@ a:focus-visible {
   gap: var(--s2);
   font-size: var(--t-lg);
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--track-title);
   color: var(--fg);
 }
 .brand:hover {
@@ -422,13 +423,13 @@ button,
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
     box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
-button:hover:not(:disabled),
-.btn:hover:not(:disabled) {
+button:hover:not(:disabled):not([aria-disabled='true']),
+.btn:hover:not(:disabled):not([aria-disabled='true']) {
   border-color: color-mix(in srgb, var(--fg-mute) 60%, var(--line));
   background: color-mix(in srgb, var(--hover) 100%, var(--panel-2));
   text-decoration: none;
 }
-button:active:not(:disabled) {
+button:active:not(:disabled):not([aria-disabled='true']) {
   transform: translateY(1px);
   /* The catch-light goes out and an inset shadow replaces it: pressed things do not catch light. */
   box-shadow: inset 0 2px 4px var(--press);
@@ -446,7 +447,7 @@ button.primary {
   box-shadow: var(--hairline-strong), var(--elev-2),
     0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
 }
-button.primary:hover:not(:disabled) {
+button.primary:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--accent-grad-hover);
   border-color: color-mix(in srgb, var(--accent) 75%, #000);
   /* The glow says "this is the one" without adding a second colour to the page. */
@@ -458,7 +459,7 @@ button.danger {
   border-color: color-mix(in srgb, var(--fail) 45%, transparent);
   color: var(--fail);
 }
-button.danger:hover:not(:disabled) {
+button.danger:hover:not(:disabled):not([aria-disabled='true']) {
   background: color-mix(in srgb, var(--fail) 26%, transparent);
   border-color: color-mix(in srgb, var(--fail) 62%, transparent);
 }
@@ -470,7 +471,7 @@ button.ghost {
 button.ghost:not(:focus-visible) {
   box-shadow: none;
 }
-button.ghost:hover:not(:disabled) {
+button.ghost:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--hover);
 }
 button.sm,
@@ -517,7 +518,7 @@ select {
   letter-spacing: var(--track-body);
   color: var(--fg);
   background: var(--sunk);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-control);
   border-radius: var(--r1);
   padding: var(--s2) var(--s3);
   min-height: var(--control-h);
@@ -576,7 +577,7 @@ select:focus {
 textarea {
   font-family: var(--mono);
   font-size: var(--t-sm);
-  line-height: 1.55;
+  line-height: var(--lh-body);
   resize: vertical;
   /* A spec is whitespace-significant; wrapping is fine, but never reflow the indentation. */
   white-space: pre;
@@ -695,9 +696,21 @@ label {
   font-size: var(--t-xs);
   color: var(--fg-mute);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--track-caps);
 }
 @media (max-width: 560px) {
+  input:not([type]),
+  input[type='text'],
+  input[type='password'],
+  input[type='search'],
+  input[type='url'],
+  input[type='email'],
+  input[type='number'],
+  textarea,
+  select {
+    /* iOS Safari zooms the whole page when a focused input is under 16px. */
+    font-size: 16px;
+  }
   .kv {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -713,6 +726,7 @@ label {
   align-items: center;
   gap: 5px;
   font: 500 var(--t-xs) / 1 var(--sans);
+  font-variant-numeric: tabular-nums;
   padding: 4px 8px;
   border-radius: var(--r-full);
   background: var(--neutral-soft);
@@ -776,7 +790,6 @@ label {
 
 .banner {
   border: 1px solid var(--line);
-  border-left-width: 3px;
   border-radius: var(--r2);
   padding: var(--s3) var(--s4);
   margin: var(--s3) 0;
@@ -791,26 +804,29 @@ label {
   color: var(--fg-dim);
 }
 .banner.ok {
-  border-left-color: var(--ok);
   background: var(--ok-soft);
 }
 .banner.failed {
-  border-left-color: var(--fail);
   background: var(--fail-soft);
 }
 .banner.leaked,
 .banner.warn {
-  border-left-color: var(--leak);
   background: var(--leak-soft);
 }
 .banner.info {
-  border-left-color: var(--accent);
   background: var(--accent-soft);
 }
-.banner.plain {
-  border-left-color: var(--fg-mute);
-}
 
+/* Prose caps itself; the page does not (ui-rules.md "Width"). --measure was unused until now. */
+.hint,
+.banner {
+  max-width: var(--measure);
+  text-wrap: pretty;
+}
+/* Inside a .field the gap already separates them; the standalone margin would stack to 20px. */
+.field > .hint {
+  margin-top: 0;
+}
 .hint {
   font-size: var(--t-sm);
   color: var(--fg-mute);
@@ -920,7 +936,7 @@ td.name {
     content: attr(data-label);
     font: 600 var(--t-xs) / 1.6 var(--sans);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: var(--track-caps);
     color: var(--fg-mute);
     text-align: left;
     flex: none;
@@ -1130,7 +1146,7 @@ td.name {
   border: 1px solid transparent;
   width: 100%;
 }
-.clist-item:hover:not(:disabled) {
+.clist-item:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--hover);
   border-color: var(--line-soft);
 }
@@ -1294,6 +1310,16 @@ pre.log mark {
     grid-template-columns: repeat(6, 1fr);
   }
 }
+/*
+ * And the other end of the same rule. At 320px three tiles get ~50px of content, so "ISOLATED",
+ * "SHARED", "RUNNING" and "UNKNOWN" all elided — the exact failure the comment above rejects.
+ * 2x3 gives ~85px, which fits every label this panel has.
+ */
+@container (max-width: 340px) {
+  .stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 .stat {
   background: var(--panel-2);
   border: 1px solid var(--line-soft);
@@ -1306,14 +1332,6 @@ pre.log mark {
   font: 600 var(--t-2xl) / 1.1 var(--sans);
   letter-spacing: var(--track-display);
   font-variant-numeric: tabular-nums;
-}
-/*
- * A zero is NOT news. Rendered at the same weight as a real count it competes for attention with
- * the numbers that actually changed, and a dashboard where everything shouts says nothing.
- */
-.stat[data-zero='true'] .v {
-  color: var(--fg-mute);
-  font-weight: 500;
 }
 .stat .k {
   font-size: var(--t-xs);
@@ -1335,6 +1353,17 @@ pre.log mark {
 .stat.leak .v {
   color: var(--leak);
 }
+/*
+ * A zero is NOT news. Rendered at the same weight as a real count it competes for attention with
+ * the numbers that actually changed, and a dashboard where everything shouts says nothing.
+ *
+ * AFTER the semantic colours deliberately: they have equal specificity, so source order decides,
+ * and a zero must read as absence whatever its tile means.
+ */
+.stat[data-zero='true'] .v {
+  color: var(--fg-mute);
+  font-weight: 500;
+}
 
 /* ------------------------------------------------------------------ tabs */
 
@@ -1344,10 +1373,6 @@ pre.log mark {
   border-bottom: 1px solid var(--line);
   margin-bottom: var(--s4);
   overflow-x: auto;
-  scrollbar-width: none;
-}
-.tabs::-webkit-scrollbar {
-  display: none;
 }
 .tabs a {
   padding: var(--s2) var(--s3);
@@ -1577,7 +1602,8 @@ pre.log mark {
   margin-left: auto;
   background: none;
   border: 0;
-  min-height: 0;
+  min-height: 24px;
+  min-width: 24px;
   padding: 2px 6px;
   color: var(--fg-mute);
 }
@@ -1676,6 +1702,7 @@ kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative;
   width: 18px;
   height: 18px;
   min-height: 0;
@@ -1686,6 +1713,12 @@ kbd {
   color: var(--fg-mute);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+/* The visual box stays 18px; the TARGET reaches the 24px minimum. */
+.hint-btn::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
 }
 .hint-btn:hover,
 .hint-btn.on {
@@ -1703,7 +1736,7 @@ kbd {
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: var(--r2);
-  box-shadow: var(--shadow);
+  box-shadow: var(--hairline), var(--shadow);
   color: var(--fg-dim);
   font: 400 var(--t-sm) / 1.5 var(--sans);
   text-transform: none;
@@ -1790,7 +1823,7 @@ kbd {
   letter-spacing: var(--track-title);
   color: var(--fg);
 }
-.palette-q input:focus {
+.palette-q input:focus:not(:focus-visible) {
   outline: none;
   border: none;
   box-shadow: none;
@@ -1861,8 +1894,10 @@ kbd {
   color: var(--fg-mute);
   font-size: var(--t-xs);
 }
-kbd {
-  font: 500 11px / 1 var(--mono);
+/* Scoped: unscoped, this beat the keycap rule above on every <kbd> in the app, at a raw 11px. */
+.palette-foot kbd {
+  font: 500 var(--t-xs) / 1 var(--mono);
+  font-variant-numeric: tabular-nums;
   color: var(--fg-dim);
   background: var(--sunk);
   border: 1px solid var(--line);
@@ -1947,11 +1982,13 @@ kbd {
   /* The box is the field now — the input inside it carries no chrome of its own. */
   border: none;
   background: none;
-  box-shadow: none;
   padding: 0;
   min-height: 0;
 }
-.searchbox input:focus {
+.searchbox input:not(:focus-visible) {
+  box-shadow: none;
+}
+.searchbox input:focus:not(:focus-visible) {
   outline: none;
   border: none;
   box-shadow: none;
@@ -2000,7 +2037,7 @@ select.compact {
   color: var(--fg);
   cursor: pointer;
 }
-.selm-trigger:hover:not(:disabled) {
+.selm-trigger:hover:not(:disabled):not([aria-disabled='true']) {
   border-color: color-mix(in srgb, var(--fg-mute) 55%, var(--line));
 }
 .selm-trigger[data-state='open'] {
@@ -2040,7 +2077,7 @@ select.compact {
   gap: var(--s2);
   padding: var(--s2);
   min-height: 30px;
-  border-radius: calc(var(--r1) - 2px);
+  border-radius: var(--r1);
   font-size: var(--t-sm);
   cursor: pointer;
   white-space: nowrap;
@@ -2359,14 +2396,6 @@ input[type='radio']:disabled {
     transform: rotate(360deg);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .refresh-icon.spin {
-    animation: none;
-  }
-}
-:root[data-motion='none'] .refresh-icon.spin {
-  animation: none;
-}
 
 /*
  * The vitals strip — a control plane's instrument row, under the page title.
@@ -2381,7 +2410,7 @@ input[type='radio']:disabled {
   flex-wrap: wrap;
   gap: var(--s1) var(--s3);
   margin-top: var(--s2);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--mono);
   font-size: var(--t-xs);
   font-variant-numeric: tabular-nums;
   color: var(--fg-mute);

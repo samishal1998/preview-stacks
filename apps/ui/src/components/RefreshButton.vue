@@ -40,7 +40,7 @@ async function go(): Promise<void> {
 
 <template>
   <button
-    class="ghost sm refresh"
+    class="ghost refresh"
     :disabled="spinning || busy"
     :title="title ?? 'Read this again from the server'"
     :aria-busy="spinning ? 'true' : undefined"

@@ -179,9 +179,8 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
     <ErrorNote v-if="error" :text="error" title="This configuration was not applied." />
 
     <p class="dim">
-      To <em>take</em> an export, run <code>pstack pull config -o host.sealed</code> on a machine
-      that holds this host's <code>PSTACK_TOKEN</code>. It is deliberately not possible from a
-      browser session: one click would otherwise hand over every credential on the host.
+      Take an export with <code>pstack pull config -o host.sealed</code> on a machine holding this
+      host's <code>PSTACK_TOKEN</code>.
     </p>
   </div>
 </template>

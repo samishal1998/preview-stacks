@@ -90,7 +90,38 @@ What caps itself instead:
 - A destructive row action uses `ActionButton`'s `confirm`: the first click arms it, the label
   becomes the question, the second click acts. Not `window.confirm` (a native panel this app avoids
   everywhere else) and not a modal (page-blocking for a decision already on screen).
-- A disabled control carries `title` saying **why** it is disabled.
+- A blocked control says **why**, in text a keyboard or screen-reader user can reach. `title` alone
+  does not: a natively `disabled` button leaves the tab order, so its tooltip is mouse-only. Use
+  `ActionButton`'s handling — `aria-disabled` plus a described reason — or put the reason beside the
+  control. A `title` is a supplement, never the only copy of the reason.
+
+## Accessibility
+
+These are the rules the drift kept finding a way around. Each one is here because it broke.
+
+- **One focus ring, and nothing may delete it.** `:focus-visible` sets `box-shadow: var(--ring)`
+  globally. A class selector with a bare `box-shadow: none` has EQUAL specificity and, declared
+  later, silently wins — that is exactly how every ghost button, container-list row and command
+  palette row lost its ring. If a control must drop its shadow, scope it: `.x:not(:focus-visible)`.
+- **Dialogs use reka's `DialogRoot`/`DialogPortal`/`DialogOverlay`/`DialogContent`.** Never a
+  hand-rolled scrim with `role="dialog" aria-modal="true"` — that attribute promises a focus trap,
+  focus restore on close, a scroll lock and Escape, and hand-rolled versions delivered none of them.
+- **Error text reaches assistive tech or it does not exist.** Use `ErrorNote` (it carries
+  `role="alert"`), or put `role="alert"` on the element yourself. Field-tied validation instead gets
+  an `id`, `aria-describedby` on the input, and `aria-invalid`.
+- **No ARIA is better than bad ARIA.** `role="tab"` promises an APG keyboard contract; two toggle
+  buttons want `aria-pressed`. A `role="tooltip"` nothing references via `aria-describedby` does
+  nothing at all.
+- **Targets are at least 24×24.** A smaller visual box is fine — grow the target with a
+  `::after { inset: -Npx }` overlay rather than the box.
+- **A scroll container takes `tabindex="0"`.** Safari does not make overflow scrollers focusable, so
+  without it a mouse-free user cannot scroll a log.
+- **`display: block` on a table strips its roles.** `table.cards` card mode does exactly that, so
+  those tables assert `role="table"/"rowgroup"/"row"/"cell"` in markup — CSS cannot restore what
+  `display` removed.
+- **Contrast is measured, not judged.** Body text 4.5:1, large text and control boundaries 3:1, in
+  BOTH themes, against the surface the thing actually renders on. `--fg-mute` shipped for months at
+  3.2:1 in light because nobody computed it.
 
 ## Chrome
 

@@ -156,7 +156,7 @@ async function remove(e: Entry): Promise<void> {
       <RefreshButton :run="load" />
     </div>
 
-    <ErrorNote v-if="listError" :text="listError" title="Something went wrong." />
+    <ErrorNote v-if="listError" :text="listError" title="Could not load the variables." />
 
     <section v-if="unsupported" class="panel">
       <div class="banner plain">
@@ -174,22 +174,22 @@ async function remove(e: Entry): Promise<void> {
             <span class="mute" style="font-size: var(--t-xs)">{{ vars.length }}</span>
           </div>
 
-          <SkeletonList v-if="!loaded" :rows="2" />
-          <table v-else-if="vars.length" class="cards">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Value</th>
-                <th>Updated</th>
-                <th aria-label="Actions" />
+          <SkeletonList v-if="!loaded" :rows="2" tall />
+          <table v-else-if="vars.length" role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Name</th>
+                <th role="columnheader">Value</th>
+                <th role="columnheader">Updated</th>
+                <th role="columnheader" aria-label="Actions" />
               </tr>
             </thead>
-            <tbody>
-              <tr v-for="e in vars" :key="e.name">
-                <td class="name" data-label="name"><code>{{ e.name }}</code></td>
-                <td class="break" data-label="value">{{ e.value }}</td>
-                <td class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
-                <td class="right nowrap" data-label="">
+            <tbody role="rowgroup">
+              <tr v-for="e in vars" :key="e.name" role="row">
+                <td role="cell" class="name" data-label="name"><code>{{ e.name }}</code></td>
+                <td role="cell" class="break" data-label="value">{{ e.value }}</td>
+                <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
+                <td role="cell" class="right nowrap" data-label="">
                   <button class="ghost sm" @click="startEdit(e)">Edit</button>
                   <ActionButton class="danger sm" :confirm="`Delete ${e.name}?`" @run="remove(e)">
                     Delete
@@ -212,20 +212,20 @@ async function remove(e: Entry): Promise<void> {
             <span class="mute" style="font-size: var(--t-xs)">{{ secrets.length }}</span>
           </div>
 
-          <SkeletonList v-if="!loaded" :rows="2" />
-          <table v-else-if="secrets.length" class="cards">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Updated</th>
-                <th aria-label="Actions" />
+          <SkeletonList v-if="!loaded" :rows="2" tall />
+          <table v-else-if="secrets.length" role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Name</th>
+                <th role="columnheader">Updated</th>
+                <th role="columnheader" aria-label="Actions" />
               </tr>
             </thead>
-            <tbody>
-              <tr v-for="e in secrets" :key="e.name">
-                <td class="name" data-label="name"><code>{{ e.name }}</code></td>
-                <td class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
-                <td class="right nowrap" data-label="">
+            <tbody role="rowgroup">
+              <tr v-for="e in secrets" :key="e.name" role="row">
+                <td role="cell" class="name" data-label="name"><code>{{ e.name }}</code></td>
+                <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
+                <td role="cell" class="right nowrap" data-label="">
                   <button class="ghost sm" @click="startEdit(e)">Replace</button>
                   <ActionButton class="danger sm" :confirm="`Delete ${e.name}?`" @run="remove(e)">
                     Delete
@@ -271,6 +271,8 @@ async function remove(e: Entry): Promise<void> {
                 spellcheck="false"
                 autocomplete="off"
                 :disabled="!!editing"
+                aria-describedby="var-name-err"
+                :aria-invalid="!!form.name && !NAME.test(form.name)"
               />
             </label>
             <label class="field grow">
@@ -284,7 +286,12 @@ async function remove(e: Entry): Promise<void> {
               />
             </label>
           </div>
-          <p v-if="form.name && !NAME.test(form.name)" class="s-failed" style="margin-top: var(--s2)">
+          <p
+            v-if="form.name && !NAME.test(form.name)"
+            id="var-name-err"
+            class="s-failed"
+            style="margin-top: var(--s2)"
+          >
             Letters, digits and _ only, not starting with a digit.
           </p>
 

@@ -135,33 +135,33 @@ onBeforeUnmount(() => {
           <b>Docker reported a problem.</b>
           <p class="mono">{{ info.error }}</p>
         </div>
-        <table v-if="info.nodes.length" class="cards">
-          <thead>
-            <tr>
-              <th>Hostname</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Availability</th>
-              <th>Engine</th>
-              <th>Id</th>
+        <table v-if="info.nodes.length" role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Hostname</th>
+              <th role="columnheader">Role</th>
+              <th role="columnheader">Status</th>
+              <th role="columnheader">Availability</th>
+              <th role="columnheader">Engine</th>
+              <th role="columnheader">Id</th>
             </tr>
           </thead>
-          <tbody class="stagger">
-            <tr v-for="(n, i) in info.nodes" :key="n.id" :style="{ '--i': i }">
-              <td class="name" data-label="hostname">
+          <tbody role="rowgroup" class="stagger">
+            <tr v-for="(n, i) in info.nodes" :key="n.id" role="row" :style="{ '--i': i }">
+              <td role="cell" class="name" data-label="hostname">
                 {{ n.hostname || '—' }}
-                <span v-if="n.self" class="badge info" title="the node this control plane runs on">this node</span>
+                <span v-if="n.self" class="badge info" title="the node this control plane runs on">This node</span>
               </td>
-              <td data-label="role">
+              <td role="cell" data-label="role">
                 <span class="badge" :class="n.role === 'manager' ? 'isolated' : ''">{{ sentence(n.role) }}</span>
                 <span v-if="n.managerStatus" class="mute" style="font-size: var(--t-sm)"> {{ n.managerStatus }}</span>
               </td>
-              <td data-label="status">
+              <td role="cell" data-label="status">
                 <span :class="n.status === 'ready' ? 's-ok' : 's-failed'">{{ sentence(n.status) }}</span>
               </td>
-              <td data-label="availability">{{ sentence(n.availability || 'unknown') }}</td>
-              <td data-label="engine" class="mono">{{ n.engineVersion || '—' }}</td>
-              <td data-label="id" class="mono mute">{{ n.id.slice(0, 12) }}</td>
+              <td role="cell" data-label="availability">{{ sentence(n.availability || 'unknown') }}</td>
+              <td role="cell" data-label="engine" class="mono">{{ n.engineVersion || '—' }}</td>
+              <td role="cell" data-label="id" class="mono mute">{{ n.id.slice(0, 12) }}</td>
             </tr>
           </tbody>
         </table>
@@ -183,7 +183,7 @@ onBeforeUnmount(() => {
         </li>
       </ul>
 
-      <div class="row" style="flex-wrap: wrap; gap: var(--s3); align-items: flex-end">
+      <div class="row" style="flex-wrap: wrap; gap: var(--s3)">
         <div class="field inline">
           <label for="join-format">Format</label>
           <SelectMenu

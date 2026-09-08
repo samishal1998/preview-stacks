@@ -74,11 +74,12 @@ async function copy(): Promise<void> {
 
     <Transition name="fade">
       <div v-if="open" class="eqc-panel">
-        <div class="eqc-tabs" role="tablist">
+        <!-- Two toggles, not a tablist: no tabpanel, no roving tabindex, no arrow keys. `role="tab"`
+             would promise an APG keyboard contract nothing here implements. -->
+        <div class="eqc-tabs">
           <button
             class="ghost sm"
-            role="tab"
-            :aria-selected="tab === 'curl'"
+            :aria-pressed="tab === 'curl'"
             :data-on="tab === 'curl'"
             @click="tab = 'curl'"
           >
@@ -87,8 +88,7 @@ async function copy(): Promise<void> {
           <button
             v-if="cli"
             class="ghost sm"
-            role="tab"
-            :aria-selected="tab === 'cli'"
+            :aria-pressed="tab === 'cli'"
             :data-on="tab === 'cli'"
             @click="tab = 'cli'"
           >

@@ -101,6 +101,9 @@ function taskOf(name: string): string {
  */
 const busy = ref('');
 
+/** The verb a person reads. Docker's own stays on the wire and in the error toast. */
+const ACTING = { start: 'Starting', stop: 'Stopping', restart: 'Restarting' } as const;
+
 async function act(c: RuntimeContainer, action: 'start' | 'stop' | 'restart'): Promise<void> {
   busy.value = `${action}:${c.name}`;
   const r = await api.post<{ note?: string }>(
@@ -113,7 +116,7 @@ async function act(c: RuntimeContainer, action: 'start' | 'stop' | 'restart'): P
     toast('error', problem(r, `${action} ${c.name}`));
     return;
   }
-  toast('ok', r.body.note ?? `${c.name}: ${action} done.`);
+  toast('ok', r.body.note ?? `${ACTING[action]} ${c.name}.`);
   // Read the table back rather than assuming the new state: a container that exits again immediately
   // is exactly the case worth seeing, and the 8s poll would show it a beat later anyway.
   void load();
@@ -142,7 +145,7 @@ function urlFor(c: RuntimeContainer): string | null {
 <template>
   <div>
     <ErrorNote v-if="error" :text="error" title="Could not inspect this deployment." />
-    <SkeletonList v-if="loading && !rt" :rows="5" />
+    <SkeletonList v-if="loading && !rt" :rows="5" tall />
 
     <template v-else-if="rt">
       <!--
@@ -182,7 +185,7 @@ function urlFor(c: RuntimeContainer): string | null {
           </div>
 
           <div v-if="rt.routes.length" class="table-scroll">
-            <table class="cards tbl-fixed t-routes">
+            <table role="table" class="cards tbl-fixed t-routes">
               <!--
                 The widths, as percentages of whatever the panel gives us. URL is the widest because
                 it is the value people read, and it WRAPS: a hostname's tail is which PR it is.
@@ -193,17 +196,17 @@ function urlFor(c: RuntimeContainer): string | null {
                 <col style="width: 26%" />
                 <col style="width: 14%" />
               </colgroup>
-              <thead>
-                <tr>
-                  <th>URL</th>
-                  <th>Forwards to</th>
-                  <th>Router</th>
-                  <th>TLS</th>
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th role="columnheader">URL</th>
+                  <th role="columnheader">Forwards to</th>
+                  <th role="columnheader">Router</th>
+                  <th role="columnheader">TLS</th>
                 </tr>
               </thead>
-              <tbody class="stagger">
-                <tr v-for="(r, i) in rt.routes" :key="r.router" :style="{ '--i': i }">
-                  <td class="cell-wrap" data-label="url">
+              <tbody role="rowgroup" class="stagger">
+                <tr v-for="(r, i) in rt.routes" :key="r.router" role="row" :style="{ '--i': i }">
+                  <td role="cell" class="cell-wrap" data-label="url">
                     <div v-for="h in r.hosts" :key="h">
                       <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
                         {{ h }}
@@ -212,22 +215,22 @@ function urlFor(c: RuntimeContainer): string | null {
                     </div>
                     <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
                   </td>
-                  <td data-label="forwards to">
+                  <td role="cell" data-label="forwards to">
                     <RouteTarget :route="r" />
                     <!-- Under swarm this is the SERVICE name; either way it is matched, not read. -->
                     <div class="mute cell-clip" style="font-size: var(--t-sm)" :title="r.container">
                       {{ r.container }}
                     </div>
                   </td>
-                  <td data-label="router">
+                  <td role="cell" data-label="router">
                     <div class="cell-clip" :title="r.router">{{ r.router }}</div>
                     <div v-if="r.priority" class="mute" style="font-size: var(--t-sm)">
                       priority {{ r.priority }}
                     </div>
                   </td>
-                  <td data-label="tls">
+                  <td role="cell" data-label="tls">
                     <span v-if="r.tls" class="badge ok">{{ r.certresolver || 'inherited' }}</span>
-                    <span v-else class="badge off">off</span>
+                    <span v-else class="badge off">Off</span>
                   </td>
                 </tr>
               </tbody>
@@ -255,7 +258,7 @@ function urlFor(c: RuntimeContainer): string | null {
           </div>
 
           <div v-if="rt.containers.length" class="table-scroll">
-            <table class="cards tbl-fixed t-containers" :class="{ swarm: hasNode }">
+            <table role="table" class="cards tbl-fixed t-containers" :class="{ swarm: hasNode }">
               <!--
                 THE NODE `<col>` CARRIES THE SAME `v-if` AS ITS `<th>`, and has to: one without the
                 other shifts every column after it by one, which is the header-drift bug rebuilt by
@@ -277,31 +280,31 @@ function urlFor(c: RuntimeContainer): string | null {
                 <col />
                 <col style="width: 288px" />
               </colgroup>
-              <thead>
-                <tr>
-                  <th>Service</th>
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th role="columnheader">Service</th>
                   <!-- Where, then how it is doing — the order the cells are in. They disagreed, so
                        under swarm (the only time this column exists) every state read as a node. -->
-                  <th v-if="hasNode">Node</th>
-                  <th>State</th>
-                  <th>Ports</th>
-                  <th>Networks</th>
-                  <th>Image</th>
-                  <th aria-label="Actions" />
+                  <th v-if="hasNode" role="columnheader">Node</th>
+                  <th role="columnheader">State</th>
+                  <th role="columnheader">Ports</th>
+                  <th role="columnheader">Networks</th>
+                  <th role="columnheader">Image</th>
+                  <th role="columnheader" aria-label="Actions" />
                 </tr>
               </thead>
-              <tbody class="stagger">
-                <tr v-for="(c, i) in rt.containers" :key="c.id" :style="{ '--i': i }">
-                  <td class="name" data-label="service">
+              <tbody role="rowgroup" class="stagger">
+                <tr v-for="(c, i) in rt.containers" :key="c.id" role="row" :style="{ '--i': i }">
+                  <td role="cell" class="name" data-label="service">
                     <div class="cell-clip" :title="c.service ?? c.name">{{ c.service ?? c.name }}</div>
                     <div class="mute task cell-clip" :title="c.name">{{ taskOf(c.name) }}</div>
                   </td>
-                  <td v-if="hasNode" data-label="node">
+                  <td v-if="hasNode" role="cell" data-label="node">
                     <div class="cell-clip" :title="c.node ?? undefined">{{ c.node ?? '—' }}</div>
                     <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
-                    <span v-if="c.remote" class="badge" title="on another node — logs reach it, a shell and stop/start do not">remote</span>
+                    <span v-if="c.remote" class="badge" title="on another node — logs reach it, a shell and stop/start do not">Remote</span>
                   </td>
-                  <td data-label="state">
+                  <td role="cell" data-label="state">
                     <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
                     <!--
                       Health is only reported while it is RUNNING. Docker keeps the last probe result on
@@ -317,14 +320,14 @@ function urlFor(c: RuntimeContainer): string | null {
                       {{ sentence(c.health) }}
                     </div>
                   </td>
-                  <td data-label="ports">
+                  <td role="cell" data-label="ports">
                     <div v-for="p in c.ports" :key="`${p.containerPort}/${p.protocol}`">
                       <span class="mono">{{ p.containerPort }}</span>
                       <span v-if="p.hostPort" class="mute"> ← host {{ p.hostPort }}</span>
                     </div>
                     <span v-if="!c.ports.length" class="mute">none exposed</span>
                   </td>
-                  <td data-label="networks">
+                  <td role="cell" data-label="networks">
                     <div v-for="n in c.networks" :key="n" class="cell-clip" :title="n">
                       <span :class="n === 'preview-ingress' ? 's-ok' : ''">{{ n }}</span>
                     </div>
@@ -334,7 +337,7 @@ function urlFor(c: RuntimeContainer): string | null {
                   </td>
                   <!-- Clipped, not wrapped: an image reference is matched against one you know, and
                        `registry.example.com/team/app@sha256:…` costs three rows to say nothing new. -->
-                  <td class="dim" data-label="image">
+                  <td role="cell" class="dim" data-label="image">
                     <span class="cell-clip" :title="c.image">{{ c.image }}</span>
                   </td>
                   <!--
@@ -342,7 +345,7 @@ function urlFor(c: RuntimeContainer): string | null {
                     that does it. Open goes to the URL Traefik actually assembled for THIS container
                     (see `urlFor`), so it is absent rather than wrong when no router points here.
                   -->
-                  <td class="row-actions" data-label="">
+                  <td role="cell" class="row-actions" data-label="">
                     <!--
                       One container, not the service and not the stack. Start appears only when it is
                       not running and Stop only when it is, so the control on screen is the one that
@@ -351,7 +354,7 @@ function urlFor(c: RuntimeContainer): string | null {
                     <!-- None of these reach a task on another node; docker's verbs are node-local. -->
                     <!-- And none of them reach a one-shot job's row, which stands for the SERVICE:
                          there is no container behind its name, so the verbs could only fail. -->
-                    <span v-if="c.job" class="badge" title="a one-shot job — no container to start, stop, or shell into">one-shot</span>
+                    <span v-if="c.job" class="badge" title="a one-shot job — no container to start, stop, or shell into">One-shot</span>
                     <span v-else-if="c.remote" class="mute" style="font-size: var(--t-sm)" title="on another node — redeploy the stack, or act on the worker itself">
                       on {{ c.node }}
                     </span>

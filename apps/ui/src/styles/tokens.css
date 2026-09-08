@@ -47,6 +47,12 @@
   --sunk: #11141a;
   --line: #2b323d;
   --line-soft: #21262f;
+  /*
+   * A CONTROL's edge, which is not a panel's. tokens.css's "the shadow carries the edge" note
+   * covers panels; an input gets an INSET shadow, which draws no outer edge at all, so its border
+   * was the only boundary — at 1.34:1 against the panel. WCAG 1.4.11 wants 3:1.
+   */
+  --line-control: #69748a;
 
   --fg: #eef2f8;
   --fg-dim: #a4afbe;
@@ -115,6 +121,7 @@
     --sunk: #eef1f5;
     --line: #dfe3e9;
     --line-soft: #eaedf1;
+    --line-control: #7b8592;
 
     --fg: #14181e;
     --fg-dim: #57616f;
@@ -174,6 +181,7 @@
   --sunk: #eef1f5;
   --line: #dfe3e9;
   --line-soft: #eaedf1;
+  --line-control: #7b8592;
 
   --fg: #14181e;
   --fg-dim: #57616f;

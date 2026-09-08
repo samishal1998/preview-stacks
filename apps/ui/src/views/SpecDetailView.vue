@@ -97,13 +97,12 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
           </li>
           <li>
             <span class="k">Used by</span>
-            <span class="v">
+            <span class="v row">
               <template v-if="users.length">
                 <RouterLink
                   v-for="d in users"
                   :key="d.id"
                   :to="`/deployments/${encodeURIComponent(d.id)}`"
-                  style="margin-right: 10px"
                   >{{ d.id }}</RouterLink
                 >
               </template>

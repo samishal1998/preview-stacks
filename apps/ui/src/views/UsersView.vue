@@ -217,7 +217,7 @@ async function removeToken(t: Token): Promise<void> {
       <RefreshButton :run="load" />
     </div>
 
-    <ErrorNote v-if="listError" :text="listError" title="Something went wrong." />
+    <ErrorNote v-if="listError" :text="listError" title="Could not load the accounts." />
 
     <div v-if="revealed" class="banner ok">
       <b>{{ revealed.what }} — copy it now.</b>
@@ -226,7 +226,7 @@ async function removeToken(t: Token): Promise<void> {
       <p>{{ revealed.note }}</p>
       <pre class="code">{{ revealed.value }}</pre>
       <div class="row">
-        <button @click="revealed = null">I have stored it</button>
+        <button @click="revealed = null">Dismiss</button>
       </div>
     </div>
 
@@ -238,21 +238,21 @@ async function removeToken(t: Token): Promise<void> {
           <span class="mute" style="font-size: var(--t-xs)">{{ users.length }}</span>
         </div>
 
-        <SkeletonList v-if="!loaded" :rows="3" />
+        <SkeletonList v-if="!loaded" :rows="3" tall />
         <!-- `cards` + `data-label` per cell: below 640px the same markup renders as cards. Without
              it the row's two buttons pushed the table past the viewport and got clipped. -->
-        <table v-else-if="users.length" class="cards">
-          <thead>
-            <tr>
-              <th>User</th>
-              <th>Role</th>
-              <th>Added</th>
-              <th aria-label="Actions" />
+        <table v-else-if="users.length" role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">User</th>
+              <th role="columnheader">Role</th>
+              <th role="columnheader">Added</th>
+              <th role="columnheader" aria-label="Actions" />
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="u in users" :key="u.id">
-              <td class="name" data-label="user">
+          <tbody role="rowgroup">
+            <tr v-for="u in users" :key="u.id" role="row">
+              <td role="cell" class="name" data-label="user">
                 <b>{{ u.username }}</b>
                 <span v-if="u.id === authState.user?.id" class="badge info">you</span>
               </td>
@@ -260,7 +260,7 @@ async function removeToken(t: Token): Promise<void> {
                    person, and a dialog for a four-option choice is a page-blocking ceremony. Anyone
                    else reads the role as text — `sentence()` at render only, never on the value.
                    A role this build does not know still shows: it falls through to `placeholder`. -->
-              <td data-label="role">
+              <td role="cell" data-label="role">
                 <span
                   v-if="can('admin')"
                   class="role-pick"
@@ -277,8 +277,8 @@ async function removeToken(t: Token): Promise<void> {
                 </span>
                 <span v-else>{{ sentence(u.role) }}</span>
               </td>
-              <td class="dim nowrap" data-label="added"><RelativeTime :at="u.createdAt" /></td>
-              <td class="right nowrap" data-label="">
+              <td role="cell" class="dim nowrap" data-label="added"><RelativeTime :at="u.createdAt" /></td>
+              <td role="cell" class="right nowrap" data-label="">
                 <!-- Your own password is yours at any role; someone else's is an admin operation. -->
                 <button
                   v-if="u.id === authState.user?.id || can('admin')"
@@ -346,23 +346,23 @@ async function removeToken(t: Token): Promise<void> {
           <h2 class="section">Your API tokens</h2>
         </div>
 
-        <SkeletonList v-if="!loaded" :rows="2" />
-        <table v-else-if="tokens.length" class="cards">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Last used</th>
-              <th aria-label="Actions" />
+        <SkeletonList v-if="!loaded" :rows="2" tall />
+        <table v-else-if="tokens.length" role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Name</th>
+              <th role="columnheader">Last used</th>
+              <th role="columnheader" aria-label="Actions" />
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="t in tokens" :key="t.id">
-              <td class="name" data-label="name"><b>{{ t.name }}</b></td>
-              <td class="dim nowrap" data-label="last used">
+          <tbody role="rowgroup">
+            <tr v-for="t in tokens" :key="t.id" role="row">
+              <td role="cell" class="name" data-label="name"><b>{{ t.name }}</b></td>
+              <td role="cell" class="dim nowrap" data-label="last used">
                 <RelativeTime v-if="t.lastUsedAt" :at="t.lastUsedAt" />
                 <span v-else class="mute">never</span>
               </td>
-              <td class="right nowrap" data-label="">
+              <td role="cell" class="right nowrap" data-label="">
                 <ActionButton
                   class="danger sm"
                   :confirm="`Revoke ${t.name}?`"

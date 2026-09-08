@@ -84,12 +84,12 @@ watch(
       </div>
       <span class="grow" />
       <span v-if="dep.detail" class="badge" :class="dep.detail.kind">{{ sentence(dep.detail.kind) }}</span>
-      <span v-if="dep.detail?.busy === true" class="badge busy"><span class="dot pulse" />busy</span>
+      <span v-if="dep.detail?.busy === true" class="badge busy"><span class="dot pulse" />Busy</span>
       <span
         v-else-if="dep.detail?.asleep"
         class="badge asleep"
         :title="`asleep since ${new Date(dep.detail.asleep.since).toLocaleString()} (${dep.detail.asleep.reason})`"
-        ><span class="dot" />asleep</span
+        ><span class="dot" />Asleep</span
       >
       <span v-if="dep.detail?.orchestrator === 'swarm'" class="badge" title="deployed as a swarm stack">swarm</span>
       <!--

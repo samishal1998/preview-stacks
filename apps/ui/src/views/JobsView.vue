@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** Job history. Polled by the shell already, so this view only filters what is in memory. */
 import { computed, ref } from 'vue';
+import { Search } from 'lucide-vue-next';
 import { loadJobs, state } from '../composables/useControlPlane';
 import { actionLabel, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
@@ -67,10 +68,7 @@ const rows = computed(() => {
            and two list pages with two different toolbars reads as two different products. -->
       <div class="phead">
         <div class="searchbox">
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
-            <path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
+          <Search :size="16" aria-hidden="true" />
           <input
             id="jq"
             v-model="q"
@@ -100,22 +98,22 @@ const rows = computed(() => {
       </div>
 
       <p v-if="state.jobsError" class="s-failed">{{ state.jobsError }}</p>
-      <SkeletonList v-else-if="!state.jobsLoaded" :rows="5" />
+      <SkeletonList v-else-if="!state.jobsLoaded" :rows="5" tall />
 
-      <table v-else class="cards">
-        <thead>
-          <tr>
-            <th>State</th>
-            <th>Action</th>
-            <th>Stack</th>
-            <th>Started</th>
-            <th>Took</th>
-            <th>Steps</th>
+      <table v-else role="table" class="cards">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">State</th>
+            <th role="columnheader">Action</th>
+            <th role="columnheader">Stack</th>
+            <th role="columnheader">Started</th>
+            <th role="columnheader">Took</th>
+            <th role="columnheader">Steps</th>
           </tr>
         </thead>
-        <tbody class="stagger">
-          <tr v-for="(j, i) in rows" :key="j.id" :style="{ '--i': i }">
-            <td data-label="state">
+        <tbody role="rowgroup" class="stagger">
+          <tr v-for="(j, i) in rows" :key="j.id" role="row" :style="{ '--i': i }">
+            <td role="cell" data-label="state">
               <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
                 <StateBadge :state="j.state" />
               </RouterLink>
@@ -132,17 +130,20 @@ const rows = computed(() => {
                 <template v-else>never ran</template>
               </div>
             </td>
-            <td data-label="action">{{ actionLabel(j.action) }}</td>
-            <td class="name" data-label="stack">
+            <td role="cell" data-label="action">{{ actionLabel(j.action) }}</td>
+            <td role="cell" class="name" data-label="stack">
               <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">{{ j.stack }}</RouterLink>
             </td>
-            <td class="dim nowrap" data-label="started"><RelativeTime :at="j.startedAt" /></td>
-            <td class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
-            <td class="dim" data-label="steps">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
+            <td role="cell" class="dim nowrap" data-label="started"><RelativeTime :at="j.startedAt" /></td>
+            <td role="cell" class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
+            <td role="cell" class="dim" data-label="steps">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
           </tr>
-          <tr v-if="!rows.length">
-            <td colspan="6" class="mute">
-              <template v-if="state.jobs.length">Nothing matches this filter.</template>
+          <tr v-if="!rows.length" role="row">
+            <td role="cell" colspan="6" class="mute">
+              <template v-if="state.jobs.length">
+                Nothing matches this filter.
+                <button class="ghost sm" @click="q = ''; only = 'all'">Clear filters</button>
+              </template>
               <template v-else>No jobs recorded.</template>
             </td>
           </tr>
