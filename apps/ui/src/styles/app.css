@@ -271,14 +271,21 @@ a:focus-visible {
   .rail nav {
     flex-direction: row;
     flex: 1;
-    justify-content: space-around;
+    /* `space-around` CENTRES negative free space, so both ends fell outside the bar and the fixed
+       rail put them beyond body scroll too. Start-aligned and scrollable keeps every link reachable. */
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rail nav::-webkit-scrollbar {
+    display: none;
   }
   .navlink {
     flex-direction: column;
     gap: 2px;
     font-size: var(--t-xs);
     padding: var(--s1) var(--s2);
-    min-width: 56px;
+    flex: 0 0 auto;
     align-items: center;
   }
   .navlink .count {
@@ -381,7 +388,7 @@ h3 {
 
 .grid-2 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: var(--s4);
   align-items: start;
 }
@@ -433,14 +440,14 @@ button:disabled {
 }
 button.primary {
   /* A slight vertical gradient — flat fills read as stickers; lit-from-above reads as a control. */
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff) 0%, var(--accent) 100%);
+  background: var(--accent-grad);
   border-color: color-mix(in srgb, var(--accent) 75%, #000);
-  color: #fff;
+  color: var(--accent-fg);
   box-shadow: var(--hairline-strong), var(--elev-2),
     0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
 }
 button.primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 78%, #fff) 0%, color-mix(in srgb, var(--accent) 94%, #fff) 100%);
+  background: var(--accent-grad-hover);
   border-color: color-mix(in srgb, var(--accent) 75%, #000);
   /* The glow says "this is the one" without adding a second colour to the page. */
   box-shadow: var(--hairline-strong), var(--elev-2),
@@ -457,6 +464,10 @@ button.danger:hover:not(:disabled) {
 }
 button.ghost {
   background: transparent;
+}
+/* Not a bare `box-shadow: none`: that selector outranks `:focus-visible` above and deleted the
+   focus ring on every ghost button — which is the style dense rows and tables use. */
+button.ghost:not(:focus-visible) {
   box-shadow: none;
 }
 button.ghost:hover:not(:disabled) {
@@ -490,6 +501,10 @@ button .progress {
   transform-origin: left;
 }
 
+/* `input:not([type])` is in every list below on purpose: an <input> with no type attribute IS a
+   text input, but `input[type='text']` does not match it — ten of them in this app were rendering
+   with no border, no radius, no focus treatment and a 22.5px browser-default height. */
+input:not([type]),
 input[type='text'],
 input[type='password'],
 input[type='search'],
@@ -505,7 +520,7 @@ select {
   border: 1px solid var(--line);
   border-radius: var(--r1);
   padding: var(--s2) var(--s3);
-  min-height: 32px;
+  min-height: var(--control-h);
   width: 100%;
   min-width: 0;
   /*
@@ -515,6 +530,25 @@ select {
   box-shadow: inset 0 1px 2px var(--press);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
+
+/*
+ * SINGLE-LINE controls hold the toolbar height exactly. `min-height` could never do it: 13.5px at
+ * 1.5 line-height + 16px padding + 2px border is 38.25px, so the floor never bound and every input
+ * sat 4px taller than the button beside it — which is what `.phead >` and a hand-written
+ * `align-self: end` were separately patching. `textarea` is excluded because it must grow.
+ */
+input:not([type]),
+input[type='text'],
+input[type='password'],
+input[type='search'],
+input[type='url'],
+input[type='email'],
+input[type='number'],
+select {
+  height: var(--control-h);
+  padding-block: var(--s1);
+}
+input:not([type]):hover,
 input[type='text']:hover,
 input[type='password']:hover,
 input[type='search']:hover,
@@ -525,6 +559,7 @@ textarea:hover,
 select:hover {
   border-color: color-mix(in srgb, var(--fg-mute) 55%, var(--line));
 }
+input:not([type]):focus,
 input[type='text']:focus,
 input[type='password']:focus,
 input[type='search']:focus,
@@ -901,6 +936,7 @@ td.name {
   }
   table.cards td[data-label=''] {
     justify-content: flex-end;
+    flex-wrap: wrap;
   }
 }
 
@@ -1092,12 +1128,14 @@ td.name {
   min-height: 0;
   background: transparent;
   border: 1px solid transparent;
-  box-shadow: none;
   width: 100%;
 }
 .clist-item:hover:not(:disabled) {
   background: var(--hover);
   border-color: var(--line-soft);
+}
+.clist-item:not(:focus-visible) {
+  box-shadow: none;
 }
 .clist-item.on {
   background: var(--panel-2);
@@ -1115,6 +1153,7 @@ td.name {
   color: var(--fg-mute);
   max-width: 100%;
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 .clist-state {
@@ -1567,14 +1606,21 @@ pre.log mark {
   padding: var(--s4);
 }
 .sheet {
+  position: fixed;
+  z-index: 71;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--r3);
-  box-shadow: var(--shadow);
+  /* The catch-light pairs with the shadow — tokens.css: remove either and the panel flattens. */
+  box-shadow: var(--hairline-strong), var(--elev-4);
   padding: var(--s5);
-  width: min(460px, 100%);
+  width: min(460px, calc(100vw - var(--s5)));
   max-height: 80vh;
   overflow: auto;
+  animation: help-in var(--dur-slow) var(--ease-spring);
 }
 .sheet dl {
   display: grid;
@@ -1769,10 +1815,9 @@ kbd {
   text-align: left;
   background: none;
   border: none;
-  box-shadow: none;
   border-radius: var(--r1);
   padding: var(--s2) var(--s3);
-  min-height: 34px;
+  min-height: var(--control-h);
   color: var(--fg);
 }
 /*
@@ -1780,6 +1825,9 @@ kbd {
  * highlight — two lit rows at once (one hovered, one selected) is the classic palette bug where
  * Enter does something other than what the eye is on.
  */
+.palette-row:not(:focus-visible) {
+  box-shadow: none;
+}
 .palette-row[data-on='true'] {
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
@@ -1888,7 +1936,7 @@ kbd {
   border-radius: var(--r1);
   box-shadow: inset 0 1px 2px var(--press);
   color: var(--fg-mute);
-  min-height: 34px;
+  min-height: var(--control-h);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 .searchbox:focus-within {
@@ -1915,13 +1963,13 @@ kbd {
 /* Sized to its content, so a filter does not stretch to fill a toolbar. */
 select.compact {
   width: auto;
-  min-height: 34px;
+  min-height: var(--control-h);
   padding-inline-end: var(--s5);
 }
 
 /* Every control in a toolbar agrees on height, or the row reads as assembled from spare parts. */
 .phead > .check {
-  min-height: 34px;
+  min-height: var(--control-h);
 }
 
 /* ------------------------------------------------------------------ select menu */
@@ -1941,7 +1989,7 @@ select.compact {
   align-items: center;
   gap: var(--s2);
   justify-content: space-between;
-  min-height: 34px;
+  min-height: var(--control-h);
   padding: 0 var(--s2) 0 var(--s3);
   background: var(--sunk);
   border: 1px solid var(--line);
@@ -2069,14 +2117,14 @@ input[type='radio']::before {
 input[type='checkbox']::before {
   width: 11px;
   height: 11px;
-  background: #fff;
+  background: var(--accent-fg);
   clip-path: polygon(14% 47%, 0 61%, 40% 100%, 100% 22%, 85% 9%, 39% 71%);
 }
 input[type='radio']::before {
   width: 7px;
   height: 7px;
   border-radius: var(--r-full);
-  background: #fff;
+  background: var(--accent-fg);
 }
 input[type='checkbox']:checked,
 input[type='radio']:checked {
@@ -2268,13 +2316,14 @@ input[type='radio']:disabled {
 .lv-row.ok .lv-msg {
   color: var(--ok);
 }
-/* Per-service hues for compose logs — stable, muted, and legible in both themes. */
-.lv-row.svc-0 .lv-gutter { color: #7aa2f7; }
-.lv-row.svc-1 .lv-gutter { color: #9ece6a; }
-.lv-row.svc-2 .lv-gutter { color: #e0af68; }
-.lv-row.svc-3 .lv-gutter { color: #bb9af7; }
-.lv-row.svc-4 .lv-gutter { color: #7dcfff; }
-.lv-row.svc-5 .lv-gutter { color: #f7768e; }
+/* Per-service hues for compose logs. Tokenised per theme: the literals here were a dark-only set
+   that measured 1.72-2.65:1 on a light panel — the comment claimed both themes, the values did not. */
+.lv-row.svc-0 .lv-gutter { color: var(--svc-0); }
+.lv-row.svc-1 .lv-gutter { color: var(--svc-1); }
+.lv-row.svc-2 .lv-gutter { color: var(--svc-2); }
+.lv-row.svc-3 .lv-gutter { color: var(--svc-3); }
+.lv-row.svc-4 .lv-gutter { color: var(--svc-4); }
+.lv-row.svc-5 .lv-gutter { color: var(--svc-5); }
 .lv-sep {
   display: flex;
   align-items: center;

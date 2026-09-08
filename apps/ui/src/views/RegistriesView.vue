@@ -77,7 +77,7 @@ async function save(): Promise<void> {
   password.value = '';
   // The server's key, not the typed one: Docker Hub canonicalises, and the list below reloads with
   // whatever it stored — so the toast does not have to explain the difference.
-  toast('ok', `Stored for ${r.body.registry || host.value}.`);
+  toast('ok', `Added ${r.body.registry || host.value}.`);
   host.value = '';
   username.value = '';
   void load();
@@ -139,7 +139,7 @@ async function forget(registry: string): Promise<void> {
             <span>{{ e.username ?? 'unknown user' }}</span>
             <span v-if="e.viaHelper" class="badge warn">via helper</span>
             <span class="grow" />
-            <ActionButton :disabled="!settings.token" variant="danger" @click="forget(e.registry)">
+            <ActionButton :disabled="!settings.token" variant="danger" :confirm="`Forget ${e.registry}?`" @run="forget(e.registry)">
               Forget
             </ActionButton>
           </span>
@@ -177,13 +177,13 @@ async function forget(registry: string): Promise<void> {
         <div class="mute hint">Stored write-only, as reversible base64 — never shown again.</div>
       </div>
 
-      <ErrorNote v-if="formError" :text="formError" title="Could not store this credential." />
+      <ErrorNote v-if="formError" :text="formError" title="Could not add this credential." />
 
       <div class="row" style="margin-top: var(--s4)">
         <ActionButton variant="primary" :pending="saving" :disabled="!canSave" @click="save">
-          {{ saving ? 'Storing…' : 'Store' }}
+          {{ saving ? 'Adding…' : 'Add credential' }}
         </ActionButton>
-        <span v-if="!settings.token" class="mute">Storing needs an access token.</span>
+        <span v-if="!settings.token" class="mute">Adding needs an access token.</span>
       </div>
     </section>
   </div>

@@ -72,7 +72,7 @@ async function copy(): Promise<void> {
     await navigator.clipboard.writeText(text);
     toast('ok', 'Copied.');
   } catch {
-    toast('error', 'Could not copy — your browser blocked clipboard access.');
+    toast('error', 'Copy failed — select it and copy by hand.');
   }
 }
 

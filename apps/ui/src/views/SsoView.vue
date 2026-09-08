@@ -316,7 +316,7 @@ async function save(): Promise<void> {
     return;
   }
   formError.value = '';
-  toast('ok', 'Saved.');
+  toast('ok', e.originalKey ? 'Saved.' : `Added ${body.key}.`);
   editing.value = null;
   void load();
 }
@@ -336,7 +336,7 @@ async function copyCallback(): Promise<void> {
     await navigator.clipboard.writeText(callbackUrl.value);
     toast('ok', 'Copied.');
   } catch {
-    toast('error', 'Copy failed.');
+    toast('error', 'Copy failed — select it and copy by hand.');
   }
 }
 

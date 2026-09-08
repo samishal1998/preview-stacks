@@ -85,7 +85,7 @@ async function copy(): Promise<void> {
     await navigator.clipboard.writeText(revealed.value);
     toast('ok', 'Copied.');
   } catch {
-    toast('error', 'Could not copy.');
+    toast('error', 'Copy failed — select it and copy by hand.');
   }
 }
 

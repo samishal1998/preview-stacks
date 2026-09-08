@@ -133,7 +133,7 @@ watch(
       </div>
     </div>
 
-    <ErrorNote v-if="actionError" :text="actionError" title="The action was refused." />
+    <ErrorNote v-if="actionError" :text="actionError" />
     <ConflictNote
       v-if="conflict"
       :conflict="conflict"

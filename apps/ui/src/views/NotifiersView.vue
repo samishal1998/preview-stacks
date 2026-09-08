@@ -127,7 +127,7 @@ async function setEnabled(n: NotifierRow, enabled: boolean): Promise<void> {
 async function remove(n: NotifierRow): Promise<void> {
   const r = await api.del(`/api/notifiers/${n.id}`);
   if (!r.ok) {
-    listError.value = problem(r, 'delete this notifier');
+    listError.value = problem(r, 'remove this notifier');
     return;
   }
   if (openDeliveries.value === n.id) openDeliveries.value = null;
@@ -288,7 +288,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                     <button class="ghost sm" @click="setEnabled(n, !n.enabled)">
                       {{ n.enabled ? 'Disable' : 'Enable' }}
                     </button>
-                    <ActionButton variant="danger" @click="remove(n)">Remove</ActionButton>
+                    <ActionButton variant="danger" :confirm="`Remove ${n.name}?`" @run="remove(n)">Remove</ActionButton>
                   </div>
                 </td>
               </tr>
@@ -391,11 +391,11 @@ async function redeliver(d: DeliveryRow): Promise<void> {
           </label>
         </div>
 
-        <ErrorNote v-if="formError" :text="formError" title="Could not register this notifier." />
+        <ErrorNote v-if="formError" :text="formError" title="Could not add this notifier." />
 
         <div class="row" style="margin-top: var(--s4)">
           <ActionButton variant="primary" :pending="saving" :disabled="!canSave" @click="create">
-            {{ saving ? 'Registering…' : 'Register' }}
+            {{ saving ? 'Adding…' : 'Add notifier' }}
           </ActionButton>
         </div>
 
