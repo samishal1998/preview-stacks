@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.39.0 — 2026-08-31
+## 0.39.1 — 2026-09-14
+
+### Changed
+
+- **The advanced UI states, it does not explain.** Copy across every view is cut to the state and
+  the action; explanations that rendered on every visit are gone.
+
+### Fixed
+
+- **Advanced UI accessibility and contrast**, from a cross-discipline interface review, each fix
+  verified in a browser. Muted text, the accent button and form-control edges now meet WCAG
+  contrast in both themes. Every focusable control shows a focus ring. Dialogs trap and restore
+  focus. Errors are announced (`role="alert"`). A blocked button stays focusable and exposes why.
+  Tables keep their semantics in card mode. Every target is at least 24×24. And the layout holds
+  at 320px.
 
 ### Added
 
