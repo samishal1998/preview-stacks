@@ -95,7 +95,8 @@ Grafana Loki Docker plugin on every node, and a `logging:` block pstack adds to 
 service that has none — pushed through Traefik with basic auth. Slice 1 is specified in full;
 slices 2 (Loki settings in the UI: chunking, retention, filesystem or S3) and 3 (Grafana with pstack
 sign-in) record their decisions and get their own specs. Read before touching logging, the control
-template, or the join material.
+template, or the join material. Slice 1's task-by-task build plan is
+[`loki-logging-slice-1-plan.md`](loki-logging-slice-1-plan.md).
 
 ### [`secret-exposure.md`](secret-exposure.md) — a closed finding, kept as a record
 
