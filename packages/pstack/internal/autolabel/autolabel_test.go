@@ -535,3 +535,189 @@ func TestSwarmLabelsGoUnderDeploy(t *testing.T) {
 		t.Errorf("container labels changed: %s", got)
 	}
 }
+
+// lokiURL is the push URL a logging-on control stack advertises, the password interpolated.
+const lokiURL = "https://pstack:0123456789abcdef0123456789abcdef@loki.preview.example.com/loki/api/v1/push"
+
+// lokiBlockWeb is the fixed block for service web of stack pr-7, as JSON, key order included — the
+// design doc's block, every value a string.
+const lokiBlockWeb = `{"driver":"loki","options":{"loki-url":"` + lokiURL + `","loki-external-labels":"service_name=pr-7-web","loki-relabel-config":"[{action: labeldrop, regex: filename}]","loki-retries":"2","loki-timeout":"1s","loki-max-backoff":"800ms","mode":"non-blocking","keep-file":"false","max-size":"10m","max-file":"3"}}`
+
+// logTo pins the discovery seam for one test and restores it after.
+func logTo(t *testing.T, url string) {
+	t.Helper()
+	prev := DetectLogging
+	DetectLogging = func(exec.Runner) string { return url }
+	t.Cleanup(func() { DetectLogging = prev })
+}
+
+func TestLoggingInjection(t *testing.T) {
+	quiet := exec.NewFake(nil, "")
+	http01 := HTTP01
+	// web has no logging; db and cache opted out, one with a driver and one with an empty block.
+	mixed := "services:\n  web:\n    image: nginx\n  db:\n    image: postgres\n    logging: {driver: json-file}\n  cache:\n    image: redis\n    logging: {}\n"
+	write := func(t *testing.T, dir, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(body), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	written := func(t *testing.T, dir string) *omap.Map {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, GeneratedCompose))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := omap.Parse(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.(*omap.Map)
+	}
+
+	t.Run("a service without logging gets exactly the fixed block, labelled <stack>-<service>", func(t *testing.T) {
+		// negative control: label the stream "service_name="+name, without the stack — the JSON
+		// differs.
+		out, logged, _ := InjectLogging(doc(t, mixed), "pr-7", lokiURL)
+		if got := jsonOf(t, out.GetMap("services").GetMap("web").GetMap("logging")); got != lokiBlockWeb {
+			t.Errorf("block:\n%s\n%s", got, lokiBlockWeb)
+		}
+		if !reflect.DeepEqual(logged, []string{"web"}) {
+			t.Errorf("logged: %v", logged)
+		}
+	})
+
+	t.Run("any logging key, json-file or empty, is left byte-unchanged and listed", func(t *testing.T) {
+		// negative control: drop the svc.Has("logging") branch — db's json-file block becomes
+		// loki's.
+		in := doc(t, mixed)
+		out, _, own := InjectLogging(in, "pr-7", lokiURL)
+		for _, name := range []string{"db", "cache"} {
+			if got, want := jsonOf(t, out.GetMap("services").GetMap(name)), jsonOf(t, in.GetMap("services").GetMap(name)); got != want {
+				t.Errorf("%s changed: %s, submitted %s", name, got, want)
+			}
+		}
+		if !reflect.DeepEqual(own, []string{"db", "cache"}) {
+			t.Errorf("own: %v", own)
+		}
+	})
+
+	t.Run("the input document is never mutated", func(t *testing.T) {
+		// negative control: drop the Clone() in InjectLogging — the input's web gains the block.
+		in := doc(t, mixed)
+		before := jsonOf(t, in)
+		InjectLogging(in, "pr-7", lokiURL)
+		if jsonOf(t, in) != before {
+			t.Errorf("input mutated: %s", jsonOf(t, in))
+		}
+	})
+
+	t.Run("logging off: no block, and a stack with no routing keeps its own file", func(t *testing.T) {
+		// negative control: drop the `pushURL != ""` guard around InjectLogging — the routed app
+		// gains a block with an empty loki-url.
+		logTo(t, "")
+		dir := t.TempDir()
+		write(t, dir, "services:\n  app:\n    image: nginx\n")
+		r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
+		if err != nil || r.File != "docker-compose.yml" || r.Logged == nil || len(r.Logged) != 0 || r.LogNotes == nil {
+			t.Errorf("plain: %+v, %v", r, err)
+		}
+		if exists(filepath.Join(dir, GeneratedCompose)) {
+			t.Error("derived file written with logging off and nothing routed")
+		}
+		write(t, dir, "services:\n  app:\n    image: nginx\n    labels: [pstack.routing.port=80]\n")
+		r, err = MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
+		if err != nil || r.File != GeneratedCompose || len(r.Logged) != 0 {
+			t.Fatalf("routed: %+v, %v", r, err)
+		}
+		if written(t, dir).GetMap("services").GetMap("app").Has("logging") {
+			t.Errorf("block injected with logging off")
+		}
+	})
+
+	t.Run("logging on: a stack with no routing gets the derived file, and own blocks are named", func(t *testing.T) {
+		// negative control: drop `&& pushURL == ""` from the pre-check — the submitted file is
+		// used.
+		logTo(t, lokiURL)
+		dir := t.TempDir()
+		write(t, dir, mixed)
+		r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
+		if err != nil || r.File != GeneratedCompose {
+			t.Fatalf("got %+v, %v", r, err)
+		}
+		if !reflect.DeepEqual(r.Logged, []string{"web"}) {
+			t.Errorf("logged: %v", r.Logged)
+		}
+		wantNotes := []string{
+			"logging: service db has its own logging: — left alone",
+			"logging: service cache has its own logging: — left alone",
+		}
+		if !reflect.DeepEqual(r.LogNotes, wantNotes) {
+			t.Errorf("notes: %q", r.LogNotes)
+		}
+		services := written(t, dir).GetMap("services")
+		if got := jsonOf(t, services.GetMap("web").GetMap("logging")); got != lokiBlockWeb {
+			t.Errorf("web: %s", got)
+		}
+		if got := jsonOf(t, services.GetMap("db").GetMap("logging")); got != `{"driver":"json-file"}` {
+			t.Errorf("db: %s", got)
+		}
+	})
+
+	t.Run("logging on but every service has its own: the submitted file, still named in the job log", func(t *testing.T) {
+		// negative control: return untouched() from the compose early return — LogNotes comes back
+		// empty.
+		logTo(t, lokiURL)
+		dir := t.TempDir()
+		write(t, dir, "services:\n  db:\n    image: postgres\n    logging: {driver: json-file}\n")
+		r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
+		if err != nil || r.File != "docker-compose.yml" || exists(filepath.Join(dir, GeneratedCompose)) {
+			t.Fatalf("got %+v, %v", r, err)
+		}
+		if !reflect.DeepEqual(r.LogNotes, []string{"logging: service db has its own logging: — left alone"}) {
+			t.Errorf("notes: %q", r.LogNotes)
+		}
+	})
+
+	t.Run("under swarm the block survives the conversion", func(t *testing.T) {
+		// negative control: add {"logging", "x"} to swarm.swarmUnsupported — Swarmify drops the
+		// block.
+		logTo(t, lokiURL)
+		st := specFrom(t, "spec.yml", map[string]string{"PR": "7", "PSTACK_ORCHESTRATOR": "swarm"})
+		dir := t.TempDir()
+		// No `profiles:`, so Swarmify keeps web whatever the spec selects.
+		write(t, dir, "services:\n  web:\n    image: nginx\n")
+		r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: st, Runner: quiet, Challenge: &http01})
+		if err != nil || r.File != GeneratedCompose {
+			t.Fatalf("got %+v, %v", r, err)
+		}
+		if got := jsonOf(t, written(t, dir).GetMap("services").GetMap("web").GetMap("logging")); got != lokiBlockWeb {
+			t.Errorf("after Swarmify: %s", got)
+		}
+	})
+
+	t.Run("the seam's default reads the control stack's loki container", func(t *testing.T) {
+		// negative control: make DetectLogging's default `return ""` — a host running Loki gets no
+		// block (the DetectChallenge seam shipped exactly that bug once).
+		lokiHost := exec.NewFake(nil, "")
+		lokiHost.Answer = func(cmd string) (exec.Result, bool) {
+			if strings.HasPrefix(cmd, "docker ps") {
+				return exec.Result{OK: true, Stdout: "l0k1\n"}, true
+			}
+			if strings.HasPrefix(cmd, "docker inspect") {
+				return exec.Result{OK: true, Stdout: `[{"Id":"l0k1","Name":"/pstack-control-loki-1","Config":{"Labels":{"com.docker.compose.project":"pstack-control","com.docker.compose.service":"loki","pstack.logging.push-url":"` + lokiURL + `"}}}]`}, true
+			}
+			return exec.Result{}, false
+		}
+		dir := t.TempDir()
+		write(t, dir, "services:\n  web:\n    image: nginx\n")
+		r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: lokiHost, Challenge: &http01})
+		if err != nil || !reflect.DeepEqual(r.Logged, []string{"web"}) {
+			t.Fatalf("got %+v, %v", r, err)
+		}
+		if got := jsonOf(t, written(t, dir).GetMap("services").GetMap("web").GetMap("logging")); got != lokiBlockWeb {
+			t.Errorf("web: %s", got)
+		}
+	})
+}

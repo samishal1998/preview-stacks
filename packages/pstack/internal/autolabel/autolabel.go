@@ -1,5 +1,5 @@
 // Package autolabel generates the Traefik labels and network wiring a preview service needs, from
-// one short label.
+// one short label — and, on a host that runs Loki, the logging block that ships its output there.
 //
 // THE PROBLEM. A reachable preview service needs four Traefik labels and two network declarations,
 // every one of which has a silent failure mode — a missing `traefik.enable` makes the container
@@ -49,6 +49,25 @@
 // profiles resolved, `restart`/`mem_limit` mapped to `deploy`, unsupported keys dropped and named).
 // Generated labels go under `deploy.labels` with `traefik.swarm.network`, because Traefik's swarm
 // provider reads service labels and its docker provider must not see a second copy on the task.
+//
+// ── LOGGING ──────────────────────────────────────────────────────────────────────────────────────
+//
+// On a host that runs Loki (`pstack init --logging loki`), every service WITHOUT a `logging` key
+// gets the loki driver block — after the labels, before the swarm conversion, so one step serves
+// both orchestrators. Whether Loki runs is not a setting: DetectLogging reads the push URL off the
+// control stack's loki container, the way DetectChallenge reads Traefik, so `pstack up` on the host
+// and the API always inject the same thing. No container, no block.
+//
+// A service with ANY `logging` key — `json-file`, even an empty one — is left alone and named in
+// the job log. The traefik.* rule again, for the same reason: pstack's options could be refused by
+// the user's driver, so nothing is merged.
+//
+// Every option but the URL and the `service_name` label is a constant, never a setting. When Loki
+// is unreachable the driver holds a node-wide lock while it retries, so every `docker stop` on that
+// node waits out the retry loop; only small retries, timeout and backoff bound the wait to seconds.
+//
+// The consequence under compose: a stack with no routing labels runs from the derived file whenever
+// a service got the block. With logging off nothing here runs, and the old gates hold exactly.
 //
 // ── THE CHALLENGE PROBE (a Go-only note) ─────────────────────────────────────────────────────────
 //
@@ -119,6 +138,12 @@ var DetectChallenge = func(r exec.Runner) Challenge {
 	}
 	return Challenge(inspect.DetectChallenge(r))
 }
+
+// DetectLogging is the push URL deploys ship logs to, "" when this host's logging is off — behind
+// a variable for the same reason as DetectChallenge. The default reads the pstack.logging.push-url
+// label off the control stack's loki container (inspect.LokiPushURL), so the CLI and the API agree
+// with no setting to keep in sync.
+var DetectLogging = func(r exec.Runner) string { return inspect.LokiPushURL(r) }
 
 // RoutingRequest is what a service asked for, read from its `pstack.routing.*` labels.
 type RoutingRequest struct {
@@ -408,12 +433,60 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 	return &AugmentResult{Doc: doc, Generated: generated, Skipped: skipped}, nil
 }
 
+// InjectLogging gives every service without a `logging` key the loki driver block, and returns the
+// services that got it and the ones left alone because they have their own, both in file order.
+//
+// Pure: the document is cloned, as in AugmentComposeDoc. The `service_name=<stack>-<service>`
+// label replaces the driver's default container_name, whose swarm value carries the task id and
+// would start new streams on every redeploy; `filename` is dropped for the same churn — a busy host
+// would reach Loki's stream limit and have new streams refused. The other options are constants on
+// purpose (see the package comment).
+func InjectLogging(doc *omap.Map, stack, pushURL string) (out *omap.Map, logged, own []string) {
+	out = doc.Clone()
+	logged, own = []string{}, []string{}
+	services := out.GetMap("services")
+	for _, name := range services.Keys() {
+		svc := services.GetMap(name)
+		if svc == nil {
+			// A scalar, list or null service has nowhere to put the key; compose reports it better.
+			continue
+		}
+		// Yours wins, entirely: a `logging` key of any shape — json-file, empty, null — opts out,
+		// as a traefik.* label does for routing. Nothing is merged: your driver may refuse ours.
+		if svc.Has("logging") {
+			own = append(own, name)
+			continue
+		}
+		svc.Set("logging", omap.From(
+			"driver", "loki",
+			"options", omap.From(
+				"loki-url", pushURL,
+				"loki-external-labels", "service_name="+stack+"-"+name,
+				"loki-relabel-config", "[{action: labeldrop, regex: filename}]",
+				// Small, so a stop on a node whose Loki is unreachable waits seconds, not minutes.
+				"loki-retries", "2",
+				"loki-timeout", "1s",
+				"loki-max-backoff", "800ms",
+				// Protects the app's stdout from a slow push. It does not protect the stop.
+				"mode", "non-blocking",
+				// `true` leaves one directory per container id in the plugin, forever.
+				"keep-file", "false",
+				"max-size", "10m",
+				"max-file", "3",
+			),
+		))
+		logged = append(logged, name)
+	}
+	return out, logged, own
+}
+
 // MaterializeArgs is what MaterializeCompose takes.
 type MaterializeArgs struct {
 	Dir    string
 	Spec   *spec.Stack
 	Runner exec.Runner
-	// Challenge skips the docker probe when the caller already knows (tests, or a batch).
+	// Challenge skips the challenge probe when the caller already knows (tests, or a batch).
+	// Logging discovery still runs — pin DetectLogging to skip that too.
 	Challenge *Challenge
 }
 
@@ -424,6 +497,11 @@ type MaterializeResult struct {
 	Skipped   *omap.Map
 	// Notes is what the swarm conversion changed, one line each. Empty under compose.
 	Notes []string
+	// Logged is the services that got the loki logging block, in file order. Empty, never nil.
+	Logged []string
+	// LogNotes is one job-log line per service left alone because it has its own `logging:`. Empty,
+	// never nil.
+	LogNotes []string
 }
 
 // MaterializeCompose reads the submitted compose file, augments it, and writes the derived file next
@@ -433,9 +511,9 @@ type MaterializeResult struct {
 // the process's working directory under the CLI (exec: the CLI runner sets no cwd, so docker runs
 // from the shell's).
 //
-// Returns the filename compose should use — the derived one when anything was generated, and the
-// original otherwise, so a deployment that writes its own labels gets exactly the file it submitted
-// with no derived artefact left lying around.
+// Returns the filename compose should use — the derived one when anything was generated or a
+// service got the logging block, and the original otherwise, so a deployment that writes its own
+// labels gets exactly the file it submitted with no derived artefact left lying around.
 //
 // Regenerated on every compose invocation rather than cached at submit time, because the labels depend
 // on the RESOLVED spec: `up` with one set of variables and `down` with another must not disagree about
@@ -450,7 +528,7 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	// wherever `-f` pointed.
 	generatedRel := filepath.Join(filepath.Dir(original), GeneratedCompose)
 	untouched := func() *MaterializeResult {
-		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: omap.New(), Notes: []string{}}
+		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: omap.New(), Notes: []string{}, Logged: []string{}, LogNotes: []string{}}
 	}
 
 	rawBytes, err := os.ReadFile(source)
@@ -470,10 +548,14 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		return nil, &spec.Error{Msg: "compose file " + original + " must be a mapping"}
 	}
 
-	// Cheap pre-check: no pstack.routing.* anywhere means nothing to generate, and no reason to shell
-	// out to docker for the challenge mode. Under swarm the conversion still has to run.
+	// Discovery runs before the pre-check because Loki on its own is a reason to write the derived
+	// file — but only once the file parsed, so a missing or broken file still costs no docker call.
+	pushURL := DetectLogging(a.Runner)
+
+	// Cheap pre-check: no pstack.routing.* anywhere and no Loki means nothing to generate, and no
+	// reason to ask docker for the challenge mode. Under swarm the conversion still has to run.
 	wantsRouting := strings.Contains(raw, "pstack.routing.")
-	if !wantsRouting && !isSwarm {
+	if !wantsRouting && !isSwarm && pushURL == "" {
 		return untouched(), nil
 	}
 
@@ -495,6 +577,16 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		generated = result.Generated
 		skipped = result.Skipped
 	}
+	// After the labels and before the swarm conversion: one step for both orchestrators, and
+	// Swarmify keeps `logging`.
+	logged, logNotes := []string{}, []string{}
+	if pushURL != "" {
+		var own []string
+		out, logged, own = InjectLogging(out, a.Spec.Stack, pushURL)
+		for _, svc := range own {
+			logNotes = append(logNotes, "logging: service "+svc+" has its own logging: — left alone")
+		}
+	}
 	notes := []string{}
 	if isSwarm {
 		// After the labels, so the generated ones are already where the swarm provider reads them and the
@@ -503,8 +595,8 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		out = converted.Doc
 		notes = converted.Notes
 	}
-	if !isSwarm && generated.Len() == 0 {
-		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: skipped, Notes: []string{}}, nil
+	if !isSwarm && generated.Len() == 0 && len(logged) == 0 {
+		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: skipped, Notes: []string{}, Logged: []string{}, LogNotes: logNotes}, nil
 	}
 
 	// JSON, which every YAML parser reads identically. Written beside the original, never over it.
@@ -515,5 +607,5 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	if err := os.WriteFile(filepath.Join(a.Dir, generatedRel), append(b, '\n'), 0o666); err != nil {
 		return nil, err
 	}
-	return &MaterializeResult{File: generatedRel, Generated: generated, Skipped: skipped, Notes: notes}, nil
+	return &MaterializeResult{File: generatedRel, Generated: generated, Skipped: skipped, Notes: notes, Logged: logged, LogNotes: logNotes}, nil
 }
