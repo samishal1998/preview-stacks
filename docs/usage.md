@@ -2075,6 +2075,10 @@ curl -s "…/api/swarm/join?format=cloud-config&distro=debian" -H "Authorization
 hcloud server create --name worker-1 --image debian-12 --user-data-from-file worker.yaml
 ```
 
+With Loki logging on (`pstack init --logging loki`), `script` and `cloud-config` install the loki log
+plugin after Docker and before the join. A failed install never blocks the join: swarm keeps logged
+services off that node. Run the script again on a worker that joined earlier to give it the plugin.
+
 The token is a **secret**: whoever holds it can add a node that runs any task on the cluster. The
 route is admin-only, the Swarm page fetches it only when you click Reveal and forgets it when you
 leave, and `docker swarm join-token --rotate worker` on the manager invalidates it. `GET /api/swarm`

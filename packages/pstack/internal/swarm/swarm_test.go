@@ -524,7 +524,7 @@ func TestPstackSwarmTheCLIHalf(t *testing.T) {
 		defer func() { CloudInit = prev }()
 		var rendered []string
 		CloudInit.Distros = []string{"ubuntu", "debian", "fedora", "suse", "arch", "alpine"}
-		CloudInit.Render = func(token, managerAddr, distro string) string {
+		CloudInit.Render = func(token, managerAddr, distro string, logging bool) string {
 			rendered = append(rendered, distro)
 			return "#cloud-config\n# " + distro + "\n" + JoinCommand(token, managerAddr) + "\n"
 		}
@@ -620,8 +620,82 @@ func TestPstackSwarmTheCLIHalf(t *testing.T) {
 			"docker info --format 'joined as {{.Swarm.NodeID}} ({{.Swarm.LocalNodeState}})'",
 			"",
 		}, "\n")
-		if got := JoinScript("T", "1.2.3.4:2377"); got != want {
+		if got := JoinScript("T", "1.2.3.4:2377", false); got != want {
 			t.Errorf("script:\n%s", got)
+		}
+	})
+
+	t.Run("join material hands logging to the script and the cloud-config, not to token or command", func(t *testing.T) {
+		// negative control: pass `false` instead of a.Logging to CloudInit.Render in JoinMaterial — the
+		// cloud-config logging=true check fails.
+		prev := CloudInit
+		defer func() { CloudInit = prev }()
+		var logged []bool
+		CloudInit.Distros = []string{"ubuntu"}
+		CloudInit.Render = func(token, managerAddr, distro string, logging bool) string {
+			logged = append(logged, logging)
+			return "#cloud-config\n"
+		}
+		r := manager(t)
+		for _, on := range []bool{false, true} {
+			if m := JoinMaterial(JoinArgs{Runner: r, Format: "cloud-config", Logging: on}); !m.OK || logged[len(logged)-1] != on {
+				t.Errorf("cloud-config logging=%v: rendered with %v", on, logged)
+			}
+			if m := JoinMaterial(JoinArgs{Runner: r, Format: "script", Logging: on}); !m.OK || strings.Contains(m.Text, LokiPluginInstall) != on {
+				t.Errorf("script logging=%v:\n%s", on, m.Text)
+			}
+			if m := JoinMaterial(JoinArgs{Runner: r, Format: "command", Logging: on}); m.Text != "docker swarm join --token SWMTKN-1-abcdef-ghijkl 10.0.0.1:2377\n" {
+				t.Errorf("command logging=%v: %q", on, m.Text)
+			}
+		}
+	})
+
+	t.Run("with logging on, the join script installs the loki plugin first, and a failed install still joins", func(t *testing.T) {
+		// negative control: drop the `{ …; } || echo …` wrapper in JoinScript (leave LokiPluginInstall
+		// bare) — `set -e` aborts at the failing `plugin install`, bash exits 1, and the fake docker
+		// never sees `swarm join`.
+		script := JoinScript("T", "1.2.3.4:2377", true)
+		enable := strings.Index(script, "systemctl enable --now docker")
+		plugin := strings.Index(script, LokiPluginInstall)
+		already := strings.Index(script, "already part of a swarm")
+		join := strings.Index(script, "docker swarm join --token T 1.2.3.4:2377")
+		// Before the "already part of a swarm" exit: re-running the script on a worker that joined
+		// earlier is how that worker gets the plugin.
+		if enable < 0 || plugin < enable || already < plugin || join < already {
+			t.Fatalf("plugin line out of place:\n%s", script)
+		}
+		if strings.Contains(JoinScript("T", "1.2.3.4:2377", false), "loki") {
+			t.Error("logging off carries the plugin line")
+		}
+
+		bash, err := osexec.LookPath("bash")
+		if err != nil {
+			t.Skip("no bash")
+		}
+		dir := t.TempDir()
+		calls := filepath.Join(dir, "calls.log")
+		// Every plugin command fails — the case the wrapper exists for. PATH is ONLY dir, so no real
+		// systemctl, curl or docker can run, and `command -v docker` finds the fake.
+		for _, f := range []struct{ name, body string }{
+			{"docker", "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\ncase \"$*\" in\n  plugin*) exit 1 ;;\n  \"info --format {{.Swarm.LocalNodeState}}\") printf '%s\\n' inactive ;;\nesac\nexit 0\n"},
+			{"uname", "#!/bin/sh\nprintf '%s\\n' x86_64\n"},
+		} {
+			if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := osexec.Command(bash, "-c", script)
+		cmd.Env = []string{"PATH=" + dir}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the script did not finish: %v\n%s", err, out)
+		}
+		log, _ := os.ReadFile(calls)
+		if !strings.Contains(string(log), "plugin install grafana/loki-docker-driver:"+LokiVersion+"-amd64") || !strings.Contains(string(log), "swarm join --token T 1.2.3.4:2377") {
+			t.Errorf("docker calls:\n%s", log)
+		}
+		if !strings.Contains(string(out), "loki plugin not installed: logged services will not run here") {
+			t.Errorf("output:\n%s", out)
 		}
 	})
 }

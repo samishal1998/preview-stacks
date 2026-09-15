@@ -25,6 +25,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/image"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/initctl"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
@@ -663,7 +664,8 @@ func swarmCmd(args *Parsed, runner exec.Runner, io IO) *Exit {
 			d := args.Distro
 			distro = &d
 		}
-		made := swarm.JoinMaterial(swarm.JoinArgs{Runner: runner, Format: args.Format, Distro: distro})
+		// Logging is read the way deploys read it, so this and GET /api/swarm/join hand out the same material.
+		made := swarm.JoinMaterial(swarm.JoinArgs{Runner: runner, Format: args.Format, Distro: distro, Logging: inspect.LokiPushURL(runner) != ""})
 		if !made.OK {
 			// A bad flag is usage (3); a host that is not a manager, or a docker that did not
 			// answer, is a failed operation (1).

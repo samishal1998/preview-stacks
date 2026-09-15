@@ -859,10 +859,11 @@ type JoinResult struct {
 // CloudInit is the seam cloudinit fills at init (cloudinit imports this package for JoinCommand and
 // the port table, so the call back cannot be an import — the TS used a dynamic import for the same
 // reason). Distros is cloudinit's own list, the one `distro` is validated against; Render is
-// renderWorkerCloudInit. Until it is filled, every `cloud-config` request is a bad-distro refusal.
+// renderWorkerCloudInit, `logging` its WorkerAnswers.Logging. Until it is filled, every
+// `cloud-config` request is a bad-distro refusal.
 var CloudInit struct {
 	Distros []string
-	Render  func(token, managerAddr, distro string) string
+	Render  func(token, managerAddr, distro string, logging bool) string
 }
 
 // JoinArgs is what JoinMaterial takes.
@@ -871,6 +872,10 @@ type JoinArgs struct {
 	Format string
 	// Distro is only read for `cloud-config`; nil means ubuntu, "" is refused (the API's `?distro=`).
 	Distro *string
+	// Logging is whether this host ships logs to Loki: `script` and `cloud-config` then install the
+	// loki plugin before joining. Callers read it with inspect.LokiPushURL — the way deploys do —
+	// because swarm is the leaf and cannot import inspect.
+	Logging bool
 }
 
 // JoinMaterial is what a new worker runs, in the requested shape.
@@ -921,9 +926,9 @@ func JoinMaterial(a JoinArgs) JoinResult {
 	case "command":
 		text = JoinCommand(token, addr) + "\n"
 	case "script":
-		text = JoinScript(token, addr)
+		text = JoinScript(token, addr, a.Logging)
 	default:
-		text = CloudInit.Render(token, addr, distro)
+		text = CloudInit.Render(token, addr, distro, a.Logging)
 	}
 	return JoinResult{OK: true, Text: text, ManagerAddr: addr}
 }
@@ -1046,8 +1051,13 @@ func SwarmReport(info Info) string {
 // JoinScript is a shell script that installs Docker (the vendor convenience script — the same one
 // every quickstart uses; distro-exact installs are the cloud-config's job) and joins. `set -e` so a
 // failed install never reaches the join with nothing to join.
-func JoinScript(token, managerAddr string) string {
-	return strings.Join([]string{
+//
+// With logging on, the loki plugin line is the one step allowed to fail: `{ …; } || echo` turns
+// `set -e` off inside the braces, so a worker without the plugin still joins and swarm keeps logged
+// services off it. It sits BEFORE the "already part of a swarm" exit, so re-running the script on a
+// worker that joined earlier installs the plugin too. Logging off is byte-identical to before.
+func JoinScript(token, managerAddr string, logging bool) string {
+	lines := []string{
 		"#!/usr/bin/env bash",
 		"# Join this machine to the pstack swarm as a WORKER. Run as root (or with sudo).",
 		"# Open " + PortList() + " between this machine and the manager first.",
@@ -1056,11 +1066,16 @@ func JoinScript(token, managerAddr string) string {
 		"  curl -fsSL https://get.docker.com | sh",
 		"fi",
 		"systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true",
+	}
+	if logging {
+		lines = append(lines, "{ "+LokiPluginInstall+"; } || echo \"loki plugin not installed: logged services will not run here\"")
+	}
+	return strings.Join(append(lines,
 		`if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" = "active" ]; then`,
 		`  echo "already part of a swarm: $(docker info --format '{{.Swarm.NodeID}}')"; exit 0`,
 		"fi",
 		JoinCommand(token, managerAddr),
 		"docker info --format 'joined as {{.Swarm.NodeID}} ({{.Swarm.LocalNodeState}})'",
 		"",
-	}, "\n")
+	), "\n")
 }

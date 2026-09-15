@@ -197,7 +197,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		if d, ok := query(r.URL.RawQuery, "distro"); ok {
 			distro = &d
 		}
-		made := swarm.JoinMaterial(swarm.JoinArgs{Runner: s.host, Format: format, Distro: distro})
+		// Logging is read the way deploys read it, so this and `pstack swarm join` hand out the same material.
+		made := swarm.JoinMaterial(swarm.JoinArgs{Runner: s.host, Format: format, Distro: distro, Logging: inspect.LokiPushURL(s.host) != ""})
 		if !made.OK {
 			status := 503
 			switch made.Kind {
