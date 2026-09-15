@@ -2090,13 +2090,19 @@ curl -s https://api.preview.example.com/api/swarm -H "Authorization: Bearer $PST
 ```json
 { "reachable": true, "active": true, "nodeId": "n1…", "managerAddr": "203.0.113.10:2377",
   "nodes": [ { "id": "n1…", "hostname": "preview-host", "role": "manager", "status": "ready",
-               "availability": "active", "managerStatus": "leader", "engineVersion": "28.0.1", "self": true } ],
+               "availability": "active", "managerStatus": "leader", "engineVersion": "28.0.1", "self": true,
+               "lokiPlugin": null } ],
   "ports": [ … ], "note": "…" }
 ```
 
 `reachable: false` means docker did not answer — nothing is known, which is not "no nodes".
 `active: false` means the host runs previews with compose; `pstack init --orchestrator swarm` (on
 the host, with every preview torn down first — the networks have to be recreated) switches it.
+
+`lokiPlugin: false` means the node has no `loki` log plugin, so swarm keeps logged services off it.
+`null` means not checked (this host's logging is off, or docker did not answer). `lokiPluginInstall`
+— the line that installs the plugin — is present only when logging is on. The Swarm page and
+`pstack swarm` flag the same nodes.
 
 ### Sleep and wake-on-call
 

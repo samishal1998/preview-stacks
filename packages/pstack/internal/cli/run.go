@@ -652,6 +652,10 @@ func swarmCmd(args *Parsed, runner exec.Runner, io IO) *Exit {
 	switch sub {
 	case "status":
 		info := swarm.SwarmInfo(runner)
+		// Read exactly as /api/swarm reads it, so the table flags the nodes the Swarm page flags.
+		if len(info.Nodes) > 0 && inspect.LokiPushURL(runner) != "" {
+			swarm.MarkLokiPlugins(runner, &info)
+		}
 		fmt.Fprintln(out, swarm.SwarmReport(info))
 		// Exit 1 when there is no swarm to report on: a script gets its answer from the status.
 		if info.Reachable && info.Active {

@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { type Booted, bootServer, until, waitJob } from '../harness/server.ts';
 import { dockerShim } from '../harness/docker-shim.ts';
 import { eventTap } from '../harness/receiver.ts';
+import { SWARM_SHIM, LOKI_SHIM, NODE_PLUGINS } from '../gen/goldens.table.ts';
 
 describe('API: share links', () => {
   const put = (base: string, H: Record<string, string>, id: string) =>
@@ -432,6 +433,38 @@ describe('swarm discovery and the swarm routes', () => {
       // Everyone is an admin today, so the 403 is exercised through a share principal instead.
       const link = (await (await fetch(`${base}/api/deployments/x/share`, { method: 'POST', headers: H, body: '{}' })).json()) as { error?: string };
       expect(link.error).toMatch(/no such deployment/);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  }, 20_000);
+
+  test('with Loki on, /api/swarm flags the node without its plugin and the join script installs it', async () => {
+    // negative control: drop swarm.MarkLokiPlugins from the /api/swarm route — both nodes read
+    // lokiPlugin null, and the page has nothing to flag.
+    const docker = dockerShim([SWARM_SHIM, LOKI_SHIM, NODE_PLUGINS].join('\n'));
+    const s = await bootServer({ tag: 'swarm-loki', pathPrefix: docker.dir });
+    const { base, H } = s;
+    type Panel = { nodes: Array<{ hostname: string; lokiPlugin: boolean | null }>; lokiPluginInstall?: string };
+    const panel = async () => (await (await fetch(`${base}/api/swarm`, { headers: H })).json()) as Panel;
+    try {
+      const on = await panel();
+      expect(on.nodes.map((n) => [n.hostname, n.lokiPlugin])).toEqual([
+        ['mgr', true],
+        ['wrk', false],
+      ]);
+      expect(on.lokiPluginInstall).toContain('docker plugin install grafana/loki-docker-driver:3.7.7-$arch');
+      const script = await (await fetch(`${base}/api/swarm/join?format=script`, { headers: H })).text();
+      expect(script).toContain('loki plugin not installed');
+
+      // negative control: mark the plugins whether or not a loki container was found — wrk reads
+      // false on a host that ships no logs. null is "not checked", never "missing".
+      docker.rewrite([SWARM_SHIM, NODE_PLUGINS].join('\n'));
+      const off = await panel();
+      expect(off.nodes.map((n) => n.lokiPlugin)).toEqual([null, null]);
+      // negative control: emit lokiPluginInstall unconditionally — this assertion fails because
+      // logging (this host's loki container) is off.
+      expect(off).not.toHaveProperty('lokiPluginInstall');
     } finally {
       await s.stop();
       docker.remove();

@@ -40,6 +40,15 @@ export const SWARM_SHIM = [
 /** A docker that is NOT a manager. */
 export const NO_SWARM_SHIM = `  "info --format {{json .Swarm}}") printf '%s\\n' '{"NodeID":"","NodeAddr":"","LocalNodeState":"inactive","ControlAvailable":false}' ;;`;
 
+/** The control stack's loki container — what `inspect.LokiPushURL` reads to find logging is on. */
+export const LOKI_SHIM = [
+  `  "ps -aq --filter label=com.docker.compose.project=pstack-control") printf '%s\\n' 'l0k1' ;;`,
+  `  "inspect l0k1") printf '%s\\n' '[{"Id":"l0k1","Name":"/pstack-control-loki-1","Config":{"Image":"grafana/loki:3.7.7","Labels":{"com.docker.compose.project":"pstack-control","com.docker.compose.service":"loki","pstack.logging.push-url":"https://pstack:0123456789abcdef0123456789abcdef@loki.preview.example.com/loki/api/v1/push"}},"State":{"Status":"running"}}]' ;;`,
+].join('\n');
+
+/** `docker node inspect` for SWARM_SHIM's two nodes: n1 carries the loki log plugin, n2 only overlay. */
+export const NODE_PLUGINS = `  "node inspect --format {{json .}} n1 n2") printf '%s\\n' '{"ID":"n1","Description":{"Engine":{"Plugins":[{"Type":"Log","Name":"loki:latest"},{"Type":"Network","Name":"overlay"}]}}}' '{"ID":"n2","Description":{"Engine":{"Plugins":[{"Type":"Network","Name":"overlay"}]}}}' ;;`;
+
 /** A `status` answer: one running container for the example's stack. */
 export const STATUS_SHIM = `  "compose -p pr-1 -f docker-compose.preview.yml ps") printf '%s\\n' 'NAME        IMAGE   STATUS' 'pr-1-web-1  nginx   running' ;;`;
 
