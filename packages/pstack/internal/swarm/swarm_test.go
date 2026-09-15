@@ -532,3 +532,120 @@ func TestPstackSwarmTheCLIHalf(t *testing.T) {
 		}
 	})
 }
+
+// pluginLog runs LokiPluginInstall against a fake `uname -m` that prints arch and a fake `docker` that
+// records every call, exits 0 from `plugin inspect loki` only when installed, and prints enabled for
+// `plugin inspect -f {{.Enabled}} loki`. It returns what docker was asked, one call per line.
+//
+// It runs the line under bash and, where present, dash: a worker's cloud-config runs it under `sh`,
+// which is dash on Debian and Ubuntu, and a bashism there fails silently into a different branch.
+func pluginLog(t *testing.T, arch string, installed bool, enabled string) string {
+	t.Helper()
+	bash, err := osexec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	code := "1"
+	if installed {
+		code = "0"
+	}
+	dir := t.TempDir()
+	uname := "#!/bin/sh\nprintf '%s\\n' " + arch + "\n"
+	docker := `#!/bin/sh
+printf '%s\n' "$*" >>"$DOCKER_LOG"
+case "$*" in
+  "plugin inspect loki") exit ` + code + ` ;;
+  "plugin inspect -f {{.Enabled}} loki") printf '%s\n' ` + enabled + ` ;;
+esac
+`
+	for _, f := range [][2]string{{"uname", uname}, {"docker", docker}} {
+		if err := os.WriteFile(filepath.Join(dir, f[0]), []byte(f[1]), 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shells := []string{bash}
+	if dash, err := osexec.LookPath("dash"); err == nil {
+		shells = append(shells, dash)
+	} else {
+		t.Log("no dash; bash only")
+	}
+	logs := make([]string, len(shells))
+	for i, sh := range shells {
+		log := filepath.Join(dir, filepath.Base(sh)+".log")
+		cmd := osexec.Command(sh, "-c", LokiPluginInstall)
+		cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "DOCKER_LOG="+log)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", filepath.Base(sh), err, out)
+		}
+		b, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logs[i] = string(b)
+	}
+	for i := 1; i < len(logs); i++ {
+		if logs[i] != logs[0] {
+			t.Fatalf("%s asked docker:\n%s\nbash asked:\n%s", filepath.Base(shells[i]), logs[i], logs[0])
+		}
+	}
+	return logs[0]
+}
+
+// The plugin line is shell, so comparing it to a string proves nothing about what it does. These run
+// it and read back what docker was asked.
+func TestLokiPluginInstall(t *testing.T) {
+	calls := func(c ...string) string { return strings.Join(c, "\n") + "\n" }
+	const (
+		inspect = "plugin inspect loki"
+		enabled = "plugin inspect -f {{.Enabled}} loki"
+		enable  = "plugin enable loki"
+	)
+
+	t.Run("x86_64 installs the amd64 tag, aliased loki, at LOG_LEVEL=warn", func(t *testing.T) {
+		// negative control: drop `x86_64|` from the case — docker is asked for `3.7.7-x86_64`.
+		want := calls(inspect, "plugin install grafana/loki-docker-driver:3.7.7-amd64 --alias loki --grant-all-permissions LOG_LEVEL=warn", enabled)
+		if got := pluginLog(t, "x86_64", false, "true"); got != want {
+			t.Errorf("docker was asked:\n%s", got)
+		}
+	})
+
+	t.Run("aarch64 installs the arm64 tag", func(t *testing.T) {
+		// negative control: drop `aarch64|` from the case — docker is asked for `3.7.7-aarch64`.
+		want := calls(inspect, "plugin install grafana/loki-docker-driver:3.7.7-arm64 --alias loki --grant-all-permissions LOG_LEVEL=warn", enabled)
+		if got := pluginLog(t, "aarch64", false, "true"); got != want {
+			t.Errorf("docker was asked:\n%s", got)
+		}
+	})
+
+	t.Run("an installed plugin is not installed again", func(t *testing.T) {
+		// negative control: drop `docker plugin inspect loki >/dev/null 2>&1 || ` — install runs a
+		// second time, which docker refuses as a Conflict.
+		if got := pluginLog(t, "x86_64", true, "true"); got != calls(inspect, enabled) {
+			t.Errorf("docker was asked:\n%s", got)
+		}
+	})
+
+	t.Run("a disabled plugin is enabled", func(t *testing.T) {
+		// negative control: replace `|| docker plugin enable loki` with `|| true` — the plugin stays
+		// disabled, and swarm counts it as missing.
+		if got := pluginLog(t, "x86_64", true, "false"); got != calls(inspect, enabled, enable) {
+			t.Errorf("docker was asked:\n%s", got)
+		}
+	})
+
+	t.Run("an enabled plugin is left alone", func(t *testing.T) {
+		// negative control: drop `[ "$(docker plugin inspect -f '{{.Enabled}}' loki)" = true ] || ` —
+		// every run re-enables. (Spelling it `[[ … == true ]]` fails too, under dash: no `[[` there.)
+		if got := pluginLog(t, "x86_64", true, "true"); got != calls(inspect, enabled) {
+			t.Errorf("docker was asked:\n%s", got)
+		}
+	})
+
+	t.Run("it is one line", func(t *testing.T) {
+		// negative control: break the constant after a `;` with "\n".
+		// Callers wrap it in `{ …; }`.
+		if strings.Contains(LokiPluginInstall, "\n") {
+			t.Errorf("LokiPluginInstall has a newline:\n%s", LokiPluginInstall)
+		}
+	})
+}

@@ -1,5 +1,5 @@
-// Package swarm is Docker Swarm: the compose→swarm conversion, the `docker stack` command lines, and
-// the node/join helpers behind the swarm panel.
+// Package swarm is Docker Swarm: the compose→swarm conversion, the `docker stack` command lines, the
+// node/join helpers behind the swarm panel, and the line that puts the Loki log plugin on a node.
 //
 // ── WHY SWARM AT ALL ─────────────────────────────────────────────────────────────────────────────
 //
@@ -48,6 +48,8 @@
 // Shq and LabelsToMap are defined here and re-exported by compose and autolabel under their original
 // names. cloudinit imports this package (JoinCommand, SwarmPorts); the one call back — rendering a
 // worker cloud-config — goes through the CloudInit seam, which cloudinit fills in at init.
+// LokiVersion and LokiPluginInstall live here for the same reason: initctl, cloudinit and compose all
+// need them, and all three already import this package.
 package swarm
 
 import (
@@ -738,6 +740,29 @@ func PortList() string {
 func JoinCommand(token, managerAddr string) string {
 	return "docker swarm join --token " + token + " " + managerAddr
 }
+
+// LokiVersion is the Loki release pstack runs: the control stack's `grafana/loki` image and the log
+// driver plugin's tag. The driver is built from Loki's own tree, so the two move together.
+const LokiVersion = "3.7.7"
+
+// LokiPluginInstall is the line that puts the Loki log driver on a node, installed, aliased `loki`
+// and enabled, and does nothing on a node that already has it. init runs it on the manager; the join
+// script and the worker cloud-config run it on a new worker. It is ONE line of POSIX sh: the worker
+// cloud-config runs it under `sh`. A caller that must not fail wraps it: `{ <line>; } || echo …`.
+//
+//   - The inspect guard, because `docker plugin install` is not idempotent: a second run is a
+//     Conflict ("already exists").
+//   - The enable, because swarm counts a disabled plugin as missing.
+//   - LOG_LEVEL=warn, because at the default `info` the driver logs its whole option map on every
+//     container start — the push URL with its password — into the node's Docker journal.
+//   - The per-architecture tag, because the image has no multi-arch manifest (`latest` was last
+//     pushed in 2021).
+//   - Pinned to LokiVersion. `pstack upgrade` never upgrades the plugin: that takes `disable --force`,
+//     `upgrade`, `enable` and a dockerd restart on each node, which interrupts every preview on it.
+const LokiPluginInstall = "arch=$(uname -m); case \"$arch\" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; esac; " +
+	"docker plugin inspect loki >/dev/null 2>&1 || docker plugin install grafana/loki-docker-driver:" + LokiVersion +
+	"-$arch --alias loki --grant-all-permissions LOG_LEVEL=warn; " +
+	"[ \"$(docker plugin inspect -f '{{.Enabled}}' loki)\" = true ] || docker plugin enable loki"
 
 // JoinFormats is the shapes the join material comes in. Add one here and both the API and the CLI
 // offer it.
