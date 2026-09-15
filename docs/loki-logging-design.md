@@ -1,8 +1,26 @@
 # Loki logging — a design in three slices
 
-> **Nothing in it is built.** Slice 1 (`--logging loki`) is specified below and was approved section
-> by section on 2026-09-14. Slices 2 and 3 record the decisions already taken; each gets its own spec
-> before it is built. Three releases, in order — the risky runtime part lands and is exercised first.
+> **Slice 1 (`--logging loki`) is built (Unreleased); slices 2 and 3 are not.** Using it:
+> [usage.md](usage.md), `pstack logging`. Slice 1's spec below is kept as approved section by section
+> on 2026-09-14. Where the build differs from it:
+>
+> - The compose plugin check fails with one sentence; the install line is in the job log, because a
+>   step message is cut at 300 runes.
+> - `/api/swarm` carries a per-node `lokiPlugin` on every host (`null` when logging is off);
+>   `lokiPluginInstall` only when logging is on. The host-fixture golden
+>   (`golden/host/expected/swarm.json`) changed for the node field alone.
+> - Masked userinfo is `://user:••••@`, the mask `redact` already used.
+> - The `no-args` and `unknown-command` goldens changed too: both print the command list.
+> - `init` also refuses a re-run that would mint a new push password: running containers' pushes
+>   would be refused until redeployed.
+> - Re-running the join script on a worker that joined earlier installs the plugin: the step sits
+>   before the already-joined exit.
+> - `/api/swarm` needed no `openapi.yaml` or `apicli` change: its response is untyped.
+> - The plugin checks live in `compose`, the node-plugin reads in `swarm`, not in `inspect`.
+> - `pstack logging off` counts a deployment's root `compose.generated.yml` only.
+> - `pstack logging off` keeps `LOKI_PUSH_PASSWORD`; `pstack logging loki` reuses it.
+>
+> Slices 2 and 3 record the decisions already taken; each gets its own spec before it is built.
 
 ## What it is
 
@@ -291,7 +309,7 @@ its own `logging:`.
 | Push password mismatch (401) | Every batch dropped, not retried. | Only reachable by hand-editing `control/.env`: `upgrade` and `pstack logging` reuse the stored password. Rotation is out of scope — it needs every stack redeployed. |
 | Manager disk fills | Loki stops accepting writes at 90%. Previews unaffected. | 7-day retention; `keep-file=false` plus 10m × 3 per container. |
 | A preview claims `loki.<domain>` via `pstack.routing.host` | It would receive every node's pushes, password included. | A deploy whose host equals `control.`, `api.` or `loki.` of the primary or an added domain is refused. This also closes the same, pre-existing hole for `control.`/`api.`. |
-| Someone reads the password | Visible in `docker inspect` of preview containers and in `compose.generated.yml`. It can only push. | pstack masks URL userinfo (`://user:pass@` → `://user:••••••••@`) wherever it shows generated compose or container config; the plugin's `LOG_LEVEL=warn` keeps it out of dockerd's journal. |
+| Someone reads the password | Visible in `docker inspect` of preview containers and in `compose.generated.yml`. It can only push. | pstack masks URL userinfo (`://user:pass@` → `://user:••••@`) wherever it shows generated compose or container config; the plugin's `LOG_LEVEL=warn` keeps it out of dockerd's journal. |
 
 ### Testing
 

@@ -1,5 +1,63 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`--logging loki` on `init` and `cloud-init`** (`PSTACK_LOGGING`, default `none`). The control
+  stack gains a Loki container (`grafana/loki:3.7.7`, 7-day retention, a fixed config at
+  `control/loki/config.yaml`) that nodes push to at `https://loki.<domain>/loki/api/v1/push`,
+  through Traefik, with basic auth. The push password is 32 hex characters generated on the first
+  run and kept in `control/.env` as `LOKI_PUSH_PASSWORD`; `PSTACK_LOKI_PASSWORD` supplies one, and
+  there is no flag for it, because argv is readable through `ps`. `init` installs the Grafana Loki
+  Docker plugin on the manager and fails if it cannot: under compose every logged service would
+  fail to create. `cloud-init --logging loki` puts the flag on the `init` call it writes.
+- **`pstack logging loki|off`** switches a host that already exists. Like `pstack ui`, it re-runs
+  `init` from the saved state — the token, the DNS token and the push password travel as env — and
+  `-n` prints the plan. `off` prints how many deployments still carry the driver: each drops it on
+  its next deploy, a sleeping one on wake, and until then its pushes get a 404, which is not retried,
+  so stops are not delayed. `pstack upgrade` keeps Loki and its password.
+- **Every deployed service without a `logging:` key ships its logs to Loki**, on both
+  orchestrators, labelled `service_name=<stack>-<service>`. Whether to inject is read from the
+  running control stack's `loki` container, so `pstack up` on the host and the API always agree. A
+  service with its own `logging:` (`json-file` counts) is left alone and named in the job log. Every
+  option but the URL and the label is a constant: when Loki is unreachable the driver holds a
+  node-wide lock while it retries, and only small retries, timeout and backoff keep a `docker stop`
+  on that node to seconds.
+- **The plugin on new workers, and the nodes without it.** On a logging-on host, `pstack swarm join
+  --format script|cloud-config` and `/api/swarm/join` install the plugin before joining, and a
+  failure never blocks the join; a worker that joined earlier gets the plugin by running the script
+  again. A compose deploy checks the plugin before `up` and fails; the install line is in the job
+  log. A swarm deploy names every node without it in the job log. The Swarm page and `pstack swarm`
+  flag those nodes with the line to run there. `/api/swarm` gains a per-node `lokiPlugin` (`null`
+  when logging is off or docker did not answer) and, when logging is on, `lokiPluginInstall`.
+- **`init` refuses a re-run that would drop Loki or mint a new push password** — two new cases for
+  the silent-revert guard. A new password would get every running container's pushes refused
+  until it is redeployed.
+
+### Changed
+
+- **A compose stack on a logging-on host runs from `compose.generated.yml`** whenever a service
+  got the logging block, even with no `pstack.routing.*` labels. With logging off nothing changes.
+- **`loki.<domain>` is a control hostname**, on the primary and every added domain, always — with
+  logging off too, so it never answers with a waking page.
+- **Goldens.** `help`, `help-h`, `no-args` and `unknown-command` were regenerated for the new flag
+  and command (`bun gen/goldens.ts`). `golden/host/expected/swarm.json` was edited by hand: every
+  node gains `lokiPlugin`, `null` on that logging-off fixture host, which is also why it carries no
+  `lokiPluginInstall`. New transcripts: `cloud-init-loki`;
+  `logging-loki-dry-dns01-advanced-swarm`; `init-dry-`, `init-`, `upgrade-plan-` and
+  `logging-off-dry-` for `http01-basic-compose-loki` and `dns01-advanced-swarm-loki`;
+  `swarm-join-script-loki`, `swarm-join-cloud-config-loki` and `swarm-status-loki`. New render cells:
+  `http01-basic-compose-loki` and `dns01-advanced-swarm-loki`. The existing render cells, the
+  cloud-init goldens and the swarm-join goldens stay byte-identical.
+
+### Fixed
+
+- **A preview could claim a control hostname.** A deploy whose `pstack.routing.host` is `control.`,
+  `api.` or `loki.` of the primary or an added domain is now refused. For `control.` and `api.` the
+  hole predates Loki; for `loki.` it would have handed a preview every node's pushes, password
+  included.
+
 ## 0.39.1 — 2026-09-14
 
 ### Changed
