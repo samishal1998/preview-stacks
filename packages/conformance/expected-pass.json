@@ -6,6 +6,7 @@
     "test/api-domains.test.ts": 3,
     "test/api-host-vars.test.ts": 2,
     "test/api-jobs-and-containers.test.ts": 12,
+    "test/api-logging.test.ts": 3,
     "test/api-openapi.test.ts": 4,
     "test/api-probe.test.ts": 5,
     "test/api-rbac.test.ts": 7,
@@ -19,7 +20,7 @@
     "test/api-webhooks-delivery.test.ts": 19,
     "test/api-webhooks-registration.test.ts": 6,
     "test/cli-api.test.ts": 6,
-    "test/cli-goldens.test.ts": 81,
+    "test/cli-goldens.test.ts": 94,
     "test/cli-surface.test.ts": 5,
     "test/harness.test.ts": 3,
     "test/host-fixture.test.ts": 34

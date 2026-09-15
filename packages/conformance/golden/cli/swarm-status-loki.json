@@ -1,0 +1,11 @@
+{
+  "name": "swarm-status-loki",
+  "argv": [
+    "swarm"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "swarm manager  10.0.0.1:2377\n2 nodes  (* this host)\n\n  HOSTNAME  ROLE              STATUS  AVAILABILITY  ENGINE  ID\n  mgr *     manager (leader)  ready   active        28.0.1  n1\n  wrk       worker            ready   active        28.0.1  n2\n\nno loki plugin: wrk\n  arch=$(uname -m); case \"$arch\" in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; esac; docker plugin inspect loki >/dev/null 2>&1 || docker plugin install grafana/loki-docker-driver:3.7.7-$arch --alias loki --grant-all-permissions LOG_LEVEL=warn; [ \"$(docker plugin inspect -f '{{.Enabled}}' loki)\" = true ] || docker plugin enable loki\n\nadd a worker:\n  pstack swarm join                       the `docker swarm join` line\n  pstack swarm join --format script       installs Docker first, then joins\n  pstack swarm join --format cloud-config --distro debian -o worker.yaml\n\nopen between every pair of nodes first:\n  2377/tcp       cluster management (worker → manager)\n  7946/tcp+udp   node discovery (every node ↔ every node)\n  4789/udp       overlay network traffic — VXLAN (every node ↔ every node)\n",
+  "stderr": ""
+}

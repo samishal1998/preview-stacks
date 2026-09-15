@@ -1,0 +1,51 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100            # `loki -health` probes localhost:3100/ready
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki                # WAL, compactor, tsdb-shipper dirs — on the volume
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+# storage_config, never common.storage: common.storage takes one backend, and slice 2's
+# filesystem→S3 switch needs both configured at once.
+storage_config:
+  filesystem:
+    directory: /loki/chunks
+
+schema_config:
+  configs:
+    - from: "2024-04-01"            # a fixed past date, never "today": a future date means no active
+      store: tsdb                   # schema (Loki stores nothing); a changed date makes data unreadable
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h                 # tsdb requires 24h
+
+ingester:
+  chunk_idle_period: 30m
+  max_chunk_age: 2h                 # must stay <= querier.query_ingesters_within
+  chunk_target_size: 1572864
+  chunk_encoding: snappy
+  wal:
+    replay_memory_ceiling: 1GB      # default 4GB exceeds the 2g container limit
+
+querier:
+  query_ingesters_within: 3h
+
+limits_config:
+  retention_period: 168h            # 0s would keep forever
+  max_query_lookback: 168h
+  max_global_streams_per_user: 1000
+
+compactor:
+  retention_enabled: true
+  delete_request_store: filesystem  # required once retention is on
+
+analytics:
+  reporting_enabled: false
