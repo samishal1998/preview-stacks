@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,5 +142,31 @@ func TestExtraDomainIsRepeatable(t *testing.T) {
 	}
 	if !found {
 		t.Error("the shell is not offered --extra-domain")
+	}
+}
+
+func TestLoggingCommandRefusesAnythingButLokiOrOff(t *testing.T) {
+	// negative control: accept `none` as a sub (`case "off", "none":` in run.go) — `logging none`
+	// reaches upgrade.SwitchLogging, which answers "no control stack found at …" instead of the
+	// usage line, and the stderr comparison fails.
+	//
+	// `none` is the one worth refusing by name: it is the FLAG's word for off (--logging none), so it
+	// is the word someone types. PSTACK_DATA points at an empty directory, so a command that got past
+	// the refusal finds no control stack to re-run init on, whatever this machine holds at /var/lib/pstack.
+	data := t.TempDir()
+	t.Setenv("PSTACK_DATA", data)
+	for _, argv := range [][]string{{"logging", "none"}, {"logging"}} {
+		var out, errOut bytes.Buffer
+		code := Run(argv, IO{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut, Env: noEnv})
+		if code != ExitUsage || errOut.String() != "pstack: usage: pstack logging <loki|off>\n" {
+			t.Errorf("pstack %s: exit %d, stderr %q; want exit 3 and the usage line", strings.Join(argv, " "), code, errOut.String())
+		}
+		// A switch prints its plan before its first step, so empty stdout means nothing was planned or run.
+		if out.Len() != 0 {
+			t.Errorf("pstack %s printed %q; a refusal runs nothing", strings.Join(argv, " "), out.String())
+		}
+	}
+	if entries, _ := os.ReadDir(data); len(entries) != 0 {
+		t.Errorf("a refused switch wrote %d entries into the data dir", len(entries))
 	}
 }

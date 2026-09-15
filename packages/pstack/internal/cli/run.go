@@ -290,6 +290,31 @@ func run(argv []string, io IO) *Exit {
 		}
 		return nil
 
+	case "logging":
+		// Same shape as `ui`: re-runs init from what is on disk. The command's words are loki|off, not
+		// the flag's none|loki — `none` is refused, not guessed.
+		var target initctl.Logging
+		switch args.Sub {
+		case "loki":
+			target = initctl.Loki
+		case "off":
+			target = initctl.LoggingNone
+		default:
+			return fail("usage: pstack logging <loki|off>")
+		}
+		changed, _, err := upgrade.SwitchLogging(upgrade.SwitchLoggingOptions{DataDir: registry.DataDir(), Logging: target, Runner: runner, Log: func(l string) { fmt.Fprintln(out, l) }})
+		if err != nil {
+			if isUpgradeError(err) {
+				return fail(err.Error())
+			}
+			return &Exit{Code: ExitFailed, Msg: err.Error()}
+		}
+		if changed && !args.DryRun {
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "  Logging is now "+args.Sub+".")
+		}
+		return nil
+
 	case "swarm":
 		return swarmCmd(args, runner, io)
 

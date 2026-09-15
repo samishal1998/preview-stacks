@@ -294,7 +294,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "swarm", "pull", "push", "healthcheck", "api", "completion")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "healthcheck", "api", "completion")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -321,7 +321,7 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|swarm|pull|push|serve|api|completion> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|serve|api|completion> [flags]",
 		"",
 		"Any command's own flags: pstack <command> --help",
 		"",
@@ -374,6 +374,9 @@ func Usage(version string) string {
 		"ui:         pstack ui <basic|advanced>   switch which UI control.<domain> serves.",
 		"            Reuses the stored token and domain; builds the SPA image when switching to",
 		"            advanced. No version change — that is `upgrade`.",
+		"",
+		"logging:    pstack logging <loki|off>    Loki on this host, or off.",
+		"            Reuses the stored token and domain.",
 		"",
 		"swarm:      pstack swarm [status]            the nodes previews run on (exit 1 if this is not a manager)",
 		"            pstack swarm join                what a new worker runs — a SECRET",
