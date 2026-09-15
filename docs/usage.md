@@ -3342,9 +3342,10 @@ Job `state`: `queued` · `running` · `ok` · `failed` · `leaked` · `cancelled
 | `api.<domain>` | `pstack-api` | the API |
 | `loki.<domain>` | `pstack-loki` | Loki's push path, only with `--logging loki` |
 
-Both point at the **same** container on port `7878`; the UI calls `/api/…` relatively, so it is
-same-origin and needs no CORS. Under `dns01` the `pstack-ui` router is the **one** router carrying
-`tls.domains[0].main` + `.sans` — the wildcard every other router inherits by SNI.
+`control.` and `api.` point at the **same** container on port `7878`; the UI calls `/api/…`
+relatively, so it is same-origin and needs no CORS. `loki.` is the Loki container on `3100`. Under
+`dns01` the `pstack-ui` router is the **one** router carrying `tls.domains[0].main` + `.sans` — the
+wildcard every other router inherits by SNI.
 
 ### Spec schema
 

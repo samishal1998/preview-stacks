@@ -78,6 +78,7 @@ and the API must not touch it.
 |---|---|---|
 | `control.<domain>` | the web UI | the control stack (`traefik.http.routers.pstack-ui`) |
 | `api.<domain>` | the HTTP API — CI, `curl`, scripts | the control stack (`…routers.pstack-api`) |
+| `loki.<domain>` | Loki's push path (`--logging loki`) | the control stack (`…routers.pstack-loki`) |
 | `<service-name>.<domain>` | a shared service's own hostname, by convention | the shared deployment's own compose labels |
 | `<surface>-pr-<n>.<domain>` | one surface of one PR | the isolated deployment's own compose labels |
 | `*.<surface>-pr-<n>.<domain>` | a whole subtree at one profile — **opt-in**, see below | your labels, using a rule pstack computes |
