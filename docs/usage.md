@@ -68,6 +68,7 @@ Flags:
 init flags: --domain <preview.example.com>  --acme-email <you@example.com>
             --challenge http01|dns01        (default http01 — no DNS credential needed)
             --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)
+            --logging none|loki             (default none — Loki log shipping)
 
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
             PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)
@@ -1297,8 +1298,10 @@ Everything `init` reads:
 | `--challenge http01\|dns01` | `PSTACK_CHALLENGE` | `http01` | see [Choose a TLS mode](#choose-a-tls-mode). Anything else exits 3 |
 | `--dns-provider <lego-code>` | `PSTACK_DNS_PROVIDER` | — | **required for `dns01` only**, ignored by `http01` |
 | `--orchestrator swarm\|compose` | `PSTACK_ORCHESTRATOR` | `swarm` | how previews deploy. `swarm` makes this daemon a one-node manager (overlay networks, the swarm provider in Traefik); `compose` is what every host before 0.26.0 ran. `upgrade` keeps whatever the host has — see [Swarm mode](#swarm-mode) |
+| `--logging none\|loki` | `PSTACK_LOGGING` | `none` | `loki`: a Loki service in the control stack, its log plugin on this node, and a `logging:` block on every deployed service that has none. Anything else exits 3. `upgrade` keeps whatever the host has |
 | — | `PSTACK_DNS_TOKEN` | *unset* | the DNS-01 credential, written to `dns.env`. Omit for the tokenless providers |
 | — | `PSTACK_TOKEN` | *generated* | the API bearer token. Supply it to keep or rotate a known one; leave it unset to be handed a fresh one **printed exactly once** |
+| — | `PSTACK_LOKI_PASSWORD` | *generated* | with `--logging loki`: the push password (32 lowercase hex), kept in `control/.env` as `LOKI_PUSH_PASSWORD`. Supply it to keep the host's |
 | — | `PSTACK_IMAGE` | `pstack:local` | the control image. A property of the installation, not the host |
 | — | `PSTACK_DATA` | `/var/lib/pstack` | where the registry and the control stack's config live |
 
@@ -1445,6 +1448,14 @@ It refuses **omissions only**. A flag you spelled is a decision and passes throu
 dns01` on an http01 host is still how you switch modes — a first `init` has nothing to compare
 against, and `pstack upgrade` supplies every value it read back, so it never trips. `--force`
 proceeds anyway.
+
+On a Loki host it refuses two more:
+
+- **Loki logging** — a run without `--logging loki` removes Loki. Keep it with `--logging loki`;
+  `--logging none` turns it off on purpose.
+- **The Loki push password** — a run that keeps Loki without `PSTACK_LOKI_PASSWORD` mints a new one,
+  and running containers' pushes are refused until each stack is redeployed. Keep it with
+  `PSTACK_LOKI_PASSWORD=$(. /var/lib/pstack/control/.env; echo "$LOKI_PUSH_PASSWORD")`.
 
 ### Why `init` is CLI-only, and always will be
 
@@ -3078,6 +3089,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--challenge http01\|dns01` | `init` | default **`http01`** (or `PSTACK_CHALLENGE`). Any other value exits 3. |
 | `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
 | `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
+| `--logging none\|loki` | `init` `cloud-init` | default **`none`** (or `PSTACK_LOGGING`). `loki` runs Loki in the control stack and ships every deployed service's logs to it; `cloud-init` passes it to `init`. Any other value exits 3. |
 | `--format <shape>` | `swarm join` | `command` (default), `script`, `cloud-config` or `token`. An unknown one exits 3. |
 | `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
 | `-o`, `--out <file>` | `cloud-init` `swarm join` `pull config` | write the rendered file instead of printing it. **Required** for `pull config`, which never writes an export to stdout and creates the file `0600`. |
@@ -3122,6 +3134,8 @@ different problems with different owners.
 | `PSTACK_DNS_TOKEN` | `init` | *unset* | the DNS-01 credential; written to `control/dns.env` (`0600`) under the provider's own variable name. **Flag-less on purpose** — a secret does not belong in a shell history. |
 | `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
+| `PSTACK_LOGGING` | `init` `cloud-init` | `none` | same as `--logging` |
+| `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
 | `PSTACK_PROBE` | `serve` | *on* | `off` removes `GET /api/probe/:id`, the unauthenticated [probe](#probe-a-preview-without-a-token-0340); the path then 404s like any unknown one. Any other value, including a misspelling, leaves it on — a typo should not silently turn a CI pipeline into one that polls a 404 forever |
 | `PSTACK_MAX_JOBS` | `serve` | `4` | lifecycle jobs running at once, across every stack. **The default for the `max_jobs` setting, not the authority** (0.33.0): a value stored through `PUT /api/settings/max_jobs` outranks it and survives a restart, so setting it here is how a host that never opens the UI is configured — see [Runtime settings](#runtime-settings-0330). |

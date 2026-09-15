@@ -106,6 +106,7 @@ healthcheck. Idempotent: re-running it IS the upgrade path.
                                  the Domains panel or PUT /api/domains
       --ui basic|advanced        default basic (embedded, no extra container)
       --orchestrator swarm|compose
+      --logging none|loki        Loki log shipping (default none)
       --force                    proceed even though this run would change something you did
                                  not ask it to change
 
@@ -116,10 +117,10 @@ rather than composing one:
       pstack upgrade -n | grep 'pstack init'
 
 Also reads PSTACK_TOKEN: absent on an existing host, a NEW machine token is minted and every CI
-job holding the old one starts getting 401s.`,
+job holding the old one starts getting 401s. PSTACK_LOKI_PASSWORD likewise, for Loki's pushes.`,
 		flags: []string{
 			"--domain", "--acme-email", "--challenge", "--dns-provider", "--dns-token-file",
-			"--extra-domain", "--ui", "--orchestrator", "--force", "--dry-run", "--help",
+			"--extra-domain", "--ui", "--orchestrator", "--logging", "--force", "--dry-run", "--help",
 		},
 	},
 	"upgrade": {
@@ -196,6 +197,7 @@ Prompts for anything missing unless -y.
                                 dns.env and never gets a certificate
       --config <file> | --config-url <url>   apply a sealed config export on first boot
       --config-repo <git-url>   cloned to /opt/preview/config
+      --logging none|loki       passed to init (default none)
   -o <file>                     write it out instead of stdout
   -y                            never prompt
 
@@ -205,7 +207,7 @@ when it carries any.`,
 		flags: []string{
 			"--domain", "--acme-email", "--distro", "--ssh-key", "--password", "--admin-user",
 			"--admin-password", "--api-token", "--dns-token-file", "--challenge", "--dns-provider",
-			"--ui", "--orchestrator", "--config", "--config-url", "--config-repo", "--help",
+			"--ui", "--orchestrator", "--logging", "--config", "--config-url", "--config-repo", "--help",
 		},
 	},
 	"swarm": {

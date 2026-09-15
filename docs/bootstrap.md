@@ -263,9 +263,11 @@ pin it in the environment rather than relying on anyone retyping the flags:
 | `--challenge http01\|dns01` | `PSTACK_CHALLENGE` | **`http01`** |
 | `--dns-provider <lego-code>` | `PSTACK_DNS_PROVIDER` | *(fails on dns01 only)* |
 | `--orchestrator swarm\|compose` | `PSTACK_ORCHESTRATOR` | **`swarm`** (a new host). `upgrade` re-passes what the host runs |
+| `--logging none\|loki` | `PSTACK_LOGGING` | **`none`**. `upgrade` re-passes what the host runs |
 | *(no flag)* | `PSTACK_DNS_TOKEN` | empty `dns.env` |
 | *(no flag)* | `PSTACK_IMAGE` | `pstack:local` |
 | *(no flag)* | `PSTACK_TOKEN` | generated, printed once |
+| *(no flag)* | `PSTACK_LOKI_PASSWORD` | generated with `--logging loki`, kept in `control/.env` |
 
 Forget `--challenge dns01` on a later run and `init` silently re-renders the stack as HTTP-01 —
 the wildcard router is gone while every per-PR file still carries DNS-01-shaped labels. See
@@ -331,6 +333,9 @@ pstack cloud-init --domain preview.example.com --acme-email ops@example.com \
 `--admin-password` without `--admin-user` is refused: a password with no account to attach to is a
 credential that silently does nothing, and rendering it would leave you believing the file carries
 an account it does not.
+
+`--logging loki` passes through to the file's `init` call, which puts Loki in the control stack and
+installs the log plugin on the manager. The file needs no step of its own.
 
 The trade is stated rather than hidden. Whatever you pass is rendered **into the file**, and your
 provider stores user-data as **instance metadata** — readable by anything on the box that can reach

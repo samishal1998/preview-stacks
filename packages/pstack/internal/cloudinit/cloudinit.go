@@ -206,6 +206,9 @@ type Answers struct {
 	// Orchestrator is `swarm` (the default for a new host) or `compose`; passed to
 	// `pstack init --orchestrator` only when set.
 	Orchestrator string
+	// Logging is "none" or "loki"; loki adds `--logging loki` to the init call. No step of its own:
+	// init installs the plugin on the manager.
+	Logging string
 }
 
 // Error is a refused input or a template that did not render. The CLI prints its message and exits 3.
@@ -382,6 +385,9 @@ func RenderCloudInit(a Answers) (string, error) {
 	}
 	if a.Orchestrator != "" {
 		initFlags = append(initFlags, "--orchestrator "+a.Orchestrator)
+	}
+	if a.Logging == "loki" {
+		initFlags = append(initFlags, "--logging loki")
 	}
 
 	// Omit the key list entirely rather than emit an empty one: cloud-init would accept

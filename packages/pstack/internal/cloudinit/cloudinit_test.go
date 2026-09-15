@@ -213,6 +213,27 @@ func TestCloudInitGeneration(t *testing.T) {
 		}
 	})
 
+	t.Run("--logging loki reaches the init call; none adds nothing", func(t *testing.T) {
+		// negative control: drop the Logging branch of initFlags — the init call has no --logging loki.
+		a := base
+		a.Logging = "loki"
+		out := render(t, a)
+		if !strings.Contains(initCall(t, out), "--logging loki") {
+			t.Errorf("--logging loki missing from the init call: %q", initCall(t, out))
+		}
+		if !yamlOK(t, out) {
+			t.Error("not valid YAML")
+		}
+		// The manager needs no step of its own: init installs the plugin. And off renders nothing,
+		// which TestCloudInitGoldens proves byte for byte.
+		for _, off := range []string{"", "none"} {
+			a.Logging = off
+			if strings.Contains(initCall(t, render(t, a)), "--logging") {
+				t.Errorf("Logging %q carries --logging", off)
+			}
+		}
+	})
+
 	t.Run("no config repo drops the clone line rather than emitting an empty one", func(t *testing.T) {
 		// `git clone  /opt/preview/config` would fail and abort the rest of cloud-init.
 		// negative control: skip the splice when ConfigRepo is "" — the regexp matches.

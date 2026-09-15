@@ -12,6 +12,8 @@
 //	  renewal then fails weeks later, silently.
 //	· a run without `--challenge dns01` flips a wildcard host to per-hostname issuance, which burns
 //	  the weekly rate limit and cannot be undone by re-running.
+//	· a run without `--logging loki` on a Loki host removes Loki; one without PSTACK_LOKI_PASSWORD
+//	  mints a new push password, and every running container's pushes are refused until redeployed.
 //
 // Every one of those is an OMISSION, never a wrong value: the operator did not ask for the change
 // and is not told about it. So that is exactly what this refuses, and nothing else.
@@ -48,9 +50,9 @@ type revert struct {
 // was asked for explicitly.
 //
 // `state` is the host as it is now; `typed` is which flags were spelled on the command line;
-// `hasToken`/`hasDNSToken` are whether the two environment variables were SET (presence, not
-// emptiness — an explicitly empty one is a choice).
-func initReverts(state *upgrade.ControlState, dataDir string, p *Parsed, hasToken, hasDNSToken bool) []revert {
+// `hasToken`/`hasDNSToken`/`hasLokiPassword` are whether the three environment variables were SET
+// (presence, not emptiness — an explicitly empty one is a choice).
+func initReverts(state *upgrade.ControlState, dataDir string, p *Parsed, hasToken, hasDNSToken, hasLokiPassword bool) []revert {
 	if state == nil {
 		return nil
 	}
@@ -70,6 +72,15 @@ func initReverts(state *upgrade.ControlState, dataDir string, p *Parsed, hasToke
 		out = append(out, revert{
 			what: "the DNS-01 credential", from: "the one this host has", to: "EMPTY — renewals would fail later, silently",
 			fix: "PSTACK_DNS_TOKEN=<the token>",
+		})
+	}
+	// The Loki push password, same shape — only when this run KEEPS Loki. A run that drops Loki is
+	// the check at the bottom, and it needs no password.
+	if !hasLokiPassword && state.LokiPassword != "" && initctl.Logging(p.Logging) == initctl.Loki {
+		out = append(out, revert{
+			what: "the Loki push password", from: "the one this host has",
+			to:  "a NEWLY GENERATED one — running containers' pushes are refused until redeployed",
+			fix: "PSTACK_LOKI_PASSWORD=$(. " + dataDir + "/control/.env; echo \"$LOKI_PUSH_PASSWORD\")",
 		})
 	}
 	if !typed("--challenge") && string(state.Challenge) != "" && initctl.Challenge(p.Challenge) != state.Challenge {
@@ -94,6 +105,13 @@ func initReverts(state *upgrade.ControlState, dataDir string, p *Parsed, hasToke
 		out = append(out, revert{
 			what: "the orchestrator", from: string(state.Orchestrator), to: p.Orchestrator,
 			fix: "--orchestrator " + string(state.Orchestrator),
+		})
+	}
+	// Only a host that HAS Loki can lose it, so a host without one never trips this.
+	if !typed("--logging") && state.Logging == initctl.Loki && initctl.Logging(p.Logging) != initctl.Loki {
+		out = append(out, revert{
+			what: "Loki logging", from: "loki", to: orNone(p.Logging),
+			fix: "--logging loki",
 		})
 	}
 	return out
