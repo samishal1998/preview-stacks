@@ -600,7 +600,7 @@ func TestWorkerCloudInit(t *testing.T) {
 		if swarm.CloudInit.Render == nil || len(swarm.CloudInit.Distros) != len(Distros) {
 			t.Fatal("seam not filled")
 		}
-		if got := swarm.CloudInit.Render("SWMTKN-1-abc-def", "10.0.0.1:2377", "ubuntu"); !strings.Contains(got, "docker swarm join --token SWMTKN-1-abc-def 10.0.0.1:2377") {
+		if got := swarm.CloudInit.Render("SWMTKN-1-abc-def", "10.0.0.1:2377", "ubuntu", false); !strings.Contains(got, "docker swarm join --token SWMTKN-1-abc-def 10.0.0.1:2377") {
 			t.Errorf("seam render: %q", got)
 		}
 	})
@@ -628,6 +628,41 @@ func TestWorkerCloudInit(t *testing.T) {
 		}
 		if !yamlOK(t, out) {
 			t.Error("not valid YAML")
+		}
+	})
+
+	t.Run("with logging on, the loki plugin step sits between docker and the join, and cannot block it", func(t *testing.T) {
+		// negative control: append the plugin step after the JoinCommand line instead of before the
+		// "2. Join" header — the runcmd order check fails.
+		on := WorkerAnswers{Token: "SWMTKN-1-abc-def", ManagerAddr: "10.0.0.1:2377", Distro: "debian", Logging: true}
+		out, err := RenderWorkerCloudInit(on)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !yamlOK(t, out) {
+			t.Fatalf("not valid YAML:\n%s", out)
+		}
+		// Parsed, like initCall: the step must be a runcmd ITEM between the two, not text that happens
+		// to sit between them.
+		cmds := runcmd(t, out)
+		docker := indexOf(cmds, func(c string) bool { return c == "docker --version" })
+		plugin := indexOf(cmds, func(c string) bool { return strings.Contains(c, swarm.LokiPluginInstall) })
+		join := indexOf(cmds, func(c string) bool { return strings.HasPrefix(c, "docker swarm join ") })
+		if docker < 0 || plugin < 0 || join < 0 || !(docker < plugin && plugin < join) {
+			t.Fatalf("runcmd order: docker %d, plugin %d, join %d\n%v", docker, plugin, join, cmds)
+		}
+		if !strings.Contains(cmds[plugin], `; } || echo "loki plugin not installed: logged services will not run here"`) {
+			t.Errorf("plugin step can block the join: %q", cmds[plugin])
+		}
+
+		off := on
+		off.Logging = false
+		plain, err := RenderWorkerCloudInit(off)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(plain, "loki") {
+			t.Errorf("logging off mentions loki:\n%s", plain)
 		}
 	})
 }

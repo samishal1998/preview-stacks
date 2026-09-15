@@ -38,8 +38,8 @@ import (
 // the render cannot be refused; if it ever is, the message is the text — visible, not an empty file.
 func init() {
 	swarm.CloudInit.Distros = Distros
-	swarm.CloudInit.Render = func(token, managerAddr, distro string) string {
-		out, err := RenderWorkerCloudInit(WorkerAnswers{Token: token, ManagerAddr: managerAddr, Distro: distro})
+	swarm.CloudInit.Render = func(token, managerAddr, distro string, logging bool) string {
+		out, err := RenderWorkerCloudInit(WorkerAnswers{Token: token, ManagerAddr: managerAddr, Distro: distro, Logging: logging})
 		if err != nil {
 			return err.Error()
 		}
@@ -757,11 +757,18 @@ type WorkerAnswers struct {
 	ManagerAddr string
 	Distro      string
 	SSHKey      string
+	// Logging adds the loki plugin step between Docker and the join.
+	Logging bool
 }
 
 // RenderWorkerCloudInit is the user-data for a swarm WORKER: install Docker, join the manager.
 // Nothing else — no Bun, no pstack, no control stack; a worker runs tasks the manager schedules
 // and is managed from the manager.
+//
+// The one optional step is Logging's loki plugin, between Docker and the join. Its section is
+// UNNUMBERED so the logging-off file stays byte-identical, and it is a `|` literal block because the
+// line starts with `{` and its echo carries `: ` — as a plain scalar YAML reads a flow mapping.
+// `{ …; } || echo` so a failed install is a line in cloud-init's log, never a worker that did not join.
 //
 // Its own small template rather than a third of the manager's with conditionals: the generator has
 // no conditional syntax (deliberately — see the header), and the two files share only the Docker
@@ -834,6 +841,15 @@ func RenderWorkerCloudInit(a WorkerAnswers) (string, error) {
 		profile.pkgSetup,
 		profile.dockerEnable,
 		"  - docker --version",
+	)
+	if a.Logging {
+		lines = append(lines,
+			"  # ── Loki log plugin ─────────────────────────────────────────────────────────────────────",
+			"  - |",
+			"    { "+swarm.LokiPluginInstall+"; } || echo \"loki plugin not installed: logged services will not run here\"",
+		)
+	}
+	lines = append(lines,
 		"  # ── 2. Join ─────────────────────────────────────────────────────────────────────────────",
 		"  - "+swarm.JoinCommand(a.Token, a.ManagerAddr),
 		"  - docker info --format 'joined as {{.Swarm.NodeID}} ({{.Swarm.LocalNodeState}})'",
