@@ -1036,6 +1036,17 @@ manages no firewall. The router matches only the push path; Loki's query API is 
 `logs` network alone. The cost: the password is visible in `docker inspect` of a preview container
 and in `compose.generated.yml` (it can only push), and pushes land only while Traefik is up.
 
+### Plugin checks at deploy
+
+A deploy that gave at least one service the loki block checks the plugin before it runs; a dry run
+checks nothing. Under compose, `docker plugin inspect -f '{{.Enabled}}' loki` must print `true`.
+Anything else fails the compose step before `up`; the job log carries the install line, not the step
+message — a step message keeps 300 characters, and the line is longer. Under swarm the deploy always
+runs. The scheduler keeps logged tasks off a node whose engine has no `Log` plugin named
+`loki`/`loki:latest`, so the job log names each such node and, once, the install line. If no node
+qualifies, readiness times out after 180s and that line is the reason. A service that kept its own
+`logging:` is named in the job log too.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves

@@ -10,8 +10,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/autolabel"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
@@ -364,6 +366,172 @@ func TestMaterializingTheFileThroughCompose(t *testing.T) {
 			if strings.HasPrefix(c, "docker compose") {
 				t.Errorf("ran anyway: %v", r.Commands())
 			}
+		}
+	})
+}
+
+// Job-log and error copy here is terse state, not explanation, matching the CLI's own `pstack swarm`
+// report for the identical fact: the compose failure names what's wrong in one sentence and puts the
+// fix in the note instead; the swarm notes name each node once, then the install line once — not the
+// install line repeated per node.
+func TestLoggedDeploysCheckThePluginFirst(t *testing.T) {
+	// What the control stack's loki container carries on a host that ships logs to Loki.
+	const pushURL = "https://pstack:0123456789abcdef0123456789abcdef@loki.preview.example.com/loki/api/v1/push"
+	const cmdPlugin = "docker plugin inspect -f '{{.Enabled}}' loki"
+	const deploy = `docker stack deploy -c 'compose.generated.yml' --prune --with-registry-auth --detach=true 's1'`
+	// web gets the loki block; db keeps its own.
+	const file = "services:\n  web:\n    image: nginx\n  db:\n    image: postgres\n    logging: {driver: json-file}\n"
+
+	// logging points discovery at url for one subtest; TestMain's pin comes back after it.
+	logging := func(t *testing.T, url string) {
+		prev := autolabel.DetectLogging
+		autolabel.DetectLogging = func(exec.Runner) string { return url }
+		t.Cleanup(func() { autolabel.DetectLogging = prev })
+	}
+	// host is a deployment directory holding dc.yml — the file plain.yml and swarm.yml name — and a
+	// runner answering by exact command; anything else succeeds with no output.
+	host := func(t *testing.T, answers map[string]exec.Result) *exec.Fake {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "dc.yml"), []byte(file), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		r := exec.NewFake(nil, "").WithCwd(dir)
+		r.Answer = func(cmd string) (exec.Result, bool) {
+			res, ok := answers[strings.TrimSpace(cmd)]
+			return res, ok
+		}
+		return r
+	}
+	// swarmHost is a manager with two nodes; inspect is what `docker node inspect` answers for both.
+	swarmHost := func(t *testing.T, inspect exec.Result) *exec.Fake {
+		t.Helper()
+		return host(t, map[string]exec.Result{
+			"docker info --format '{{json .Swarm}}'": {OK: true, Stdout: `{"NodeID":"n1abcdef01234567","NodeAddr":"10.0.0.1","LocalNodeState":"active","ControlAvailable":true}`},
+			"docker node ls --format '{{json .}}'": {OK: true, Stdout: `{"ID":"n1abcdef01234567","Hostname":"preview-host","Status":"Ready","Availability":"Active","ManagerStatus":"Leader","EngineVersion":"28.0.1","Self":"true"}` + "\n" +
+				`{"ID":"n2abcdef01234567","Hostname":"worker-1","Status":"Ready","Availability":"Active","ManagerStatus":"","EngineVersion":"28.0.1","Self":"false"}` + "\n"},
+			"docker node inspect --format '{{json .}}' 'n1abcdef01234567' 'n2abcdef01234567'": inspect,
+		})
+	}
+	ran := func(r *exec.Fake, prefix string) bool {
+		for _, c := range r.Commands() {
+			if strings.HasPrefix(c, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("compose: no enabled plugin fails before `up`, and the install line goes to the log", func(t *testing.T) {
+		// negative control: drop the `return` after the failed plugin check — `docker compose … up` runs.
+		logging(t, pushURL)
+		// Disabled, and absent (docker exits 1 with nothing on stdout).
+		for _, answer := range []exec.Result{{OK: true, Stdout: "false\n"}, {OK: false, Code: 1, Stderr: "Error: No such plugin: loki"}} {
+			r := host(t, map[string]exec.Result{cmdPlugin: answer})
+			notes := []string{}
+			res, err := ComposeUp(specFrom(t, "plain.yml", nil), r, nil, func(l string) { notes = append(notes, l) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The sentence itself, nothing explanatory — the fix is the note checked below.
+			if res.OK || res.Code != 1 || res.Stderr != "loki log plugin not installed" {
+				t.Errorf("result: %+v", res)
+			}
+			// stack.Up shows the first line cut at 300 runes; the install line (344 runes on its own)
+			// cannot fit, which is why it goes to the note instead.
+			if strings.Contains(res.Stderr, "\n") || utf8.RuneCountInString(res.Stderr) > 300 {
+				t.Errorf("the step message would be cut: %q", res.Stderr)
+			}
+			if !slices.Contains(notes, "logging: install the loki log plugin on this host: "+swarm.LokiPluginInstall) {
+				t.Errorf("notes: %v", notes)
+			}
+			if ran(r, "docker compose") {
+				t.Errorf("ran anyway: %v", r.Commands())
+			}
+		}
+	})
+
+	t.Run("compose: an enabled plugin lets `up` run, on the derived file", func(t *testing.T) {
+		// negative control: run the plugin check after `up` instead of before — Commands()[0] is the compose line.
+		logging(t, pushURL)
+		r := host(t, map[string]exec.Result{cmdPlugin: {OK: true, Stdout: "true\n"}})
+		must(t)(ComposeUp(specFrom(t, "plain.yml", nil), r, nil, nil))
+		want := cmdPlugin + "\n" + "docker compose -p 's1' -f 'compose.generated.yml' --profile 'a' up -d --remove-orphans"
+		if got := strings.Join(r.Commands(), "\n"); got != want {
+			t.Errorf("commands:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("compose: logging off never asks docker about the plugin", func(t *testing.T) {
+		// negative control: drop `len(m.Logged) > 0` from `logged` — `docker plugin inspect` runs and, unanswered, fails the deploy.
+		logging(t, "")
+		r := host(t, nil)
+		must(t)(ComposeUp(specFrom(t, "plain.yml", nil), r, nil, nil))
+		if got := strings.Join(r.Commands(), "\n"); got != "docker compose -p 's1' -f 'dc.yml' --profile 'a' up -d --remove-orphans" {
+			t.Errorf("commands:\n%s", got)
+		}
+	})
+
+	t.Run("swarm: every node without the plugin is named, the install line goes once, and the deploy still runs", func(t *testing.T) {
+		// negative control: skip swarm.MarkLokiPlugins — every node stays unread and no `no loki plugin` line appears.
+		// Both nodes lack the plugin, so a mutation that puts the install line inside the per-node loop
+		// (instead of once, after it) shows up as a count instead of a presence check.
+		logging(t, pushURL)
+		r := swarmHost(t, exec.Result{OK: true, Stdout: `{"ID":"n1abcdef01234567","Description":{"Engine":{"Plugins":[{"Type":"Network","Name":"overlay"}]}}}` + "\n" +
+			`{"ID":"n2abcdef01234567","Description":{"Engine":{"Plugins":[{"Type":"Network","Name":"overlay"}]}}}` + "\n"})
+		notes := []string{}
+		must(t)(ComposeUp(specFrom(t, "swarm.yml", nil), r, nil, func(l string) { notes = append(notes, l) }))
+		if !slices.Contains(notes, "logging: no loki plugin: preview-host") {
+			t.Errorf("notes: %v", notes)
+		}
+		if !slices.Contains(notes, "logging: no loki plugin: worker-1") {
+			t.Errorf("notes: %v", notes)
+		}
+		install := 0
+		for _, n := range notes {
+			switch {
+			case n == "logging: "+swarm.LokiPluginInstall:
+				install++
+			case strings.Contains(n, "could not read"):
+				t.Errorf("note: %s", n)
+			}
+		}
+		if install != 1 {
+			t.Errorf("install line count: %d, notes: %v", install, notes)
+		}
+		if log := r.Commands(); log[len(log)-1] != deploy {
+			t.Errorf("commands: %v", log)
+		}
+	})
+
+	t.Run("swarm: nodes docker would not describe get one line, not one each", func(t *testing.T) {
+		// negative control: move the could-not-read note into the per-node loop instead of after it — it appears twice.
+		logging(t, pushURL)
+		r := swarmHost(t, exec.Result{OK: false, Code: 1, Stderr: "boom"})
+		notes := []string{}
+		must(t)(ComposeUp(specFrom(t, "swarm.yml", nil), r, nil, func(l string) { notes = append(notes, l) }))
+		count := 0
+		for _, n := range notes {
+			if n == "logging: could not read the nodes' plugins (docker node inspect did not answer)" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("notes: %v", notes)
+		}
+		if log := r.Commands(); log[len(log)-1] != deploy {
+			t.Errorf("commands: %v", log)
+		}
+	})
+
+	t.Run("a service with its own logging is named in the log", func(t *testing.T) {
+		// negative control: stop emitting m.LogNotes in ComposeUp — the db line is missing.
+		logging(t, pushURL)
+		r := host(t, map[string]exec.Result{cmdPlugin: {OK: true, Stdout: "true\n"}})
+		notes := []string{}
+		must(t)(ComposeUp(specFrom(t, "plain.yml", nil), r, nil, func(l string) { notes = append(notes, l) }))
+		if !slices.Contains(notes, "logging: service db has its own logging: — left alone") {
+			t.Errorf("notes: %v", notes)
 		}
 	})
 }
