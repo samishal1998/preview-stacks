@@ -234,7 +234,8 @@ func run(argv []string, io IO) *Exit {
 		if !args.Force {
 			if state, err := upgrade.ReadControlState(dataDir); err == nil {
 				_, hasToken := io.Env("PSTACK_TOKEN")
-				if msg := initRevertRefusal(initReverts(state, dataDir, args, hasToken, hasDNSToken)); msg != "" {
+				_, hasLokiPassword := io.Env("PSTACK_LOKI_PASSWORD")
+				if msg := initRevertRefusal(initReverts(state, dataDir, args, hasToken, hasDNSToken, hasLokiPassword)); msg != "" {
 					return fail(msg)
 				}
 			}
@@ -242,7 +243,7 @@ func run(argv []string, io IO) *Exit {
 		err := initctl.Init(initctl.Options{
 			DataDir: dataDir, Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
 			Challenge: initctl.Challenge(args.Challenge), UI: initctl.UI(args.UI), Orchestrator: spec.Orchestrator(args.Orchestrator),
-			Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
+			Logging: initctl.Logging(args.Logging), Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
 		})
 		if err != nil {
 			return &Exit{Code: ExitFailed, Msg: err.Error()}
@@ -544,7 +545,7 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	}
 	yaml, err := cloudinit.RenderCloudInit(cloudinit.Answers{
 		Domain: domain, AcmeEmail: acmeEmail, SSHKey: sshKey, DashboardPassword: dashboardPassword,
-		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator,
+		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator, Logging: args.Logging,
 		AdminUser: adminUser, AdminPassword: adminPassword, Token: apiToken, DNSToken: dnsToken,
 		ExtraDomains: args.ExtraDomains,
 		ConfigRepo:   configRepo, Distro: args.Distro,

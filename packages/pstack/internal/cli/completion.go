@@ -49,6 +49,7 @@ var enumFlags = map[string][]string{
 	"--challenge":    {"http01", "dns01"},
 	"--ui":           {"basic", "advanced"},
 	"--orchestrator": {"swarm", "compose"},
+	"--logging":      {"none", "loki"},
 	"--distro":       {"ubuntu", "debian", "fedora", "suse", "arch", "alpine"},
 	"--format":       {"command", "script", "cloud-config", "token"},
 }

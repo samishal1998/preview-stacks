@@ -94,7 +94,7 @@ func TestEnvDefaultsUseTheRightNullishness(t *testing.T) {
 	// negative control: read PSTACK_CHALLENGE with `get` instead of `or` — an empty value stops meaning http01.
 	env := func(k string) (string, bool) {
 		switch k {
-		case "PSTACK_CHALLENGE", "PSTACK_ORCHESTRATOR", "PSTACK_UI":
+		case "PSTACK_CHALLENGE", "PSTACK_ORCHESTRATOR", "PSTACK_UI", "PSTACK_LOGGING":
 			return "", true // set but empty: the `||` sites fall back
 		case "PSTACK_DOMAIN":
 			return "", true // the `??` site keeps the empty string
@@ -104,8 +104,38 @@ func TestEnvDefaultsUseTheRightNullishness(t *testing.T) {
 		return "", false
 	}
 	p, _ := ParseArgs([]string{"init"}, env)
-	if p.Challenge != "http01" || p.Orchestrator != "swarm" || p.UI != "basic" || p.Tag != "custom:tag" || p.Domain != "" {
+	if p.Challenge != "http01" || p.Orchestrator != "swarm" || p.UI != "basic" || p.Logging != "none" || p.Tag != "custom:tag" || p.Domain != "" {
 		t.Errorf("got %+v", p)
+	}
+}
+
+func TestLoggingFlag(t *testing.T) {
+	// negative control: drop the none|loki check in the `--logging` case — `--logging on` parses,
+	// and init renders a host with logging off without saying so.
+	p, e := ParseArgs([]string{"init", "--logging", "loki"}, noEnv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.Logging != "loki" || !p.Typed["--logging"] {
+		t.Errorf("--logging loki: %+v", p)
+	}
+	def, _ := ParseArgs([]string{"init"}, noEnv)
+	if def.Logging != "none" || def.Typed["--logging"] {
+		t.Errorf("default: %+v", def)
+	}
+	if _, e := ParseArgs([]string{"init", "--logging", "on"}, noEnv); e == nil || e.Code != ExitUsage || e.Msg != `--logging must be none or loki, got "on"` {
+		t.Errorf("bad --logging: %+v", e)
+	}
+	// The environment sets the value but is not a SPELLED flag: the guard judges Typed.
+	env := func(k string) (string, bool) {
+		if k == "PSTACK_LOGGING" {
+			return "loki", true
+		}
+		return "", false
+	}
+	fromEnv, _ := ParseArgs([]string{"init"}, env)
+	if fromEnv.Logging != "loki" || fromEnv.Typed["--logging"] {
+		t.Errorf("PSTACK_LOGGING: %+v", fromEnv)
 	}
 }
 

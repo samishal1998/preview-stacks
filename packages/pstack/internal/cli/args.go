@@ -50,6 +50,7 @@ type Parsed struct {
 	DNSProvider  string
 	Challenge    string // http01 | dns01
 	Orchestrator string // swarm | compose
+	Logging      string // none | loki
 	Distro       string
 	Format       string
 	Tag          string
@@ -92,7 +93,7 @@ type Parsed struct {
 	// box through `ps` for as long as the process lives. A path is not a secret, so it may travel
 	// here; what it points at never enters this struct.
 	DNSTokenFile string
-	Out       string
+	Out          string
 	// In is `-i` — the file `push config` reads. The counterpart of Out.
 	In     string
 	Yes    bool
@@ -136,6 +137,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		Format:       "command",
 		Tag:          get("PSTACK_IMAGE", "pstack:local"),
 		UI:           or("PSTACK_UI", "basic"),
+		Logging:      or("PSTACK_LOGGING", "none"),
 		SSHKey:       get("PSTACK_SSH_KEY", ""),
 		Password:     get("PSTACK_DASHBOARD_PASSWORD", ""),
 		Distro:       get("PSTACK_DISTRO", "ubuntu"),
@@ -242,6 +244,13 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 				return nil, fail(fmt.Sprintf(`--orchestrator must be swarm or compose, got "%s"`, o))
 			}
 			p.Orchestrator = o
+		case "--logging":
+			p.Typed["--logging"] = true
+			l := next(&i, "")
+			if l != "none" && l != "loki" {
+				return nil, fail(fmt.Sprintf(`--logging must be none or loki, got "%s"`, l))
+			}
+			p.Logging = l
 		case "--set":
 			kv := next(&i, "")
 			eq := strings.IndexByte(kv, '=')
@@ -343,8 +352,9 @@ func Usage(version string) string {
 		"            --dns-token-file <path>         the DNS-01 credential, or PSTACK_DNS_TOKEN.",
 		"                                            A path, never the token: argv is world-readable.",
 		"            --orchestrator swarm|compose    (default swarm — one manager; workers join from the Swarm page)",
+		"            --logging none|loki             (default none — Loki log shipping)",
 		"",
-		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator]",
+		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator] [--logging]",
 		"            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)",
 		"            --admin-user <name> [--admin-password <pw>]  the first UI account, created on first boot",
 		"            --api-token <PSTACK_TOKEN>   default: `init` generates one on the host and prints it once",

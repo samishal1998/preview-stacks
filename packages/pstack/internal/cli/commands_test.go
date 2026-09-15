@@ -45,6 +45,8 @@ func TestTheShellIsOfferedTheFlagsTheHelpDescribes(t *testing.T) {
 		{"down", "--force"},
 		{"cloud-init", "--admin-user"},
 		{"build-image", "--tag"},
+		{"init", "--logging"},
+		{"cloud-init", "--logging"},
 	} {
 		got := completionFlags(tc.cmd)
 		found := false
