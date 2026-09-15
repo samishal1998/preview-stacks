@@ -158,6 +158,15 @@ type Options struct {
 	//   compose  What every host before 0.26.0 ran. `pstack upgrade` keeps it: switching an existing
 	//            host means recreating its networks, which needs every preview torn down first.
 	Orchestrator spec.Orchestrator
+	// Logging is where this host's previews' logs go.
+	//
+	//   none  DEFAULT ("" counts as none). The control stack and every deploy stay exactly what they
+	//         were. .env still keeps LOKI_PUSH_PASSWORD if PSTACK_LOKI_PASSWORD is set, so a value
+	//         survives `pstack logging off` for `pstack logging loki` to reuse.
+	//   loki  A Loki service in the control stack, reachable only at loki.<domain>'s push path; its log
+	//         plugin on this node; a push password in .env. Deploys give every service without its
+	//         own `logging:` the loki driver.
+	Logging Logging
 	// DNSProvider is the lego DNS-01 provider code, e.g. `cloudflare`. Required for, and only used by, `dns01`.
 	DNSProvider string
 	// Token is the DNS-01 API token, and ONLY that — it is written to `dns.env` for Traefik and
@@ -174,9 +183,10 @@ type Options struct {
 	Out io.Writer
 }
 
-// randomToken is 24 random bytes, hex. Hex on purpose: `$` in a `.env` value is expanded by Compose.
-func randomToken() string {
-	b := make([]byte, 24)
+// randomHex is n random bytes, hex. Hex on purpose: `$` in a `.env` value is expanded by Compose, and
+// the Loki push password also sits in a URL's userinfo, where a reserved character would break it.
+func randomHex(n int) string {
+	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
@@ -193,7 +203,7 @@ func Init(opts Options) error {
 		out = os.Stdout
 	}
 	dataDir, domain, acmeEmail, dnsProvider := opts.DataDir, opts.Domain, opts.AcmeEmail, opts.DNSProvider
-	challenge, ui, orchestrator, dryRun, runner := opts.Challenge, opts.UI, opts.Orchestrator, opts.DryRun, opts.Runner
+	challenge, ui, orchestrator, logging, dryRun, runner := opts.Challenge, opts.UI, opts.Orchestrator, opts.Logging, opts.DryRun, opts.Runner
 	image := defaultImage()
 	uiImage := "pstack-ui:local"
 	if v, ok := os.LookupEnv("PSTACK_UI_IMAGE"); ok {
@@ -214,7 +224,7 @@ func Init(opts Options) error {
 	pstackToken := os.Getenv("PSTACK_TOKEN")
 	generated := pstackToken == ""
 	if generated {
-		pstackToken = randomToken()
+		pstackToken = randomHex(24)
 	}
 
 	// The first admin account, from the environment for the same reason the token is: `serve` inside
@@ -228,6 +238,23 @@ func Init(opts Options) error {
 	// and the bootstrap is inert (internal/auth), so keeping a spent password in a 0600 file buys
 	// nothing.
 	adminUser, adminPassword := os.Getenv("PSTACK_ADMIN_USER"), os.Getenv("PSTACK_ADMIN_PASSWORD")
+
+	// Loki's push password, read regardless of --logging: `pstack logging off` re-runs Init with
+	// PSTACK_LOKI_PASSWORD carrying back whatever .env already has, so the line survives that round
+	// trip and `pstack logging loki` reuses it (only reachable by hand-editing .env otherwise — spec
+	// "push password mismatch"). `||` like the token: a set one is kept, and only --logging loki
+	// generates one when unset. 16 bytes is 128 bits, which is why Traefik's fast {SHA} check is no
+	// weakness. Validated and checked before step 0 runs anything, because a set value always lands
+	// in .env — where Compose expands `$` — and, under Loki, in the push URL's userinfo. The error
+	// never echoes it.
+	lokiPassword := os.Getenv("PSTACK_LOKI_PASSWORD")
+	if lokiPassword == "" {
+		if logging == Loki {
+			lokiPassword = randomHex(16)
+		}
+	} else if len(lokiPassword) != 32 || strings.Trim(lokiPassword, "0123456789abcdef") != "" {
+		return errors.New("PSTACK_LOKI_PASSWORD must be 32 lowercase hex characters, like LOKI_PUSH_PASSWORD in control/.env")
+	}
 
 	// ── 0. Preconditions ────────────────────────────────────────────────────────────────────────
 	// Same shape and same reason as a spec's `requires:` — fail immediately, by name, before
@@ -295,6 +322,13 @@ func Init(opts Options) error {
 	if err := ensureDir(out, filepath.Join(dataDir, "db"), dryRun, 0o700); err != nil {
 		return err
 	}
+	// Loki's config, mounted as a DIRECTORY (a file mount keeps the old inode when the file is replaced
+	// by rename). Left to the umask: the image runs as uid 10001 and must traverse it.
+	if logging == Loki {
+		if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, noMode); err != nil {
+			return err
+		}
+	}
 
 	// ── 1b. Swarm ───────────────────────────────────────────────────────────────────────────────
 	// `swarm init` on a node that is already a manager fails, so it is guarded by the state docker
@@ -309,6 +343,20 @@ func Init(opts Options) error {
 					"  A host with several addresses needs --advertise-addr; run `docker swarm init --advertise-addr <ip>` " +
 					"once by hand, then re-run pstack init.")
 			}
+		}
+	}
+
+	// ── 1c. The Loki log plugin ─────────────────────────────────────────────────────────────────
+	// Only with --logging loki, and fatal. Under compose every service given the loki driver fails to
+	// CREATE without the plugin, so a host that says "logging on" but cannot run a logged preview is
+	// worse than an init that stops here, before any config is written. The line is idempotent
+	// (swarm.LokiPluginInstall), so re-running init is the retry. Workers get it from their join material.
+	if logging == Loki {
+		r := runner.Run(swarm.LokiPluginInstall, exec.RunOptions{Label: "loki log plugin"})
+		if !r.OK {
+			return errors.New("the loki log plugin did not install:\n" + exec.Indent(firstOf(r.Stderr, r.Stdout)) + "\n" +
+				"  Run it by hand on this host, then re-run pstack init:\n" +
+				"  " + swarm.LokiPluginInstall)
 		}
 	}
 
@@ -379,7 +427,14 @@ func Init(opts Options) error {
 	template = strings.Replace(template, "      #__CONTROL_UI_SERVICE__", ControlUIService(ui), 1)
 	template = strings.Replace(template, "      #__SWARM_PROVIDER__", SwarmProviderArgs(orchestrator), 1)
 	template = strings.Replace(template, "      #__WAKE_ROUTER__", WakeRouterLabels(domain), 1)
-	template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui), 1)
+	// Loki rides on the last marker instead of adding one: every marker leaves a line behind when off, so
+	// a new marker would change every existing host's file (and the 8 render goldens). Its other three
+	// edits are anchors that LokiWiring checks before replacing. Both are no-ops unless logging is loki.
+	template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui)+LokiService(logging, challenge, lokiPassword), 1)
+	template, err := LokiWiring(template, logging)
+	if err != nil {
+		return err
+	}
 	if err := write(out, composePath, template, 0o644, dryRun); err != nil {
 		return err
 	}
@@ -389,7 +444,7 @@ func Init(opts Options) error {
 	if err := write(out, filepath.Join(controlDir, ".env"), envFile(envValues{
 		dataDir: dataDir, domain: domain, acmeEmail: acmeEmail, dnsProvider: dnsProvider, image: image,
 		pstackToken: pstackToken, ui: ui, uiImage: uiImage, orchestrator: orchestrator,
-		adminUser: adminUser, adminPassword: adminPassword,
+		adminUser: adminUser, adminPassword: adminPassword, lokiPassword: lokiPassword,
 	}), 0o600, dryRun); err != nil {
 		return err
 	}
@@ -397,6 +452,14 @@ func Init(opts Options) error {
 	// Only meaningful for dns01; written either way so switching modes needs no extra step.
 	if err := write(out, filepath.Join(controlDir, "dns.env"), dnsEnvFile(dnsProvider, opts.Token), 0o600, dryRun); err != nil {
 		return err
+	}
+
+	// 0644, not 0600 like its neighbours: the Loki image runs as uid 10001 and must read it, and it holds
+	// no credential. The password stays in .env and reaches Traefik only as a hash.
+	if logging == Loki {
+		if err := write(out, filepath.Join(controlDir, "loki", "config.yaml"), pstack.LokiConfig, 0o644, dryRun); err != nil {
+			return err
+		}
 	}
 
 	// ── 4. Bring it up ──────────────────────────────────────────────────────────────────────────
@@ -442,6 +505,9 @@ func Init(opts Options) error {
 	}
 	if orchestrator == spec.Swarm {
 		lines = append(lines, "            workers need "+swarm.PortList()+" open to and from this host")
+	}
+	if logging == Loki {
+		lines = append(lines, "  logging   loki at https://loki."+domain+" (push only); services without `logging:` ship to it")
 	}
 	envPath := filepath.Join(controlDir, ".env")
 	lines = append(lines,
@@ -531,6 +597,7 @@ type envValues struct {
 	pstackToken   string
 	adminUser     string
 	adminPassword string
+	lokiPassword  string
 }
 
 // envFile is the values every `${...}` in the compose template reads. Compose loads this from `.env`.
@@ -573,6 +640,17 @@ func envFile(v envValues) string {
 			"# empty and inert forever after. Remove them once you have signed in; nothing re-reads them.",
 			"PSTACK_ADMIN_USER="+v.adminUser,
 			"PSTACK_ADMIN_PASSWORD="+v.adminPassword,
+			"",
+		)
+	}
+	// Present whenever a password exists — generated under --logging loki, or carried back on a
+	// logging-off re-run — so a fresh host with none stays byte-identical. Compose interpolates it
+	// into the loki container's push-url label; upgrade and `pstack logging` read it back.
+	if v.lokiPassword != "" {
+		lines = append(lines,
+			"# Loki's push password. Every node's log plugin sends it; Traefik checks its {SHA} hash.",
+			"# `pstack upgrade` and `pstack logging` keep it; turning Loki on generates one if none exists.",
+			"LOKI_PUSH_PASSWORD="+v.lokiPassword,
 			"",
 		)
 	}

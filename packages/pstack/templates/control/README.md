@@ -21,8 +21,9 @@ Everything lands under `--data-dir` (default `/var/lib/pstack`, the same path th
 ├── deployments/                 the Registry — one directory per submitted deployment
 └── control/
     ├── docker-compose.yml       ← a byte-for-byte copy of this directory's template
-    ├── .env             0600    DOMAIN, ACME_EMAIL, DNS_PROVIDER, PSTACK_IMAGE, PSTACK_TOKEN
+    ├── .env             0600    DOMAIN, ACME_EMAIL, DNS_PROVIDER, PSTACK_IMAGE, PSTACK_TOKEN, LOKI_PUSH_PASSWORD (only with --logging loki)
     ├── dns.env          0600    the DNS-01 credential, under the variable name lego expects
+    ├── loki/config.yaml 0644    Loki's fixed config (only with --logging loki)
     └── traefik-dynamic/         the file provider's watched directory (starts empty)
 ```
 

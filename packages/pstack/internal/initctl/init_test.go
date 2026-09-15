@@ -17,6 +17,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/initctl"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/testfacts"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/upgrade"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
@@ -523,6 +524,8 @@ func TestInitGoldens(t *testing.T) {
 	t.Setenv("PSTACK_TOKEN", goldenToken)
 	os.Unsetenv("PSTACK_IMAGE")
 	os.Unsetenv("PSTACK_UI_IMAGE")
+	// A stray PSTACK_LOKI_PASSWORD is no longer inert under logging off — it lands in .env.
+	os.Unsetenv("PSTACK_LOKI_PASSWORD")
 	for _, c := range cells() {
 		t.Run(c.name()+" files", func(t *testing.T) {
 			// negative control: change `name: pstack-control` handling, any marker block, or the .env line order — the compare fails.
@@ -855,6 +858,208 @@ func TestLokiConfig(t *testing.T) {
 		// comment-only edit the load-bearing-values subtest above cannot see, but this one catches.
 		if want := strings.Join(lokiConfigSpecLines, "\n"); pstack.LokiConfig != want {
 			t.Error("templates/control/loki/config.yaml no longer matches docs/loki-logging-design.md's Loki config block byte-for-byte")
+		}
+	})
+}
+
+// init --logging loki: the push password, its .env line, Loki's config and the plugin step. Logging off
+// is today's bytes — TestInitGoldens proves that for all eight cells, so it is not repeated here.
+func TestInitLoki(t *testing.T) {
+	loki := func(r *exec.Fake, out *bytes.Buffer) func(*initctl.Options) {
+		return func(o *initctl.Options) { o.Logging, o.Runner, o.Out = initctl.Loki, r, out }
+	}
+	const pw = "0123456789abcdef0123456789abcdef"
+
+	t.Run("a generated push password is 32 hex in .env and its {SHA} hash is the basicauth label", func(t *testing.T) {
+		// negative control: pass "" instead of lokiPassword to LokiService in Init — the label hash no longer matches.
+		t.Setenv("PSTACK_LOKI_PASSWORD", "") // empty is unset (`||`), and it keeps the operator's shell out of the test
+		var out bytes.Buffer
+		dir, yaml := render(t, loki(okRunner("inactive", ""), &out))
+		env := read(t, filepath.Join(dir, "control", ".env"))
+		m := regexp.MustCompile(`(?m)^LOKI_PUSH_PASSWORD=([0-9a-f]{32})$`).FindStringSubmatch(env)
+		if m == nil {
+			t.Fatalf(".env has no 32-hex LOKI_PUSH_PASSWORD line:\n%s", env)
+		}
+		sum := sha1.Sum([]byte(m[1]))
+		if want := "basicauth.users=pstack:{SHA}" + base64.StdEncoding.EncodeToString(sum[:]) + "\n"; !strings.Contains(yaml, want) {
+			t.Errorf("compose lacks %q", want)
+		}
+		if !strings.Contains(out.String(), "  logging   loki at https://loki.preview.example.com (push only)") {
+			t.Errorf("no logging summary line:\n%s", out.String())
+		}
+		// Nobody needs it printed: upgrade reads it back from .env, deploys from the loki container's label.
+		if strings.Contains(out.String(), m[1]) {
+			t.Error("init printed the push password")
+		}
+	})
+
+	t.Run("PSTACK_LOKI_PASSWORD is used verbatim", func(t *testing.T) {
+		// negative control: replace `os.Getenv("PSTACK_LOKI_PASSWORD")` with "" in Init — a generated password is written instead.
+		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
+		dir, _ := render(t, loki(okRunner("inactive", ""), &bytes.Buffer{}))
+		if env := read(t, filepath.Join(dir, "control", ".env")); !strings.Contains(env, "\nLOKI_PUSH_PASSWORD="+pw+"\n") {
+			t.Errorf(".env does not carry the supplied password:\n%s", env)
+		}
+	})
+
+	t.Run("a malformed PSTACK_LOKI_PASSWORD fails before anything runs or is written", func(t *testing.T) {
+		// negative control: move the push-password block below `── 0. Preconditions` — the precondition commands run first.
+		bad := "0123456789abcdef0123456789abcde$" // 32 characters; `$` is what Compose would expand in .env
+		t.Setenv("PSTACK_LOKI_PASSWORD", bad)
+		r := okRunner("inactive", "")
+		dir := t.TempDir()
+		err := initctl.Init(initctl.Options{
+			DataDir: dir, Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			Orchestrator: spec.Compose, Logging: initctl.Loki, Runner: r, Out: &bytes.Buffer{},
+		})
+		if err == nil || !strings.HasPrefix(err.Error(), "PSTACK_LOKI_PASSWORD must be 32 lowercase hex characters") {
+			t.Fatalf("got %v", err)
+		}
+		if strings.Contains(err.Error(), bad) {
+			t.Error("the error echoes the secret")
+		}
+		if n := len(r.Commands()); n != 0 {
+			t.Errorf("%d commands ran before the refusal: %v", n, r.Commands())
+		}
+		if _, err := os.Stat(filepath.Join(dir, "control", ".env")); !os.IsNotExist(err) {
+			t.Errorf("control/.env was written: %v", err)
+		}
+	})
+
+	t.Run("the plugin installs before the control stack comes up, and a failed install fails init", func(t *testing.T) {
+		// negative control: move the `── 1c.` block below `── 4. Bring it up` — plugin runs after up, and up runs before the error.
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		r := okRunner("inactive", "")
+		render(t, loki(r, &bytes.Buffer{}))
+		plugin, up := -1, -1
+		for i, c := range r.Commands() {
+			if c == swarm.LokiPluginInstall {
+				plugin = i
+			}
+			if strings.Contains(c, "-p pstack-control") && strings.HasSuffix(c, " up -d --remove-orphans") {
+				up = i
+			}
+		}
+		if plugin < 0 || up < 0 || plugin > up {
+			t.Errorf("plugin at %d, up at %d:\n%s", plugin, up, strings.Join(r.Commands(), "\n"))
+		}
+
+		failing := okRunner("inactive", "")
+		ok := failing.Answer
+		// Answer, not Fail: a Fake consults Fail only when Answer declines, and okRunner answers everything.
+		failing.Answer = func(cmd string) (exec.Result, bool) {
+			if cmd == swarm.LokiPluginInstall {
+				return exec.Result{OK: false, Code: 1, Stderr: "Error response from daemon: pull access denied\n"}, true
+			}
+			return ok(cmd)
+		}
+		err := initctl.Init(initctl.Options{
+			DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			Orchestrator: spec.Compose, Logging: initctl.Loki, Runner: failing, Out: &bytes.Buffer{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "loki log plugin") || !strings.Contains(err.Error(), "pull access denied") ||
+			!strings.Contains(err.Error(), swarm.LokiPluginInstall) {
+			t.Fatalf("got %v", err)
+		}
+		for _, c := range failing.Commands() {
+			if strings.Contains(c, " up -d") {
+				t.Errorf("the control stack came up after the plugin failed: %s", c)
+			}
+		}
+	})
+
+	t.Run("control/loki/config.yaml is the embedded config at 0644", func(t *testing.T) {
+		// negative control: write config.yaml at 0o600 — the mode check fails (Loki runs as uid 10001 and could not read it).
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		dir, _ := render(t, loki(okRunner("inactive", ""), &bytes.Buffer{}))
+		p := filepath.Join(dir, "control", "loki", "config.yaml")
+		if got := read(t, p); got != pstack.LokiConfig {
+			t.Errorf("config.yaml differs from pstack.LokiConfig:\n%s", got)
+		}
+		st, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0o644 {
+			t.Errorf("mode %o, want 644", st.Mode().Perm())
+		}
+	})
+
+	// R5 amends the plan: LOKI_PUSH_PASSWORD survives `pstack logging off` (spec 291 — `pstack upgrade`
+	// and `pstack logging` reuse the stored password), so a valid env password is kept even with logging
+	// none. Everything ELSE about "off" stays today's behaviour: no loki dir, no plugin, no compose block.
+	t.Run("logging off: no loki dir, no plugin, no compose block — but PSTACK_LOKI_PASSWORD is kept in .env", func(t *testing.T) {
+		// negative control: re-gate `os.Getenv("PSTACK_LOKI_PASSWORD")` under `if logging == Loki` (pre-R5) — the .env line disappears.
+		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
+		r := okRunner("inactive", "")
+		var out bytes.Buffer
+		dir, yaml := render(t, func(o *initctl.Options) { o.Runner, o.Out = r, &out })
+		if _, err := os.Stat(filepath.Join(dir, "control", "loki")); !os.IsNotExist(err) {
+			t.Errorf("control/loki exists: %v", err)
+		}
+		if env := read(t, filepath.Join(dir, "control", ".env")); !strings.Contains(env, "\nLOKI_PUSH_PASSWORD="+pw+"\n") {
+			t.Errorf(".env dropped the password it was handed (spec 291: it must survive `logging off`):\n%s", env)
+		}
+		if strings.Contains(yaml, "loki") {
+			t.Error("compose mentions loki")
+		}
+		for _, c := range r.Commands() {
+			if strings.Contains(c, "docker plugin") {
+				t.Errorf("plugin command with logging off: %s", c)
+			}
+		}
+		// Not a bare "logging" check: t.TempDir() folds this subtest's own name into the printed
+		// config/registry paths above, and that name starts with "logging off" too.
+		if strings.Contains(out.String(), "  logging   loki at ") {
+			t.Errorf("summary mentions the loki logging line:\n%s", out.String())
+		}
+	})
+
+	t.Run("a malformed PSTACK_LOKI_PASSWORD fails logging off too, before anything runs or is written", func(t *testing.T) {
+		// negative control: re-gate the validation under `if logging == Loki` — a bad env password is accepted and written.
+		bad := "0123456789abcdef0123456789abcde$"
+		t.Setenv("PSTACK_LOKI_PASSWORD", bad)
+		r := okRunner("inactive", "")
+		dir := t.TempDir()
+		err := initctl.Init(initctl.Options{
+			DataDir: dir, Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			Orchestrator: spec.Compose, Runner: r, Out: &bytes.Buffer{},
+		})
+		if err == nil || !strings.HasPrefix(err.Error(), "PSTACK_LOKI_PASSWORD must be 32 lowercase hex characters") {
+			t.Fatalf("got %v", err)
+		}
+		if n := len(r.Commands()); n != 0 {
+			t.Errorf("%d commands ran before the refusal: %v", n, r.Commands())
+		}
+		if _, err := os.Stat(filepath.Join(dir, "control", ".env")); !os.IsNotExist(err) {
+			t.Errorf("control/.env was written: %v", err)
+		}
+	})
+
+	t.Run("dry-run names the plugin step and the config file, and writes nothing", func(t *testing.T) {
+		// negative control: wrap the `── 1c.` block in `if !dryRun` like the health wait — `[dry-run] loki log plugin` is missing.
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		dir := t.TempDir()
+		var out bytes.Buffer
+		// The real runner, not a Fake: only it prints the `[dry-run] <label>` lines.
+		if err := initctl.Init(initctl.Options{
+			DataDir: dir, Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			Orchestrator: spec.Compose, Logging: initctl.Loki, DryRun: true,
+			Runner: exec.New(exec.Options{DryRun: true, Out: &out}), Out: &out,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"  [dry-run] loki log plugin\n",
+			"  [dry-run] mkdir -p " + filepath.Join(dir, "control", "loki") + "\n",
+			"  [dry-run] write " + filepath.Join(dir, "control", "loki", "config.yaml") + " (",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("missing %q:\n%s", want, out.String())
+			}
+		}
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+			t.Errorf("dry-run wrote %v (%v)", entries, err)
 		}
 	})
 }
