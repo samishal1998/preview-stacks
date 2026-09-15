@@ -26,6 +26,15 @@
 // Every verb returns an error only when the derived compose file could not be produced (a
 // *spec.Error from autolabel — the TS threw the same); a command that ran and failed is a Result
 // with OK false, never an error.
+//
+// Logging: on a host that ships logs to Loki, `up` checks the plugin before it deploys anything
+// autolabel gave the loki driver. Under compose a missing or disabled plugin fails every logged
+// container's create with dockerd's error, which names the driver and not the fix — so the check
+// answers a Result with OK false (the rule above) and `up` never runs. Under swarm the scheduler
+// keeps logged tasks off a node without the plugin, so the deploy runs and the log names those
+// nodes; if none qualifies, readiness times out and those lines are the only thing saying why. The
+// install line always goes to `note`, never into the Result: stack.Up keeps the first 300 runes of
+// the Result's first line, and the line alone is longer.
 package compose
 
 import (
@@ -47,18 +56,29 @@ type LogsOptions = swarm.LogsOptions
 // baseFor is the prefix every subcommand shares.
 //
 // `-p <stack>` is the namespacing primitive: it prefixes containers, networks and volumes, so two
-// stacks from the same compose file never collide. The `-f` list comes from fileArgsFor, which
+// stacks from the same compose file never collide. The `-f` list comes from filesFor, which
 // substitutes the augmented file when the submitted one asked for generated labels.
 func baseFor(st *spec.Stack, r exec.Runner) (string, error) {
-	files, err := fileArgsFor(st, r)
+	files, _, err := filesFor(st, r)
 	if err != nil {
 		return "", err
 	}
-	return "docker compose -p " + Shq(st.Stack) + " " + files, nil
+	return baseOf(st, files), nil
 }
 
-// fileArgsFor resolves which compose file to pass to `-f`, generating the augmented one when the
-// submitted file asks for it with `pstack.routing.*` labels.
+// baseOf is baseFor over files already resolved. ComposeUp resolves them itself, once, because it
+// also reads what the materialization did.
+func baseOf(st *spec.Stack, files []string) string {
+	parts := make([]string, len(files))
+	for i, f := range files {
+		parts[i] = "-f " + Shq(f)
+	}
+	return "docker compose -p " + Shq(st.Stack) + " " + strings.Join(parts, " ")
+}
+
+// filesFor resolves which compose files to pass to `-f`, in order, generating the augmented one when
+// the submitted file needs it: `pstack.routing.*` labels, swarm, or a host that ships logs to Loki.
+// m is what the materialization did, for the job log; nil under --dry-run.
 //
 // Called by EVERY subcommand, not just `up`. The generated labels are derived from the resolved spec,
 // so regenerating each time is what stops `up` and `down` disagreeing about what a router was called —
@@ -67,26 +87,12 @@ func baseFor(st *spec.Stack, r exec.Runner) (string, error) {
 // `runner.Cwd()` is the deployment directory (the registry sets it); the CLI sets none and docker runs
 // from the shell's directory, which is then where the compose file is read from and the derived one
 // written (beside it — see autolabel.MaterializeCompose).
-func fileArgsFor(st *spec.Stack, r exec.Runner) (string, error) {
-	files, _, err := filesFor(st, r)
-	if err != nil {
-		return "", err
-	}
-	parts := make([]string, len(files))
-	for i, f := range files {
-		parts[i] = "-f " + Shq(f)
-	}
-	return strings.Join(parts, " "), nil
-}
-
-// filesFor is the compose files to pass, in order, plus what the swarm conversion changed (for the
-// job log).
-func filesFor(st *spec.Stack, r exec.Runner) (files, notes []string, err error) {
+func filesFor(st *spec.Stack, r exec.Runner) (files []string, m *autolabel.MaterializeResult, err error) {
 	c := st.Compose
 	// Nothing is written under --dry-run: a dry run must not have side effects, and the point of it is
 	// to show what WOULD happen.
 	if r.DryRun() {
-		return append([]string{c.File}, c.Overlays...), []string{}, nil
+		return append([]string{c.File}, c.Overlays...), nil, nil
 	}
 	// The deployment directory under the API; the shell's directory under the CLI — which is also
 	// where docker itself will resolve the `-f` path, so the two cannot disagree.
@@ -94,11 +100,11 @@ func filesFor(st *spec.Stack, r exec.Runner) (files, notes []string, err error) 
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
-	m, err := autolabel.MaterializeCompose(autolabel.MaterializeArgs{Dir: dir, Spec: st, Runner: r})
+	m, err = autolabel.MaterializeCompose(autolabel.MaterializeArgs{Dir: dir, Spec: st, Runner: r})
 	if err != nil {
 		return nil, nil, err
 	}
-	return append([]string{m.File}, c.Overlays...), m.Notes, nil
+	return append([]string{m.File}, c.Overlays...), m, nil
 }
 
 func isSwarm(st *spec.Stack) bool {
@@ -127,28 +133,67 @@ func ComposeEnv(st *spec.Stack, extra map[string]string) map[string]string {
 	return exec.Merge(st.Env, spec.SubdomainEnv(subs), extra, map[string]string{"STACK": st.Stack})
 }
 
-// ComposeUp is `compose up` / `stack deploy`. note receives the swarm conversion's lines; nil for the CLI,
-// which has no job log.
+// ComposeUp is `compose up` / `stack deploy`. note receives the job-log lines: what the swarm
+// conversion changed, which services kept their own `logging:`, and what the loki plugin check found.
+// nil drops them.
 func ComposeUp(st *spec.Stack, r exec.Runner, extraEnv map[string]string, note func(string)) (exec.Result, error) {
 	c := st.Compose
-	if isSwarm(st) {
-		files, notes, err := filesFor(st, r)
-		if err != nil {
-			return exec.Result{}, err
+	files, m, err := filesFor(st, r)
+	if err != nil {
+		return exec.Result{}, err
+	}
+	if note == nil {
+		note = func(string) {}
+	}
+	// m is nil under --dry-run: nothing was materialized, so nothing is said and no plugin is checked.
+	logged := m != nil && len(m.Logged) > 0
+	if m != nil {
+		for _, n := range m.Notes {
+			note("swarm: " + n)
 		}
-		if note != nil {
-			for _, n := range notes {
-				note("swarm: " + n)
+		for _, n := range m.LogNotes {
+			note(n)
+		}
+	}
+	if isSwarm(st) {
+		if logged {
+			// A node whose plugins could not be read is unknown, not a node without the plugin.
+			info := swarm.SwarmInfo(r)
+			swarm.MarkLokiPlugins(r, &info)
+			var missing []string
+			unread := false
+			for _, n := range info.Nodes {
+				switch {
+				case n.LokiPlugin == nil:
+					unread = true
+				case !*n.LokiPlugin:
+					missing = append(missing, n.Hostname)
+				}
+			}
+			if unread {
+				note("logging: could not read the nodes' plugins (docker node inspect did not answer)")
+			}
+			for _, h := range missing {
+				note("logging: no loki plugin: " + h)
+			}
+			if len(missing) > 0 {
+				note("logging: " + swarm.LokiPluginInstall)
 			}
 		}
 		// `--prune` is `--remove-orphans`; profiles were resolved into the file by the conversion.
 		return r.Run(swarm.StackDeployCmd(st.Stack, files), exec.RunOptions{Env: ComposeEnv(st, extraEnv), Label: "stack deploy"}), nil
 	}
-	base, err := baseFor(st, r)
-	if err != nil {
-		return exec.Result{}, err
+	if logged {
+		// Anything but `true` — absent, disabled, docker not answering — fails every logged create alike.
+		res := r.Run("docker plugin inspect -f '{{.Enabled}}' loki", exec.RunOptions{Label: "loki plugin"})
+		if strings.TrimSpace(res.Stdout) != "true" {
+			note("logging: install the loki log plugin on this host: " + swarm.LokiPluginInstall)
+			// The fix is the note above; the Result only says what's wrong, not how to fix it — a step
+			// message is cut at 300 runes and the install line alone is longer.
+			return exec.Result{OK: false, Code: 1, Stderr: "loki log plugin not installed"}, nil
+		}
 	}
-	cmd := base + " " + profileArgs(c.Profiles) + " up -d --remove-orphans"
+	cmd := baseOf(st, files) + " " + profileArgs(c.Profiles) + " up -d --remove-orphans"
 	// --remove-orphans drops services that were in a previous deploy but are not selected now, so a
 	// relabel from "backend+frontend" to "backend" actually stops the frontend instead of orphaning it.
 	return r.Run(cmd, exec.RunOptions{Env: ComposeEnv(st, extraEnv), Label: "compose up"}), nil
