@@ -179,11 +179,22 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	// ---- the swarm ----
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)
+		// Plugins are read only on a host that ships logs, found the way deploys find it; with logging
+		// off every lokiPlugin stays null — "not checked", never "missing". `len(info.Nodes) > 0` first,
+		// so a compose-only or unreachable host issues no docker ps/inspect during the 10s poll.
+		fields := jsonx.Object{{K: "ports", V: swarm.SwarmPorts}}
+		if len(info.Nodes) > 0 && inspect.LokiPushURL(s.host) != "" {
+			swarm.MarkLokiPlugins(s.host, &info)
+			// lokiPluginInstall is the line that puts the plugin on a worker; handed out only when
+			// logging is on, since nothing here can run it on a worker itself.
+			fields = append(fields, jsonx.KV{K: "lokiPluginInstall", V: swarm.LokiPluginInstall})
+		}
 		note := "This daemon is not a swarm manager. Previews run with docker compose on this host; `pstack init --orchestrator swarm` (on the host) enables swarm mode."
 		if info.Active {
 			note = "Add a worker: GET /api/swarm/join?format=command|script|cloud-config, run it on the new machine."
 		}
-		writeJSON(w, 200, append(spread(info), jsonx.KV{K: "ports", V: swarm.SwarmPorts}, jsonx.KV{K: "note", V: note}))
+		fields = append(fields, jsonx.KV{K: "note", V: note})
+		writeJSON(w, 200, append(spread(info), fields...))
 		return nil
 	}
 	if path == "/api/swarm/join" && r.Method == http.MethodGet {

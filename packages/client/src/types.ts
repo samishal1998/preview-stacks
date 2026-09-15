@@ -105,6 +105,8 @@ export type SwarmNode = {
   engineVersion: string;
   /** The node this API runs on. */
   self: boolean;
+  /** null: logging is off or docker did not answer. false: no loki log plugin — logged services will not run there. */
+  lokiPlugin: boolean | null;
 };
 
 export type SwarmInfo = {
@@ -119,6 +121,8 @@ export type SwarmInfo = {
   error?: string;
   /** The ports a worker must reach on the manager (and nodes on each other). */
   ports: Array<{ port: string; why: string }>;
+  /** The line that installs the loki log plugin on a node. Present only when logging is on. */
+  lokiPluginInstall?: string;
   note: string;
 };
 

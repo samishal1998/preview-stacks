@@ -7,11 +7,15 @@
  * docker did not answer (nothing is known), this daemon is not a manager (previews run with
  * compose), and active (the node table).
  *
+ * WITH LOKI LOGGING ON, a node without the loki log plugin is flagged and the install line shown.
+ * Swarm keeps logged services off that node, and nothing here can reach a worker to install it — the
+ * line is run there by hand. `lokiPlugin: null` is "not checked" (logging off), never "missing".
+ *
  * THE JOIN TOKEN IS A SECRET. Whoever holds it can add a node that runs any task on the cluster.
  * It is fetched on a click and never by the poll, shown once, held in component state only, and
  * cleared the moment this page is left.
  */
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { api, problem } from '../api/client';
 import type { SwarmInfo } from '../api/types';
 import { usePolling } from '../composables/usePolling';
@@ -42,6 +46,9 @@ async function load(): Promise<void> {
   };
 }
 usePolling(load, 10_000);
+
+// Only `false` is missing; null is "not checked".
+const unplugged = computed(() => info.value?.nodes.filter((n) => n.lokiPlugin === false) ?? []);
 
 // ── joining ─────────────────────────────────────────────────────────────────────────────────────
 type Format = 'token' | 'command' | 'script' | 'cloud-config';
@@ -151,6 +158,7 @@ onBeforeUnmount(() => {
               <td role="cell" class="name" data-label="hostname">
                 {{ n.hostname || '—' }}
                 <span v-if="n.self" class="badge info" title="the node this control plane runs on">This node</span>
+                <span v-if="n.lokiPlugin === false" class="badge warn">No loki plugin</span>
               </td>
               <td role="cell" data-label="role">
                 <span class="badge" :class="n.role === 'manager' ? 'isolated' : ''">{{ sentence(n.role) }}</span>
@@ -166,6 +174,10 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
         <p v-else class="mute">Docker lists no nodes.</p>
+        <div v-if="unplugged.length" class="banner warn">
+          <b>No loki plugin on {{ unplugged.map((n) => n.hostname || n.id.slice(0, 12)).join(', ') }}.</b>
+          <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ info.lokiPluginInstall }}</pre>
+        </div>
       </template>
     </section>
 
@@ -226,3 +238,17 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+/* Card mode: badges wrap under the hostname instead of crushing it or pushing the card wide. */
+@container (max-width: 460px) {
+  table.cards td.name {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: var(--s1);
+  }
+  table.cards td.name::before {
+    margin-right: auto;
+  }
+}
+</style>
