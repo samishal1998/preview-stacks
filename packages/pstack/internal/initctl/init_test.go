@@ -2,15 +2,20 @@ package initctl_test
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	pstack "github.com/samishal1998/preview-stacks/packages/pstack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/initctl"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/testfacts"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/upgrade"
@@ -586,6 +591,270 @@ func TestInitGoldens(t *testing.T) {
 		got := regexp.MustCompile(`PSTACK_TOKEN=[0-9a-f]{48}`).ReplaceAllString(mask(out.String(), dir), "PSTACK_TOKEN=<GENERATED_TOKEN>")
 		if got != want {
 			t.Errorf("transcript differs\n--- got\n%s\n--- want\n%s", got, want)
+		}
+	})
+}
+
+// substituted is the control template after Init's six marker substitutions (init.go, "── 3.
+// Configuration"), with `loki` appended after the advanced UI where Init appends LokiService. It is
+// LokiWiring's input; its first subtest proves it still matches the file Init writes.
+func substituted(challenge initctl.Challenge, ui initctl.UI, loki string) string {
+	s := pstack.ControlTemplate
+	s = strings.Replace(s, "      #__ACME_CHALLENGE__", initctl.AcmeChallengeArgs(challenge, "cloudflare"), 1)
+	s = strings.Replace(s, "      #__ACME_ROUTER_TLS__", initctl.AcmeRouterLabels(challenge), 1)
+	s = strings.Replace(s, "      #__CONTROL_UI_SERVICE__", initctl.ControlUIService(ui), 1)
+	s = strings.Replace(s, "      #__SWARM_PROVIDER__", initctl.SwarmProviderArgs(spec.Compose), 1)
+	s = strings.Replace(s, "      #__WAKE_ROUTER__", initctl.WakeRouterLabels("preview.example.com"), 1)
+	return strings.Replace(s, "#__ADVANCED_UI_SERVICE__", initctl.AdvancedUIService(ui)+loki, 1)
+}
+
+// The loki service. Its TLS labels are the part that varies by host, and getting them backwards is
+// silent until the first push: DNS-01 would order a second certificate, HTTP-01 would serve none.
+func TestLokiService(t *testing.T) {
+	const pw = "0123456789abcdef0123456789abcdef"
+
+	t.Run("http01 orders loki its own certificate, dns01 inherits the wildcard", func(t *testing.T) {
+		// negative control: append the certresolver label for every challenge — the dns01 check fails.
+		http := initctl.LokiService(initctl.Loki, initctl.HTTP01, pw)
+		dns := initctl.LokiService(initctl.Loki, initctl.DNS01, pw)
+		for _, block := range []string{http, dns} {
+			if !strings.Contains(block, "      - traefik.http.routers.pstack-loki.tls=true\n") {
+				t.Errorf("no tls=true:\n%s", block)
+			}
+		}
+		if !strings.Contains(http, "      - traefik.http.routers.pstack-loki.tls.certresolver=le\n") {
+			t.Error("http01 has no certresolver")
+		}
+		if strings.Contains(dns, "- traefik.http.routers.pstack-loki.tls.certresolver") {
+			t.Error("dns01 orders its own certificate")
+		}
+	})
+
+	t.Run("basic auth is pstack:{SHA} of the password; deploys find the push URL on a label", func(t *testing.T) {
+		// negative control: hash with sha256.Sum256 in LokiService — the users label differs.
+		sum := sha1.Sum([]byte(pw))
+		block := initctl.LokiService(initctl.Loki, initctl.HTTP01, pw)
+		for _, want := range []string{
+			"      - traefik.http.middlewares.pstack-loki-auth.basicauth.users=pstack:{SHA}" + base64.StdEncoding.EncodeToString(sum[:]) + "\n",
+			// ${…} stays for compose to fill from .env.
+			"      - pstack.logging.push-url=https://pstack:${LOKI_PUSH_PASSWORD}@loki.${DOMAIN}/loki/api/v1/push\n",
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("missing %q", want)
+			}
+		}
+		if strings.Contains(block, pw) {
+			t.Error("the password itself is in the compose file")
+		}
+	})
+
+	t.Run("loki is on the logs network only", func(t *testing.T) {
+		// Every preview container sits on preview-ingress, and Loki has no auth of its own.
+		// negative control: render `networks: [preview-ingress, logs]` in LokiService — the list has two entries.
+		v, err := yamlx.ParseString("services:\n" + initctl.LokiService(initctl.Loki, initctl.DNS01, pw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := fmt.Sprint(v.(*omap.Map).GetMap("services").GetMap("loki").GetSlice("networks")); n != "[logs]" {
+			t.Errorf("networks %s", n)
+		}
+	})
+
+	t.Run("logging off renders nothing", func(t *testing.T) {
+		// negative control: drop the `logging != Loki` early return — both cases render the service.
+		for _, l := range []initctl.Logging{initctl.LoggingNone, ""} {
+			if got := initctl.LokiService(l, initctl.HTTP01, pw); got != "" {
+				t.Errorf("%q rendered:\n%s", l, got)
+			}
+		}
+	})
+}
+
+// Loki's plumbing is literal edits of lines the template already has. A template change that moves
+// one must fail by name, never render a Loki that Traefik cannot reach.
+func TestLokiWiring(t *testing.T) {
+	const pw = "0123456789abcdef0123456789abcdef"
+
+	t.Run("substituted is the file Init writes", func(t *testing.T) {
+		// negative control: drop the WAKE_ROUTER replacement from substituted — it differs from Init's file.
+		if _, yaml := render(t, nil); substituted(initctl.HTTP01, initctl.Basic, "") != yaml {
+			t.Error("substituted no longer mirrors Init's marker substitutions")
+		}
+	})
+
+	t.Run("each edit lands once: Traefik's networks, the top-level volumes and networks", func(t *testing.T) {
+		// negative control: strings.ReplaceAll for the networks anchor in LokiWiring — advanced-ui joins logs too.
+		for _, c := range []initctl.Challenge{initctl.HTTP01, initctl.DNS01} {
+			got, err := initctl.LokiWiring(substituted(c, initctl.Advanced, initctl.LokiService(initctl.Loki, c, pw)), initctl.Loki)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, edit := range []string{
+				"    networks: [preview-ingress, logs]\n",
+				"volumes:\n  letsencrypt:\n  loki:\n",
+				"  preview-shared:\n    external: true\n  logs: {}\n",
+			} {
+				if n := strings.Count(got, edit); n != 1 {
+					t.Errorf("%s: %q appears %d times", c, edit, n)
+				}
+			}
+			v, err := yamlx.ParseString(got)
+			if err != nil {
+				t.Fatalf("%s: %v", c, err)
+			}
+			d := v.(*omap.Map)
+			svcs := d.GetMap("services")
+			if n := fmt.Sprint(svcs.GetMap("traefik").GetSlice("networks")); n != "[preview-ingress logs]" {
+				t.Errorf("%s: traefik networks %s", c, n)
+			}
+			// The advanced UI's identical line comes after Traefik's and must stay off `logs`.
+			if n := fmt.Sprint(svcs.GetMap("advanced-ui").GetSlice("networks")); n != "[preview-ingress]" {
+				t.Errorf("%s: advanced-ui networks %s", c, n)
+			}
+			if svcs.GetMap("loki") == nil || !d.GetMap("volumes").Has("loki") || !d.GetMap("networks").Has("logs") {
+				t.Errorf("%s: the loki service, volume or network is missing", c)
+			}
+		}
+	})
+
+	t.Run("only Traefik's own copy of the networks line counts, not the advanced UI's identical one", func(t *testing.T) {
+		// negative control: change the Traefik entry's haystack from traefikBlock to identity — the
+		// advanced UI's identical line stands in for Traefik's removed one, and no error is returned.
+		const anchor = "    networks: [preview-ingress]\n"
+		// n=1 removes the FIRST copy only: Traefik's own line, which sits earlier in the file than the
+		// advanced UI's (inserted later, at the #__ADVANCED_UI_SERVICE__ marker near the volumes block).
+		in := strings.Replace(substituted(initctl.HTTP01, initctl.Advanced, ""), anchor, "", 1)
+		if _, err := initctl.LokiWiring(in, initctl.Loki); err == nil || !strings.Contains(err.Error(), "Traefik networks line") {
+			t.Fatalf("got %v, want an error naming the Traefik networks line", err)
+		}
+	})
+
+	t.Run("logging off returns the template byte-identical", func(t *testing.T) {
+		// negative control: drop the `logging != Loki` early return — the file gains the logs network.
+		in := substituted(initctl.HTTP01, initctl.Basic, "")
+		for _, l := range []initctl.Logging{initctl.LoggingNone, ""} {
+			if got, err := initctl.LokiWiring(in, l); err != nil || got != in {
+				t.Errorf("%q changed the template (err %v)", l, err)
+			}
+		}
+	})
+
+	for _, c := range []struct{ what, anchor string }{
+		{"Traefik networks line", "    networks: [preview-ingress]\n"},
+		{"letsencrypt volume", "volumes:\n  letsencrypt:\n"},
+		{"preview-shared network", "  preview-shared:\n    external: true\n"},
+	} {
+		t.Run("a template without the "+c.what+" fails by name", func(t *testing.T) {
+			// negative control: skip the strings.Contains check in LokiWiring — no error.
+			// ReplaceAll: the advanced UI carries a second copy of the networks line.
+			in := strings.ReplaceAll(substituted(initctl.HTTP01, initctl.Advanced, ""), c.anchor, "")
+			if _, err := initctl.LokiWiring(in, initctl.Loki); err == nil || !strings.Contains(err.Error(), c.what) {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+// lokiConfigSpecLines is docs/loki-logging-design.md's Loki config block (the ```yaml fence after
+// "### Loki config"), copied here — not extracted at test time — so a Go test fails on day-one drift
+// between the design doc and the shipped config.yaml. The render golden is generated FROM the binary,
+// so it cannot catch a wrong first generation (spec 308: "Loki config: byte-exact").
+var lokiConfigSpecLines = []string{
+	"auth_enabled: false",
+	"",
+	"server:",
+	"  http_listen_port: 3100            # `loki -health` probes localhost:3100/ready",
+	"",
+	"common:",
+	"  instance_addr: 127.0.0.1",
+	"  path_prefix: /loki                # WAL, compactor, tsdb-shipper dirs — on the volume",
+	"  replication_factor: 1",
+	"  ring:",
+	"    kvstore:",
+	"      store: inmemory",
+	"",
+	"# storage_config, never common.storage: common.storage takes one backend, and slice 2's",
+	"# filesystem→S3 switch needs both configured at once.",
+	"storage_config:",
+	"  filesystem:",
+	"    directory: /loki/chunks",
+	"",
+	"schema_config:",
+	"  configs:",
+	"    - from: \"2024-04-01\"            # a fixed past date, never \"today\": a future date means no active",
+	"      store: tsdb                   # schema (Loki stores nothing); a changed date makes data unreadable",
+	"      object_store: filesystem",
+	"      schema: v13",
+	"      index:",
+	"        prefix: index_",
+	"        period: 24h                 # tsdb requires 24h",
+	"",
+	"ingester:",
+	"  chunk_idle_period: 30m",
+	"  max_chunk_age: 2h                 # must stay <= querier.query_ingesters_within",
+	"  chunk_target_size: 1572864",
+	"  chunk_encoding: snappy",
+	"  wal:",
+	"    replay_memory_ceiling: 1GB      # default 4GB exceeds the 2g container limit",
+	"",
+	"querier:",
+	"  query_ingesters_within: 3h",
+	"",
+	"limits_config:",
+	"  retention_period: 168h            # 0s would keep forever",
+	"  max_query_lookback: 168h",
+	"  max_global_streams_per_user: 1000",
+	"",
+	"compactor:",
+	"  retention_enabled: true",
+	"  delete_request_store: filesystem  # required once retention is on",
+	"",
+	"analytics:",
+	"  reporting_enabled: false",
+	"",
+}
+
+// Loki's config is fixed, and some of its values fail silently when changed: a moved schema `from`
+// makes stored logs unreadable, a retention of 0s keeps everything forever. The second subtest pins
+// the whole file byte-for-byte against the design doc (R8): the render golden is generated FROM the
+// binary, so it cannot catch a wrong first generation — only a Go test with an independent copy can.
+func TestLokiConfig(t *testing.T) {
+	t.Run("the load-bearing values", func(t *testing.T) {
+		// negative control: change the schema `from` in templates/control/loki/config.yaml to "2026-09-15" — fails.
+		v, err := yamlx.ParseString(pstack.LokiConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := v.(*omap.Map)
+		configs := cfg.GetMap("schema_config").GetSlice("configs")
+		if len(configs) != 1 {
+			t.Fatalf("%d schema configs, want 1", len(configs))
+		}
+		schema, _ := configs[0].(*omap.Map)
+		port, _ := cfg.GetMap("server").Get("http_listen_port")
+		for _, c := range []struct {
+			what      string
+			got, want any
+		}{
+			{"schema from", schema.GetString("from"), "2024-04-01"},
+			{"schema store", schema.GetString("store"), "tsdb"},
+			{"index period", schema.GetMap("index").GetString("period"), "24h"},
+			{"retention", cfg.GetMap("limits_config").GetString("retention_period"), "168h"},
+			{"WAL replay ceiling", cfg.GetMap("ingester").GetMap("wal").GetString("replay_memory_ceiling"), "1GB"},
+			{"listen port", port, int64(3100)},
+			{"delete request store", cfg.GetMap("compactor").GetString("delete_request_store"), "filesystem"},
+		} {
+			if c.got != c.want {
+				t.Errorf("%s = %#v, want %#v", c.what, c.got, c.want)
+			}
+		}
+	})
+
+	t.Run("byte-exact against the design doc's Loki config block", func(t *testing.T) {
+		// negative control: change "tsdb requires 24h" to "tsdb requires 24hrs" in config.yaml — a
+		// comment-only edit the load-bearing-values subtest above cannot see, but this one catches.
+		if want := strings.Join(lokiConfigSpecLines, "\n"); pstack.LokiConfig != want {
+			t.Error("templates/control/loki/config.yaml no longer matches docs/loki-logging-design.md's Loki config block byte-for-byte")
 		}
 	})
 }

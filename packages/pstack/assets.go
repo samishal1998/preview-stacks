@@ -1,4 +1,4 @@
-// Package pstack carries the six files the binary embeds. Explicit paths, never a glob: the
+// Package pstack carries the seven files the binary embeds. Explicit paths, never a glob: the
 // READMEs beside the assets must not ship, and a pattern that matches nothing is a compile error —
 // which is exactly the failure mode `with { type: 'text' }` had at bundle time, moved earlier.
 package pstack
@@ -19,6 +19,13 @@ var ShareHTML string
 //
 //go:embed templates/control/docker-compose.yml
 var ControlTemplate string
+
+// LokiConfig is Loki's config file, which init writes beside the control compose file with
+// `--logging loki`. Embedded as-is, never rendered: nothing in it varies by host, and it holds no
+// credential.
+//
+//go:embed templates/control/loki/config.yaml
+var LokiConfig string
 
 // CloudInitTemplate is the cloud-config user-data template.
 //
