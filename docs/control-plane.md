@@ -977,6 +977,65 @@ Stored, not hashed, for the notifier-secret reason (§4d): the token exchange mu
 has no read path — the config endpoint answers with a mask, submitting the mask back keeps what is
 stored, and the protection is the 0700 directory and the 0600 file, as with every other secret here.
 
+## 5g. Loki logging
+
+`pstack init --logging loki` puts Loki in the control stack and the Loki Docker log plugin on the
+node. From then on every deployed service ships its output there. The design and its failure modes
+are in [`loki-logging-design.md`](loki-logging-design.md); this section records where it plugs in.
+
+### Discovery: the running control stack is the setting
+
+A deploy never reads a flag to learn whether logging is on. `autolabel.DetectLogging` reads the
+`pstack.logging.push-url` label off the control stack's `loki` container (`inspect.LokiPushURL`),
+the way the challenge mode is read off Traefik's argv. No container, no injection — so `pstack up`
+on the host and the API always inject the same thing, and there is no second copy of the answer to
+drift. The lookup is `docker ps -a`, so a restarting Loki does not flip deploys between logged and
+not; `pstack logging off` recreates the control stack without the container, and discovery stops
+finding it.
+
+### Injection sits in `MaterializeCompose`
+
+After the routing labels and before the swarm conversion: the one step every compose and swarm
+invocation already passes through, regenerated per subcommand (§4a). `Swarmify` keeps `logging`.
+The control stack never passes through it, so Loki never ships its own output to itself;
+`kind: shared` stacks are injected like any other.
+
+Every service **without** a `logging` key gets the loki driver, its push URL and
+`service_name=<stack>-<service>`. A service with **any** `logging` key — `json-file` counts — is
+left alone and named in the job log: the `traefik.*` opt-out again. Nothing is merged into a user's
+block, because pstack's options could be refused by the user's driver.
+
+The rule only sees `compose.file` as parsed. Overlays (`compose.overlays`) are applied after the
+derived file, so a `logging:` in an overlay is not skipped — it replaces the injected block (compose
+merges the options when the driver is the same or unset). `extends` is not resolved, so a service
+that inherits `logging:` through `extends` still gets injected. A `<<: *anchor` merge that brings in
+`logging` counts as the service's own: yamlx expands anchors before the check.
+
+Under compose this changes one thing: a stack with no routing labels now runs from
+`compose.generated.yml` whenever a service got the block. With logging off the gates are exactly what
+they were.
+
+### The options are constants
+
+Only the URL and the label vary. When Loki is unreachable the driver holds a node-wide lock while it
+retries, so `docker stop` of **every** container on that node waits out the retry loop
+(grafana/loki#2361). `mode: non-blocking` protects the app's stdout, not the stop; only
+`loki-retries: "2"`, `loki-timeout: 1s` and `loki-max-backoff: 800ms` bound the wait, to seconds. A
+setting would let someone trade that bound away without seeing the cost.
+
+`filename` is dropped, and `service_name` replaces the driver's `container_name`, because both change
+per container: every redeploy would open new streams until Loki's 1000-stream limit refused them.
+`keep-file: "false"` because `true` leaves one directory per container in the plugin, forever.
+
+### Pushes go through Traefik
+
+The plugin runs in the host's network namespace, so overlay DNS (`http://loki:3100`) is unreachable
+from it. `https://loki.<domain>/loki/api/v1/push` with basic auth needs only 443, which every node
+already reaches. The alternative, `<manager-ip>:3100`, needs a firewall rule per worker, and pstack
+manages no firewall. The router matches only the push path; Loki's query API is reachable from the
+`logs` network alone. The cost: the password is visible in `docker inspect` of a preview container
+and in `compose.generated.yml` (it can only push), and pushes land only while Traefik is up.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves
@@ -1262,7 +1321,7 @@ exists locally, and the host can make one from what it has.
 ### Assets are embedded, not read from disk
 
 The web UI, the share page, `templates/control/docker-compose.yml` and the cloud-init template are
-`//go:embed`ded (`packages/pstack/assets.go`, five explicit paths — never a glob, so the READMEs
+`//go:embed`ded (`packages/pstack/assets.go`, seven explicit paths — never a glob, so the READMEs
 beside them do not ship). Nothing resolves a path relative to a source tree at runtime; the
 failure mode where a tool passes every local test and then `init` dies on a missing template on
 the one host that matters cannot occur.

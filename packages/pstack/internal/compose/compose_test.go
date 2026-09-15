@@ -20,6 +20,14 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
 
+// TestMain pins logging discovery off. These tests are about the compose invocation on a Loki-less
+// host, and some assert the FIRST command a fake saw — a `docker ps` of the control stack under the
+// default discovery. Tests about a logged deploy set the seam themselves.
+func TestMain(m *testing.M) {
+	autolabel.DetectLogging = func(exec.Runner) string { return "" }
+	os.Exit(m.Run())
+}
+
 func specFrom(t *testing.T, file string, env map[string]string) *spec.Stack {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", file))
