@@ -15,6 +15,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
 )
@@ -719,5 +720,63 @@ func TestLoggingInjection(t *testing.T) {
 		if got := jsonOf(t, written(t, dir).GetMap("services").GetMap("web").GetMap("logging")); got != lokiBlockWeb {
 			t.Errorf("web: %s", got)
 		}
+	})
+}
+
+func TestAPreviewCannotClaimAControlHostname(t *testing.T) {
+	// The real seam, not a pin: the primary comes from PSTACK_DOMAIN and the added domains from the
+	// routing dir, exactly as a deploy inside the control container resolves them.
+	dyn := t.TempDir()
+	t.Setenv("PSTACK_ROUTING_DIR", dyn)
+	t.Setenv("PSTACK_DOMAIN", "preview.example.com")
+	if _, err := routing.New(dyn).SetDomains([]string{"other.example.org"}, routing.DomainOptions{Primary: "preview.example.com", Mode: "http01"}); err != nil {
+		t.Fatal(err)
+	}
+	claiming := func(t *testing.T, host string) *omap.Map {
+		return doc(t, "services:\n  app:\n    image: x\n    labels: [pstack.routing.port=80, pstack.routing.host="+host+"]\n")
+	}
+	refused := func(t *testing.T, host string) {
+		t.Helper()
+		_, err := AugmentComposeDoc(AugmentArgs{Doc: claiming(t, host), Spec: s(t), Challenge: HTTP01})
+		if err == nil || !spec.IsSpecError(err) || !strings.Contains(err.Error(), "pstack.routing.host="+host+" — a control hostname") {
+			t.Fatalf("%s must be refused as a control hostname, got %v", host, err)
+		}
+	}
+
+	t.Run("loki. of the primary domain is refused", func(t *testing.T) {
+		// negative control: pass "" as the primary in ControlHostname's default — loki.preview.example.com
+		// is in no added domain, so it gets a router and this fails with `got <nil>`.
+		refused(t, "loki.preview.example.com")
+	})
+
+	t.Run("api. of an added domain is refused", func(t *testing.T) {
+		// negative control: read no store in ControlHostname's default
+		// (`(*routing.RoutingStore)(nil).IsControlHostname(host, os.Getenv("PSTACK_DOMAIN"))`) —
+		// api.other.example.org gets a router and this fails with `got <nil>`.
+		refused(t, "api.other.example.org")
+	})
+
+	t.Run("any other explicit host still gets its router", func(t *testing.T) {
+		// negative control: drop `&& ControlHostname(req.Host)` from the refusal — every explicit host
+		// is refused and augment fails the test.
+		r := augment(t, claiming(t, "app.preview.example.com"), s(t), HTTP01)
+		if l := labelsOf(t, r.Doc, "app"); !contains(l, "traefik.http.routers.app-pr-7.rule=Host(`app.preview.example.com`)") {
+			t.Errorf("labels: %v", l)
+		}
+	})
+
+	t.Run("the primary falls back to DOMAIN in control/.env when PSTACK_DOMAIN is unset", func(t *testing.T) {
+		// negative control: drop the control/.env fallback in ControlHostname — loki.preview.example.com
+		// gets a router with PSTACK_DOMAIN unset (the host-side CLI case) and this fails with `got <nil>`.
+		data := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(data, "control"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(data, "control", ".env"), []byte("PSTACK_TOKEN=t\nDOMAIN=preview.example.com\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PSTACK_DATA", data)
+		t.Setenv("PSTACK_DOMAIN", "") // Getenv conflates unset and empty; "" is the unset case here
+		refused(t, "loki.preview.example.com")
 	})
 }

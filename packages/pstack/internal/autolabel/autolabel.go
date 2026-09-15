@@ -29,6 +29,17 @@
 // A service with neither a `pstack.routing.*` label nor a `traefik.*` one is also left alone — that is
 // a database or a worker, and forcing a hostname onto it would be wrong.
 //
+// ── NOR DOES IT HAND OUT A CONTROL HOSTNAME ──────────────────────────────────────────────────────
+//
+// A `pstack.routing.host` naming `control.`, `api.` or `loki.` of any domain this host answers on
+// is refused (ControlHostname): its router would compete with the control plane's own for the
+// console, the API, or every node's log pushes and the password on them. `loki.` is reserved even
+// with logging off. A service with its own `traefik.*` labels is not checked — that is the escape
+// hatch above, and specs are CI-trusted.
+//
+// The refusal is a spec error like the missing-domain one, so it fires on EVERY compose subcommand
+// that re-materializes the file — `down` included, where stack.Down records it as non-fatal.
+//
 // ── WHY A DERIVED FILE AND NOT AN OVERLAY ────────────────────────────────────────────────────────
 //
 // The obvious implementation is a second `-f` overlay adding labels. It was rejected in 0.3.0 for the
@@ -144,6 +155,36 @@ var DetectChallenge = func(r exec.Runner) Challenge {
 // label off the control stack's loki container (inspect.LokiPushURL), so the CLI and the API agree
 // with no setting to keep in sync.
 var DetectLogging = func(r exec.Runner) string { return inspect.LokiPushURL(r) }
+
+// ControlHostname reports whether a hostname is the control plane's — `control.`, `api.` or `loki.`
+// of the primary domain or any added one — behind a variable, like DetectChallenge, so a caller's
+// test can pin it. The added domains come from routing.DynamicDir. The primary is PSTACK_DOMAIN,
+// which the control container always sets; `pstack up` run host-side has no such variable, so it
+// falls back to DOMAIN= in <DataDir>/control/.env — the same file `init` wrote it to — read here
+// rather than via upgrade.ReadControlState, which already imports this package and would cycle.
+var ControlHostname = func(host string) bool {
+	primary := os.Getenv("PSTACK_DOMAIN")
+	if primary == "" {
+		primary = domainFromControlEnv()
+	}
+	return routing.New(routing.DynamicDir(registry.DataDir())).IsControlHostname(host, primary)
+}
+
+// domainFromControlEnv reads DOMAIN= from control/.env — the KEY=VALUE grammar
+// upgrade.ReadControlState parses the same file with. A missing file or line is "", which
+// IsControlHostname skips, exactly like an unset primary.
+func domainFromControlEnv() string {
+	b, err := os.ReadFile(filepath.Join(registry.DataDir(), "control", ".env"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "DOMAIN="); ok {
+			return v
+		}
+	}
+	return ""
+}
 
 // RoutingRequest is what a service asked for, read from its `pstack.routing.*` labels.
 type RoutingRequest struct {
@@ -315,6 +356,11 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 		host := req.Host
 		if host == "" {
 			host = req.Name + "-" + st.Stack + "." + domain
+		}
+		// A preview never gets a control hostname — see the package comment. Only an EXPLICIT host can
+		// collide: a generated one's first label is `<name>-<stack>`, which always has a dash in it.
+		if req.Host != "" && ControlHostname(req.Host) {
+			return nil, &spec.Error{Msg: fmt.Sprintf(`service "%s" sets pstack.routing.host=%s — a control hostname of this host (control., api. and loki. on every domain it answers on). Pick another host.`, name, req.Host)}
 		}
 
 		isSwarm := st.Compose != nil && st.Compose.Orchestrator == spec.Swarm

@@ -213,3 +213,27 @@ func TestTheWildcardMustCoverEveryRegisteredDomain(t *testing.T) {
 		t.Fatalf("a pair covering both must be accepted: %v", err)
 	}
 }
+
+func TestLokiIsAControlHostnameOnEveryDomain(t *testing.T) {
+	// negative control: drop `|| h == "loki."+d` from IsControlHostname — every true-expecting
+	// assertion below fails, and loki.<domain> is left to the wake router and to any preview that
+	// asks for it with pstack.routing.host.
+	s := New(t.TempDir())
+	if _, err := s.SetDomains([]string{"preview.new.com"}, DomainOptions{Primary: "preview.old.com", Mode: "http01"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"loki.preview.old.com", "loki.preview.new.com", "LOKI.Preview.New.com"} {
+		if !s.IsControlHostname(h, "preview.old.com") {
+			t.Errorf("%s must be a control hostname", h)
+		}
+	}
+	// An exact name, not a prefix: a convention hostname that happens to start with loki is a preview's.
+	if s.IsControlHostname("loki-pr-1.preview.old.com", "preview.old.com") {
+		t.Error("a preview hostname is not the control plane's")
+	}
+	// The primary needs no file to be reserved — the nil store still answers for it.
+	var none *RoutingStore
+	if !none.IsControlHostname("loki.preview.old.com", "preview.old.com") {
+		t.Error("loki.<primary> must be a control hostname on a nil store")
+	}
+}
