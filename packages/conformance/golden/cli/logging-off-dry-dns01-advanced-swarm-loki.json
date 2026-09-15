@@ -1,0 +1,15 @@
+{
+  "name": "logging-off-dry-dns01-advanced-swarm-loki",
+  "argv": [
+    "logging",
+    "off",
+    "-n"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "loki → off   (preview.example.com)\n  → re-run init with logging off\n  [dry-run] re-run init with logging off\n  0 deployment(s) still carry the loki driver\n",
+  "stderr": ""
+}

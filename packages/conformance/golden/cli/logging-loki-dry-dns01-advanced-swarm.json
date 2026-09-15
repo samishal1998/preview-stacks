@@ -1,0 +1,15 @@
+{
+  "name": "logging-loki-dry-dns01-advanced-swarm",
+  "argv": [
+    "logging",
+    "loki",
+    "-n"
+  ],
+  "env": {
+    "PSTACK_DATA": "/tmp/pstack-golden-data"
+  },
+  "cwd": "packages/pstack",
+  "code": 0,
+  "stdout": "off → loki   (preview.example.com)\n  → re-run init with logging loki\n  [dry-run] re-run init with logging loki\n",
+  "stderr": ""
+}
