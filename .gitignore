@@ -37,6 +37,8 @@ hetzner*.yml
 *.sealed
 config.yaml
 .config.yaml
+# Loki's config: a fixed template and its rendered goldens. No credential, not an export.
+!**/loki/config.yaml
 # GLOBS, because the exact-name list above did not hold: `.config-c.yaml` — a sealed export from a
 # manual `pull config` — reached a commit and had to be pulled back out of it. "The other shapes are
 # what people actually type" is right, and an enumeration of them is always one shape behind.

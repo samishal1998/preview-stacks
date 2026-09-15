@@ -26,6 +26,8 @@ package initctl
 
 import (
 	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -69,12 +71,22 @@ type Challenge string
 // UI is which web UI `control.<domain>` serves.
 type UI string
 
+// Logging is where preview containers' logs go. "" counts as LoggingNone.
+type Logging string
+
 const (
-	HTTP01   Challenge = "http01"
-	DNS01    Challenge = "dns01"
-	Basic    UI        = "basic"
-	Advanced UI        = "advanced"
+	HTTP01      Challenge = "http01"
+	DNS01       Challenge = "dns01"
+	Basic       UI        = "basic"
+	Advanced    UI        = "advanced"
+	LoggingNone Logging   = "none"
+	Loki        Logging   = "loki"
 )
+
+// PushURLLabel is the label on the control stack's loki container that carries the push URL. Deploys
+// read it off the RUNNING container, the way DetectChallenge reads Traefik's flags, so `pstack up` on
+// the host and the API always agree and there is no setting to keep in step. The one spelling of the key.
+const PushURLLabel = "pstack.logging.push-url"
 
 // defaultImage is the image the control stack runs. Not an `init` option because it is a property
 // of the *installation* (what you built or pulled), not of the host you are configuring; override
@@ -696,6 +708,123 @@ func AdvancedUIService(ui UI) string {
 		"      - traefik.http.services.advanced-ui.loadbalancer.server.port=80",
 		"",
 	}, "\n")
+}
+
+// LokiService is the opt-in Loki container, appended after the advanced UI at the same marker.
+// Omitted entirely unless logging is loki: the template gains no line of its own, so every host
+// without it renders byte-identical.
+//
+// Pushes arrive through Traefik's websecure entrypoint, and Traefik is the only other member of the
+// `logs` network. The password is hashed HERE because compose cannot hash: `{SHA}`, not bcrypt,
+// because Traefik checks it on every push — about one per container per second — and a 128-bit
+// random secret needs no slow hash. The discovery label keeps `${LOKI_PUSH_PASSWORD}` for compose to
+// fill from .env, so the password itself is never in this file.
+func LokiService(logging Logging, challenge Challenge, password string) string {
+	if logging != Loki {
+		return ""
+	}
+	sum := sha1.Sum([]byte(password))
+	lines := []string{
+		"",
+		"  # Loki, opt-in (`pstack init --logging loki`). Every node's loki log plugin pushes the logs of",
+		"  # each preview container here, through Traefik at loki.${DOMAIN}.",
+		"  loki:",
+		"    image: grafana/loki:" + swarm.LokiVersion,
+		"    restart: unless-stopped",
+		"    mem_limit: 2g",
+		"    # Only Traefik shares this network. Never preview-ingress: Loki has no auth, and every preview",
+		"    # container sits on preview-ingress — any of them could read every stack's logs.",
+		"    networks: [logs]",
+		`    command: ["-config.file=/etc/loki/config.yaml"]`,
+		"    environment:",
+		"      GOMEMLIMIT: 1600MiB",
+		"    volumes:",
+		"      - ./loki:/etc/loki:ro      # the directory, not the file: a renamed-in file is not seen through a file mount",
+		"      - loki:/loki",
+		"    healthcheck:",
+		`      test: ["CMD", "/usr/bin/loki", "-health"]   # distroless image: no shell, wget or curl`,
+		"      start_period: 30s",
+		"      interval: 30s",
+		"      timeout: 10s",
+		"      retries: 3",
+		"    labels:",
+		"      - traefik.enable=true",
+		"      - traefik.docker.network=pstack-control_logs",
+		"      - traefik.http.routers.pstack-loki.rule=Host(`loki.${DOMAIN}`) && PathPrefix(`/loki/api/v1/push`)",
+		"      - traefik.http.routers.pstack-loki.entrypoints=websecure",
+		"      # TLS follows the challenge: tls=true alone under DNS-01 (the wildcard covers loki.), plus",
+		"      # its own certresolver under HTTP-01. Backwards orders a second certificate, or none at all.",
+		"      - traefik.http.routers.pstack-loki.tls=true",
+	}
+	if challenge == HTTP01 {
+		lines = append(lines, "      - traefik.http.routers.pstack-loki.tls.certresolver=le")
+	}
+	return strings.Join(append(lines,
+		"      - traefik.http.routers.pstack-loki.middlewares=pstack-loki-auth",
+		"      - traefik.http.middlewares.pstack-loki-auth.basicauth.users=pstack:{SHA}"+base64.StdEncoding.EncodeToString(sum[:]),
+		"      - traefik.http.services.pstack-loki.loadbalancer.server.port=3100",
+		"      # How deploys find Loki: pstack reads this label off the running container and hands it to",
+		"      # every service it injects as loki-url.",
+		"      - "+PushURLLabel+"=https://pstack:${LOKI_PUSH_PASSWORD}@loki.${DOMAIN}/loki/api/v1/push",
+		"",
+	), "\n")
+}
+
+// traefikBlock isolates the "  traefik:" service from the template: from its key to the line just
+// before the next top-level (2-space-indented, non-blank-third-column) line — a service key or the
+// header comment above one. Only the networks anchor needs this: it is byte-identical to the
+// advanced UI's own networks line (AdvancedUIService), which sits later in the file. Scoping the
+// check to Traefik's own block means a template edit that removes ONLY Traefik's copy fails by name,
+// instead of the advanced UI's copy silently standing in for it.
+func traefikBlock(template string) string {
+	start := strings.Index(template, "  traefik:\n")
+	if start < 0 {
+		return ""
+	}
+	lines := strings.Split(template[start:], "\n")
+	end := len(lines)
+	for i := 1; i < len(lines); i++ {
+		if len(lines[i]) > 2 && lines[i][:2] == "  " && lines[i][2] != ' ' {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[:end], "\n")
+}
+
+// identity returns s: the "search the whole template" haystack for LokiWiring's anchors that have
+// only one possible home.
+func identity(s string) string { return s }
+
+// LokiWiring is the rest of Loki's plumbing: Traefik joins the `logs` network, and the file declares
+// the `loki` volume and that network. Literal edits of lines the template already has, not new
+// markers — every marker leaves a line behind when it renders "off", so a new one would change the
+// compose file of every existing host.
+//
+// Each anchor is checked before it is replaced (strings.Replace with n=1, rule 8), so a template edit
+// that moves one fails init by name instead of rendering a Loki that Traefik cannot reach. The
+// networks anchor is checked inside `haystack`, scoped to Traefik's own block: the advanced UI's
+// identical networks line would otherwise stand in for a Traefik line a template edit actually
+// removed, passing the check and then getting edited in Traefik's place. Ordered, never a map (rule
+// 5): the first missing anchor is the one named.
+func LokiWiring(template string, logging Logging) (string, error) {
+	if logging != Loki {
+		return template, nil
+	}
+	for _, e := range []struct {
+		what, anchor, with string
+		haystack           func(string) string
+	}{
+		{"Traefik networks line", "    networks: [preview-ingress]\n", "    networks: [preview-ingress, logs]\n", traefikBlock},
+		{"letsencrypt volume", "volumes:\n  letsencrypt:\n", "volumes:\n  letsencrypt:\n  loki:\n", identity},
+		{"preview-shared network", "  preview-shared:\n    external: true\n", "  preview-shared:\n    external: true\n  logs: {}\n", identity},
+	} {
+		if !strings.Contains(e.haystack(template), e.anchor) {
+			return "", fmt.Errorf("the control template has no %s (%q) for --logging loki to extend", e.what, e.anchor)
+		}
+		template = strings.Replace(template, e.anchor, e.with, 1)
+	}
+	return template, nil
 }
 
 // dnsEnvFile is the DNS-01 credential, in its own file because Compose cannot build an environment
