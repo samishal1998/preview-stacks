@@ -62,7 +62,27 @@ const (
 	cmdInfo   = "docker info --format '{{json .Swarm}}'"
 	cmdNodeLs = "docker node ls --format '{{json .}}'"
 	cmdToken  = "docker swarm join-token -q worker"
+	// cmdNodeInspect is the one `docker node inspect` MarkLokiPlugins asks for node-ls.jsonl's two nodes.
+	cmdNodeInspect = "docker node inspect --format '{{json .}}' 'n1abcdef01234567' 'n2abcdef01234567'"
 )
+
+// nodeInspect answers cmdNodeInspect, trimmed to the fields around the list swarm schedules on.
+// Docker reports `--alias loki` as `loki:latest`, beside the built-in log drivers. worker-1 has only
+// the built-ins.
+var nodeInspect = strings.Join([]string{
+	`{"ID":"n1abcdef01234567","Description":{"Hostname":"preview-host","Engine":{"EngineVersion":"28.0.1","Plugins":[{"Type":"Log","Name":"json-file"},{"Type":"Log","Name":"loki:latest"},{"Type":"Network","Name":"overlay"},{"Type":"Volume","Name":"local"}]}}}`,
+	`{"ID":"n2abcdef01234567","Description":{"Hostname":"worker-1","Engine":{"EngineVersion":"28.0.1","Plugins":[{"Type":"Log","Name":"json-file"},{"Type":"Network","Name":"overlay"},{"Type":"Volume","Name":"local"}]}}}`,
+}, "\n") + "\n"
+
+// loggedManager is manager(t) that also answers the node inspect.
+func loggedManager(t *testing.T) *exec.Fake {
+	return shim(map[string]string{
+		cmdInfo:        read(t, "info-active.json"),
+		cmdNodeLs:      read(t, "node-ls.jsonl"),
+		cmdToken:       "SWMTKN-1-abcdef-ghijkl\n",
+		cmdNodeInspect: nodeInspect,
+	})
+}
 
 func manager(t *testing.T) *exec.Fake {
 	return shim(map[string]string{
@@ -321,7 +341,7 @@ func TestSwarmDiscovery(t *testing.T) {
 		}
 		// The wire shape — tri-states as null, no token anywhere.
 		js := jsonOf(t, info)
-		if !strings.HasPrefix(js, `{"reachable":true,"active":true,"nodeId":"n1","managerAddr":"10.0.0.1:2377","nodes":[{"id":"n1","hostname":"mgr","role":"manager","status":"ready","availability":"active","managerStatus":"leader","engineVersion":"28.0.1","self":true},{"id":"n2","hostname":"wrk","role":"worker","status":"ready","availability":"active","managerStatus":null,`) {
+		if !strings.HasPrefix(js, `{"reachable":true,"active":true,"nodeId":"n1","managerAddr":"10.0.0.1:2377","nodes":[{"id":"n1","hostname":"mgr","role":"manager","status":"ready","availability":"active","managerStatus":"leader","engineVersion":"28.0.1","self":true,"lokiPlugin":null},{"id":"n2","hostname":"wrk","role":"worker","status":"ready","availability":"active","managerStatus":null,`) {
 			t.Errorf("json: %s", js)
 		}
 		if strings.Contains(js, "SWMTKN") || strings.Contains(js, `"error"`) {
@@ -370,6 +390,79 @@ func TestSwarmDiscovery(t *testing.T) {
 		}
 		if PortList() != "2377/tcp, 7946/tcp+udp, 4789/udp" {
 			t.Errorf("list: %s", PortList())
+		}
+	})
+}
+
+func TestLokiPluginOnNodes(t *testing.T) {
+	// negative control: match Name == "loki" only — docker reports the alias as loki:latest, so preview-host reads false.
+	t.Run("one node inspect marks each node: the aliased Log plugin is true, the built-ins alone are false", func(t *testing.T) {
+		// negative control: match Name == "loki" only — preview-host reads false.
+		f := loggedManager(t)
+		info := SwarmInfo(f)
+		MarkLokiPlugins(f, &info)
+		rows := ""
+		for _, n := range info.Nodes {
+			rows += n.Hostname + ":" + jsonOf(t, n.LokiPlugin) + " "
+		}
+		// A drifted command line gets the shim's empty answer and reads null:null.
+		if rows != "preview-host:true worker-1:false " {
+			t.Errorf("nodes: %s", rows)
+		}
+	})
+
+	t.Run("docker not answering leaves every node unknown, never missing", func(t *testing.T) {
+		// negative control: drop the `!res.OK` return — the partial answer marks preview-host true.
+		f := loggedManager(t)
+		answer := f.Answer
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			if strings.TrimSpace(cmd) == cmdNodeInspect {
+				first, _, _ := strings.Cut(nodeInspect, "\n")
+				return exec.Result{OK: false, Code: 1, Stdout: first + "\n", Stderr: "Error response from daemon: node n2abcdef01234567 not found\n"}, true
+			}
+			return answer(cmd)
+		}
+		info := SwarmInfo(f)
+		MarkLokiPlugins(f, &info)
+		if len(info.Nodes) != 2 {
+			t.Fatalf("nodes: %s", jsonOf(t, info))
+		}
+		for _, n := range info.Nodes {
+			if n.LokiPlugin != nil {
+				t.Errorf("%s: %s", n.Hostname, jsonOf(t, n.LokiPlugin))
+			}
+		}
+	})
+
+	t.Run("no nodes, no command", func(t *testing.T) {
+		// negative control: drop the `len(info.Nodes) == 0` return — a bare `docker node inspect` runs on a host that is not a manager.
+		f := inactive()
+		info := SwarmInfo(f)
+		before := len(f.Commands())
+		MarkLokiPlugins(f, &info)
+		if got := f.Commands(); len(got) != before {
+			t.Errorf("commands: %v", got)
+		}
+	})
+
+	t.Run("pstack swarm names each node without the plugin, and the line to run there", func(t *testing.T) {
+		// negative control: append the flag after the ports table — it no longer sits between the nodes and `add a worker:`.
+		f := loggedManager(t)
+		info := SwarmInfo(f)
+		MarkLokiPlugins(f, &info)
+		report := SwarmReport(info)
+		want := "  worker-1        worker            ready   active        28.0.1  n2abcdef0123\n" +
+			"\n" +
+			"no loki plugin: worker-1\n" +
+			"  " + LokiPluginInstall + "\n" +
+			"\n" +
+			"add a worker:"
+		if !strings.Contains(report, want) {
+			t.Errorf("report:\n%s\nwant within it:\n%s", report, want)
+		}
+		// preview-host has the plugin, so the flag never names it.
+		if strings.Contains(report, "no loki plugin: preview-host") {
+			t.Errorf("preview-host has the plugin:\n%s", report)
 		}
 	})
 }

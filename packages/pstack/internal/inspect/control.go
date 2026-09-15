@@ -10,6 +10,10 @@
 // container EXCEPT pstack's own. Recreating the container performing the operation kills the
 // operation, and if the new image is broken, the thing that could have repaired the host died with
 // it — the rule the control template's header states, enforced by name instead of by distance.
+//
+// And one read that deploys depend on: LokiPushURL. Whether a deploy injects a loki logging block
+// comes from the running loki container's label, not from a setting. So `pstack up` on the host and
+// the API always agree, and nothing needs syncing when `pstack logging` switches.
 package inspect
 
 import (
@@ -81,6 +85,28 @@ func ControlRuntime(r exec.Runner) ControlView {
 		return out.Containers[i].Name < out.Containers[j].Name
 	})
 	return out
+}
+
+// LokiPushURL is the URL deploys put in every injected logging block. It is the
+// `pstack.logging.push-url` label that `pstack init --logging loki` renders onto the control stack's
+// loki service, read from the container the way DetectChallenge reads Traefik's flags. "" means
+// logging is off: docker did not answer, or no control container is the loki service with the label.
+//
+// `-a` (idsByLabel) is deliberate: a Loki that is restarting must not flip deploys between injected
+// and not. `pstack logging off` re-runs init, whose `up --remove-orphans` removes the container, so
+// it stops being found.
+func LokiPushURL(r exec.Runner) string {
+	// nil when docker did not answer, and inspectIDs of nil asks nothing.
+	ids, _ := idsByLabel(r, "com.docker.compose.project="+ControlProject)
+	for _, raw := range inspectIDs(r, ids) {
+		if raw.Config == nil || raw.Config.Labels["com.docker.compose.service"] != "loki" {
+			continue
+		}
+		if push := raw.Config.Labels[initctl.PushURLLabel]; push != "" {
+			return push
+		}
+	}
+	return ""
 }
 
 // The three ways RestartControlService refuses, for the route to map onto statuses.

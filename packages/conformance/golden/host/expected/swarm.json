@@ -16,7 +16,8 @@
         "availability": "active",
         "managerStatus": "leader",
         "engineVersion": "28.0.1",
-        "self": true
+        "self": true,
+        "lokiPlugin": null
       }
     ],
     "ports": [
