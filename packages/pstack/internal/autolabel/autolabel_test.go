@@ -721,6 +721,34 @@ func TestLoggingInjection(t *testing.T) {
 			t.Errorf("web: %s", got)
 		}
 	})
+
+	t.Run("the derived file is not world-readable once it carries the push password", func(t *testing.T) {
+		// negative control: drop the os.Chmod after WriteFile — the file keeps the 0644 the
+		// logging-off pass left it at, and the push password stays readable by every local user.
+		dir := t.TempDir()
+		write(t, dir, "services:\n  app:\n    image: nginx\n    labels: [pstack.routing.port=80]\n")
+		gen := filepath.Join(dir, GeneratedCompose)
+		logTo(t, "")
+		if _, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01}); err != nil {
+			t.Fatal(err)
+		}
+		// Pinned, not inherited: under a tight umask the first pass would already be 0600 and the
+		// rewrite would prove nothing.
+		if err := os.Chmod(gen, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		logTo(t, lokiURL)
+		if _, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01}); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(gen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("mode %04o, want 0600", got)
+		}
+	})
 }
 
 func TestAPreviewCannotClaimAControlHostname(t *testing.T) {

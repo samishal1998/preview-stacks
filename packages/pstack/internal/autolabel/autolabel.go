@@ -650,8 +650,17 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	if err != nil {
 		return nil, &spec.Error{Msg: "compose file " + original + " could not be serialised: " + err.Error()}
 	}
-	if err := os.WriteFile(filepath.Join(a.Dir, generatedRel), append(b, '\n'), 0o666); err != nil {
+	path := filepath.Join(a.Dir, generatedRel)
+	if err := os.WriteFile(path, append(b, '\n'), 0o666); err != nil {
 		return nil, err
+	}
+	// The injected loki-url carries the push password, and deployments/<id>/ is world-readable. The
+	// `chmod` is separate because a create-time mode applies only on CREATE: a stack first deployed
+	// with logging off already has this file at 0644 (initctl.write splits it for the same reason).
+	if pushURL != "" {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return nil, err
+		}
 	}
 	return &MaterializeResult{File: generatedRel, Generated: generated, Skipped: skipped, Notes: notes, Logged: logged, LogNotes: logNotes}, nil
 }
