@@ -1457,6 +1457,48 @@ On a Loki host it refuses two more:
   and running containers' pushes are refused until each stack is redeployed. Keep it with
   `PSTACK_LOKI_PASSWORD=$(. /var/lib/pstack/control/.env; echo "$LOKI_PUSH_PASSWORD")`.
 
+### Turn Loki logging on or off: `pstack logging`
+
+```console
+$ pstack logging loki       # Loki on this host
+$ pstack logging off
+$ pstack logging loki -n    # print the plan, change nothing
+```
+
+Like `pstack ui`, it re-runs `init` from what `control/.env` and the generated compose already hold,
+so the token, the DNS token and the domain stay as they are. Asking for the mode the host is already
+in recreates nothing.
+
+**`loki`** adds a Loki service to the control stack, installs and enables the `loki` log plugin on
+this node, and writes a push password to `control/.env`. If the plugin does not install, the switch
+fails and says so. From then on, a deploy gives every service without a `logging:` key of its own
+the loki driver, labelled `service_name=<stack>-<service>`. A service with its own `logging:` is
+left alone and named in the job log. Deployments already running switch on their next deploy, a
+sleeping one on wake.
+
+**`off`** removes the Loki service; the plugin stays installed. New deploys get no driver.
+Containers still running with it push to `loki.<domain>` and get a 404, which the plugin does not
+retry: their logs are dropped and stopping them is not delayed. The command prints how many
+deployments still carry the driver — each registry deployment's `compose.generated.yml`, so it
+counts deployments the API has stored, not containers. Each drops it on its next deploy, a sleeping
+one on wake.
+
+`pstack upgrade` keeps whichever mode the host is in, and the push password with it. Workers get the
+plugin from the join material; see [Swarm mode](#swarm-mode).
+
+#### Upgrading the plugin by hand
+
+The plugin is pinned to Loki's version (`grafana/loki-docker-driver:3.7.7-<arch>`), and
+`pstack upgrade` never upgrades it. **Doing it interrupts every preview on that node**, because
+dockerd restarts. On each node, with `<arch>` set to `amd64` or `arm64`:
+
+```console
+$ docker plugin disable --force loki
+$ docker plugin upgrade loki grafana/loki-docker-driver:<new>-<arch> --grant-all-permissions
+$ docker plugin enable loki
+$ sudo systemctl restart docker      # rc-service docker restart on Alpine
+```
+
 ### Why `init` is CLI-only, and always will be
 
 `init` — and `upgrade` — are CLI-only and will never be HTTP routes,

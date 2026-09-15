@@ -144,6 +144,18 @@ Reuses the stored token and domain, and builds the SPA image when switching to a
 version change — that is upgrade.`,
 		flags: globalFlags,
 	},
+	"logging": {
+		summary: "turn Loki logging on or off for this host",
+		body: `pstack logging <loki|off> [-n]
+
+loki   Loki on
+off    Loki off, plugin kept
+
+Reuses the stored token and domain.
+
+  -n, --dry-run   print the plan and change nothing`,
+		flags: globalFlags,
+	},
 	"serve": {
 		summary: "run the API and UI (what the control container does)",
 		body: `pstack serve

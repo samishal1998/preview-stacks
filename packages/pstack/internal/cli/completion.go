@@ -37,6 +37,7 @@ func Completion(shell string) (string, *Exit) {
 // flags and only three commands have any.
 var subcommands = map[string][]string{
 	"ui":         {"basic", "advanced"},
+	"logging":    {"loki", "off"},
 	"swarm":      {"status", "join"},
 	"pull":       {"config"},
 	"push":       {"config"},
