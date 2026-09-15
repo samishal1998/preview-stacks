@@ -53,6 +53,7 @@
 package swarm
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"unicode"
@@ -572,6 +573,9 @@ type Node struct {
 	EngineVersion string  `json:"engineVersion"`
 	// Self is the node this API runs on.
 	Self bool `json:"self"`
+	// LokiPlugin: nil = not checked (this host's logging is off) or docker did not answer; false = no
+	// Log plugin named loki / loki:latest, so swarm keeps logged services off this node.
+	LokiPlugin *bool `json:"lokiPlugin"`
 }
 
 // Info is what the swarm panel shows.
@@ -701,6 +705,56 @@ func SwarmInfo(r exec.Runner) Info {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// nodePlugins is the part of `docker node inspect` that MarkLokiPlugins reads.
+type nodePlugins struct {
+	ID          string
+	Description struct {
+		Engine struct {
+			Plugins []struct{ Type, Name string }
+		}
+	}
+}
+
+// MarkLokiPlugins sets each node's LokiPlugin from the plugin list the node reports to the manager.
+// That is the same list swarm's scheduler filters on: a task with `logging.driver: loki` is placed
+// only on a node reporting an ENABLED Log plugin named `loki` or `loki:latest` (`--alias loki` is
+// reported as the latter), and stays pending anywhere else. One `docker node inspect` covers every
+// node. When docker does not answer, every LokiPlugin stays nil: unknown, never "missing".
+//
+// A worker that joined before logging was on cannot be fixed from here, because there is no remote
+// exec to workers (see the package comment). This flag is how the Swarm page and `pstack swarm` name
+// it.
+func MarkLokiPlugins(r exec.Runner, info *Info) {
+	if len(info.Nodes) == 0 {
+		return
+	}
+	ids := make([]string, len(info.Nodes))
+	for i, n := range info.Nodes {
+		ids[i] = Shq(n.ID)
+	}
+	res := r.Run("docker node inspect --format '{{json .}}' "+strings.Join(ids, " "), exec.RunOptions{Label: "docker node inspect"})
+	if !res.OK {
+		return
+	}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		var node nodePlugins
+		if strings.TrimSpace(line) == "" || json.Unmarshal([]byte(line), &node) != nil {
+			continue
+		}
+		has := false
+		for _, p := range node.Description.Engine.Plugins {
+			if p.Type == "Log" && (p.Name == "loki" || p.Name == "loki:latest") {
+				has = true
+			}
+		}
+		for i := range info.Nodes {
+			if info.Nodes[i].ID == node.ID {
+				info.Nodes[i].LokiPlugin = &has
+			}
+		}
+	}
+}
 
 // WorkerJoinToken is the worker join token, or "" when docker would not hand one out. A SECRET:
 // whoever holds it can add a node that runs any task.
@@ -958,6 +1012,21 @@ func SwarmReport(info Info) string {
 	out = append(out, "", line(head))
 	for _, r := range rows {
 		out = append(out, line(r))
+	}
+	// Only a node that was checked and found without the plugin is named. nil means logging is off or
+	// docker did not answer, and neither is a reason to send someone to a worker.
+	var noPlugin []string
+	for _, n := range info.Nodes {
+		if n.LokiPlugin != nil && !*n.LokiPlugin {
+			noPlugin = append(noPlugin, n.Hostname)
+		}
+	}
+	if len(noPlugin) > 0 {
+		out = append(out, "")
+		for _, h := range noPlugin {
+			out = append(out, "no loki plugin: "+h)
+		}
+		out = append(out, "  "+LokiPluginInstall)
 	}
 	out = append(out,
 		"",
