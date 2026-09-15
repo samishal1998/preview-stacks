@@ -45,8 +45,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/autolabel"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/initctl"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/version"
@@ -81,12 +83,21 @@ type ControlState struct {
 	// it zeroes the only copy — Traefik is recreated with no credential, the existing wildcard keeps
 	// serving, and the renewal silently fails weeks later.
 	DNSToken string
+	// Logging is `loki` when the generated compose has the loki service. Not in `.env`, for UI's
+	// reason: init bakes the decision into the compose file, so it is read back from there. Absent
+	// means none — every host from before the option, and every host that turned it off.
+	Logging initctl.Logging
+	// LokiPassword is LOKI_PUSH_PASSWORD from `.env`, or "" when the host has none. Carried for the
+	// token's reason: `init` mints a new one when PSTACK_LOKI_PASSWORD is unset, and every running
+	// container keeps pushing with the old one — 401, never retried, logs gone until it is redeployed.
+	LokiPassword string
 }
 
 var (
 	envLineRe    = regexp.MustCompile(`^([A-Z_][A-Z0-9_]*)=(.*)$`)
 	dnsChallenge = regexp.MustCompile(`(?i)dnschallenge`)
 	advancedSvc  = regexp.MustCompile(`(?m)^\s{2}advanced-ui:`)
+	lokiSvc      = regexp.MustCompile(`(?m)^\s{2}loki:`)
 	semverRe     = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
 )
 
@@ -179,12 +190,20 @@ func ReadControlState(dataDir string) (*ControlState, error) {
 		 */
 		UI:           initctl.Basic,
 		Orchestrator: spec.Compose,
+		Logging:      initctl.LoggingNone,
+		// Not need(): absent is a host without Loki, never a refusal.
+		LokiPassword: env["LOKI_PUSH_PASSWORD"],
 	}
 	if dnsChallenge.MatchString(compose) {
 		s.Challenge = initctl.DNS01
 	}
 	if advancedSvc.MatchString(compose) {
 		s.UI = initctl.Advanced
+	}
+	// The loki service and the `loki:` volume beside it both match, and both exist only when init
+	// ran with --logging loki: the logging-off template has no `loki` anywhere.
+	if lokiSvc.MatchString(compose) {
+		s.Logging = initctl.Loki
 	}
 	if env["PSTACK_ORCHESTRATOR"] == "swarm" {
 		s.Orchestrator = spec.Swarm
@@ -255,6 +274,9 @@ func initFlags(state *ControlState) string {
 		flags = append(flags, "--ui advanced")
 	}
 	flags = append(flags, "--orchestrator "+string(state.Orchestrator))
+	if state.Logging == initctl.Loki {
+		flags = append(flags, "--logging loki")
+	}
 	return strings.Join(flags, " ")
 }
 
@@ -313,12 +335,16 @@ func PlanUpgrade(a PlanArgs) []Step {
 }
 
 // initEnv is what `init` must be handed so that NOTHING rotates: the machine token always, and the
-// DNS-01 credential when the host has one. `init` writes dns.env from PSTACK_DNS_TOKEN
-// unconditionally, so omitting it here is how an upgrade used to blank a host's Cloudflare token.
+// DNS-01 credential and the Loki push password when the host has them. `init` writes dns.env from
+// PSTACK_DNS_TOKEN unconditionally, so omitting it here is how an upgrade used to blank a host's
+// Cloudflare token; a switch to loki with no stored password mints one fresh the same way.
 func initEnv(state *ControlState) map[string]string {
 	env := map[string]string{"PSTACK_TOKEN": state.Token}
 	if state.DNSToken != "" {
 		env["PSTACK_DNS_TOKEN"] = state.DNSToken
+	}
+	if state.LokiPassword != "" {
+		env["PSTACK_LOKI_PASSWORD"] = state.LokiPassword
 	}
 	return env
 }
@@ -373,17 +399,107 @@ func SwitchUI(opts SwitchUIOptions) (changed bool, steps []Step, err error) {
 	state.UI = opts.UI
 	steps = PlanUISwitch(&state)
 	say(string(current.UI) + " UI → " + string(opts.UI) + " UI   (" + state.Domain + ")")
+	if err := runSwitch(say, opts.Runner, steps); err != nil {
+		return false, nil, err
+	}
+	return true, steps, nil
+}
+
+// runSwitch runs a switch's steps in order and stops at the first failure. SwitchUI and SwitchLogging
+// share it so the two cannot drift in what they print or how they fail.
+func runSwitch(say func(string), runner exec.Runner, steps []Step) error {
 	for _, step := range steps {
 		say("  → " + step.Label)
-		r := opts.Runner.Run(step.Cmd, exec.RunOptions{Env: step.Env, Label: step.Label})
+		r := runner.Run(step.Cmd, exec.RunOptions{Env: step.Env, Label: step.Label})
 		if !r.OK && !r.Skipped {
-			return false, nil, &Error{step.Label + " failed (exit " + strconv.Itoa(r.Code) + ").\n" + lastLines(firstOf(r.Stderr, r.Stdout), 8)}
+			return &Error{step.Label + " failed (exit " + strconv.Itoa(r.Code) + ").\n" + lastLines(firstOf(r.Stderr, r.Stdout), 8)}
 		}
 		if strings.TrimSpace(r.Stdout) != "" {
 			say(exec.Indent(r.Stdout))
 		}
 	}
+	return nil
+}
+
+// SwitchLoggingOptions are SwitchLogging's inputs.
+type SwitchLoggingOptions struct {
+	DataDir string
+	Logging initctl.Logging
+	Runner  exec.Runner
+	// Log receives each progress line (stdout when nil).
+	Log func(string)
+}
+
+// SwitchLogging turns Loki on or off for a host that exists — `pstack logging loki|off`.
+//
+// SwitchUI's shape, for SwitchUI's reason: everything init needs is on disk, the token and the push
+// password included, and retyping them is how a host stops answering CI or starts refusing its own
+// containers' logs. One step: Loki is a pulled image, nothing to build. Returns changed=false and no
+// steps for a no-op.
+//
+// Off does not reach running containers. Their driver is fixed when they are created, so each keeps
+// pushing (now a 404, dropped without retry) until it is recreated; the closing line says how many.
+func SwitchLogging(opts SwitchLoggingOptions) (changed bool, steps []Step, err error) {
+	say := sayer(opts.Log)
+	current, err := ReadControlState(opts.DataDir)
+	if err != nil {
+		return false, nil, err
+	}
+	from, to := loggingWord(current.Logging), loggingWord(opts.Logging)
+	if from == to {
+		say("Logging is already " + to + ". Nothing to do.")
+		return false, []Step{}, nil
+	}
+
+	state := *current
+	state.Logging = opts.Logging
+	cmd := "pstack init " + initFlags(&state)
+	if state.Logging != initctl.Loki {
+		// Spelled out. initFlags reproduces a host by leaving defaults off, and initguard refuses an
+		// init that drops Loki without --logging typed; this switch is the decision, so it types it.
+		cmd += " --logging none"
+	}
+	steps = []Step{{Label: "re-run init with logging " + to, Cmd: cmd, Env: initEnv(&state)}}
+	say(from + " → " + to + "   (" + state.Domain + ")")
+	if err := runSwitch(say, opts.Runner, steps); err != nil {
+		return false, nil, err
+	}
+	if state.Logging != initctl.Loki {
+		say("  " + strconv.Itoa(LoggedDeployments(opts.DataDir)) + " deployment(s) still carry the loki driver")
+	}
 	return true, steps, nil
+}
+
+// loggingWord is the command's vocabulary, `loki|off`. "" reads as off, like none.
+func loggingWord(l initctl.Logging) string {
+	if l == initctl.Loki {
+		return "loki"
+	}
+	return "off"
+}
+
+// LoggedDeployments is how many deployments' generated compose still names the loki driver: the
+// ones whose containers keep pushing after logging is turned off, until their next deploy.
+//
+// Read from the file, not from docker: a sleeping deployment has no containers to ask and still
+// carries the driver until wake re-materializes it. The derived file sits in the deployment
+// directory itself — autolabel writes it beside the submitted compose.yml, which registry.Put puts
+// there. JSON despite the extension, so the key is matched with its quotes. A deployment whose file
+// is missing or unreadable is not counted.
+func LoggedDeployments(dataDir string) int {
+	root := registry.New(dataDir).Root
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0 // nothing deployed yet
+	}
+	n := 0
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(root, e.Name(), autolabel.GeneratedCompose))
+		if err == nil && strings.Contains(string(b), `"loki-url"`) {
+			n++
+		}
+	}
+	return n
 }
 
 // Options are Upgrade's inputs.
@@ -508,7 +624,7 @@ func Upgrade(opts Options) (*Result, error) {
 		say("  then, as the newly installed version:")
 		for _, step := range PlanUpgrade(PlanArgs{Phase: Resume, Target: target, State: &state, BinPath: binPath}) {
 			var carried []string
-			for _, k := range []string{"PSTACK_TOKEN", "PSTACK_DNS_TOKEN"} {
+			for _, k := range []string{"PSTACK_TOKEN", "PSTACK_DNS_TOKEN", "PSTACK_LOKI_PASSWORD"} {
 				if step.Env[k] != "" {
 					carried = append(carried, k)
 				}
