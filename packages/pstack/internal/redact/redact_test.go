@@ -139,4 +139,14 @@ func TestRedaction(t *testing.T) {
 			t.Fatalf("got %q", got)
 		}
 	})
+
+	t.Run("a loki push URL keeps its user and loses its password", func(t *testing.T) {
+		// negative control: drop the urlPassword replacement — the push password survives.
+		// Four bullets, the shape every URL password already gets (pinned above), not the design doc's eight.
+		// compose.generated.yml is JSON, so the URL sits between quotes with its key before it.
+		generated := `{"loki-url":"https://pstack:0123456789abcdef0123456789abcdef@loki.preview.example.com/loki/api/v1/push","loki-retries":"2"}`
+		if got := RedactText(generated); got != `{"loki-url":"https://pstack:••••@loki.preview.example.com/loki/api/v1/push","loki-retries":"2"}` {
+			t.Fatalf("json form: %q", got)
+		}
+	})
 }

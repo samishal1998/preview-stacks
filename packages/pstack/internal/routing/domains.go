@@ -242,17 +242,22 @@ func renderDomains(domains []string, o DomainOptions) string {
 }
 
 // IsControlHostname reports whether a hostname is one of the control plane's own — the primary's or
-// any additional domain's. Those are never a preview's to wake.
+// any additional domain's. Those are never a preview's to wake, and never a preview's to claim:
+// autolabel refuses a `pstack.routing.host` that names one.
 //
 // The PRIMARY is checked even on a nil store, because it is the one that must never be answered
 // with a waking page whatever else is missing.
+//
+// `loki.` counts ALWAYS, not only on a host running `--logging loki`: a host that turned logging
+// off must still never answer `loki.` with a waking page, and no preview can take the name meanwhile.
 func (s *RoutingStore) IsControlHostname(hostname, primary string) bool {
 	h := strings.ToLower(hostname)
 	for _, d := range append([]string{primary}, s.Domains()...) {
 		if d == "" {
 			continue
 		}
-		if h == "control."+strings.ToLower(d) || h == "api."+strings.ToLower(d) {
+		d = strings.ToLower(d)
+		if h == "control."+d || h == "api."+d || h == "loki."+d {
 			return true
 		}
 	}
