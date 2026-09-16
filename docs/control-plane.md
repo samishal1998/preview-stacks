@@ -1048,6 +1048,19 @@ runs. The scheduler keeps logged tasks off a node whose engine has no `Log` plug
 qualifies, readiness times out after 180s and that line is the reason. A service that kept its own
 `logging:` is named in the job log too.
 
+### The period guard
+
+A schema period whose `from` has passed cannot be removed or changed: its data becomes unreadable.
+The row can lag or lead the files, so every write of `config.yaml` (apply, rollback, resume) reads
+the periods from the files, never from the row, and runs `loki.CheckPeriods`. `lead` is the ready
+timeout + 10m.
+
+- **Rule 1:** a period starting at or before now + `lead` stays, unchanged, at its position.
+- **Rule 2** (apply, resume): a new period starts after now + 2×`lead`.
+
+A rollback checks rule 1 only: a period that has not started stores nothing. A refusal names the
+period; nothing is written.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves
