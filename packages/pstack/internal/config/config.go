@@ -11,7 +11,8 @@
 // OUT, deliberately: deployments, sessions, `sso_state`, terminal audit, delivery history. Those
 // describe what is happening on ONE host. Restoring a deployment row onto a machine where that
 // stack does not run is not merely useless, it is a lie about the world (invariant 10), and a
-// restored session id is a live credential nobody minted.
+// restored session id is a live credential nobody minted. Loki's settings stay behind too: a bucket
+// and a cutover date belong to one host's Loki. Assemble names them in Skipped.
 //
 // ── THIS PACKAGE ADDS A ROUTE, NOT A READ PATH ───────────────────────────────────────────────────
 //
@@ -67,6 +68,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/hostvars"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/notify"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registries"
@@ -249,6 +251,13 @@ func (s Sources) Assemble() (*Document, error) {
 			continue
 		}
 		d.Routing = append(d.Routing, RoutingFile{Name: f.Name, Content: content})
+	}
+	// Not carried either way, so a read error is a skip line rather than a failed export (the routing
+	// precedent above): the export is a recovery tool.
+	if row, err := loki.Read(s.Store); err != nil {
+		d.Skipped = append(d.Skipped, "loki: "+err.Error())
+	} else if row != nil {
+		d.Skipped = append(d.Skipped, "loki: host-specific — re-enter it on the target")
 	}
 	if d.Specs, d.Skipped, err = s.specList(d.Skipped); err != nil {
 		return nil, err

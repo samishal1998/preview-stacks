@@ -20,6 +20,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/hostvars"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/notify"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registries"
@@ -421,6 +422,33 @@ func TestTheWildcardPointerDoesNotTravel(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(d.Skipped, "\n"), "PUT /api/tls/wildcard") {
 		t.Fatalf("the skip must say how to store one on the target: %v", d.Skipped)
+	}
+}
+
+// negative control: delete the loki block in Assemble → a stored row goes unnamed and the second check
+// fails. (Appending the line whether or not a row exists fails the first check instead.)
+func TestAssembleSkipsTheLokiRow(t *testing.T) {
+	const line = "loki: host-specific — re-enter it on the target"
+	h := newHost(t)
+	before := assemble(t, h).Skipped
+	for _, s := range before {
+		if strings.HasPrefix(s, "loki:") {
+			t.Fatalf("an empty loki_config table was named: %v", before)
+		}
+	}
+	// An in-flight first save is still a stored row.
+	if err := loki.Save(h.Store, loki.Defaults(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	after := assemble(t, h).Skipped
+	n := 0
+	for _, s := range after {
+		if s == line {
+			n++
+		}
+	}
+	if n != 1 || len(after) != len(before)+1 {
+		t.Fatalf("skipped after a save: %v — want exactly one more line, %q", after, line)
 	}
 }
 

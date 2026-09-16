@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
 
 // Internal tests (package loki): they pin now, geteuid and chown and call render. None runs in
@@ -452,6 +454,329 @@ func TestDir(t *testing.T) {
 		}
 		if got := Dir("/data"); got != filepath.Join("/data", "control", "loki") {
 			t.Errorf("unset: %q", got)
+		}
+	})
+}
+
+// ── the row, Merge, Changed (T4) ─────────────────────────────────────────────────────────────────
+
+const (
+	rowLead   = 15 * time.Minute // Lead(5m): the default ready timeout's lead
+	rowKeyID  = "AKIAOLDKEY01"
+	rowSecret = "old-secret-0001"
+)
+
+// rowNoon is the day before patchS3's cutover: EarliestCutover(rowNoon, rowLead) is 2026-09-16.
+var rowNoon = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+
+func openRowStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+func readRow(t *testing.T, st *store.Store) *Row {
+	t.Helper()
+	r, err := Read(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// patchS3 is a complete, valid S3 storage save. Every call returns fresh pointers.
+func patchS3(bucket string) *StoragePatch {
+	return &StoragePatch{
+		Storage: Storage{Type: StorageS3, S3: &S3{
+			Endpoint: "https://s3.eu-central-1.amazonaws.com", Region: "eu-central-1", Bucket: bucket,
+			AccessKeyID: rowKeyID, Cutover: "2026-09-16",
+		}},
+		Secret: rowSecret,
+	}
+}
+
+// s3Row is a stored S3 row: the defaults plus patchS3("pstack-logs").
+func s3Row() *Row {
+	s := Defaults()
+	s.Storage = patchS3("pstack-logs").Storage
+	return &Row{Settings: s, Secret: rowSecret}
+}
+
+func TestRow(t *testing.T) {
+	t.Run("an empty table reads as nil", func(t *testing.T) {
+		// negative control: return &Row{Settings: Defaults()}, nil on sql.ErrNoRows → Read is non-nil and this fails
+		if r := readRow(t, openRowStore(t)); r != nil {
+			t.Fatalf("an empty table read as %+v", r)
+		}
+	})
+
+	t.Run("a save over an empty table is in flight with no Previous, and Revert empties it again", func(t *testing.T) {
+		// negative control: delete Revert's DELETE statement → the first save survives the revert and the last Read is non-nil
+		st := openRowStore(t)
+		s := s3Row().Settings
+		if err := Save(st, s, rowSecret, nil); err != nil {
+			t.Fatal(err)
+		}
+		r := readRow(t, st)
+		if r == nil || !r.InFlight || r.Previous != nil {
+			t.Fatalf("after a first save: %+v", r)
+		}
+		if !reflect.DeepEqual(r.Settings, s) || r.Secret != rowSecret || r.UpdatedAt == 0 {
+			t.Fatalf("saved %+v / %q / %d", r.Settings, r.Secret, r.UpdatedAt)
+		}
+		if err := Revert(st); err != nil {
+			t.Fatal(err)
+		}
+		if r := readRow(t, st); r != nil {
+			t.Fatalf("reverting a first save left %+v", r)
+		}
+	})
+
+	t.Run("a save over a stored row carries it as Previous, and Revert restores it", func(t *testing.T) {
+		// negative control: make Revert's UPDATE set config = config, secret = secret → the save survives and storage reads s3
+		st := openRowStore(t)
+		first := Defaults()
+		first.RetentionDays = 14
+		if err := Save(st, first, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := Finish(st); err != nil {
+			t.Fatal(err)
+		}
+		stored := readRow(t, st)
+		second := s3Row().Settings
+		if err := Save(st, second, rowSecret, stored); err != nil {
+			t.Fatal(err)
+		}
+		inFlight := readRow(t, st)
+		if inFlight == nil || !inFlight.InFlight || inFlight.Previous == nil ||
+			!reflect.DeepEqual(inFlight.Previous.Settings, first) || inFlight.Previous.Secret != "" ||
+			!reflect.DeepEqual(inFlight.Settings, second) || inFlight.Secret != rowSecret {
+			t.Fatalf("in flight: %+v", inFlight)
+		}
+		if err := Revert(st); err != nil {
+			t.Fatal(err)
+		}
+		back := readRow(t, st)
+		if back == nil || back.InFlight || back.Previous != nil || !reflect.DeepEqual(back.Settings, first) || back.Secret != "" {
+			t.Fatalf("after Revert: %+v", back)
+		}
+	})
+
+	t.Run("Finish keeps the save and clears previous_*; a Revert after it changes nothing", func(t *testing.T) {
+		// negative control: make Finish set only previous_secret = NULL → previous_config stays '' and InFlight stays true
+		st := openRowStore(t)
+		s := s3Row().Settings
+		if err := Save(st, s, rowSecret, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := Finish(st); err != nil {
+			t.Fatal(err)
+		}
+		done := readRow(t, st)
+		if done == nil || done.InFlight || done.Previous != nil || !reflect.DeepEqual(done.Settings, s) || done.Secret != rowSecret {
+			t.Fatalf("after Finish: %+v", done)
+		}
+		if err := Revert(st); err != nil {
+			t.Fatal(err)
+		}
+		if again := readRow(t, st); !reflect.DeepEqual(again, done) {
+			t.Fatalf("Revert with no apply in flight changed the row: %+v → %+v", done, again)
+		}
+	})
+}
+
+func TestMerge(t *testing.T) {
+	t.Run("a nil row merges onto Defaults()", func(t *testing.T) {
+		// negative control: start Merge from Settings{} when row is nil → Validate refuses retentionDays 0 and the empty storage type
+		c := &ChunksPatch{RetentionDays: 14, Chunks: Chunks{IdlePeriodMinutes: 15, MaxAgeMinutes: 60, TargetSizeKiB: 1024, Encoding: "zstd"}}
+		got, secret, err := Merge(nil, c, nil, rowLead)
+		want := Defaults()
+		want.RetentionDays, want.Chunks = c.RetentionDays, c.Chunks
+		if err != nil || secret != "" || !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v %q %v, want %+v", got, secret, err, want)
+		}
+	})
+
+	t.Run("a chunks patch keeps the stored storage and secret", func(t *testing.T) {
+		// negative control: start Merge from Defaults() even when a row is given → storage reads filesystem and the secret ""
+		row := s3Row()
+		got, secret, err := Merge(row, &ChunksPatch{RetentionDays: 30, Chunks: row.Settings.Chunks}, nil, rowLead)
+		if err != nil || secret != rowSecret || got.RetentionDays != 30 || !reflect.DeepEqual(got.Storage, row.Settings.Storage) {
+			t.Fatalf("got %+v %q %v", got, secret, err)
+		}
+	})
+
+	t.Run("filesystem to S3 needs every field and a secret", func(t *testing.T) {
+		// negative control: return merged without calling Validate → the patch with no region merges
+		pin(t, rowNoon)
+		row := &Row{Settings: Defaults()}
+		got, secret, err := Merge(row, nil, patchS3("pstack-logs"), rowLead)
+		if err != nil || secret != rowSecret || !reflect.DeepEqual(got.Storage, patchS3("pstack-logs").Storage) {
+			t.Fatalf("a complete S3 add: %+v %q %v", got, secret, err)
+		}
+		noRegion := patchS3("pstack-logs")
+		noRegion.Storage.S3.Region = ""
+		if _, _, err := Merge(row, nil, noRegion, rowLead); !IsError(err) || !strings.Contains(err.Error(), "region") {
+			t.Fatalf("no region: %v", err)
+		}
+		noSecret := patchS3("pstack-logs")
+		noSecret.Secret = ""
+		if _, _, err := Merge(row, nil, noSecret, rowLead); !IsError(err) {
+			t.Fatalf("no secret: %v", err)
+		}
+		keep := patchS3("pstack-logs")
+		keep.Secret, keep.KeepSecret = "", true
+		if _, _, err := Merge(row, nil, keep, rowLead); !IsError(err) || !strings.Contains(err.Error(), "secretAccessKey is required") {
+			t.Fatalf("keepSecret with nothing stored: %v", err)
+		}
+	})
+
+	t.Run("only the save that adds S3 checks the cutover against earliestCutover", func(t *testing.T) {
+		// negative control: compute addingS3 as merged.Storage.Type == StorageS3 → the rotation on a host past its cutover is refused
+		pin(t, time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC))
+		if _, _, err := Merge(&Row{Settings: Defaults()}, nil, patchS3("pstack-logs"), rowLead); !IsError(err) || !strings.Contains(err.Error(), "cutover") {
+			t.Fatalf("an S3 add with a past cutover: %v", err)
+		}
+		rotate := patchS3("pstack-logs")
+		rotate.Secret = "new-secret-0002"
+		if _, _, err := Merge(s3Row(), nil, rotate, rowLead); err != nil {
+			t.Fatalf("a rotation on a host past its cutover: %v", err)
+		}
+	})
+
+	t.Run("S3 to filesystem is ErrOneWay, before the cutover too", func(t *testing.T) {
+		// negative control: delete the ErrOneWay case → the filesystem patch reaches Validate and merges
+		pin(t, rowNoon) // the stored cutover, 2026-09-16, has not come
+		_, _, err := Merge(s3Row(), nil, &StoragePatch{Storage: Storage{Type: StorageFilesystem}}, rowLead)
+		if !errors.Is(err, ErrOneWay) || IsError(err) {
+			t.Fatalf("S3 → filesystem: %v (a *Error would be a 400)", err)
+		}
+	})
+
+	t.Run("a changed endpoint, region, bucket, pathStyle or cutover is ErrFixed", func(t *testing.T) {
+		// negative control: delete the ErrFixed case → every changed patch merges
+		for name, change := range map[string]func(*S3){
+			"endpoint":  func(s *S3) { s.Endpoint = "https://minio.internal:9000" },
+			"region":    func(s *S3) { s.Region = "us-east-1" },
+			"bucket":    func(s *S3) { s.Bucket = "other-logs" },
+			"pathStyle": func(s *S3) { s.PathStyle = true },
+			"cutover":   func(s *S3) { s.Cutover = "2026-09-17" },
+		} {
+			p := patchS3("pstack-logs")
+			change(p.Storage.S3)
+			if _, _, err := Merge(s3Row(), nil, p, rowLead); !errors.Is(err, ErrFixed) || IsError(err) {
+				t.Errorf("changed %s: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("credentials rotate, and KeepSecret keeps the stored secret", func(t *testing.T) {
+		// negative control: resolve KeepSecret to sp.Secret → the kept secret comes back "" and Validate refuses it
+		rotate := patchS3("pstack-logs")
+		rotate.Storage.S3.AccessKeyID, rotate.Secret = "AKIANEWKEY02", "new-secret-0002"
+		got, secret, err := Merge(s3Row(), nil, rotate, rowLead)
+		if err != nil || secret != "new-secret-0002" || got.Storage.S3.AccessKeyID != "AKIANEWKEY02" {
+			t.Fatalf("rotation: %+v %q %v", got.Storage.S3, secret, err)
+		}
+		keep := patchS3("pstack-logs")
+		keep.Secret, keep.KeepSecret = "", true
+		if _, secret, err := Merge(s3Row(), nil, keep, rowLead); err != nil || secret != rowSecret {
+			t.Fatalf("keepSecret: %q %v", secret, err)
+		}
+	})
+
+	t.Run("KeepSecret with a changed accessKeyId is refused", func(t *testing.T) {
+		// negative control: drop the key-id comparison from the KeepSecret case → the old secret is kept under the new key id
+		keep := patchS3("pstack-logs")
+		keep.Storage.S3.AccessKeyID = "AKIANEWKEY02"
+		keep.Secret, keep.KeepSecret = "", true
+		if _, _, err := Merge(s3Row(), nil, keep, rowLead); !IsError(err) || !strings.Contains(err.Error(), "secretAccessKey is required") {
+			t.Fatalf("a new key id with the old secret: %v", err)
+		}
+	})
+
+	t.Run("a filesystem patch on a filesystem host changes nothing", func(t *testing.T) {
+		// negative control: delete the filesystem-to-filesystem case → KeepSecret finds no stored secret and refuses
+		row := &Row{Settings: Defaults()}
+		row.Settings.RetentionDays = 14
+		got, secret, err := Merge(row, nil, &StoragePatch{Storage: Storage{Type: StorageFilesystem}, KeepSecret: true}, rowLead)
+		if err != nil || secret != "" || !reflect.DeepEqual(got, row.Settings) {
+			t.Fatalf("got %+v %q %v", got, secret, err)
+		}
+	})
+
+	t.Run("two queued storage saves with different buckets: the second is ErrFixed once the first is stored", func(t *testing.T) {
+		// negative control: delete the ErrFixed case → the second bucket merges over the first
+		pin(t, rowNoon)
+		st := openRowStore(t)
+		fs := readRow(t, st) // nil: the empty table is slice 1's filesystem config
+		a, b := patchS3("pstack-logs"), patchS3("other-logs")
+		mergedA, secretA, err := Merge(fs, nil, a, rowLead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Merge(fs, nil, b, rowLead); err != nil {
+			t.Fatalf("both saves are accepted while the row is filesystem: %v", err)
+		}
+		if err := Save(st, mergedA, secretA, fs); err != nil {
+			t.Fatal(err)
+		}
+		if err := Finish(st); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Merge(readRow(t, st), nil, b, rowLead); !errors.Is(err, ErrFixed) {
+			t.Fatalf("the second save against the stored first: %v", err)
+		}
+	})
+}
+
+func TestChanged(t *testing.T) {
+	t.Run("nothing changed is [] and never null", func(t *testing.T) {
+		// negative control: declare `var changed []string` in Changed → it marshals as null
+		b, err := jsonx.Marshal(Changed(nil, Defaults(), ""))
+		if err != nil || string(b) != "[]" {
+			t.Fatalf("no change marshals as %s (%v)", b, err)
+		}
+		if got := Changed(s3Row(), s3Row().Settings, rowSecret); len(got) != 0 {
+			t.Fatalf("an equal S3 row: %v", got)
+		}
+	})
+
+	t.Run("a retention-only change is retention", func(t *testing.T) {
+		// negative control: drop the RetentionDays comparison → []
+		after := Defaults()
+		after.RetentionDays = 14
+		if got := Changed(nil, after, ""); !reflect.DeepEqual(got, []string{"retention"}) {
+			t.Fatalf("got %v", got)
+		}
+	})
+
+	t.Run("a secret rotation and a key-id rotation are credentials, not storage", func(t *testing.T) {
+		// negative control: compare the S3 structs whole for storage → the key-id rotation reads [storage credentials]
+		row := s3Row()
+		if got := Changed(row, row.Settings, "new-secret-0002"); !reflect.DeepEqual(got, []string{"credentials"}) {
+			t.Fatalf("secret rotation: %v", got)
+		}
+		after := s3Row().Settings
+		after.Storage.S3.AccessKeyID = "AKIANEWKEY02"
+		if got := Changed(row, after, rowSecret); !reflect.DeepEqual(got, []string{"credentials"}) {
+			t.Fatalf("key-id rotation: %v", got)
+		}
+	})
+
+	t.Run("filesystem to S3 with new chunks and retention is all four, in order", func(t *testing.T) {
+		// negative control: append "credentials" before "storage" → the order differs
+		after := s3Row().Settings
+		after.RetentionDays = 30
+		after.Chunks.Encoding = "zstd"
+		want := []string{"chunks", "retention", "storage", "credentials"}
+		if got := Changed(nil, after, rowSecret); !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
 }

@@ -48,6 +48,8 @@
 package loki
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -57,6 +59,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
 
 // Settings is what an operator saved. Field order is the JSON order (rule 1).
@@ -362,4 +367,184 @@ func Dir(dataDir string) string {
 		return lokiMount
 	}
 	return filepath.Join(dataDir, "control", "loki")
+}
+
+// ── THE ROW ──────────────────────────────────────────────────────────────────────────────────────
+//
+// loki_config (migration 9) is what an operator SAVED, never what Loki runs: every schema-period
+// decision reads config.yaml. previous_* is one apply's write-ahead undo record, written in the same
+// statement as the save. NULL: no apply in flight. '': the table was empty before it.
+//
+// Everything here uses st.DB, so none of it may run inside store.Tx (one connection, Go rule 16).
+
+// Row is the stored settings. Previous is set only while an apply is in flight over an earlier row;
+// InFlight with a nil Previous means the table was empty before, so undoing renders Defaults().
+// Previous.UpdatedAt is 0: no column keeps it.
+type Row struct {
+	Settings  Settings
+	Secret    string
+	UpdatedAt int64
+	InFlight  bool
+	Previous  *Row
+}
+
+// Read is the stored row, or nil when the table is empty (slice 1's config exactly).
+func Read(st *store.Store) (*Row, error) {
+	var config string
+	var previous, previousSecret sql.NullString
+	r := &Row{}
+	err := st.DB.QueryRow("SELECT config, secret, previous_config, previous_secret, updated_at FROM loki_config WHERE id = 1").
+		Scan(&config, &r.Secret, &previous, &previousSecret, &r.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(config), &r.Settings); err != nil {
+		return nil, err
+	}
+	r.InFlight = previous.Valid
+	if previous.Valid && previous.String != "" {
+		r.Previous = &Row{Secret: previousSecret.String}
+		if err := json.Unmarshal([]byte(previous.String), &r.Previous.Settings); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
+// Save stores a save and its undo record in ONE statement, so no crash leaves one without the
+// other. previous is the row the apply read (nil: the table was empty).
+func Save(st *store.Store, s Settings, secret string, previous *Row) error {
+	config, err := jsonx.Marshal(s)
+	if err != nil {
+		return err
+	}
+	previousConfig, previousSecret := "", ""
+	if previous != nil {
+		b, err := jsonx.Marshal(previous.Settings)
+		if err != nil {
+			return err
+		}
+		previousConfig, previousSecret = string(b), previous.Secret
+	}
+	_, err = st.DB.Exec(
+		"INSERT INTO loki_config (id, config, secret, previous_config, previous_secret, updated_at) VALUES (1, ?, ?, ?, ?, ?) "+
+			"ON CONFLICT(id) DO UPDATE SET config = excluded.config, secret = excluded.secret, "+
+			"previous_config = excluded.previous_config, previous_secret = excluded.previous_secret, updated_at = excluded.updated_at",
+		string(config), secret, previousConfig, previousSecret, now().UnixMilli())
+	return err
+}
+
+// Finish ends an apply: the save stays, the undo record goes.
+func Finish(st *store.Store) error {
+	_, err := st.DB.Exec("UPDATE loki_config SET previous_config = NULL, previous_secret = NULL WHERE id = 1")
+	return err
+}
+
+// Revert undoes an apply: the row becomes previous, or goes when previous is empty. The two WHEREs
+// are disjoint and NULL matches neither, so the pair needs no transaction and leaves a row with no
+// apply in flight untouched.
+func Revert(st *store.Store) error {
+	if _, err := st.DB.Exec("DELETE FROM loki_config WHERE previous_config = ''"); err != nil {
+		return err
+	}
+	_, err := st.DB.Exec("UPDATE loki_config SET config = previous_config, secret = previous_secret, " +
+		"previous_config = NULL, previous_secret = NULL WHERE previous_config <> ''")
+	return err
+}
+
+// ChunksPatch is PUT /api/logging's body: the whole chunks-and-retention section.
+type ChunksPatch struct {
+	RetentionDays int
+	Chunks        Chunks
+}
+
+// StoragePatch is PUT /api/logging/storage's body. KeepSecret is an empty or masked
+// secretAccessKey, resolved against the row Merge is given, never the one the request saw.
+type StoragePatch struct {
+	Storage    Storage
+	Secret     string
+	KeepSecret bool
+}
+
+// Merge lays the patches over the row (Defaults() when there is none) and resolves KeepSecret.
+// The storage rules run against THIS row, so a second save that queued behind a first is refused
+// once the first is stored. ErrOneWay and ErrFixed (409) come before *Error (400), and Validate
+// runs last. addingS3 is filesystem → s3 only, so a rotation on a host past its cutover passes.
+func Merge(row *Row, c *ChunksPatch, sp *StoragePatch, lead time.Duration) (Settings, string, error) {
+	base, secret := Defaults(), ""
+	if row != nil {
+		base, secret = row.Settings, row.Secret
+	}
+	merged := base
+	if c != nil {
+		merged.RetentionDays, merged.Chunks = c.RetentionDays, c.Chunks
+	}
+	if sp != nil {
+		switch {
+		case base.Storage.Type == StorageS3 && sp.Storage.Type == StorageFilesystem:
+			return Settings{}, "", ErrOneWay
+		case base.Storage.Type == StorageS3 && sp.Storage.Type == StorageS3 && fixed(base.Storage) != fixed(sp.Storage):
+			return Settings{}, "", ErrFixed
+		case base.Storage.Type == StorageFilesystem && sp.Storage.Type == StorageFilesystem:
+			// Filesystem has no fields and no secret: nothing to change.
+		default:
+			merged.Storage = sp.Storage
+			switch {
+			case !sp.KeepSecret:
+				secret = sp.Secret
+			case secret == "" || keyID(base.Storage) != keyID(sp.Storage):
+				// A new key id with the old secret is never right.
+				return Settings{}, "", &Error{Msg: "secretAccessKey is required"}
+			}
+		}
+	}
+	addingS3 := base.Storage.Type == StorageFilesystem && merged.Storage.Type == StorageS3
+	if err := Validate(merged, secret, addingS3, lead); err != nil {
+		return Settings{}, "", err
+	}
+	return merged, secret, nil
+}
+
+// Changed is logging.changed's `changed`, in this order: chunks, retention, storage (the type or
+// any S3 field but the key id), credentials (the key id or the secret). Never nil. Empty means
+// after equals the row, which is how the apply and the PUT spot a no-op.
+func Changed(before *Row, after Settings, afterSecret string) []string {
+	b, secret := Defaults(), ""
+	if before != nil {
+		b, secret = before.Settings, before.Secret
+	}
+	changed := []string{}
+	if b.Chunks != after.Chunks {
+		changed = append(changed, "chunks")
+	}
+	if b.RetentionDays != after.RetentionDays {
+		changed = append(changed, "retention")
+	}
+	if b.Storage.Type != after.Storage.Type || fixed(b.Storage) != fixed(after.Storage) {
+		changed = append(changed, "storage")
+	}
+	if keyID(b.Storage) != keyID(after.Storage) || secret != afterSecret {
+		changed = append(changed, "credentials")
+	}
+	return changed
+}
+
+// fixed is what an S3 save makes permanent: every S3 field but the key id.
+func fixed(st Storage) S3 {
+	if st.S3 == nil {
+		return S3{}
+	}
+	f := *st.S3
+	f.AccessKeyID = ""
+	return f
+}
+
+func keyID(st Storage) string {
+	if st.S3 == nil {
+		return ""
+	}
+	return st.S3.AccessKeyID
 }
