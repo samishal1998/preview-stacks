@@ -1061,6 +1061,19 @@ timeout + 10m.
 A rollback checks rule 1 only: a period that has not started stores nothing. A refusal names the
 period; nothing is written.
 
+### The probe
+
+With S3, `PUT /api/logging/storage` first runs `loki.Probe`: a SigV4-signed `PUT` of an empty
+`pstack-probe-<16 hex>` object, then its `DELETE`. `-verify-config` builds no storage client and
+Loki writes nothing to S3 before the cutover, so this is the only save-time check of endpoint, TLS,
+region, bucket, credentials and delete permission. 10s per request. A refusal is a 400 with the
+status and S3's `<Code>` when it is letters only; the body is never echoed. A 3xx is a refusal, not
+followed. Loopback and private addresses are allowed: an internal MinIO is the normal case, and the
+§4d guard exists for typos.
+
+The probe runs from pstack's networks, not Loki's `logs` network. An endpoint that only
+`preview-shared` reaches passes the probe and fails in Loki after the cutover.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves
