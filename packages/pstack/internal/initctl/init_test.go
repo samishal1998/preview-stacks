@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 
 	pstack "github.com/samishal1998/preview-stacks/packages/pstack"
@@ -982,6 +983,22 @@ func TestInitLoki(t *testing.T) {
 		}
 		if st.Mode().Perm() != 0o644 {
 			t.Errorf("mode %o, want 644", st.Mode().Perm())
+		}
+	})
+
+	t.Run("control/loki is 0755 regardless of umask", func(t *testing.T) {
+		// negative control: pass noMode instead of 0o755 to ensureDir for control/loki — under a
+		// restrictive umask the directory renders 0700 and uid 10001 (Loki) cannot traverse it.
+		old := syscall.Umask(0o077)
+		defer syscall.Umask(old)
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		dir, _ := render(t, loki(okRunner("inactive", ""), &bytes.Buffer{}))
+		st, err := os.Stat(filepath.Join(dir, "control", "loki"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0o755 {
+			t.Errorf("control/loki mode %o, want 0755", st.Mode().Perm())
 		}
 	})
 

@@ -323,9 +323,11 @@ func Init(opts Options) error {
 		return err
 	}
 	// Loki's config, mounted as a DIRECTORY (a file mount keeps the old inode when the file is replaced
-	// by rename). Left to the umask: the image runs as uid 10001 and must traverse it.
+	// by rename). Explicit 0755, not the umask: the image runs as uid 10001 and must traverse it, and
+	// under umask 027/077 "left to the umask" renders 0700 root-owned — Loki can't read config.yaml and
+	// crash-loops. Matches the deliberate 0644 on config.yaml itself.
 	if logging == Loki {
-		if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, noMode); err != nil {
+		if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, 0o755); err != nil {
 			return err
 		}
 	}
