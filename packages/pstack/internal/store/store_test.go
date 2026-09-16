@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,7 +40,7 @@ func TestOpen(t *testing.T) {
 		}
 		// Every table the migrations declare exists — the multi-statement Exec ran to the end.
 		// sso_config is deliberately absent: migration 7 replaced it with sso_providers.
-		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state", "settings"} {
+		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state", "settings", "loki_config"} {
 			var n int
 			if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n); err != nil || n != 1 {
 				t.Fatalf("table %s missing", tbl)
@@ -164,6 +165,66 @@ func TestOpen(t *testing.T) {
 		var region string
 		if err := s.DB.QueryRow("SELECT value FROM host_vars WHERE name='REGION'").Scan(&region); err != nil || region != "eu" {
 			t.Fatalf("the v7 data did not survive migration 8: %q %v", region, err)
+		}
+	})
+
+	t.Run("migration 9 adds an EMPTY loki_config table and touches nothing else", func(t *testing.T) {
+		// negative control: delete the CREATE TABLE from migration 9's string, leaving the entry (so
+		// user_version still reaches 9 and the failure is about the table, not the version) → the
+		// SELECT COUNT(*) FROM loki_config errors with "no such table" and this fails.
+		//
+		// An empty loki_config is slice 1's fixed config, so every host that migrates through this —
+		// the checked-in host fixture included — runs Loki exactly as before.
+		dir := t.TempDir()
+		saved := Migrations
+		Migrations = saved[:8]
+		s, err := Open(dir) // a real v8 database, made by the shipped migrations
+		Migrations = saved
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='loki_config'").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("v8 already has a loki_config table (%d, %v)", n, err)
+		}
+		// A row that predates the migration, to prove the hop is additive.
+		if _, err := s.DB.Exec("INSERT INTO host_vars (name, value, secret, created_at, updated_at) VALUES ('REGION', 'eu', 0, 1, 1)"); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		s, err = Open(dir) // reopening runs migration 9
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM loki_config").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("loki_config after migration 9: %d rows, %v — it must exist and be empty", n, err)
+		}
+		var v int
+		s.DB.QueryRow("PRAGMA user_version").Scan(&v)
+		if v != len(Migrations) {
+			t.Fatalf("user_version %d, want %d", v, len(Migrations))
+		}
+		var region string
+		if err := s.DB.QueryRow("SELECT value FROM host_vars WHERE name='REGION'").Scan(&region); err != nil || region != "eu" {
+			t.Fatalf("the v8 data did not survive migration 9: %q %v", region, err)
+		}
+	})
+
+	t.Run("loki_config holds one row: a second id violates CHECK (id = 1)", func(t *testing.T) {
+		// negative control: drop `CHECK (id = 1)` from migration 9 → the id = 2 INSERT succeeds and this fails
+		s, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		// id 1 with previous_* NULL is the row at rest: the same column list, accepted.
+		if _, err := s.DB.Exec("INSERT INTO loki_config (id, config, secret, updated_at) VALUES (1, '{}', '', 1)"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.DB.Exec("INSERT INTO loki_config (id, config, secret, updated_at) VALUES (2, '{}', '', 1)")
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("a second loki_config row: %v, want a CHECK constraint failure", err)
 		}
 	})
 

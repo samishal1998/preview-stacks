@@ -231,4 +231,29 @@ var Migrations = []string{
     updated_at INTEGER NOT NULL
   );
   `,
+	// 9 — Loki's settings (logging slice 2).
+	`
+  -- 9 — Loki's settings (logging slice 2). ONE row: one Loki per host.
+  --
+  -- CONFIGURATION AN OPERATOR SAVED, not a record of what is running (invariant 10). What Loki runs
+  -- is control/loki/config.yaml plus its container, and every decision about Loki's schema periods
+  -- reads that file, never this row. An EMPTY table means slice 1's fixed config.
+  CREATE TABLE loki_config (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    -- JSON, loki.Settings WITHOUT the secret.
+    config          TEXT NOT NULL,
+    --
+    -- The S3 secret access key, '' on filesystem. STORED, NOT HASHED — the notifier-secret precedent:
+    -- pstack must WRITE it into the credentials file Loki reads. No route returns it; a read answers
+    -- secretSet. The protection is the 0700 db directory and the absence of a read path.
+    secret          TEXT NOT NULL,
+    --
+    -- WRITE-AHEAD FOR ONE APPLY. The row as it stood before this save, stored in the same statement
+    -- as the save and cleared when the apply finishes or is undone. Non-NULL when a job starts means
+    -- an apply was cut off; the job finishes or undoes it. '' means the table was empty before.
+    previous_config TEXT,
+    previous_secret TEXT,
+    updated_at      INTEGER NOT NULL
+  );
+  `,
 }
