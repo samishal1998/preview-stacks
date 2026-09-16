@@ -439,6 +439,10 @@ type SwitchLoggingOptions struct {
 //
 // Off does not reach running containers. Their driver is fixed when they are created, so each keeps
 // pushing (now a 404, dropped without retry) until it is recreated; the closing line says how many.
+//
+// Off also leaves the `pstack-control_logs` network behind: the re-rendered compose no longer
+// declares it, and `up -d --remove-orphans` prunes orphan containers, not networks. Harmless — an
+// empty network — but not cleaned up here.
 func SwitchLogging(opts SwitchLoggingOptions) (changed bool, steps []Step, err error) {
 	say := sayer(opts.Log)
 	current, err := ReadControlState(opts.DataDir)

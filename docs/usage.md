@@ -1481,7 +1481,8 @@ Containers still running with it push to `loki.<domain>` and get a 404, which th
 retry: their logs are dropped and stopping them is not delayed. The command prints how many
 deployments still carry the driver — each registry deployment's `compose.generated.yml`, so it
 counts deployments the API has stored, not containers. Each drops it on its next deploy, a sleeping
-one on wake.
+one on wake. It also leaves the `pstack-control_logs` docker network behind (harmless, not pruned);
+the `loki` volume is left on purpose, for a later `pstack logging loki` to reuse.
 
 `pstack upgrade` keeps whichever mode the host is in, and the push password with it. Workers get the
 plugin from the join material; see [Swarm mode](#swarm-mode).
