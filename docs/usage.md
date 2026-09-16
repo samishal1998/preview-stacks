@@ -2550,11 +2550,11 @@ is loopback or a private address, for the same reason.
 | API tokens (hashes), so scripts keep working — and a document you author may [name the token itself](#predeclaring-the-tokens-a-rebuilt-host-should-hold-0340) | login sessions and half-finished SSO sign-ins |
 | host variables **and secrets** | notifier delivery history |
 | notifiers, with their signing secrets and URLs | terminal sessions |
-| the SSO providers and their client secrets | |
+| the SSO providers and their client secrets | Loki's settings and its S3 secret |
 | registry logins, routing files, named specs | |
 
 Restoring the right-hand column into a *different* host would be wrong, not merely useless — so
-none of it is in the file, and nothing in the file names it.
+none of it is in the file. Only Loki's settings are named, in `skipped`: re-enter them on the target.
 
 #### Predeclaring the tokens a rebuilt host should hold (0.34.0)
 

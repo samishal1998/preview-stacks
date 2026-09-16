@@ -40,6 +40,7 @@
 
 ### Changed
 
+- **A config export names Loki's settings in `skipped`** (`loki: host-specific — re-enter it on the target`). They are not carried.
 - **A compose stack on a logging-on host runs from `compose.generated.yml`** whenever a service
   got the logging block, even with no `pstack.routing.*` labels. With logging off nothing changes.
 - **`loki.<domain>` is a control hostname**, on the primary and every added domain, always — with
