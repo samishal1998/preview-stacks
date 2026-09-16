@@ -34,6 +34,9 @@
 - **`init` refuses a re-run that would drop Loki or mint a new push password** — two new cases for
   the silent-revert guard. A new password would get every running container's pushes refused
   until it is redeployed.
+- **Loki settings.** Retention, chunks and storage (filesystem, or S3 from a cutover date) are held
+  to pstack's ranges and rendered into `control/loki/config.yaml`. S3 keys go in a 0600 credentials
+  file owned by Loki's uid, never in the config.
 
 ### Changed
 
