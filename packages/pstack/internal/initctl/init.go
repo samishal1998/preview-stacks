@@ -300,6 +300,17 @@ func Init(opts Options) error {
 				"or re-run without --ui advanced to use the basic UI embedded in the API.",
 		})
 	}
+	// With --logging loki, both images by name, for the advanced UI's reason above. They come from Docker
+	// Hub, so a missing one is pulled here, where a failure names it, not inside `up`.
+	if logging == Loki {
+		lokiImage, grafanaImage := "grafana/loki:"+swarm.LokiVersion, "grafana/grafana:"+GrafanaVersion
+		reqs = append(reqs,
+			req{name: "loki image", assert: "docker image inspect " + swarm.Shq(lokiImage) + " >/dev/null 2>&1 || docker pull -q " + swarm.Shq(lokiImage) + " >/dev/null",
+				hint: lokiImage + " could not be pulled — --logging loki needs Docker Hub from this host"},
+			req{name: "grafana image", assert: "docker image inspect " + swarm.Shq(grafanaImage) + " >/dev/null 2>&1 || docker pull -q " + swarm.Shq(grafanaImage) + " >/dev/null",
+				hint: grafanaImage + " could not be pulled — --logging loki needs Docker Hub from this host"},
+		)
+	}
 	for _, r := range reqs {
 		res := runner.Run(r.assert, exec.RunOptions{Label: "requires " + r.name})
 		if !res.OK {
@@ -333,6 +344,13 @@ func Init(opts Options) error {
 	// and crash-loops. Matches the deliberate 0644 on config.yaml itself.
 	if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, 0o755); err != nil {
 		return err
+	}
+	// Grafana's provisioned datasources, a directory mount for the same reason, and 0755 for the same
+	// reason: Grafana runs as uid 472.
+	if logging == Loki {
+		if err := ensureDir(out, filepath.Join(controlDir, "grafana", "datasources"), dryRun, 0o755); err != nil {
+			return err
+		}
 	}
 
 	// ── 1b. Swarm ───────────────────────────────────────────────────────────────────────────────
@@ -432,10 +450,10 @@ func Init(opts Options) error {
 	template = strings.Replace(template, "      #__CONTROL_UI_SERVICE__", ControlUIService(ui), 1)
 	template = strings.Replace(template, "      #__SWARM_PROVIDER__", SwarmProviderArgs(orchestrator), 1)
 	template = strings.Replace(template, "      #__WAKE_ROUTER__", WakeRouterLabels(domain), 1)
-	// Loki rides on the last marker instead of adding one: every marker leaves a line behind when off, so
-	// a new marker would change every existing host's file (and the 8 render goldens). Its other three
-	// edits are anchors that LokiWiring checks before replacing. Both are no-ops unless logging is loki.
-	template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui)+LokiService(logging, challenge, lokiPassword), 1)
+	// Loki and Grafana ride on the last marker instead of adding one: every marker leaves a line behind
+	// when off, so a new marker would change every existing host's file (and the 8 render goldens). The
+	// other edits are anchors that LokiWiring checks before replacing. All are no-ops unless logging is loki.
+	template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui)+LokiService(logging, challenge, lokiPassword)+GrafanaService(logging, challenge), 1)
 	template, err := LokiWiring(template, logging)
 	if err != nil {
 		return err
@@ -472,6 +490,14 @@ func Init(opts Options) error {
 				fmt.Fprintf(out, "  [dry-run] keep %s\n", path)
 			}
 		} else if err := write(out, path, pstack.LokiConfig, 0o644, dryRun); err != nil {
+			return err
+		}
+	}
+
+	// Grafana's Loki datasource. 0644 like Loki's config: Grafana runs as uid 472, and the file holds no
+	// credential. Always written: nothing else owns it.
+	if logging == Loki {
+		if err := write(out, filepath.Join(controlDir, "grafana", "datasources", "loki.yaml"), pstack.GrafanaDatasources, 0o644, dryRun); err != nil {
 			return err
 		}
 	}
@@ -522,6 +548,7 @@ func Init(opts Options) error {
 	}
 	if logging == Loki {
 		lines = append(lines, "  logging   loki at https://loki."+domain+" (push only); services without `logging:` ship to it")
+		lines = append(lines, "  grafana   https://grafana."+domain)
 	}
 	envPath := filepath.Join(controlDir, ".env")
 	lines = append(lines,
@@ -986,9 +1013,9 @@ func traefikBlock(template string) string {
 func identity(s string) string { return s }
 
 // LokiWiring is the rest of Loki's plumbing: Traefik joins the `logs` network, and the file declares
-// the `loki` volume and that network. Literal edits of lines the template already has, not new
-// markers — every marker leaves a line behind when it renders "off", so a new one would change the
-// compose file of every existing host.
+// the `loki` and `grafana` volumes and that network. Literal edits of lines the template already has,
+// not new markers — every marker leaves a line behind when it renders "off", so a new one would change
+// the compose file of every existing host.
 //
 // Each anchor is checked before it is replaced (strings.Replace with n=1, rule 8), so a template edit
 // that moves one fails init by name instead of rendering a Loki that Traefik cannot reach. The
@@ -1005,7 +1032,7 @@ func LokiWiring(template string, logging Logging) (string, error) {
 		haystack           func(string) string
 	}{
 		{"Traefik networks line", "    networks: [preview-ingress]\n", "    networks: [preview-ingress, logs]\n", traefikBlock},
-		{"letsencrypt volume", "volumes:\n  letsencrypt:\n", "volumes:\n  letsencrypt:\n  loki:\n", identity},
+		{"letsencrypt volume", "volumes:\n  letsencrypt:\n", "volumes:\n  letsencrypt:\n  loki:\n  grafana:\n", identity},
 		{"preview-shared network", "  preview-shared:\n    external: true\n", "  preview-shared:\n    external: true\n  logs: {}\n", identity},
 	} {
 		if !strings.Contains(e.haystack(template), e.anchor) {

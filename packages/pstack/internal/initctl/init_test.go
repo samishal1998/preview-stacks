@@ -601,7 +601,7 @@ func TestInitGoldens(t *testing.T) {
 }
 
 // substituted is the control template after Init's six marker substitutions (init.go, "── 3.
-// Configuration"), with `loki` appended after the advanced UI where Init appends LokiService. It is
+// Configuration"), with `loki` appended after the advanced UI where Init appends LokiService and GrafanaService. It is
 // LokiWiring's input; its first subtest proves it still matches the file Init writes.
 func substituted(challenge initctl.Challenge, ui initctl.UI, loki string) string {
 	s := pstack.ControlTemplate
@@ -611,6 +611,28 @@ func substituted(challenge initctl.Challenge, ui initctl.UI, loki string) string
 	s = strings.Replace(s, "      #__SWARM_PROVIDER__", initctl.SwarmProviderArgs(spec.Compose), 1)
 	s = strings.Replace(s, "      #__WAKE_ROUTER__", initctl.WakeRouterLabels("preview.example.com"), 1)
 	return strings.Replace(s, "#__ADVANCED_UI_SERVICE__", initctl.AdvancedUIService(ui)+loki, 1)
+}
+
+// serviceBlock is one service's text in a rendered compose file: its "  <key>:" line through the last
+// line before the next non-blank line indented fewer than four spaces (the next service, its header
+// comment, or a top-level key), trailing newlines trimmed. Not traefikBlock's rule: with logging off,
+// pstack's block is followed by the empty advanced-UI marker line and `volumes:` at column 0, which that
+// rule walks straight through.
+func serviceBlock(yaml, key string) string {
+	start := strings.Index(yaml, "\n  "+key+":\n")
+	if start < 0 {
+		return ""
+	}
+	rest := yaml[start+1:]
+	lines := strings.SplitAfter(rest, "\n")
+	n := len(lines[0])
+	for _, l := range lines[1:] {
+		if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "    ") {
+			break
+		}
+		n += len(l)
+	}
+	return strings.TrimRight(rest[:n], "\n")
 }
 
 // The loki service. Its TLS labels are the part that varies by host, and getting them backwards is
@@ -910,14 +932,15 @@ func TestLokiWiring(t *testing.T) {
 
 	t.Run("each edit lands once: Traefik's networks, the top-level volumes and networks", func(t *testing.T) {
 		// negative control: strings.ReplaceAll for the networks anchor in LokiWiring — advanced-ui joins logs too.
+		// negative control: leave "  grafana:\n" out of LokiWiring's letsencrypt-volume `with` — the volumes edit appears 0 times and volumes has no grafana.
 		for _, c := range []initctl.Challenge{initctl.HTTP01, initctl.DNS01} {
-			got, err := initctl.LokiWiring(substituted(c, initctl.Advanced, initctl.LokiService(initctl.Loki, c, pw)), initctl.Loki)
+			got, err := initctl.LokiWiring(substituted(c, initctl.Advanced, initctl.LokiService(initctl.Loki, c, pw)+initctl.GrafanaService(initctl.Loki, c)), initctl.Loki)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, edit := range []string{
 				"    networks: [preview-ingress, logs]\n",
-				"volumes:\n  letsencrypt:\n  loki:\n",
+				"volumes:\n  letsencrypt:\n  loki:\n  grafana:\n",
 				"  preview-shared:\n    external: true\n  logs: {}\n",
 			} {
 				if n := strings.Count(got, edit); n != 1 {
@@ -940,6 +963,25 @@ func TestLokiWiring(t *testing.T) {
 			if svcs.GetMap("loki") == nil || !d.GetMap("volumes").Has("loki") || !d.GetMap("networks").Has("logs") {
 				t.Errorf("%s: the loki service, volume or network is missing", c)
 			}
+			if svcs.GetMap("grafana") == nil || !d.GetMap("volumes").Has("grafana") {
+				t.Errorf("%s: the grafana service or volume is missing", c)
+			}
+			// Anything that reaches :3000 can send X-WEBAUTH-USER, so only Traefik (and Loki) may share it.
+			if n := fmt.Sprint(svcs.GetMap("grafana").GetSlice("networks")); n != "[logs]" {
+				t.Errorf("%s: grafana networks %s", c, n)
+			}
+		}
+	})
+
+	t.Run("Grafana adds nothing to pstack's service block", func(t *testing.T) {
+		// pstack finds Grafana from docker (inspect.GrafanaOn), so Grafana needs nothing here. Slice 2's
+		// ./loki mount is in both modes, so the switch leaves pstack's block, and pstack, alone.
+		// negative control: append {"pstack environment", "      DOCKER_CONFIG: /docker-config\n", "      DOCKER_CONFIG: /docker-config\n      PSTACK_GRAFANA: \"on\"\n", identity} to LokiWiring's entries — the blocks differ.
+		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
+		_, off := render(t, nil)
+		_, on := render(t, func(o *initctl.Options) { o.Logging = initctl.Loki })
+		if got, want := serviceBlock(on, "pstack"), serviceBlock(off, "pstack"); got == "" || got != want {
+			t.Errorf("pstack's block differs with loki on\n--- on\n%s\n--- off\n%s", got, want)
 		}
 	})
 
@@ -1332,12 +1374,70 @@ func TestInitLoki(t *testing.T) {
 		}
 	})
 
+	t.Run("Grafana's datasource, images and summary line come with loki", func(t *testing.T) {
+		// negative control: drop the grafana/datasources/loki.yaml write from Init — read fails, no such file.
+		// negative control: drop the `if logging == Loki` image reqs block from Init — no grafana/grafana pull runs.
+		// negative control: drop the `  grafana   https://grafana.` append from Init — the summary check fails.
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		r := okRunner("inactive", "")
+		var out bytes.Buffer
+		dir, _ := render(t, loki(r, &out))
+		p := filepath.Join(dir, "control", "grafana", "datasources", "loki.yaml")
+		if got := read(t, p); got != pstack.GrafanaDatasources {
+			t.Errorf("loki.yaml differs from pstack.GrafanaDatasources:\n%s", got)
+		}
+		st, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0o644 {
+			t.Errorf("mode %o, want 644 (Grafana runs as uid 472)", st.Mode().Perm())
+		}
+		// Pulled by name before up: a pull that fails inside `up` takes the whole control stack down.
+		grafana, lokiImage, up := -1, -1, -1
+		for i, c := range r.Commands() {
+			switch {
+			case strings.Contains(c, "docker pull -q 'grafana/grafana:13.2.1'"):
+				grafana = i
+			case strings.Contains(c, "docker pull -q 'grafana/loki:3.7.7'"):
+				lokiImage = i
+			case strings.Contains(c, "-p pstack-control") && strings.HasSuffix(c, " up -d --remove-orphans"):
+				up = i
+			}
+		}
+		if grafana < 0 || lokiImage < 0 || up < 0 || grafana > up || lokiImage > up {
+			t.Errorf("grafana pull at %d, loki pull at %d, up at %d:\n%s", grafana, lokiImage, up, strings.Join(r.Commands(), "\n"))
+		}
+		if !strings.Contains(out.String(), "  grafana   https://grafana.preview.example.com\n") {
+			t.Errorf("no grafana summary line:\n%s", out.String())
+		}
+	})
+
+	t.Run("control/grafana/datasources is 0755 regardless of umask", func(t *testing.T) {
+		// negative control: pass noMode instead of 0o755 to ensureDir for control/grafana/datasources — under a
+		// restrictive umask the directory renders 0700 and uid 472 (Grafana) cannot read the datasource.
+		old := syscall.Umask(0o077)
+		defer syscall.Umask(old)
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		dir, _ := render(t, loki(okRunner("inactive", ""), &bytes.Buffer{}))
+		st, err := os.Stat(filepath.Join(dir, "control", "grafana", "datasources"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0o755 {
+			t.Errorf("control/grafana/datasources mode %o, want 0755", st.Mode().Perm())
+		}
+	})
+
 	// R5 amends the plan: LOKI_PUSH_PASSWORD survives `pstack logging off` (spec 291 — `pstack upgrade`
 	// and `pstack logging` reuse the stored password), so a valid env password is kept even with logging
 	// none. "Off" has no plugin, no loki service and no config.yaml; control/loki itself exists in every
 	// mode, because pstack mounts it in every mode.
 	t.Run("logging off: control/loki at 0755 but no config.yaml, no plugin, no loki service — PSTACK_LOKI_PASSWORD is kept in .env", func(t *testing.T) {
 		// negative control: re-gate `os.Getenv("PSTACK_LOKI_PASSWORD")` under `if logging == Loki` (pre-R5) — the .env line disappears.
+		// negative control: drop the `if logging == Loki` around the grafana/datasources ensureDir — control/grafana exists.
+		// negative control: remove the `if logging == Loki` around the loki/grafana image reqs — a grafana/ image command runs.
+		// negative control: append the `  grafana   ` summary line outside `if logging == Loki` — the summary names Grafana.
 		// negative control: re-wrap control/loki's ensureDir in `if logging == Loki` — control/loki does not exist.
 		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
 		r := okRunner("inactive", "")
@@ -1346,6 +1446,9 @@ func TestInitLoki(t *testing.T) {
 		if st, err := os.Stat(filepath.Join(dir, "control", "loki")); err != nil || st.Mode().Perm() != 0o755 {
 			t.Errorf("control/loki: %v, want a 0755 directory", err)
 		}
+		if _, err := os.Stat(filepath.Join(dir, "control", "grafana")); !os.IsNotExist(err) {
+			t.Errorf("control/grafana exists: %v", err)
+		}
 		if _, err := os.Stat(filepath.Join(dir, "control", "loki", "config.yaml")); !os.IsNotExist(err) {
 			t.Errorf("control/loki/config.yaml exists: %v", err)
 		}
@@ -1353,18 +1456,21 @@ func TestInitLoki(t *testing.T) {
 			t.Errorf(".env dropped the password it was handed (spec 291: it must survive `logging off`):\n%s", env)
 		}
 		// Not a bare "loki": pstack's `./loki:/etc/loki` mount is there in every mode.
-		if strings.Contains(yaml, "\n  loki:\n") || strings.Contains(yaml, "\n  logs: {}\n") {
-			t.Error("compose has the loki service or the logs network")
+		if strings.Contains(yaml, "\n  loki:\n") || strings.Contains(yaml, "\n  logs: {}\n") || strings.Contains(yaml, "grafana") {
+			t.Error("compose has the loki service, the logs network or grafana")
 		}
 		for _, c := range r.Commands() {
-			if strings.Contains(c, "docker plugin") {
-				t.Errorf("plugin command with logging off: %s", c)
+			if strings.Contains(c, "docker plugin") || strings.Contains(c, "grafana/") {
+				t.Errorf("plugin or image command with logging off: %s", c)
 			}
 		}
 		// Not a bare "logging" check: t.TempDir() folds this subtest's own name into the printed
 		// config/registry paths above, and that name starts with "logging off" too.
 		if strings.Contains(out.String(), "  logging   loki at ") {
 			t.Errorf("summary mentions the loki logging line:\n%s", out.String())
+		}
+		if strings.Contains(out.String(), "  grafana   ") {
+			t.Errorf("summary names Grafana:\n%s", out.String())
 		}
 	})
 
@@ -1391,6 +1497,7 @@ func TestInitLoki(t *testing.T) {
 
 	t.Run("dry-run names the plugin step and the config file, and writes nothing", func(t *testing.T) {
 		// negative control: wrap the `── 1c.` block in `if !dryRun` like the health wait — `[dry-run] loki log plugin` is missing.
+		// negative control: drop the grafana/datasources ensureDir from Init — the mkdir line is missing.
 		t.Setenv("PSTACK_LOKI_PASSWORD", "")
 		dir := t.TempDir()
 		var out bytes.Buffer
@@ -1404,6 +1511,10 @@ func TestInitLoki(t *testing.T) {
 		}
 		for _, want := range []string{
 			"  [dry-run] loki log plugin\n",
+			"  [dry-run] requires loki image\n",
+			"  [dry-run] requires grafana image\n",
+			"  [dry-run] mkdir -p " + filepath.Join(dir, "control", "grafana", "datasources") + "\n",
+			"  [dry-run] write " + filepath.Join(dir, "control", "grafana", "datasources", "loki.yaml") + " (",
 			"  [dry-run] mkdir -p " + filepath.Join(dir, "control", "loki") + "\n",
 			"  [dry-run] write " + filepath.Join(dir, "control", "loki", "config.yaml") + " (",
 		} {

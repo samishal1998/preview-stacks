@@ -23,6 +23,7 @@ Everything lands under `--data-dir` (default `/var/lib/pstack`, the same path th
     ├── docker-compose.yml       ← a byte-for-byte copy of this directory's template
     ├── .env             0600    DOMAIN, ACME_EMAIL, DNS_PROVIDER, PSTACK_IMAGE, PSTACK_TOKEN, LOKI_PUSH_PASSWORD (only with --logging loki)
     ├── dns.env          0600    the DNS-01 credential, under the variable name lego expects
+    ├── grafana/datasources/loki.yaml 0644  Grafana's Loki datasource (only with --logging loki)
     ├── loki/              0755  pstack mounts it read-write, Loki read-only
     │   ├── config.yaml    0644  only with --logging loki; written once, then pstack's
     │   └── s3-credentials 0600  uid 10001; S3 storage only

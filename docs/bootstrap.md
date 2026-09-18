@@ -129,7 +129,7 @@ Then size the host from the numbers you just wrote down:
 
 ```
 host RAM  ≳  (Σ mem_limit per stack) × (peak concurrent stacks)
-             + control stack (Traefik 256 MB + pstack 512 MB, both capped in the template)
+             + control stack (Traefik 512 MB + pstack 512 MB, + advanced UI 128 MB; with --logging loki + Loki 2 GB + Grafana 768 MB, all capped in the template)
              + any shared DB / queue
              + 2 GB for the kernel, Docker, and image builds
 ```
