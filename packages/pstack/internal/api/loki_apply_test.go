@@ -16,6 +16,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
 
 // lokiInspect is `docker inspect` of a running loki container, l1: the id, image, service label and
@@ -662,6 +663,385 @@ func TestLokiApplyRollback(t *testing.T) {
 		}
 		if cfg, _ := readLoki(t, s, loki.ConfigFile); !strings.Contains(cfg, "  retention_period: 336h") {
 			t.Errorf("config.yaml:\n%s", cfg)
+		}
+	})
+}
+
+// ── resume and boot (Task 11) ───────────────────────────────────────────────────────────────────
+
+// lokiStarted is lokiInspect's State.StartedAt. A file whose mtime is later is one Loki has not loaded.
+var lokiStarted = time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+
+// writeLoki puts config.yaml, plus s3-credentials when creds is not "", in s's loki directory, both
+// with mtime at.
+func writeLoki(t *testing.T, s *Server, config, creds string, at time.Time) {
+	t.Helper()
+	files := map[string]string{loki.ConfigFile: config}
+	if creds != "" {
+		files[loki.CredentialsFile] = creds
+	}
+	for name, body := range files {
+		path := filepath.Join(s.opts.LokiDir, name)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func mustRender(t *testing.T, set loki.Settings) string {
+	t.Helper()
+	out, err := loki.Render(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// lokiCount is how many recorded commands start with prefix.
+func lokiCount(f *exec.Fake, prefix string) int {
+	n := 0
+	for _, c := range f.Commands() {
+		if strings.HasPrefix(c, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func lokiJobs(s *Server) []jobs.Job {
+	out := []jobs.Job{}
+	for _, j := range s.jobs.List() {
+		if j.Action == jobs.LokiApply {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// lokiS3 is an S3 save whose second period starts on cutover.
+func lokiS3(cutover string) loki.Settings {
+	set := loki.Defaults()
+	set.Storage = loki.Storage{Type: loki.StorageS3, S3: &loki.S3{
+		Endpoint: "https://s3.example.com", Region: "eu-central-1", Bucket: "pstack-logs",
+		AccessKeyID: "AKIAEXAMPLE", Cutover: cutover,
+	}}
+	return set
+}
+
+func TestLokiResume(t *testing.T) {
+	// negative control: delete the `if row != nil && row.InFlight { … }` hook from run. No subtest sees
+	// `unfinished apply`, and the too-close one ends ok instead of undone.
+	retention14 := loki.Defaults()
+	retention14.RetentionDays = 14
+	boot := func(t *testing.T, s *Server) jobs.Job {
+		t.Helper()
+		job, ok := s.startLokiApply(0, "pstack (boot)", true)
+		if !ok {
+			t.Fatal("the apply was refused")
+		}
+		return waitLokiJob(t, s, job.ID)
+	}
+	resumed := func(t *testing.T, j jobs.Job, want jobs.State) {
+		t.Helper()
+		if j.State != want || !strings.Contains(string(jsonx.Must(j)), `"unfinished apply"`) {
+			t.Fatalf("state %q: %s", j.State, jsonx.Must(j))
+		}
+	}
+
+	t.Run("files equal the row, Loki started before them: restart, ready, finish", func(t *testing.T) {
+		// negative control: change `restart := !loaded` to `restart := false` in resume. There are 0
+		// restarts, so Loki keeps the config from before the save.
+		s, f := lokiFixture(t, nil)
+		if err := loki.Save(s.store, retention14, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		writeLoki(t, s, mustRender(t, retention14), "", lokiStarted.Add(time.Minute))
+		resumed(t, boot(t, s), jobs.OK)
+		if n := lokiCount(f, "docker restart"); n != 1 {
+			t.Errorf("%d docker restarts, want 1", n)
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.InFlight || row.Settings.RetentionDays != 14 {
+			t.Errorf("want the save kept and previous_* cleared: %+v (%v)", row, err)
+		}
+	})
+
+	t.Run("files equal the row, Loki started after them: ready and finish, no restart", func(t *testing.T) {
+		// negative control: change `restart := !loaded` to `restart := true` in resume. Loki already runs
+		// the saved files and gets one needless restart.
+		s, f := lokiFixture(t, nil)
+		if err := loki.Save(s.store, retention14, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		writeLoki(t, s, mustRender(t, retention14), "", lokiStarted.Add(-time.Minute))
+		resumed(t, boot(t, s), jobs.OK)
+		if n := lokiCount(f, "docker restart"); n != 0 {
+			t.Errorf("%d docker restarts, want 0", n)
+		}
+		if lokiCount(f, "docker exec") == 0 {
+			t.Error("the resume must still wait for ready")
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.InFlight {
+			t.Errorf("want previous_* cleared: %+v (%v)", row, err)
+		}
+	})
+
+	t.Run("files that differ from the row are verified, swapped and restarted, whatever StartedAt says", func(t *testing.T) {
+		// negative control: delete `restart = true` after the swap in resume. Loki started after the old
+		// file's mtime, so it is never restarted onto the new one.
+		s, f := lokiFixture(t, nil)
+		if err := loki.Save(s.store, retention14, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		writeLoki(t, s, pstack.LokiConfig, "", lokiStarted.Add(-time.Minute))
+		resumed(t, boot(t, s), jobs.OK)
+		if n := lokiCount(f, "docker run --rm --network none"); n != 1 {
+			t.Errorf("%d verify runs, want 1", n)
+		}
+		if n := lokiCount(f, "docker restart"); n != 1 {
+			t.Errorf("%d docker restarts, want 1", n)
+		}
+		if config, _ := readLoki(t, s, loki.ConfigFile); !strings.Contains(config, "  retention_period: 336h") {
+			t.Errorf("config.yaml must be the row's render:\n%s", config)
+		}
+	})
+
+	t.Run("a cutover within 2×lead that Loki never loaded is undone: previous files, row reverted, no restart", func(t *testing.T) {
+		// negative control: replace `running := beforeCfg` and its `if loaded` with `running := diskCfg`.
+		// The guard passes, and the resume restarts Loki onto an S3 period that starts before a rollback
+		// could finish.
+		s, f := lokiFixture(t, nil)
+		saved := lokiS3("2030-01-15")
+		// lokiFixture's ready timeout is 300ms, so lead is 10m0.3s and now+2×lead is past midnight.
+		s.lokiNow = func() time.Time { return time.Date(2030, 1, 14, 23, 50, 0, 0, time.UTC) }
+		if err := loki.Save(s.store, saved, "s3cretKEY1", nil); err != nil {
+			t.Fatal(err)
+		}
+		writeLoki(t, s, mustRender(t, saved), loki.Credentials("AKIAEXAMPLE", "s3cretKEY1"), lokiStarted.Add(time.Minute))
+		j := boot(t, s)
+		resumed(t, j, jobs.Failed)
+		if phase, ok, msg := lastStep(t, j); phase != "render" || ok || msg != "cutover 2030-01-15 passed while pstack was down — save again" {
+			t.Fatalf("last step %s %v %q", phase, ok, msg)
+		}
+		if n := lokiCount(f, "docker restart"); n != 0 {
+			t.Errorf("%d docker restarts, want 0: Loki still runs the previous files", n)
+		}
+		if config, _ := readLoki(t, s, loki.ConfigFile); config != pstack.LokiConfig {
+			t.Error("config.yaml must be the previous render, the defaults")
+		}
+		if _, here := readLoki(t, s, loki.CredentialsFile); here {
+			t.Error("s3-credentials did not exist before the save")
+		}
+		if row, err := loki.Read(s.store); err != nil || row != nil {
+			t.Errorf("the table was empty before the save: %+v (%v)", row, err)
+		}
+	})
+
+	t.Run("a save's job resumes first, then applies its own save", func(t *testing.T) {
+		// negative control: in the hook, replace the re-read `if row, err = loki.Read(s.store); err != nil
+		// { … }` with `return a.outcome()`. config.yaml stays at 336h and the 21-day save is never applied.
+		s, f := lokiFixture(t, nil)
+		if err := loki.Save(s.store, retention14, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		writeLoki(t, s, mustRender(t, retention14), "", lokiStarted.Add(-time.Minute))
+		job, ok := s.startLokiApply(s.lokiPut("alice", retention(21), nil), "alice", false)
+		if !ok {
+			t.Fatal("the apply was refused")
+		}
+		resumed(t, waitLokiJob(t, s, job.ID), jobs.OK)
+		if config, _ := readLoki(t, s, loki.ConfigFile); !strings.Contains(config, "  retention_period: 504h") {
+			t.Errorf("config.yaml must carry the 21-day save:\n%s", config)
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.InFlight || row.Settings.RetentionDays != 21 {
+			t.Errorf("row %+v (%v)", row, err)
+		}
+		if n := lokiCount(f, "docker restart"); n != 1 {
+			t.Errorf("%d docker restarts, want 1: the resume found Loki on the saved files", n)
+		}
+	})
+}
+
+// bootNew runs New over a loki directory that holds slice 1's config.yaml (none when !withConfig) and a
+// database that seed has written. It returns New's `loki: ` lines. No job may start here, because
+// lokiRunner is still the real one.
+func bootNew(t *testing.T, withConfig bool, uid int, seed func(*store.Store) error) (*Server, []string) {
+	t.Helper()
+	data := t.TempDir()
+	dir := filepath.Join(data, "control", "loki")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if withConfig {
+		if err := os.WriteFile(filepath.Join(dir, loki.ConfigFile), []byte(pstack.LokiConfig), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if seed != nil {
+		st, err := store.Open(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = seed(st)
+		if cerr := st.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	lines := []string{}
+	s, err := New(Options{DataDir: data, LokiDir: dir, LokiUID: uid, Bus: events.New(), Log: func(l string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasPrefix(l, "loki: ") {
+			lines = append(lines, l)
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	mu.Lock()
+	defer mu.Unlock()
+	return s, append([]string{}, lines...)
+}
+
+func TestReconcileLoki(t *testing.T) {
+	// negative control: delete both `s.startLokiApply(0, lokiBootBy, true)` calls from reconcileLoki. The
+	// three subtests that expect a job see none.
+	retention72 := strings.Replace(pstack.LokiConfig, "  retention_period: 168h", "  retention_period: 72h", 1)
+	onlyJob := func(t *testing.T, s *Server) jobs.Job {
+		t.Helper()
+		js := lokiJobs(s)
+		if len(js) != 1 {
+			t.Fatalf("%d loki-apply jobs, want 1", len(js))
+		}
+		return waitLokiJob(t, s, js[0].ID)
+	}
+
+	// lokiFixture's New already ran reconcileLoki over slice 1's config and an empty table, which are
+	// equal bytes and start no job. These subtests set up the state, then call it again.
+	t.Run("equal bytes: no docker command, no job", func(t *testing.T) {
+		// negative control: delete the `if config == diskCfg && … { return }` line. A job starts and runs
+		// docker ps.
+		s, f := lokiFixture(t, nil)
+		s.reconcileLoki()
+		if js := lokiJobs(s); len(js) != 0 {
+			t.Fatalf("jobs %+v, want none", js)
+		}
+		if c := f.Commands(); len(c) != 0 {
+			t.Errorf("commands %q, want none", c)
+		}
+	})
+
+	t.Run("different bytes: exactly one job, by pstack (boot), that renders the defaults", func(t *testing.T) {
+		// negative control: delete T9's `a.sink.Emit(log.Info, "by "+by)`. The transcript has no by line.
+		s, _ := lokiFixture(t, nil)
+		writeLoki(t, s, retention72, "", lokiStarted.Add(-time.Minute))
+		s.reconcileLoki()
+		j := onlyJob(t, s)
+		if j.State != jobs.OK {
+			t.Fatalf("state %q: %s", j.State, jsonx.Must(j))
+		}
+		if config, _ := readLoki(t, s, loki.ConfigFile); config != pstack.LokiConfig {
+			t.Error("config.yaml must be the defaults' render")
+		}
+		said := false
+		for _, e := range j.Log {
+			said = said || e.Message == "by pstack (boot)"
+		}
+		if !said {
+			t.Errorf("the transcript must say who ran it: %+v", j.Log)
+		}
+	})
+
+	t.Run("previous_config set: one job even when the bytes are equal", func(t *testing.T) {
+		// negative control: delete the `if row != nil && row.InFlight { … }` branch. Equal bytes return
+		// with no job.
+		s, _ := lokiFixture(t, nil)
+		if err := loki.Save(s.store, loki.Defaults(), "", nil); err != nil {
+			t.Fatal(err)
+		}
+		writeLoki(t, s, pstack.LokiConfig, "", lokiStarted.Add(-time.Minute))
+		s.reconcileLoki()
+		if j := onlyJob(t, s); j.State != jobs.OK {
+			t.Fatalf("state %q: %s", j.State, jsonx.Must(j))
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.InFlight {
+			t.Errorf("want previous_* cleared: %+v (%v)", row, err)
+		}
+	})
+
+	t.Run("no loki container: the job runs ps and inspect and ends ok", func(t *testing.T) {
+		// negative control: end T9's no-container find `failed` for a boot apply too (ignore a.boot). The
+		// job is failed.
+		traefik := `[{"Id":"t1","Name":"/pstack-control-traefik-1","Config":{"Image":"traefik:v3.5","Labels":{"com.docker.compose.service":"traefik"}},"State":{"Status":"running"}}]`
+		s, f := lokiFixture(t, func(cmd string) (exec.Result, bool) {
+			if strings.HasPrefix(cmd, "docker inspect") {
+				return exec.Result{OK: true, Stdout: traefik}, true
+			}
+			return exec.Result{}, false
+		})
+		writeLoki(t, s, retention72, "", lokiStarted.Add(-time.Minute))
+		s.reconcileLoki()
+		j := onlyJob(t, s)
+		if phase, ok, msg := lastStep(t, j); j.State != jobs.OK || phase != "find" || !ok || msg != "no loki container" {
+			t.Fatalf("%q %s %v %q", j.State, phase, ok, msg)
+		}
+		if c := f.Commands(); len(c) != 2 || c[0] != lokiPS || !strings.HasPrefix(c[1], "docker inspect") {
+			t.Errorf("commands %q, want ps then inspect", c)
+		}
+	})
+
+	// The no-job cases go through New itself, which also proves New calls reconcileLoki.
+	t.Run("no config.yaml: no job, no line", func(t *testing.T) {
+		// negative control: delete the `errors.Is(err, fs.ErrNotExist)` return. One `loki: open …` line.
+		s, lines := bootNew(t, false, os.Geteuid(), nil)
+		if len(lines) != 0 {
+			t.Errorf("lines %q, want none", lines)
+		}
+		if js := lokiJobs(s); len(js) != 0 {
+			t.Errorf("jobs %+v, want none", js)
+		}
+	})
+
+	t.Run("a saved row that no longer renders: one line, no job", func(t *testing.T) {
+		// negative control: empty the `if err != nil { s.opts.Log(…); return }` after lokiRender. The
+		// render is "", it differs from config.yaml, and a job starts with no line. (Also run: delete
+		// `s.reconcileLoki()` from New. No line.)
+		s, lines := bootNew(t, true, os.Geteuid(), func(st *store.Store) error {
+			_, err := st.DB.Exec(`INSERT INTO loki_config (id, config, secret, updated_at) VALUES (1, ?, '', 1)`,
+				`{"retentionDays":0,"chunks":{"idlePeriodMinutes":30,"maxAgeMinutes":120,"targetSizeKiB":1536,"encoding":"snappy"},"storage":{"type":"filesystem","s3":null}}`)
+			return err
+		})
+		if len(lines) != 1 {
+			t.Errorf("lines %q, want one", lines)
+		}
+		if js := lokiJobs(s); len(js) != 0 {
+			t.Errorf("jobs %+v, want none", js)
+		}
+	})
+
+	t.Run("an S3 row this process cannot give Loki: one line, no job", func(t *testing.T) {
+		// negative control: delete the loki.CredentialsOwner check. A job starts.
+		if os.Geteuid() == 0 {
+			t.Skip("root can always chown the credentials file")
+		}
+		s, lines := bootNew(t, true, os.Geteuid()+1, func(st *store.Store) error {
+			if err := loki.Save(st, lokiS3("2030-01-15"), "s3cretKEY1", nil); err != nil {
+				return err
+			}
+			return loki.Finish(st)
+		})
+		if len(lines) != 1 || lines[0] != "loki: "+loki.ErrNeedsRoot.Error() {
+			t.Errorf("lines %q, want the needs-root line", lines)
+		}
+		if js := lokiJobs(s); len(js) != 0 {
+			t.Errorf("jobs %+v, want none", js)
 		}
 	})
 }
