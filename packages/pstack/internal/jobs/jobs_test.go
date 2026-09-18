@@ -309,6 +309,9 @@ func TestStateFromOutcomeAndEventPayload(t *testing.T) {
 		{Verify, stack.Outcome{OK: true, Steps: []stack.StepResult{{Axis: "db", Phase: stack.PhaseAssertGone, OK: true}}}, OK, "job.succeeded", []any{}, true},
 		{Verify, stack.Outcome{OK: true, Steps: []stack.StepResult{{Axis: "db", Phase: stack.PhaseAssertGone, OK: true, Skipped: true}}}, OK, "job.succeeded", []any{}, false},
 		{Verify, stack.Outcome{OK: true}, OK, "job.succeeded", []any{}, false},
+		// An apply has no teardown to prove: `verified` is null, as for up.
+		// negative control: drop LokiApply from noAssertGone → "case 6: verified false want <nil>".
+		{LokiApply, stack.Outcome{OK: true}, OK, "job.succeeded", []any{}, nil},
 	}
 	for i, tc := range cases {
 		c.mu.Lock()

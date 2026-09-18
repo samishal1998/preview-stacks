@@ -455,6 +455,12 @@ func Summarize(e events.Event) string {
 			views = strings.Join(strs(xs), ", ")
 		}
 		return "A read-only link to " + stack + " was created" + byStr("by") + " (" + views + ")."
+	case "logging.changed":
+		s := "Loki settings changed" + by("by")
+		if xs := strs(d["changed"]); len(xs) > 0 {
+			s += ": " + strings.Join(xs, ", ")
+		}
+		return s + "."
 	default:
 		if stack == "" {
 			stack = "this host"
@@ -475,6 +481,8 @@ func actionWord(action any) string {
 		return "Sleep"
 	case "wake":
 		return "Wake"
+	case "loki-apply":
+		return "Loki settings"
 	}
 	return tpl(action, action != nil)
 }
