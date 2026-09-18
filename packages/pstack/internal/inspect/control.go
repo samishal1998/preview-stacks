@@ -11,9 +11,11 @@
 // operation, and if the new image is broken, the thing that could have repaired the host died with
 // it — the rule the control template's header states, enforced by name instead of by distance.
 //
-// And one read that deploys depend on: LokiPushURL. Whether a deploy injects a loki logging block
-// comes from the running loki container's label, not from a setting. So `pstack up` on the host and
-// the API always agree, and nothing needs syncing when `pstack logging` switches.
+// And two reads of what the control stack runs, never of a setting. LokiPushURL: whether a deploy
+// injects a loki logging block comes from the running loki container's label, so `pstack up` on the
+// host and the API always agree, and nothing needs syncing when `pstack logging` switches. GrafanaOn:
+// whether the API answers Grafana sign-in and names Grafana in /api/health comes from a grafana
+// container being there, so no setting can claim a Grafana this host does not run.
 package inspect
 
 import (
@@ -107,6 +109,19 @@ func LokiPushURL(r exec.Runner) string {
 		}
 	}
 	return ""
+}
+
+// GrafanaOn reports whether the control project has a `grafana` container. `-a`, as LokiPushURL: a
+// Grafana that is restarting is still this host's, and `pstack logging off` removes the container.
+func GrafanaOn(r exec.Runner) bool {
+	// nil when docker did not answer, and inspectIDs of nil asks nothing.
+	ids, _ := idsByLabel(r, "com.docker.compose.project="+ControlProject)
+	for _, raw := range inspectIDs(r, ids) {
+		if raw.Config != nil && raw.Config.Labels["com.docker.compose.service"] == "grafana" {
+			return true
+		}
+	}
+	return false
 }
 
 // The three ways RestartControlService refuses, for the route to map onto statuses.

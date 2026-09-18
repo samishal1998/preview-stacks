@@ -158,3 +158,39 @@ func TestLokiPushURLComesFromTheControlStacksLokiContainer(t *testing.T) {
 		}
 	})
 }
+
+func TestGrafanaOn(t *testing.T) {
+	// negative control: drop the `com.docker.compose.service == "grafana"` check in GrafanaOn — a host with only traefik and loki reads as Grafana on.
+	traefik := `{"Id":"t1","Name":"/pstack-control-traefik-1","Config":{"Image":"traefik:v3.6.1","Labels":{"com.docker.compose.service":"traefik"}}}`
+	loki := `{"Id":"l1","Name":"/pstack-control-loki-1","Config":{"Image":"grafana/loki:3.7.7","Labels":{"com.docker.compose.service":"loki"}}}`
+	grafana := `{"Id":"g1","Name":"/pstack-control-grafana-1","Config":{"Image":"grafana/grafana:13.2.1","Labels":{"com.docker.compose.service":"grafana"}}}`
+
+	t.Run("a grafana control container is Grafana on", func(t *testing.T) {
+		// negative control: match `raw.Name == "grafana"` instead of the compose service label — the name is /pstack-control-grafana-1, so this reads false.
+		if !GrafanaOn(lokiHost(exec.Result{OK: true, Stdout: "t1\nl1\ng1\n"}, "["+traefik+","+loki+","+grafana+"]")) {
+			t.Error("got false")
+		}
+	})
+
+	t.Run("only loki is Grafana off", func(t *testing.T) {
+		// negative control: drop the `com.docker.compose.service == "grafana"` check — traefik reads as Grafana.
+		if GrafanaOn(lokiHost(exec.Result{OK: true, Stdout: "t1\nl1\n"}, "["+traefik+","+loki+"]")) {
+			t.Error("got true")
+		}
+	})
+
+	t.Run("docker not answering is Grafana off", func(t *testing.T) {
+		// negative control: drop idsByLabel's `!res.OK` return — the failed `docker ps` still printed g1, and its inspect reads grafana.
+		failed := exec.Result{OK: false, Code: 1, Stdout: "g1\n", Stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"}
+		if GrafanaOn(lokiHost(failed, "["+grafana+"]")) {
+			t.Error("got true")
+		}
+	})
+
+	t.Run("no control containers is Grafana off", func(t *testing.T) {
+		// negative control: drop inspectIDs' `len(ids) == 0` return — a bare `docker inspect` is asked and this fake's grafana answer leaks through.
+		if GrafanaOn(lokiHost(exec.Result{OK: true}, "["+grafana+"]")) {
+			t.Error("got true")
+		}
+	})
+}
