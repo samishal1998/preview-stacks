@@ -69,6 +69,8 @@ export type Health = {
   sso?: { providers: Array<{ key: string; label: string; preset: string }> } | null;
   dataDir: string;
   version: string;
+  /** `https://grafana.<domain>`, present only on a host running Grafana. */
+  grafana?: string;
 };
 
 export type DeploymentRow = {

@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
@@ -162,6 +163,11 @@ type Server struct {
 
 	// spec is the OpenAPI document and its JSON conversion, the latter computed on first request.
 	spec *openAPIDoc
+
+	// grafana: the control project runs a grafana container (inspect.GrafanaOn). It comes from docker,
+	// never a setting. Writers are Start (once, before Serve) and reindexLoop (every tick). Request
+	// goroutines read it, and atomic means no mutex.
+	grafana atomic.Bool
 
 	// waking is deployment id → what a request to its hostnames needs while it comes back: the
 	// stack name (to read the readiness verdict) and the hostnames the sleep record carried. See
@@ -837,6 +843,8 @@ func (s *Server) Start() error {
 	// a route needs one.
 	s.http = &http.Server{Handler: http.HandlerFunc(s.handle), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 240 * time.Second}
 	s.scheduler.Start()
+	// Before Serve, so the first /api/health is already right.
+	s.grafana.Store(inspect.GrafanaOn(s.host))
 	go s.reindexLoop()
 	go func() { _ = s.http.Serve(ln) }()
 	return nil
@@ -859,6 +867,9 @@ func (s *Server) reindexLoop() {
 			return
 		case <-t.C:
 			s.reindex()
+			// Not inside reindex(): request paths call that, and this is two docker calls. Still needed
+			// after Start: `pstack logging` adds or removes grafana while pstack keeps running.
+			s.grafana.Store(inspect.GrafanaOn(s.host))
 		}
 	}
 }

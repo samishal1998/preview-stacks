@@ -33,14 +33,20 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		}
 		ssoSummary = jsonx.O("providers", providers)
 	}
-	writeJSON(w, 200, jsonx.O(
+	body := jsonx.O(
 		"ok", true,
 		"authEnforced", s.opts.Token != "",
 		"hasUsers", n > 0,
 		"sso", ssoSummary,
 		"dataDir", s.opts.DataDir,
 		"version", s.opts.Version,
-	))
+	)
+	// Last, and only when Grafana runs. Otherwise the key is absent (Go rule 2), so every other host's
+	// answer stays byte-identical. Unauthenticated like the rest of health: it says nothing DNS doesn't.
+	if s.grafanaOn() {
+		body = append(body, jsonx.KV{K: "grafana", V: s.grafanaURL()})
+	}
+	writeJSON(w, 200, body)
 }
 
 // ssoCallbackURL is THE callback URL, for every provider. Under /api/ deliberately: in advanced-UI
