@@ -3327,7 +3327,7 @@ anything it does not list is the root token's alone.
 
 | Method | Route | Body / query | Returns |
 |---|---|---|---|
-| GET | `/api/health` | — | `{ ok, authEnforced, hasUsers, sso, dataDir, version }` — `sso` is `{ providers: [{ key, label, preset }…] }` (enabled providers, in key order) or `null`, read by the login page before authenticating |
+| GET | `/api/health` | — | `{ ok, authEnforced, hasUsers, sso, dataDir, version, grafana? }` — `sso` is `{ providers: [{ key, label, preset }…] }` (enabled providers, in key order) or `null`, read by the login page before authenticating; `grafana` is `https://grafana.<domain>`, present only on a host running Grafana |
 | GET | `/api/deployments` | spec variables as `?K=V`, **optional** | `{ deployments: [{ …meta, stack, busy, running, unresolved? }] }`. A row whose variables were not supplied degrades to `stack: null` + `unresolved: <reason>` rather than failing the listing; `busy`/`running` are `null` when undeterminable |
 | GET | `/api/openapi.yaml` · `/api/openapi.json` | — | **No token.** The API's own OpenAPI document — the same file `pstack api` is generated from. YAML is the file byte for byte (comments and key order intact); JSON is that file, key order preserved. `ETag` is the version |
 | GET | `/api/probe/:id` | — | **No token.** The upstream's own status, **no body ever**, and `x-pstack-probe: upstream\|unknown\|asleep\|no-target\|unresolved\|unreachable\|busy`. `?service=` names which one on a stack that publishes several. See [Probe a preview without a token](#probe-a-preview-without-a-token-0340) |
