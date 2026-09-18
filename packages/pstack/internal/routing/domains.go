@@ -248,8 +248,10 @@ func renderDomains(domains []string, o DomainOptions) string {
 // The PRIMARY is checked even on a nil store, because it is the one that must never be answered
 // with a waking page whatever else is missing.
 //
-// `loki.` counts ALWAYS, not only on a host running `--logging loki`: a host that turned logging
-// off must still never answer `loki.` with a waking page, and no preview can take the name meanwhile.
+// `loki.` and `grafana.` count ALWAYS, not only on a host running `--logging loki`: a host that
+// turned logging off must still never answer either with a waking page, and no preview can take
+// the name meanwhile. `grafana.` exists only on the primary; on an added domain it is reserved so
+// that the wake catch-all never hands it to a preview.
 func (s *RoutingStore) IsControlHostname(hostname, primary string) bool {
 	h := strings.ToLower(hostname)
 	for _, d := range append([]string{primary}, s.Domains()...) {
@@ -257,7 +259,7 @@ func (s *RoutingStore) IsControlHostname(hostname, primary string) bool {
 			continue
 		}
 		d = strings.ToLower(d)
-		if h == "control."+d || h == "api."+d || h == "loki."+d {
+		if h == "control."+d || h == "api."+d || h == "loki."+d || h == "grafana."+d {
 			return true
 		}
 	}

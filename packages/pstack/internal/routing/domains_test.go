@@ -237,3 +237,28 @@ func TestLokiIsAControlHostnameOnEveryDomain(t *testing.T) {
 		t.Error("loki.<primary> must be a control hostname on a nil store")
 	}
 }
+
+func TestGrafanaIsAControlHostnameOnEveryDomain(t *testing.T) {
+	// negative control: drop `|| h == "grafana."+d` from IsControlHostname — every true-expecting
+	// assertion below fails, and grafana.<domain> is left to the wake router and to any preview that
+	// asks for it with pstack.routing.host.
+	// negative control: compare with `strings.HasPrefix(h, "grafana")` instead of `h == "grafana."+d` —
+	// the grafana-pr-1 assertion fails.
+	s := New(t.TempDir())
+	if _, err := s.SetDomains([]string{"added.example"}, DomainOptions{Primary: "preview.example.com", Mode: "http01"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"grafana.preview.example.com", "grafana.added.example", "GRAFANA.Added.Example"} {
+		if !s.IsControlHostname(h, "preview.example.com") {
+			t.Errorf("%s must be a control hostname", h)
+		}
+	}
+	// An exact name, not a prefix: a convention hostname that happens to start with grafana is a preview's.
+	if s.IsControlHostname("grafana-pr-1.preview.example.com", "preview.example.com") {
+		t.Error("a preview hostname is not the control plane's")
+	}
+	// The primary needs no file to be reserved — the nil store still answers for it.
+	if !(*RoutingStore)(nil).IsControlHostname("grafana.preview.example.com", "preview.example.com") {
+		t.Error("grafana.<primary> must be a control hostname on a nil store")
+	}
+}
