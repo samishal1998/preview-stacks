@@ -370,6 +370,50 @@ describe('0.32.0: stopping everything a stack has outstanding', () => {
   }, 30_000);
 });
 
+describe('loki settings: the logging block', () => {
+  // negative control: in src/index.ts, point logging.get at '/api/settings' → fails at the `enabled` assertion (expected [null, false] to contain undefined)
+  test('get: the saved settings and the server limits, never a secret', async () => {
+    const s = await client.logging.get();
+    // No docker here, or docker with no control stack: never `true`.
+    expect([null, false]).toContain(s.enabled);
+    expect(s).toMatchObject({
+      source: 'default',
+      updatedAt: null,
+      retentionDays: 7,
+      chunks: { idlePeriodMinutes: 30, maxAgeMinutes: 120, targetSizeKiB: 1536, encoding: 'snappy' },
+      storage: { type: 'filesystem', s3: null },
+    });
+    expect(Array.isArray(s.limits.encodings)).toBe(true);
+    expect(s.limits.encodings).toEqual(['snappy', 'gzip', 'lz4', 'zstd']);
+    expect(s.limits.retentionDays).toEqual({ min: 1, max: 365 });
+    expect(s.limits.earliestCutover).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(JSON.stringify(s)).not.toContain('••••••••');
+  });
+
+  // negative control: in src/index.ts, make logging.set call `post` instead of `put` → 404, `expect(e.status).toBe(409)` fails; point logging.setStorage at '/api/logging/storages' → 404, the setStorage status assertion fails
+  test('set and setStorage are refused with the server\'s reason on a host without Loki', async () => {
+    const err = await client.logging
+      .set({ retentionDays: 14, chunks: { idlePeriodMinutes: 30, maxAgeMinutes: 120, targetSizeKiB: 1536, encoding: 'snappy' } })
+      .catch((e: PstackError) => e);
+    expect(err).toBeInstanceOf(PstackError);
+    const e = err as PstackError;
+    /*
+     * Which refusal you get depends on the machine, as with DELETE above:
+     *
+     *   docker absent   → 503, "docker did not answer"
+     *   docker present  → 409, no control stack here, so no loki container
+     */
+    if (e.status === 503) {
+      expect(e.message).toContain('docker did not answer');
+    } else {
+      expect(e.status).toBe(409);
+      expect(e.message).toContain('Loki is not running on this host');
+    }
+    // The storage route refuses at the same step, before it reads the body.
+    await expect(client.logging.setStorage({ type: 'filesystem' })).rejects.toMatchObject({ status: e.status });
+  });
+});
+
 describe('verifyWebhook — the half that lives in the receiver', () => {
   const secret = 'shhh-a-long-signing-secret';
   const body = JSON.stringify({ id: 'evt_1', event: 'job.leaked', at: 1, data: { stack: 's' } });

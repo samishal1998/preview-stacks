@@ -34,8 +34,12 @@ import type {
   HostSettings,
   HostVar,
   Job,
+  JobStub,
   Kind,
   Logs,
+  LokiChunks,
+  LokiSettings,
+  LokiStorageInput,
   Me,
   NotifierRow,
   Readiness,
@@ -366,6 +370,17 @@ export function createClient(opts: ClientOptions) {
        */
       set: (key: SettingKey, value: number | Role) =>
         put<SettingWritten>(`/api/settings/${enc(key)}`, { value }),
+    },
+
+    logging: {
+      /** Loki's settings, as saved. Never the S3 secret — `secretSet` is all a read learns. */
+      get: () => get<LokiSettings>('/api/logging'),
+      /** Chunks and retention. Maintainer. A 202 is a job: it restarts Loki. */
+      set: (body: { retentionDays: number; chunks: LokiChunks }) =>
+        put<{ job: JobStub } | { changed: false }>('/api/logging', body),
+      /** Storage. Admin. S3 is one-way; omit `secretAccessKey` to keep the stored one. */
+      setStorage: (body: LokiStorageInput) =>
+        put<{ job: JobStub } | { changed: false }>('/api/logging/storage', body),
     },
 
     /**

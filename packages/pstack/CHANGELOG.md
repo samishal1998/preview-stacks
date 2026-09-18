@@ -47,6 +47,9 @@
 - **Loki settings over the API.** `GET`/`PUT /api/logging` (maintainer) for retention and chunks,
   `PUT /api/logging/storage` (admin) for filesystem or S3; `pstack api logging get|set|storage-set`.
   A save that changes something answers `202 { job }`; an unchanged one on an idle host, `200`.
+- **`logging` in the client SDK:** `logging.get()`, `logging.set()` and `logging.setStorage()`,
+  with the `LokiSettings`, `LokiChunks`, `LokiS3`, `LokiLimits` and `LokiStorageInput` types.
+  `JobAction` gains `loki-apply`.
 
 ### Changed
 
