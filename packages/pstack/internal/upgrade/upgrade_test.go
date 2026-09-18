@@ -353,6 +353,23 @@ func TestUpgrade(t *testing.T) {
 		}
 	})
 
+	t.Run("a loki host's compose carries Grafana and still reads loki", func(t *testing.T) {
+		// lokiControl is the real init, so this is the file an upgraded host has. lokiSvc (`^\s{2}loki:`)
+		// cannot match Grafana's block: it has no two-space `loki:` line.
+		// negative control: drop `+GrafanaService(logging, challenge)` from Init's #__ADVANCED_UI_SERVICE__ substitution — the compose has no grafana service.
+		dataDir := lokiControl(t, lokiPassword)
+		b, err := os.ReadFile(filepath.Join(dataDir, "control", "docker-compose.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), "\n  grafana:\n    image: grafana/grafana:13.2.1") {
+			t.Fatalf("compose has no grafana service:\n%s", b)
+		}
+		if s := mustRead(t, dataDir); s.Logging != initctl.Loki {
+			t.Errorf("logging = %q", s.Logging)
+		}
+	})
+
 	t.Run("a logging-off host reads none, is not refused for having no password, and plans no --logging", func(t *testing.T) {
 		// negative control: read LOKI_PUSH_PASSWORD through need() — ReadControlState refuses the off host.
 		s := mustRead(t, realControl(t, initctl.Basic, initctl.HTTP01))
