@@ -718,3 +718,35 @@ func TestSsoDefaultRoleIsLeastPrivilege(t *testing.T) {
 		}
 	}
 }
+
+// The Grafana cookie carries a session's stored hash, not the session, and resolves it through the
+// same query as the cookie value — so expiry and revocation reach both on the next request.
+func TestSessionHashUser(t *testing.T) {
+	// negative control: drop `AND s.expires_at > ?` and its now() argument from SessionHashUser → the
+	// expired session still resolves; or pass `session` unhashed in SessionUser → the lookups disagree.
+	a := open(t)
+	if _, err := a.Bootstrap("sami", "correct-horse"); err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := a.Login("sami", "correct-horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCookie, err := a.SessionUser(session)
+	if err != nil || byCookie == nil || byCookie.Username != "sami" {
+		t.Fatalf("SessionUser: %+v %v", byCookie, err)
+	}
+	byHash, err := a.SessionHashUser(HashToken(session))
+	if err != nil || byHash == nil || byHash.ID != byCookie.ID || byHash.Username != byCookie.Username {
+		t.Fatalf("SessionHashUser: %+v %v; SessionUser: %+v", byHash, err, byCookie)
+	}
+	if _, err := a.store.DB.Exec("UPDATE sessions SET expires_at = ?", now()); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := a.SessionUser(session); u != nil || err != nil {
+		t.Fatalf("expired, SessionUser: %+v %v", u, err)
+	}
+	if u, err := a.SessionHashUser(HashToken(session)); u != nil || err != nil {
+		t.Fatalf("expired, SessionHashUser: %+v %v", u, err)
+	}
+}

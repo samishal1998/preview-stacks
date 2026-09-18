@@ -475,10 +475,20 @@ func mintSession(q store.Querier, userID int64) (string, error) {
 
 // SessionUser resolves a cookie value to its account, or nil.
 func (a *Auth) SessionUser(session string) (*UserRow, error) {
+	return a.SessionHashUser(sha256Hex(session))
+}
+
+// SessionHashUser resolves a stored session hash (sessions.id_hash) to its account, or nil.
+//
+// Only the Grafana cookie reaches it: that cookie carries the hash under a MAC, never the session.
+// A hash is not a credential anywhere else — principal and Logout hash whatever they are given, so
+// an id_hash presented as pstack_session is hashed again and matches nothing. One query for both
+// callers, so an expired or revoked pstack session is a dead Grafana one on the next request.
+func (a *Auth) SessionHashUser(idHash string) (*UserRow, error) {
 	return scanUserRow(a.store.DB.QueryRow(
 		`SELECT u.id, u.username, u.role, u.email, u.created_at FROM sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.id_hash = ? AND s.expires_at > ?`, sha256Hex(session), now()))
+         WHERE s.id_hash = ? AND s.expires_at > ?`, idHash, now()))
 }
 
 // Logout deletes the session row.
