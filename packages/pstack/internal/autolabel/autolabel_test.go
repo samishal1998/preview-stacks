@@ -777,6 +777,12 @@ func TestAPreviewCannotClaimAControlHostname(t *testing.T) {
 		refused(t, "loki.preview.example.com")
 	})
 
+	t.Run("grafana. of the primary domain is refused", func(t *testing.T) {
+		// negative control: drop `|| h == "grafana."+d` from routing.IsControlHostname —
+		// grafana.preview.example.com gets a router and this fails with `got <nil>`.
+		refused(t, "grafana.preview.example.com")
+	})
+
 	t.Run("api. of an added domain is refused", func(t *testing.T) {
 		// negative control: read no store in ControlHostname's default
 		// (`(*routing.RoutingStore)(nil).IsControlHostname(host, os.Getenv("PSTACK_DOMAIN"))`) —

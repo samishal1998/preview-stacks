@@ -1588,6 +1588,7 @@ reason [`init` is CLI-only](#why-init-is-cli-only-and-always-will-be). From the 
 | `control.<domain>` | the web UI (an operator's browser) |
 | `api.<domain>` | the API (CI, `curl`, scripts) |
 | `loki.<domain>` | Loki's push endpoint, for the nodes' log plugins (`--logging loki`); reserved even with logging off |
+| `grafana.<domain>` | Grafana (`--logging loki`), signed in with pstack accounts; reserved even with logging off |
 | `<service-name>.<domain>` | the convention for a shared service's own hostname |
 | `<surface>-pr-<n>.<domain>` | a per-PR surface, e.g. `backend-pr-123.<domain>` |
 
@@ -1595,8 +1596,8 @@ reason [`init` is CLI-only](#why-init-is-cli-only-and-always-will-be). From the 
 UI calls the API with relative `/api/…` paths, so it is same-origin from `control.<domain>` and needs
 no CORS; `api.<domain>` exists to give external callers an honest name that is not "the UI host".
 
-A `pstack.routing.host` naming `control.`, `api.` or `loki.` on any domain this host answers on is
-refused at deploy.
+A `pstack.routing.host` naming `control.`, `api.`, `loki.` or `grafana.` on any domain this host
+answers on is refused at deploy.
 
 **Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
 `backend-pr-1.<domain>` is covered by `*.<domain>`, `backend.pr-1.<domain>` is not.
@@ -3389,6 +3390,7 @@ Job `state`: `queued` · `running` · `ok` · `failed` · `leaked` · `cancelled
 | `control.<domain>` | `pstack-ui` | the web UI |
 | `api.<domain>` | `pstack-api` | the API |
 | `loki.<domain>` | `pstack-loki` | Loki's push path, only with `--logging loki` |
+| `grafana.<domain>` | `pstack-grafana` | Grafana (`--logging loki`), signed in with pstack accounts; reserved even with logging off |
 
 `control.` and `api.` point at the **same** container on port `7878`; the UI calls `/api/…`
 relatively, so it is same-origin and needs no CORS. `loki.` is the Loki container on `3100`. Under

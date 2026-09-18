@@ -31,10 +31,10 @@
 //
 // ── NOR DOES IT HAND OUT A CONTROL HOSTNAME ──────────────────────────────────────────────────────
 //
-// A `pstack.routing.host` naming `control.`, `api.` or `loki.` of any domain this host answers on
-// is refused (ControlHostname): its router would compete with the control plane's own for the
-// console, the API, or every node's log pushes and the password on them. `loki.` is reserved even
-// with logging off. A service with its own `traefik.*` labels is not checked — that is the escape
+// A `pstack.routing.host` naming `control.`, `api.`, `loki.` or `grafana.` of any domain this host
+// answers on is refused (ControlHostname): its router would compete with the control plane's own
+// for the console, the API, every node's log pushes and the password on them, or the Grafana
+// sign-in cookie. `loki.` and `grafana.` are reserved even with logging off. A service with its own `traefik.*` labels is not checked — that is the escape
 // hatch above, and specs are CI-trusted.
 //
 // The refusal is a spec error like the missing-domain one, so it fires on EVERY compose subcommand
@@ -156,7 +156,7 @@ var DetectChallenge = func(r exec.Runner) Challenge {
 // with no setting to keep in sync.
 var DetectLogging = func(r exec.Runner) string { return inspect.LokiPushURL(r) }
 
-// ControlHostname reports whether a hostname is the control plane's — `control.`, `api.` or `loki.`
+// ControlHostname reports whether a hostname is the control plane's — `control.`, `api.`, `loki.` or `grafana.`
 // of the primary domain or any added one — behind a variable, like DetectChallenge, so a caller's
 // test can pin it. The added domains come from routing.DynamicDir. The primary is PSTACK_DOMAIN,
 // which the control container always sets; `pstack up` run host-side has no such variable, so it
@@ -360,7 +360,7 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 		// A preview never gets a control hostname — see the package comment. Only an EXPLICIT host can
 		// collide: a generated one's first label is `<name>-<stack>`, which always has a dash in it.
 		if req.Host != "" && ControlHostname(req.Host) {
-			return nil, &spec.Error{Msg: fmt.Sprintf(`service "%s" sets pstack.routing.host=%s — a control hostname of this host (control., api. and loki. on every domain it answers on). Pick another host.`, name, req.Host)}
+			return nil, &spec.Error{Msg: fmt.Sprintf(`service "%s" sets pstack.routing.host=%s — a control hostname of this host (control., api., loki. and grafana. on every domain it answers on). Pick another host.`, name, req.Host)}
 		}
 
 		isSwarm := st.Compose != nil && st.Compose.Orchestrator == spec.Swarm
