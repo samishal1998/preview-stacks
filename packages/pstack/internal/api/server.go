@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/notify"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/redact"
@@ -70,6 +72,13 @@ type Options struct {
 	// ReadinessRestartLoop is the crash-loop threshold. Raise it on a SWARM host: without
 	// `depends_on`, a dependent legitimately restarts while its database converges.
 	ReadinessRestartLoop int64
+	// LokiDir holds Loki's config.yaml and s3-credentials, which the Loki settings routes write.
+	// Default: <DataDir>/control/loki. serve passes loki.Dir (PSTACK_LOKI_DIR, then /etc/loki).
+	LokiDir string
+	// LokiReadyTimeoutMs is how long an apply waits for Loki's /ready. Zero means 300000.
+	LokiReadyTimeoutMs int64
+	// LokiUID owns s3-credentials, so Loki can read it. Zero means 10001, grafana/loki's uid.
+	LokiUID int
 	// MaxJobs is how many lifecycle jobs RUN AT ONCE across every stack (PSTACK_MAX_JOBS); zero
 	// means jobs.DefaultMaxRunning. Over the cap an accepted job WAITS for a slot — it is never
 	// refused. Not to be confused with jobs.MaxJobs, which bounds retained transcripts and is not
@@ -180,6 +189,17 @@ type Server struct {
 	http   *http.Server
 	ln     net.Listener
 	reidx  chan struct{}
+
+	// lokiMu owns lokiGen and the two pending Loki saves, one per section (loki_apply.go). Its own
+	// mutex: never held with writeMu, and never across jobs.Start or an Emit (Go rule 14).
+	lokiMu      sync.Mutex
+	lokiGen     uint64
+	lokiChunks  *lokiEntry
+	lokiStorage *lokiEntry
+	// The apply's seams: its runner on a given ctx, the ready-poll interval, the clock.
+	lokiRunner func(ctx context.Context) exec.Runner
+	lokiPoll   time.Duration
+	lokiNow    func() time.Time
 }
 
 // New wires a server. Nothing listens until Start.
@@ -212,6 +232,15 @@ func New(o Options) (*Server, error) {
 	}
 	if o.TerminalArgv == nil {
 		o.TerminalArgv = terminal.ExecArgv
+	}
+	if o.LokiDir == "" {
+		o.LokiDir = filepath.Join(o.DataDir, "control", "loki")
+	}
+	if o.LokiReadyTimeoutMs <= 0 {
+		o.LokiReadyTimeoutMs = 300_000
+	}
+	if o.LokiUID <= 0 {
+		o.LokiUID = 10001
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	// The cap the registry starts with is RESOLVED, not the raw option: database > PSTACK_MAX_JOBS
@@ -255,6 +284,12 @@ func New(o Options) (*Server, error) {
 	// without it hands bash an empty env — no PATH, no DOCKER_HOST — and the DELETE guard would
 	// refuse forever.
 	s.host = exec.New(exec.Options{Level: exec.Quiet, BaseEnv: env, Ctx: ctx})
+	// Not s.host: an apply's runner stops with the ctx it is given (a job's, or the post-swap one).
+	s.lokiRunner = func(runCtx context.Context) exec.Runner {
+		return exec.New(exec.Options{Level: exec.Quiet, BaseEnv: env, Ctx: runCtx})
+	}
+	s.lokiPoll = 2 * time.Second
+	s.lokiNow = time.Now
 	s.ssoTTL = 5 * 60
 	if o.SSOStateTTLS > 0 {
 		s.ssoTTL = o.SSOStateTTLS
@@ -941,7 +976,7 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
 	case registry.IsError(err), routing.IsError(err), registries.IsError(err), sso.IsError(err),
 		hostvars.IsError(err), auth.IsError(err), specs.IsError(err), webhooks.IsError(err), notify.IsError(err),
-		settings.IsError(err):
+		settings.IsError(err), loki.IsError(err):
 		writeError(w, 400, err.Error())
 	default:
 		writeError(w, 500, err.Error())

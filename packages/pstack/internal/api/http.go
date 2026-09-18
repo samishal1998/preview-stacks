@@ -55,6 +55,10 @@ type Tuning struct {
 	// meaning jobs.DefaultMaxRunning. It is NOT jobs.MaxJobs — that one bounds how many finished
 	// transcripts are kept and is not tunable. One letter apart in name, nothing in common.
 	MaxJobs float64
+	// PSTACK_LOKI_READY_TIMEOUT_MS and PSTACK_LOKI_UID. 0 means the default (300000, 10001), so
+	// PSTACK_LOKI_UID=0 is 10001: a root pstack chowns s3-credentials to 10001 either way.
+	LokiReadyTimeoutMs float64
+	LokiUID            float64
 }
 
 // TuningFromEnv reads the knobs.
@@ -77,6 +81,8 @@ func TuningFromEnv(env func(string) (string, bool)) Tuning {
 		SSOStateTTLS:         num("PSTACK_SSO_STATE_TTL_S"),
 		SSODiscoveryTTLS:     num("PSTACK_SSO_DISCOVERY_TTL_S"),
 		MaxJobs:              num("PSTACK_MAX_JOBS"),
+		LokiReadyTimeoutMs:   num("PSTACK_LOKI_READY_TIMEOUT_MS"),
+		LokiUID:              num("PSTACK_LOKI_UID"),
 	}
 }
 

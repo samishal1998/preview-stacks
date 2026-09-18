@@ -18,6 +18,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/hostvars"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
@@ -1243,4 +1244,102 @@ func TestAnInheritingSsoProviderNeverMintsAnAdmin(t *testing.T) {
 	if got := s.ssoSignInOpts(&sso.Config{}, nil).DefaultRole; got != string(auth.Developer) {
 		t.Fatalf("inherit = %q, want developer", got)
 	}
+}
+
+// ── Loki settings: the knobs, the options, fail() (logging slice 2) ─────────────────────────────
+
+func TestTuningReadsTheLokiKnobs(t *testing.T) {
+	// negative control: read "PSTACK_LOKI_UID" for LokiReadyTimeoutMs in TuningFromEnv — the first
+	// assertion reads 0. (Also run: drop `LokiUID: num("PSTACK_LOKI_UID")` — the second reads 0.)
+	read := func(k, v string) Tuning {
+		return TuningFromEnv(func(key string) (string, bool) {
+			if key == k {
+				return v, true
+			}
+			return "", false
+		})
+	}
+	if tu := read("PSTACK_LOKI_READY_TIMEOUT_MS", "4000"); tu.LokiReadyTimeoutMs != 4000 || tu.LokiUID != 0 {
+		t.Fatalf("PSTACK_LOKI_READY_TIMEOUT_MS=4000 read as %+v", tu)
+	}
+	if tu := read("PSTACK_LOKI_UID", "501"); tu.LokiUID != 501 || tu.LokiReadyTimeoutMs != 0 {
+		t.Fatalf("PSTACK_LOKI_UID=501 read as %+v", tu)
+	}
+	// 0 is unset, so PSTACK_LOKI_UID=0 is 10001: a root pstack chowns to 10001 either way.
+	for _, k := range []string{"PSTACK_LOKI_READY_TIMEOUT_MS", "PSTACK_LOKI_UID"} {
+		for _, bad := range []string{"0", "-1", "nope", ""} {
+			if tu := read(k, bad); tu.LokiReadyTimeoutMs != 0 || tu.LokiUID != 0 {
+				t.Fatalf("%s=%q must read as unset, got %+v", k, bad, tu)
+			}
+		}
+	}
+}
+
+func TestNewResolvesTheLokiOptions(t *testing.T) {
+	// negative control: delete the three Loki default blocks from New — the first subtest fails.
+	t.Run("zero values take the defaults", func(t *testing.T) {
+		// negative control: delete `o.LokiUID = 10001` from New — LokiUID reads 0, and a root pstack
+		// would chown s3-credentials to root. (Also run: drop `s.lokiPoll = 2 * time.Second`.)
+		dir := t.TempDir()
+		s, err := New(Options{DataDir: dir, Bus: events.New(), Log: func(string) {}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Stop()
+		if got, want := s.opts.LokiDir, filepath.Join(dir, "control", "loki"); got != want {
+			t.Errorf("LokiDir = %q, want %q", got, want)
+		}
+		if s.opts.LokiReadyTimeoutMs != 300_000 || s.opts.LokiUID != 10001 {
+			t.Errorf("LokiReadyTimeoutMs %d, LokiUID %d; want 300000, 10001", s.opts.LokiReadyTimeoutMs, s.opts.LokiUID)
+		}
+		if s.lokiPoll != 2*time.Second || s.lokiNow == nil || s.lokiRunner == nil {
+			t.Errorf("seams: poll %v, now set %v, runner set %v", s.lokiPoll, s.lokiNow != nil, s.lokiRunner != nil)
+		}
+		if got := s.lokiLead(); got != 15*time.Minute {
+			t.Errorf("lokiLead = %v, want 15m", got)
+		}
+	})
+	t.Run("set values survive, and the runner takes the ctx it is given", func(t *testing.T) {
+		// negative control: build lokiRunner's runner with `Ctx: s.ctx` instead of its argument — the
+		// post-swap runner could not outlive a job's cancel. (Also run: make lokiLead read
+		// ReadinessTimeoutMs — 10m9s; set `o.LokiUID = 10001` unconditionally — 501 is lost.)
+		lokiDir := t.TempDir()
+		s, err := New(Options{DataDir: t.TempDir(), Bus: events.New(), Log: func(string) {},
+			LokiDir: lokiDir, LokiReadyTimeoutMs: 4000, LokiUID: 501, ReadinessTimeoutMs: 9000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Stop()
+		if s.opts.LokiDir != lokiDir || s.opts.LokiReadyTimeoutMs != 4000 || s.opts.LokiUID != 501 {
+			t.Errorf("options overridden: %q %d %d", s.opts.LokiDir, s.opts.LokiReadyTimeoutMs, s.opts.LokiUID)
+		}
+		if got := s.lokiLead(); got != 10*time.Minute+4*time.Second {
+			t.Errorf("lokiLead = %v, want 10m4s", got)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if s.lokiRunner(ctx).Context() != ctx {
+			t.Error("lokiRunner must run on the ctx it is given, not the server's")
+		}
+	})
+}
+
+func TestFailMapsALokiErrorTo400(t *testing.T) {
+	// negative control: remove loki.IsError(err) from fail()'s list — the first subtest reads 500.
+	t.Run("a *loki.Error is the caller's: 400 with its text", func(t *testing.T) {
+		// negative control: remove loki.IsError(err) from fail()'s list — 500.
+		w := httptest.NewRecorder()
+		(&Server{}).fail(w, &loki.Error{Msg: "chunks.maxAgeMinutes must be 30–180"})
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "chunks.maxAgeMinutes must be 30–180") {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("a sentinel that escapes a handler is a 500, never a mislabelled 400", func(t *testing.T) {
+		// negative control: add `errors.Is(err, loki.ErrOneWay)` to fail()'s 400 list — 400.
+		w := httptest.NewRecorder()
+		(&Server{}).fail(w, loki.ErrOneWay)
+		if w.Code != 500 {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	})
 }

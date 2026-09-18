@@ -14,6 +14,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/api"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
@@ -88,6 +89,9 @@ func Serve(o ServeOptions) *Exit {
 		ReadinessTimeoutMs:   int64(tuning.ReadinessTimeoutMs),
 		ReadinessRestartLoop: int64(tuning.ReadinessRestartLoop),
 		MaxJobs:              int(tuning.MaxJobs),
+		LokiDir:              loki.Dir(dataDir), // env override > in-container /etc/loki > host path
+		LokiReadyTimeoutMs:   int64(tuning.LokiReadyTimeoutMs),
+		LokiUID:              int(tuning.LokiUID),
 		// `off` and nothing else. A misspelling leaves the route ON, deliberately: this is a
 		// convenience endpoint, and the alternative — any unrecognised value disabling it — turns a
 		// typo into a CI pipeline that polls a 404 forever with nothing saying why.
