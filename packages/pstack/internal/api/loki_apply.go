@@ -335,20 +335,23 @@ func (a *lokiApply) run(ctx context.Context) stack.Outcome {
 	defer cancel()
 	post := s.lokiRunner(postCtx)
 	if err := s.lokiSwap(creds != ""); err != nil {
-		return a.end(phaseSwap, false, err.Error())
+		a.step(phaseSwap, false, err.Error())
+		return a.rollback(post, row)
 	}
 	a.step(phaseSwap, true, "")
 
 	// 6. restart Loki only, through the control restart path.
 	restartedAt := time.Now()
 	if _, err := inspect.RestartControlService(post, lokiService); err != nil {
-		return a.end(phaseRestart, false, err.Error())
+		a.step(phaseRestart, false, err.Error())
+		return a.rollback(post, row)
 	}
 	a.step(phaseRestart, true, "")
 
 	// 7. ready
 	if !a.ready(post) {
-		return a.end(phaseReady, false, "not ready within "+scheduler.FormatDuration(s.opts.LokiReadyTimeoutMs))
+		a.step(phaseReady, false, "not ready within "+scheduler.FormatDuration(s.opts.LokiReadyTimeoutMs))
+		return a.rollback(post, row)
 	}
 	a.step(phaseReady, true, "")
 
@@ -430,4 +433,70 @@ func lastLine(stderr string, code int) string {
 		return js.Truncate(l, 300)
 	}
 	return "exit " + strconv.Itoa(code)
+}
+
+// rollback undoes an apply whose swap, restart or ready wait failed after the commit. row is the row
+// the apply replaced; nil means the table was empty, so the defaults. The files Render(previous) gives
+// go back (an s3-credentials the save created is removed), the row goes back (loki.Revert reads
+// previous_*), and Loki restarts on them.
+//
+// Rule 1 first, against the files on disk, never the row: when undoing would drop a period starting
+// at or before now+lead, the save stays, previous_* is cleared, and Loki is left to come up on it.
+//
+// Every command runs on post, never the job's runner, so a cancel cannot strand swapped files. An
+// error before the revert leaves previous_* set, and the next job resumes.
+func (a *lokiApply) rollback(post exec.Runner, row *loki.Row) stack.Outcome {
+	s := a.s
+	done := func(message string) stack.Outcome { return a.end("rollback", false, message) }
+	prev, secret := loki.Defaults(), ""
+	if row != nil {
+		prev, secret = row.Settings, row.Secret
+	}
+	config, creds, err := lokiRender(prev, secret)
+	disk := ""
+	if err == nil {
+		disk, _, _, err = s.lokiDisk()
+	}
+	var loaded, next []loki.Period
+	if err == nil {
+		loaded, err = loki.Periods(disk)
+	}
+	if err == nil {
+		next, err = loki.Periods(config)
+	}
+	if err != nil {
+		return done("rollback failed: " + err.Error())
+	}
+	if loki.CheckPeriods(loaded, next, s.lokiNow(), s.lokiLead(), false) != nil {
+		// The refused period: the first on-disk one the previous config does not carry at its index.
+		from := ""
+		for i, p := range loaded {
+			if i >= len(next) || next[i] != p {
+				from = p.From
+				break
+			}
+		}
+		if loki.Finish(s.store) != nil {
+			return done("could not record the finished apply")
+		}
+		return done("not ready — S3 from " + from + " starts too soon to undo; left in place")
+	}
+	err = s.lokiWriteNext(config, creds)
+	if err == nil {
+		err = s.lokiSwap(creds != "")
+	}
+	if err == nil {
+		err = loki.Revert(s.store)
+	}
+	if err != nil {
+		return done("rollback failed: " + err.Error())
+	}
+	if _, err := inspect.RestartControlService(post, lokiService); err != nil {
+		a.sink.Emit(log.Error, "rollback: "+err.Error())
+		return done("rollback did not come up")
+	}
+	if !a.ready(post) {
+		return done("rollback did not come up")
+	}
+	return done("rolled back")
 }

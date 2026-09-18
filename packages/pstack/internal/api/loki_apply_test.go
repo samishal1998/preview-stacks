@@ -454,3 +454,214 @@ func TestLokiApplyWhoseSaveWasReplacedChangesNothing(t *testing.T) {
 		t.Error("nothing is pending once bob's save is applied")
 	}
 }
+
+// ── rollback, leave-in-place, and a cancel after the swap ─────────────────────────────────────────
+
+// cancellableFake refuses every command once its context is done, as the real runner does
+// (exec.go:110-112), and records none it refuses. The job's runner and post both come from
+// s.lokiRunner, so only this tells their two contexts apart.
+type cancellableFake struct {
+	*exec.Fake
+	ctx context.Context
+}
+
+func (c cancellableFake) Run(cmd string, o exec.RunOptions) exec.Result {
+	if c.ctx.Err() != nil {
+		return exec.Result{OK: false, Code: 130, Stderr: "cancelled"}
+	}
+	return c.Fake.Run(cmd, o)
+}
+
+func (c cancellableFake) Context() context.Context { return c.ctx }
+
+func TestLokiApplyRollback(t *testing.T) {
+	// negative control: make rollback's first statement `return a.end("rollback", false, "rolled back")`
+	// — the first three subtests fail.
+	const (
+		restart = "docker restart 'l1'"
+		health  = "docker exec 'l1' /usr/bin/loki -health"
+	)
+	// host differs from lokiFixture in two ways. config.yaml is written after New, so a boot reconcile
+	// never sees it, and a failed ready wait lasts 50ms, which keeps lead at about 10m. ready says whether
+	// -health answers after n restarts. onRestart runs inside the `docker restart` answer.
+	host := func(t *testing.T, config string, ready func(n int) bool, onRestart func(s *Server)) (*Server, *exec.Fake) {
+		t.Helper()
+		dir := t.TempDir()
+		// LokiUID is this process's euid, so loki.WriteFile writes s3-credentials 0600 without root.
+		s, err := New(Options{DataDir: t.TempDir(), LokiDir: dir, LokiReadyTimeoutMs: 50, LokiUID: os.Geteuid(), Bus: events.New(), Log: func(string) {}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.Stop)
+		if err := os.WriteFile(filepath.Join(dir, loki.ConfigFile), []byte(config), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		restarts := 0 // only the job's goroutine touches it
+		f := exec.NewFake(nil, "")
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			switch c := strings.TrimSpace(cmd); {
+			case strings.HasPrefix(c, "docker ps -aq"):
+				return exec.Result{OK: true, Stdout: "l1\n"}, true
+			case strings.HasPrefix(c, "docker inspect"):
+				return exec.Result{OK: true, Stdout: lokiInspect}, true
+			case c == restart:
+				restarts++
+				if onRestart != nil {
+					onRestart(s)
+				}
+				return exec.Result{OK: true, Stdout: "l1\n"}, true
+			case c == health:
+				if ready(restarts) {
+					return exec.Result{OK: true, Stdout: "ready\n"}, true
+				}
+				return exec.Result{OK: false, Code: 1, Stderr: "Ingester not ready"}, true
+			}
+			return exec.Result{OK: true}, true // -verify-config, docker logs
+		}
+		s.lokiRunner = func(ctx context.Context) exec.Runner { return cancellableFake{f, ctx} }
+		s.lokiPoll = time.Millisecond
+		return s, f
+	}
+	apply := func(t *testing.T, s *Server, c *loki.ChunksPatch, sp *loki.StoragePatch) jobs.Job {
+		t.Helper()
+		job, ok := s.startLokiApply(s.lokiPut("alice", c, sp), "alice", false)
+		if !ok {
+			t.Fatal("the apply was refused")
+		}
+		return waitLokiJob(t, s, job.ID)
+	}
+	count := func(f *exec.Fake, want string) int {
+		n := 0
+		for _, c := range f.Commands() {
+			if c == want {
+				n++
+			}
+		}
+		return n
+	}
+	s3 := func(cutover string) *loki.StoragePatch {
+		return &loki.StoragePatch{Storage: loki.Storage{Type: loki.StorageS3, S3: &loki.S3{
+			Endpoint: "https://s3.example.com", Region: "eu-central-1", Bucket: "pstack-logs",
+			AccessKeyID: "AKIAEXAMPLE0001", Cutover: cutover,
+		}}, Secret: "s3cret-access-key-0001"}
+	}
+
+	t.Run("not ready: the previous files and row come back, and Loki restarts on them", func(t *testing.T) {
+		// negative control: delete rollback's `if err == nil { err = loki.Revert(s.store) }` — the row
+		// still holds the S3 save. (Also run: `s.lokiSwap(creds != "")` → `s.lokiSwap(true)` — the
+		// message is `rollback failed: rename …` and s3-credentials is left behind.)
+		s, f := host(t, pstack.LokiConfig, func(n int) bool { return n >= 2 }, nil)
+		// The real clock throughout: this cutover passes Validate and rule 2 and is not live for rule 1.
+		j := apply(t, s, nil, s3(loki.EarliestCutover(time.Now(), s.lokiLead())))
+		if phase, ok, msg := lastStep(t, j); j.State != jobs.Failed || phase != "rollback" || ok || msg != "rolled back" {
+			t.Errorf("state %q, last step %s %v %q", j.State, phase, ok, msg)
+		}
+		if cfg, _ := readLoki(t, s, loki.ConfigFile); cfg != pstack.LokiConfig {
+			t.Errorf("config.yaml was not restored:\n%s", cfg)
+		}
+		if _, here := readLoki(t, s, loki.CredentialsFile); here {
+			t.Error("s3-credentials is left behind")
+		}
+		assertNoNext(t, s)
+		if row, err := loki.Read(s.store); err != nil || row != nil {
+			t.Errorf("the table was empty before the save, so it is empty again: %+v, %v", row, err)
+		}
+		if n := count(f, restart); n != 2 {
+			t.Errorf("restarts: %d, want 2 (the apply, then the rollback)", n)
+		}
+	})
+
+	t.Run("not ready, and undoing would drop an S3 period starting within lead: left in place", func(t *testing.T) {
+		// negative control: in rollback pass `0` instead of `s.lokiLead()` to CheckPeriods (now, not
+		// now+lead) — it rolls back and restarts twice.
+		late := false // set and read on the job's goroutine only
+		s, f := host(t, pstack.LokiConfig, func(int) bool { return false }, func(*Server) { late = true })
+		cutover := loki.EarliestCutover(time.Now(), s.lokiLead())
+		at, err := time.Parse(time.DateOnly, cutover)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Step 2 sees the cutover an hour out, so rule 2 passes. From the restart on, it is 5 minutes
+		// out, inside lead, so rule 1 refuses the undo. Validate's floor reads the real clock, which is
+		// what the cutover was computed from.
+		s.lokiNow = func() time.Time {
+			if late {
+				return at.Add(-5 * time.Minute)
+			}
+			return at.Add(-time.Hour)
+		}
+		j := apply(t, s, nil, s3(cutover))
+		want := "not ready — S3 from " + cutover + " starts too soon to undo; left in place"
+		if phase, _, msg := lastStep(t, j); j.State != jobs.Failed || phase != "rollback" || msg != want {
+			t.Errorf("state %q, last step %s %q", j.State, phase, msg)
+		}
+		if cfg, _ := readLoki(t, s, loki.ConfigFile); !strings.Contains(cfg, "object_store: s3") {
+			t.Errorf("the S3 period must stay:\n%s", cfg)
+		}
+		if _, here := readLoki(t, s, loki.CredentialsFile); !here {
+			t.Error("s3-credentials must stay")
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.Settings.Storage.Type != loki.StorageS3 || row.InFlight {
+			t.Errorf("the save stays, with previous_* cleared: %+v, %v", row, err)
+		}
+		if n := count(f, restart); n != 1 {
+			t.Errorf("restarts: %d, want 1", n)
+		}
+	})
+
+	t.Run("the rollback's own ready wait fails: rollback did not come up, with the row already reverted", func(t *testing.T) {
+		// negative control: delete rollback's `if !a.ready(post) { … }` block — it says `rolled back`.
+		s14 := loki.Defaults()
+		s14.RetentionDays = 14
+		before, err := loki.Render(s14)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, f := host(t, before, func(int) bool { return false }, nil)
+		if err := loki.Save(s.store, s14, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := loki.Finish(s.store); err != nil {
+			t.Fatal(err)
+		}
+		j := apply(t, s, retention(30), nil)
+		if phase, _, msg := lastStep(t, j); j.State != jobs.Failed || phase != "rollback" || msg != "rollback did not come up" {
+			t.Errorf("state %q, last step %s %q", j.State, phase, msg)
+		}
+		if cfg, _ := readLoki(t, s, loki.ConfigFile); cfg != before {
+			t.Errorf("config.yaml must be the 14-day render again:\n%s", cfg)
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.Settings.RetentionDays != 14 || row.InFlight {
+			t.Errorf("the row is reverted before the restart: %+v, %v", row, err)
+		}
+		if n := count(f, restart); n != 2 {
+			t.Errorf("restarts: %d, want 2", n)
+		}
+	})
+
+	t.Run("a cancel after the swap: Loki still restarts, answers ready, and the apply finishes", func(t *testing.T) {
+		// negative control: in run, change `context.WithTimeout(context.Background(), 2*lead)` to
+		// `context.WithTimeout(ctx, 2*lead)` — the -health after the restart is refused and never
+		// recorded, and the rollback's own restart is refused too.
+		s, f := host(t, pstack.LokiConfig, func(int) bool { return true }, func(s *Server) {
+			for _, j := range s.jobs.List() {
+				if j.Action == jobs.LokiApply && !j.State.Terminal() {
+					s.jobs.Cancel(j.ID, "alice")
+				}
+			}
+		})
+		j := apply(t, s, retention(14), nil)
+		if j.State != jobs.Cancelled {
+			t.Errorf("state %q, want cancelled", j.State)
+		}
+		if cmds := strings.Join(f.Commands(), "\n"); !strings.Contains(cmds, restart+"\n"+health) {
+			t.Errorf("no -health after the restart:\n%s", cmds)
+		}
+		if row, err := loki.Read(s.store); err != nil || row == nil || row.Settings.RetentionDays != 14 || row.InFlight {
+			t.Errorf("the apply must finish: %+v, %v", row, err)
+		}
+		if cfg, _ := readLoki(t, s, loki.ConfigFile); !strings.Contains(cfg, "  retention_period: 336h") {
+			t.Errorf("config.yaml:\n%s", cfg)
+		}
+	})
+}
