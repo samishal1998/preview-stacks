@@ -426,38 +426,1012 @@ multi-tenant Loki.
 - **Copy:** retention changes are not retroactive; the UI must not promise that shortening it deletes
   existing logs.
 
-## Slice 3 — Grafana with pstack sign-in (decisions recorded; own spec before building)
+## Slice 3 — Grafana at `grafana.<domain>`, signed in with pstack accounts
 
-- **Service:** `grafana/grafana:13.2.1` (not `-slim`: no bundled plugins; not `-distroless`: no
-  health check), `mem_limit: 768m`, named volume on `/var/lib/grafana`, Loki datasource provisioned
-  (`access: proxy`, `http://loki:3100` over the `logs` network), `GF_SERVER_ROOT_URL=https://grafana.<domain>/`.
-- **Sign-in:** Traefik `forwardAuth` on `grafana.<domain>` calls a new pstack verify endpoint.
-  pstack's session cookie is host-only on `api.<domain>` and **must not be widened** — previews live
-  on `*.<domain>` and would receive it. So Grafana gets its own cookie through a redirect sign-in:
-  no cookie → 302 (navigations only; 401 for XHR) to the pstack UI login with a path-only return →
-  a short-lived one-time code → `grafana.<domain>/<reserved path>?code=…`, routed to pstack → a
-  `__Host-` cookie for `grafana.<domain>`, tied to the parent pstack session so logout revokes it.
-  The verify endpoint answers `X-WEBAUTH-USER` and `X-WEBAUTH-ROLE`.
-- **Roles:** viewer → Viewer, maintainer → Editor, admin → Admin. Grafana syncs the default org's
-  role from the header; it can never grant Grafana server admin.
-- **Hard security requirements** (each verified against Traefik 3.7.13 / Grafana 13.2.1 source):
-  - Grafana and Loki's query API only on the `logs` network — never `preview-ingress`, never a
-    published port. Anything that reaches Grafana directly can send `X-WEBAUTH-USER: admin`.
-  - Every header Grafana reads is listed in `authResponseHeaders`: Traefik strips listed headers
-    from the client request unconditionally, and passes unlisted ones through.
-  - `GF_AUTH_DISABLE_LOGIN_FORM=true`, `GF_AUTH_BASIC_ENABLED=false`,
-    `GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=true` — never `disable_login=true`, which silently
-    turns auth proxy off.
-  - `GF_SECURITY_CSRF_ALWAYS_CHECK=true`, plus an Origin check in verify for unsafe methods: preview
-    apps are same-site with `grafana.<domain>`, so SameSite does not stop them.
-  - `__Host-` cookie names (a preview can plant `Domain=<domain>` cookies); the callback code is
-    bound to a state cookie set by the first 302 (login CSRF).
-  - Absolute `Location` headers built from the configured domain: Traefik resolves a relative one
-    against the verify endpoint's internal address.
-  - `grafana.` joins `IsControlHostname` and the reserved-host refusal.
-- **Known costs:** Logs Drilldown is downloaded from grafana.com on first start (a host without that
-  egress gets Grafana without it); Drilldown's Patterns view needs `pattern_ingester.enabled` in the
-  Loki config.
+> Builds on slice 1 as planned in `docs/loki-logging-slice-1-plan.md`, using these names from that
+> plan: `initctl.Logging`/`Loki`, `LokiService`, `LokiWiring`, `inspect.LokiPushURL` and its
+> `idsByLabel`/`inspectIDs` path, `upgrade.ControlState.Logging`, `upgrade.SwitchLogging`,
+> `autolabel.ControlHostname`, `IsControlHostname`, the `logs` network, `LOKI_SHIM`. Slice 2 lands
+> first: it mounts `./loki` into pstack's service block in every mode, and its `init` writes the
+> Loki config only if absent. Line numbers into `init.go`, `domains.go` and `upgrade.go`
+> are from the tree before slice 1, so apply each edit by the text it quotes. Traefik citations are
+> tag `v3.6.1` (the pinned `docker-compose.yml:32`) unless marked 3.7.13. Grafana citations are tag
+> `v13.2.1`.
+
+### Turning it on
+
+- **No new flag, env var or command: `--logging loki` renders Grafana beside Loki.** The owner
+  decided "Grafana included" as the way logs are read (§Decisions, "Reading logs"). Loki's
+  query API is on the `logs` network and nowhere else (Slice 1 › Control stack), so without
+  Grafana nothing can read Loki.
+- `pstack logging loki|off` and `pstack cloud-init --logging loki` turn both on and off.
+- **pstack is not recreated by the switch.** Slice 3 adds nothing to pstack's service block. pstack
+  finds out about Grafana from docker, the same way it finds Loki (below). Slice 1's `LokiWiring`
+  edits only Traefik's networks line, the volumes block and the networks block (plan:954-972).
+  Compose leaves pstack running, so running jobs survive: they live in this process's memory
+  (`server.go:829-830`, `usage.md:1483`). A render test pins this.
+- **Upgrade carries it with nothing new to read back.**
+  - `ReadControlState` already reads `Logging = loki` from `^\s{2}loki:` (plan:1797-1853).
+  - `initFlags` already passes `--logging loki` (plan:1673-1674).
+  - Grafana holds no secret pstack generates. There is no admin password
+    (`GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION`).
+  - The cookie MAC key is `PSTACK_TOKEN`, which `initEnv` already carries (`upgrade.go:318-322`).
+- **initguard: nothing new.** A re-run that drops `--logging loki` is already refused (plan:91,
+  plan:1679).
+- **Cost.** A slice-1 host gains Grafana on its next `pstack upgrade`: 768m more on the manager and a
+  download from grafana.com on first start. The CHANGELOG says so in those words.
+
+### Control stack
+
+**Still no new lines in `templates/control/docker-compose.yml`.** Grafana rides Loki's substitution
+and anchors:
+
+| What | How |
+|---|---|
+| the `grafana` service | the `#__ADVANCED_UI_SERVICE__` substitution (`init.go:370`) becomes `AdvancedUIService(ui) + LokiService(logging, challenge, lokiPassword) + GrafanaService(logging, challenge)` |
+| the `grafana` volume | `LokiWiring`'s volume edit (plan:954-972) writes `volumes:\n  letsencrypt:\n  loki:\n  grafana:\n` |
+| Traefik on `logs`, the `logs` network | slice 1's edits, unchanged |
+| pstack's service block | **unchanged**: no env var, no network, no mount |
+
+The Grafana block cannot collide with slice 1's anchors or its read-back:
+- It says `networks: [logs]`, so it cannot match anchor 1 (`    networks: [preview-ingress]\n`,
+  plan:100).
+- Its `    volumes:` line is indented four spaces, so it cannot match `volumes:\n  letsencrypt:\n`.
+- It has no `  loki:` line, so `ReadControlState`'s regex still means "Loki is on".
+
+With logging off, `GrafanaService` returns `""` and `LokiWiring` returns the template unchanged, so
+all 8 render cells stay byte-identical.
+
+`initctl.GrafanaVersion = "13.2.1"` lives in `initctl`. `swarm.LokiVersion` is in `swarm` only
+because the plugin line needs it, and nothing in swarm uses Grafana.
+
+**Images are pulled by name before `up`.** `init.go:247-250` records that compose does not stop
+early on a missing image: the pull fails and the whole control stack goes down, Traefik included.
+An upgrade from slice 1 on a host that cannot reach Docker Hub takes exactly that path. So with
+`logging == Loki`, two `reqs` entries are appended at `init.go:251-259`, shaped like the
+advanced-UI image entry:
+
+```go
+lokiImage, grafanaImage := "grafana/loki:"+swarm.LokiVersion, "grafana/grafana:"+GrafanaVersion
+reqs = append(reqs,
+	req{name: "loki image", assert: "docker image inspect " + swarm.Shq(lokiImage) + " >/dev/null 2>&1 || docker pull -q " + swarm.Shq(lokiImage) + " >/dev/null",
+		hint: lokiImage + " could not be pulled — --logging loki needs Docker Hub from this host"},
+	req{name: "grafana image", assert: "docker image inspect " + swarm.Shq(grafanaImage) + " >/dev/null 2>&1 || docker pull -q " + swarm.Shq(grafanaImage) + " >/dev/null",
+		hint: grafanaImage + " could not be pulled — --logging loki needs Docker Hub from this host"},
+)
+```
+
+The Loki entry closes the same gap in slice 1. The Loki transcripts change in this slice anyway.
+
+**Init summary.** After slice 1's `  logging   loki at https://loki.<domain> …` line (plan:1056), a
+`--logging loki` init prints exactly:
+
+```
+  grafana   https://grafana.<domain>
+```
+
+#### The service (`GrafanaService`), rendered only when logging is loki
+
+```yaml
+
+  # Grafana, with --logging loki: the reader for Loki. Signed in with pstack accounts (forwardAuth).
+  grafana:
+    image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)
+    restart: unless-stopped
+    mem_limit: 768m                  # 13.x idles ~330Mi and OOMed under 400Mi (grafana#123017)
+    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches
+    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.
+    networks: [logs]
+    volumes:
+      - grafana:/var/lib/grafana      # users, preferences, and the Drilldown plugin download
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      GF_SERVER_DOMAIN: grafana.${DOMAIN}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}/
+      # Sign-in: Traefik's forwardAuth asks pstack, and pstack's answer is these two headers.
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_HEADERS: Role:X-WEBAUTH-ROLE
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      # false: no grafana_session of Grafana's own, so pstack decides EVERY request and a pstack
+      # sign-out applies on the next one.
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "false"
+      # Never GF_AUTH_DISABLE_LOGIN: it unregisters the proxy client and silently turns sign-in off.
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
+      # No built-in `admin` row, so a pstack user named admin is a user, not the server admin.
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+      # Previews on *.${DOMAIN} are same-site with Grafana: SameSite does not stop their POSTs.
+      GF_SECURITY_CSRF_ALWAYS_CHECK: "true"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      # Off: a WebSocket passes forwardAuth once, at the upgrade, and would outlive a pstack sign-out.
+      GF_LIVE_MAX_CONNECTIONS: "0"
+      # Off: an Editor could publish log panels to snapshots.raintank.io, outside verify.
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
+      # Default preinstalls with no datasource here. Logs Drilldown (grafana-lokiexplore-app) stays.
+      GF_PLUGINS_DISABLE_PLUGINS: grafana-pyroscope-app,grafana-exploretraces-app,grafana-metricsdrilldown-app,grafana-advisor-app
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:3000/api/health"]
+      start_period: 60s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=pstack-control_logs
+      - traefik.http.routers.pstack-grafana.rule=Host(`grafana.${DOMAIN}`)
+      # A deployment routed to grafana.<domain> before this release has a rule of the same length
+      # (autolabel's Host(`…`)), and equal priority is a coin toss for who gets the Grafana cookie.
+      - traefik.http.routers.pstack-grafana.priority=10000
+      - traefik.http.routers.pstack-grafana.entrypoints=websecure
+      # TLS follows the challenge, exactly like pstack-loki: tls=true alone under DNS-01 (the wildcard
+      # covers grafana.), plus its own certresolver under HTTP-01.
+      - traefik.http.routers.pstack-grafana.tls=true
+      - traefik.http.routers.pstack-grafana.tls.certresolver=le
+      - traefik.http.routers.pstack-grafana.middlewares=pstack-grafana-auth
+      # pstack, by service name, over preview-ingress, the network Traefik already reaches pstack on
+      # (the advanced UI's nginx dials the same name). pstack does not join `logs`.
+      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.address=http://pstack:7878/api/auth/grafana/verify
+      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.trustForwardHeader=false
+      # EVERY header Grafana reads: header_name plus each GF_AUTH_PROXY_HEADERS value. Traefik deletes
+      # a listed header from the client's request unconditionally and passes an unlisted one through.
+      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.authResponseHeaders=X-WEBAUTH-USER,X-WEBAUTH-ROLE
+      - traefik.http.services.pstack-grafana.loadbalancer.server.port=3000
+```
+
+- **`tls.certresolver=le`** is appended in code **only under HTTP-01**, as `LokiService` does
+  (plan:893-940).
+- **Env values are quoted strings**, because compose refuses a YAML boolean as an environment value.
+- **Priority.** Traefik's default priority is the rule's length (`traefik rules-and-priority.md`
+  :238-247). autolabel renders `Host(\`<host>\`)` (`autolabel.go:305`), the same length as
+  `pstack-grafana`'s rule.
+  - `10000` beats any rule length, and the ceiling is MaxInt64−1000.
+  - `pstack-loki` needs no priority: its rule adds `&& PathPrefix(…)` (plan:924), so it is always
+    longer.
+- **Only three forwardAuth fields** (`address`, `trustForwardHeader`, `authResponseHeaders`). Each
+  exists in v3.6.1 and 3.7.13.
+  - `trustForwardHeader` is a plain `bool` in v3.6.1 (`forward.go:54`) and a tri-state in 3.7.13
+    (`forward.go:56`). `=false` is valid on both.
+  - `maxResponseBodySize` does not exist in v3.6.1.
+  - **No `authRequestHeaders`.** It is hygiene, not a control: pstack is trusted with the whole
+    request. In v3.6.1 the filter (`forward.go:361`) runs before the `X-Forwarded-*` headers are set
+    (`:372-414`), so adding it later cannot strip them.
+- **The Traefik behaviour this relies on, v3.6.1:**
+  - **The auth client never follows a redirect** (`forward.go:96-98`, `http.ErrUseLastResponse`).
+  - **On a non-2xx, Traefik copies every auth-response header to the client**, `Set-Cookie`
+    included (`forward.go:237-262`: `CopyHeaders` at `:240`, `Location` at `:254`). A relative
+    `Location` is resolved against the auth address (`:302-303`).
+  - **On a 2xx, Traefik runs `req.Header.Del` for each listed header before it copies any**
+    (`forward.go:266-272`).
+  - **With `trustForwardHeader=false`, `X-Forwarded-Method`, `-Host` and `-Uri` come from the real
+    request** (`forward.go:372-380`, `:396-404`, `:406-414`). A client's copies are also deleted at
+    the entrypoint, because `X-Forwarded-Method` and `X-Forwarded-Uri` are in `xHeaders`
+    (`forwarded_header.go:31-43`, deleted for untrusted clients at `:190-194`). 3.7.13 behaves the
+    same (`forwarded_header.go:43-44`, `forward.go:455-456`). A real-host check forges it.
+- **No `Name` or `Email` header.** pstack users have no display name. `users.email` is nullable
+  with a non-unique index (`migrations.go:134-135`), and Grafana matches a proxy user by email
+  before login.
+
+#### The datasource file
+
+`templates/control/grafana/datasources.yaml`, embedded as `pstack.GrafanaDatasources` and added to
+`assets.go` by explicit path. `init` writes it to `<DATA>/control/grafana/datasources/loki.yaml`:
+- **Mode 0644.** Grafana runs as uid 472, and `write` chmods to exactly that mode
+  (`init.go:760-770`).
+- **Directory:** `ensureDir(…, noMode)`, beside `loki`.
+- **Mounted as a directory, read-only**, for slice 1's reason: a file replaced by rename is not seen
+  through a file mount.
+- **No credential.**
+
+```yaml
+# Written by `pstack init --logging loki`. Grafana re-applies it on every start.
+apiVersion: 1
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy            # Grafana's server calls Loki over the logs network; Traefik is not involved
+    url: http://loki:3100
+    isDefault: true
+    editable: false
+    jsonData:
+      maxLines: 1000
+      timeout: 60
+```
+
+- **`logs` stays a plain bridge** (`logs: {}`), not `internal`, because Grafana downloads Logs
+  Drilldown from grafana.com.
+- **`pstack logging off`** recreates the stack with `--remove-orphans` (`init.go:391`). That removes
+  the container and keeps the `pstack-control_grafana` volume, so turning logging back on restores
+  users and preferences.
+
+### How pstack knows Grafana is on
+
+Slice 1's discovery path, pointed at a different service:
+
+```go
+// package inspect (control.go), beside LokiPushURL.
+// GrafanaOn reports whether the control project has a `grafana` container. `-a`, as LokiPushURL: a
+// Grafana that is restarting is still this host's, and `pstack logging off` removes the container.
+func GrafanaOn(r exec.Runner) bool {
+	ids, _ := idsByLabel(r, "com.docker.compose.project="+ControlProject)
+	for _, raw := range inspectIDs(r, ids) {
+		if raw.Config != nil && raw.Config.Labels["com.docker.compose.service"] == "grafana" {
+			return true
+		}
+	}
+	return false
+}
+```
+
+- **Cached, never asked per request.**
+  - `Server` gains `grafana atomic.Bool`. Its comment names the writers, Start and reindexLoop, and
+    says reads need no mutex.
+  - `Start` sets it once, **synchronously**, before `go s.reindexLoop()` (`server.go:802`). The
+    listener does not serve until then, so the first `/api/health` is already right.
+  - `reindexLoop` refreshes it on every tick, after `s.reindex()` (`server.go:815-826`). It is not
+    added to `reindex()` itself, which request paths call (`server.go:678`, `routes_deploy.go:416`).
+  - `server.go:29` already imports `inspect`. The cost is two docker calls every 30 s.
+- **A switch shows up within 30 s**, with no pstack restart: the health key on the next tick, the nav
+  link on the next page load.
+- **`G` = `"https://grafana." + s.opts.Domain`**, built from `PSTACK_DOMAIN` (`docker-compose.yml:170`),
+  never from a request header.
+- **`C` = `baseURL(s.opts.Domain, r)`**, which is `https://control.<domain>` (`http.go:175-178`).
+
+```go
+// grafanaOn: this host runs Grafana and has what sign-in needs. Off, both routes 404 and
+// /api/health has no `grafana` key.
+func (s *Server) grafanaOn() bool {
+	return s.opts.Domain != "" && s.opts.Token != "" && s.grafana.Load()
+}
+
+func (s *Server) grafanaURL() string { return "https://grafana." + s.opts.Domain }
+```
+
+### Sign-in
+
+**Where the pstack session is.** `sessionCookie` sets no `Domain` (`http.go:164-170`), so
+`pstack_session` is host-only on the host that served the login. For a browser that host is
+`control.<domain>`, because the UI calls `/api/…` relatively (`docker-compose.yml:183-187`). It is
+never widened: previews on `*.<domain>` would receive it.
+
+**Two new routes, both pre-gate** (`preGate`, `routes_auth.go:71-134`). They sit beside SSO's
+routes, for SSO's reason: they run before anyone has a principal.
+
+| Route | Called by | Does |
+|---|---|---|
+| `GET /api/auth/grafana/verify` | Traefik's forwardAuth, for every request to `grafana.<domain>` | answers 204 with the two headers, or 302, 401, 403 or 404 |
+| `GET /api/auth/grafana/start` | a browser on `control.<domain>` | turns a pstack session into a one-time code, or sends the browser to the login page |
+
+Both answer `404 Not found.` (plain text) unless `grafanaOn()`, so a host without Grafana has no
+sign-in surface. There is no third route: the callback is a branch of verify.
+
+Every plain-text answer is `http.Error`'s: `content-type: text/plain; charset=utf-8`,
+`x-content-type-options: nosniff`, and the body with `\n` appended (`Not found.\n`). Verify's
+no-cookie 401 is the exception: `w.WriteHeader(401)`, empty body.
+
+**Route order** in `handle()` (`server.go:864-930`):
+1. The service-host refusal (new, below).
+2. The wake check (`:870-874`). Verify requests carry `X-Forwarded-Host: grafana.<domain>`, which
+   `requestHost` reads (`http.go:198-205`). `IsControlHostname` gains `grafana.`, so `wakeFor`
+   steps aside (`server.go:643-649`).
+3. `/api/health`, probe, openapi.
+4. `preGate` (`:909`): **verify is answered here**.
+
+Verify never reaches `principal()` (`:914`). It reads only its own cookie, never `pstack_session`
+and never a bearer. So neither `PSTACK_TOKEN` nor a pstack session sent to `grafana.<domain>` gives
+Grafana access.
+
+#### The flow
+
+```
+browser → G/d/x                      no __Host-pstack_grafana
+  Traefik → verify   X-Forwarded-Uri=/d/x   Sec-Fetch-Mode=navigate   Sec-Fetch-Dest=document
+  ← 302 C/api/auth/grafana/start?state=S&next=%2Fd%2Fx
+    Set-Cookie: __Host-pstack_grafana_state=S; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=900
+browser → C/api/auth/grafana/start?state=S&next=/d/x     (carries pstack_session, if any)
+  signed in  ← 302 G/-/pstack/callback?code=K        K parked 60s: {session hash, S, next}
+  signed out ← 302 /login?next=%2Fapi%2Fauth%2Fgrafana%2Fstart%3Fstate%3DS%26next%3D%252Fd%252Fx
+               … password or SSO … → full navigation back to start → signed in, as above
+browser → G/-/pstack/callback?code=K               carries __Host-pstack_grafana_state=S
+  Traefik → verify   X-Forwarded-Uri=/-/pstack/callback?code=K
+  ← 302 G/d/x
+    Set-Cookie: __Host-pstack_grafana=<hash>.<mac>; Path=/; Secure; HttpOnly; SameSite=Lax
+    Set-Cookie: __Host-pstack_grafana_state=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0
+browser → G/d/x
+  Traefik → verify   ← 204  X-WEBAUTH-USER: alice   X-WEBAUTH-ROLE: Editor
+  Traefik → grafana:3000 with those two headers (the client's copies deleted)
+```
+
+**Each step, and why it looks that way:**
+
+1. **No cookie, top-level navigation.**
+   - **A navigation means `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`.** An
+     `<iframe>` sends `navigate` with `Dest: iframe`. A same-site preview could frame a silent
+     sign-in, and its state cookie would overwrite one from a real tab. So a frame gets a 401.
+   - **The answer is an absolute 302 to start**, not to `/login`. The UI's router sends a signed-in
+     user from `/login` to `/` and drops `next` (`router.ts:79-80`). Start checks the session on the
+     server first, so a signed-in user never sees a login page.
+   - **`Location` is absolute** because Traefik resolves a relative one against
+     `http://pstack:7878`.
+   - **The return is path-only:** `sso.SafeNext(u.RequestURI())` (`sso.go:785-790`).
+   - **`S = sso.RandomB64URL(32)`** (`sso.go:758-764`).
+   - **The state cookie's Max-Age is 900 s.** That outlasts a slowly typed password or an SSO
+     consent screen (`SSOStateTTLS` defaults to 300 s per leg).
+2. **No cookie, anything else: 401, empty body.**
+   - A 302 would send Grafana's `fetch` to `control.<domain>` and a CORS failure.
+   - On a 401, Grafana's frontend pings, then navigates the top-level window to `/logout`
+     (`public/app/core/services/backend_srv.ts`). That navigation is step 1.
+3. **Start.** Every failure answers plain text, because a browser navigated here
+   (`routes_auth.go:52-53`).
+   - `state` must match `^[A-Za-z0-9_-]{43}$`, or the answer is `400 Sign-in link is invalid.`
+   - `next` goes through `SafeNext`.
+   - The session is the first entry of `sessionCandidates(r)` (`http.go:147-159`) that
+     `SessionUser` resolves.
+   - With a session: `K = sso.RandomB64URL(32)`, then `Transient().Set("grafana:"+K, {"session":
+     auth.HashToken(c), "state": S, "next": next}, 60)`. This is SSO's store and key-prefix style
+     (`routes_auth.go:235-236`, `transient.go:40-47`). If the store fails, the error is logged and
+     the answer is `500 Sign-in failed.`
+   - With no session: a relative 302 to `/login?next=<start URL, EncodeURIComponent'd>`, the way
+     `ssoFailed` redirects (`routes_auth.go:54-58`).
+4. **Login returns to start.**
+   - **SSO needs no change.** The provider button carries `next` (`LoginView.vue:58`), and the SSO
+     callback server-redirects to `SafeNext(next)` (`routes_auth.go:444`).
+   - **A password login needs one edit per UI.**
+     - The advanced UI's `router.replace(next)` (`LoginView.vue:75`) is a client-side route, so
+       `/api/…` would render NotFound.
+     - The basic UI's `signIn()` ignores `next` (`ui/index.html:1679-1688`).
+     - **Rule for both:** a `next` that starts with `/api/` gets a full `location.assign`.
+5. **Callback, inside verify.** Verify answers any `X-Forwarded-Uri` whose path is
+   `/-/pstack/callback` itself. Traefik relays the 302 and both `Set-Cookie`s, the request never
+   reaches Grafana, and no second router is needed.
+   - **`Take` runs first** (`transient.go:60-63`, one statement). Any presentation burns the code,
+     including one that then fails the state check.
+   - **The parked state must equal `__Host-pstack_grafana_state`**, compared with
+     `subtle.ConstantTimeCompare`.
+   - **Any failure (unknown, expired, replayed, wrong browser) restarts sign-in** at step 1 with
+     `next=/`. A login-CSRF victim ends up signed in as themselves.
+   - **A reloaded callback URL** from a browser that is already signed in gets a 302 to `G/`.
+6. **Every request.** Verify checks, in order:
+   - **The MAC** (`hmac.Equal`).
+   - **The account:** `auth.SessionHashUser(hash)`, one statement.
+   - **The role map.** An unrankable role gets `403 No Grafana access.`
+   - **The Origin rule.** When `X-Forwarded-Method` is not GET or HEAD, `Origin` must equal `G`, or
+     the answer is `403 Cross-origin request refused.` A request with no `X-Forwarded-Method`
+     (a direct call, not Traefik) fails this rule too, so the check fails closed.
+   - **Then 204** with the two headers.
+
+#### The Grafana cookie: derived, no table
+
+`__Host-pstack_grafana = <h>.<m>`:
+- `h` is the parent session's stored `id_hash` (`auth.HashToken(cookie)`, `auth.go:958`).
+- `m` is `base64url(HMAC-SHA256(PSTACK_TOKEN, "pstack-grafana\n" + h))`.
+
+This follows the share-link precedent: signed with `PSTACK_TOKEN`, nothing stored (`control-plane.md`
+§5e "Share links", `principal.go:39-42`). **The parent session's row is the Grafana session.** The
+prefix keeps it apart from share JWTs, whose signing input starts with `eyJ`, so neither signature
+can stand in for the other.
+
+| Event | Grafana access | Why |
+|---|---|---|
+| pstack sign-out (`routes_auth.go:89-96` → `Logout`, `auth.go:485-488`) | ends on the next request | the join finds no row |
+| password change (`SetPassword` deletes sessions, `auth.go:418-435`) | ends | same |
+| account deleted (`DeleteUser`, cascade; `foreign_keys(ON)`, `store.go:76-79`) | ends | same |
+| session expires (30 days, `auth.go:76-77`) | ends | `s.expires_at > now` in the query |
+| role changed (`SetRole`, `auth.go:379-402`) | new role on the next request | the role is read fresh. Grafana re-syncs because the header value is part of its proxy cache key (`proxy.go#L305-L319`) |
+| `PSTACK_TOKEN` rotated by re-running `init` | every Grafana cookie fails the MAC | transparent re-sign-in while the pstack session lives |
+| SSO-created user | nothing special | `SsoSignIn` mints the same session row (`auth.go:3-16`, `control-plane.md` §5f) |
+
+- **"The next request" is literal.** Grafana Live is off (`GF_LIVE_MAX_CONNECTIONS=0`; `0` disables
+  it, `conf/defaults.ini:2237-2241`), so no WebSocket outlives the check. A request already in
+  flight still finishes, bounded by the datasource's 60 s timeout.
+- **`h` reaching Grafana is not a pstack credential.** The Grafana container sees `h` in the
+  forwarded `Cookie` header. Nothing accepts a hash: `principal` and `Logout` hash whatever they are
+  given (`principal.go:45-49`, `auth.go:485-488`).
+- **The Grafana cookie authorizes verify and nothing else.**
+- **Cookie mechanics.**
+  - **No Max-Age.** The lifetime is the parent session's, checked on every request.
+  - **`__Host-`.** A browser keeps such a cookie only host-only, `Secure` and `Path=/`, so a preview
+    on `*.<domain>` cannot plant either name.
+  - **Always `Secure`**, unlike `sessionCookie`'s `x-forwarded-proto` check (`http.go:164-170`).
+    A browser drops a `__Host-` cookie without it, and Grafana is only reached over TLS.
+  - **Read with `r.Cookie(name)`.** `__Host-` makes a same-name duplicate impossible, which is the
+    problem `sessionCandidates` loops over.
+
+**Performance.** Each Grafana request, static assets included, costs one HMAC-SHA256 and one
+statement:
+- The statement is a primary-key lookup on `sessions` (`id_hash TEXT PRIMARY KEY`,
+  `migrations.go:22-28`) joined to `users` by primary key.
+- It runs no argon2 (only `Login` does, `auth.go:461`) and no write, unlike `TokenUser`'s
+  `last_used_at` (`auth.go:527`).
+- Start does one `Set` and the callback one `Take`.
+- **The ceiling is the single pooled SQLite connection** (`store.go:84`, Go rule 16). Verify waits
+  for it behind any open `Store.Tx`, such as `SsoSignIn` (`auth.go:773`) or a host-variable import
+  (`hostvars.go:132`). A CLI write in another process adds up to `busy_timeout` (5 s, `store.go:79`).
+- A slow answer delays the page and never opens it. The code carries
+  `// ponytail: one SQLite statement per Grafana request on the single pooled connection; if page
+  loads stall behind transactions, cache hash→user for a few seconds (revocation then lags by that TTL).`
+
+#### Roles
+
+| pstack | Grafana (default org) |
+|---|---|
+| viewer | **403** — the owner's decision (2026-09-15): a Grafana Viewer still queries Loki's unredacted lines |
+| developer | Editor |
+| maintainer | Editor |
+| admin | Admin |
+| anything else | **403**, never an omitted header: Grafana silently keeps a user's old role when the header is missing or invalid |
+
+- **Only a browser session has a Grafana identity.** Root (`PSTACK_TOKEN`) and personal tokens do
+  not, because verify never calls `principal()`.
+- **There is no Grafana server admin.** The proxy never sets `IsGrafanaAdmin`
+  (`user_sync.go#L550-L553`), and no initial admin is created. Plugin installs and server settings
+  are unavailable in Grafana's UI, deliberately, and usage.md says so.
+- **Grafana login = pstack username** (`^[a-z0-9][a-z0-9._-]{1,31}$`, `auth.go:79`).
+  - It never contains `@`, so `header_property=username` never also sets an email.
+  - `admin` collides with nothing, because no built-in `admin` row exists.
+- **A deleted-then-recreated username** inherits the old Grafana user row: preferences, stars, and
+  the dashboards it owns. Documented.
+- **pstack viewers are refused.** A Grafana Viewer is not a read-only log view: in OSS every Viewer
+  holds `datasources:query` on all datasources (`pkg/api/accesscontrol.go:94-113`), so any panel and
+  `/api/ds/query` run LogQL over Loki's unredacted lines. pstack shows viewers redacted logs only
+  (`permissions.go:193`, invariant 15), so a viewer gets **403** at verify and never a Grafana
+  identity. The pstack UI shows the Grafana link to developer and above only.
+
+#### Sign-out
+
+There is no Grafana-only sign-out. `GF_AUTH_DISABLE_SIGNOUT_MENU=true`, and **pstack's sign-out is
+the sign-out**: it ends Grafana access on the next request.
+
+Verify does not intercept `/logout`. That path arrives only from Grafana's 401 handling, and the
+chain resolves itself:
+1. It is a top-level navigation, so sign-in starts.
+2. With a live pstack session, the browser comes straight back.
+3. Grafana's own `/logout` redirects to `/login`.
+4. The proxy authenticates, and Grafana redirects to `/`, or to the page its `redirect_to` cookie
+   remembers.
+
+Grafana has no session of its own to clean up (`ENABLE_LOGIN_TOKEN=false`).
+
+#### The code
+
+`packages/pstack/internal/api/routes_grafana.go` (new):
+
+```go
+// __Host- names: a browser keeps one only host-only, Secure and Path=/, so a preview on *.<domain>
+// cannot plant either (cookie tossing).
+const (
+	grafanaSessionCookie = "__Host-pstack_grafana"
+	grafanaStateCookie   = "__Host-pstack_grafana_state"
+	// Answered INSIDE verify: forwardAuth relays a 302 and its Set-Cookie verbatim, so the callback
+	// needs no router of its own and never reaches Grafana.
+	grafanaCallbackPath = "/-/pstack/callback"
+)
+
+// A lookup table, never ranged into output (rule 5). A role missing here is refused, not defaulted.
+// No auth.Viewer: viewers are refused (owner, 2026-09-15) — a Grafana Viewer can still query Loki's
+// unredacted lines through panels and /api/ds/query.
+var grafanaRoles = map[auth.Role]string{auth.Developer: "Editor", auth.Maintainer: "Editor", auth.Admin: "Admin"}
+
+var grafanaStateRe = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+// grafanaOn: this host runs Grafana (s.grafana, from docker) and has what sign-in needs.
+func (s *Server) grafanaOn() bool {
+	return s.opts.Domain != "" && s.opts.Token != "" && s.grafana.Load()
+}
+
+// grafanaURL is G. From config, never from a request header.
+func (s *Server) grafanaURL() string { return "https://grafana." + s.opts.Domain }
+
+// hostCookie is a __Host- Set-Cookie. Secure ALWAYS, unlike sessionCookie: a browser drops a __Host-
+// cookie without it, and Grafana is only reached through Traefik's TLS. maxAge < 0: none.
+func hostCookie(name, value string, maxAge int) [2]string {
+	v := name + "=" + value + "; Path=/; Secure; HttpOnly; SameSite=Lax"
+	if maxAge >= 0 {
+		v += "; Max-Age=" + strconv.Itoa(maxAge)
+	}
+	return [2]string{"set-cookie", v}
+}
+
+func (s *Server) grafanaMAC(hash string) string {
+	m := hmac.New(sha256.New, []byte(s.opts.Token))
+	m.Write([]byte("pstack-grafana\n" + hash))
+	return js.B64URL(m.Sum(nil))
+}
+
+// grafanaUser is the account behind this browser's Grafana cookie, or nil. The parent session's row
+// IS the Grafana session: delete it and this answers nil on the very next request.
+// ponytail: one SQLite statement per Grafana request on the single pooled connection; if page loads
+// stall behind transactions, cache hash→user for a few seconds (revocation then lags by that TTL).
+func (s *Server) grafanaUser(r *http.Request) *auth.UserRow {
+	c, err := r.Cookie(grafanaSessionCookie)
+	if err != nil {
+		return nil
+	}
+	hash, mac, ok := strings.Cut(c.Value, ".")
+	if !ok || !hmac.Equal([]byte(mac), []byte(s.grafanaMAC(hash))) {
+		return nil
+	}
+	u, _ := s.auth.SessionHashUser(hash)
+	return u
+}
+
+// grafanaVerify is Traefik's forwardAuth for grafana.<domain>. Every Location is absolute and built
+// from config: Traefik resolves a relative one against http://pstack:7878.
+func (s *Server) grafanaVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.grafanaOn() {
+		http.Error(w, "Not found.", 404)
+		return
+	}
+	u, err := url.ParseRequestURI(r.Header.Get("x-forwarded-uri"))
+	if err != nil {
+		u = &url.URL{Path: "/"}
+	}
+	user := s.grafanaUser(r)
+	if u.Path == grafanaCallbackPath {
+		code, _ := query(u.RawQuery, "code")
+		if s.grafanaCallback(w, r, code) {
+			return
+		}
+		if user != nil { // a reloaded callback: nothing to finish
+			redirect(w, s.grafanaURL()+"/")
+			return
+		}
+		u = &url.URL{Path: "/"} // expired, replayed or not this browser's: sign in afresh
+	}
+	if user == nil {
+		// A top-level navigation only. fetch gets 401 (a 302 would be a CORS error in Grafana's
+		// frontend), and so does an <iframe>: a same-site preview must not frame a silent sign-in.
+		if r.Header.Get("sec-fetch-mode") != "navigate" || r.Header.Get("sec-fetch-dest") != "document" {
+			w.WriteHeader(401)
+			return
+		}
+		state := sso.RandomB64URL(32)
+		redirect(w, baseURL(s.opts.Domain, r)+"/api/auth/grafana/start?state="+state+
+			"&next="+js.EncodeURIComponent(sso.SafeNext(u.RequestURI())),
+			hostCookie(grafanaStateCookie, state, 900))
+		return
+	}
+	role, ok := grafanaRoles[auth.Role(user.Role)]
+	if !ok {
+		http.Error(w, "No Grafana access.", 403)
+		return
+	}
+	// Every preview on *.<domain> is SAME-SITE with Grafana: SameSite=Lax does not stop its page
+	// posting here with the cookie attached. Traefik sets X-Forwarded-Method from the real request.
+	if m := r.Header.Get("x-forwarded-method"); m != http.MethodGet && m != http.MethodHead && r.Header.Get("origin") != s.grafanaURL() {
+		http.Error(w, "Cross-origin request refused.", 403)
+		return
+	}
+	w.Header().Set("X-WEBAUTH-USER", user.Username)
+	w.Header().Set("X-WEBAUTH-ROLE", role)
+	w.WriteHeader(204)
+}
+
+// grafanaCallback finishes a sign-in. Take FIRST: any presentation burns the code, including one
+// that fails the state check, so a code read from Traefik's access log is already spent.
+func (s *Server) grafanaCallback(w http.ResponseWriter, r *http.Request, code string) bool {
+	if code == "" {
+		return false
+	}
+	raw, found, err := s.auth.Transient().Take("grafana:" + code)
+	if err != nil || !found {
+		return false
+	}
+	parsed, _ := omap.Parse([]byte(raw))
+	parked, _ := parsed.(*omap.Map)
+	state, _ := getStr(parked, "state")
+	session, _ := getStr(parked, "session")
+	next, _ := getStr(parked, "next")
+	c, err := r.Cookie(grafanaStateCookie)
+	if err != nil || state == "" || session == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
+		return false
+	}
+	redirect(w, s.grafanaURL()+sso.SafeNext(next),
+		hostCookie(grafanaSessionCookie, session+"."+s.grafanaMAC(session), -1),
+		hostCookie(grafanaStateCookie, "", 0))
+	return true
+}
+
+// grafanaStart runs on control.<domain>, where pstack_session lives: it turns that session into a
+// 60-second, single-use code bound to the state cookie Grafana's host set. A browser navigated here,
+// so every failure is plain text (the ssoFailed rule, routes_auth.go:52-53).
+func (s *Server) grafanaStart(w http.ResponseWriter, r *http.Request) {
+	if !s.grafanaOn() {
+		http.Error(w, "Not found.", 404)
+		return
+	}
+	state, _ := query(r.URL.RawQuery, "state")
+	if !grafanaStateRe.MatchString(state) {
+		http.Error(w, "Sign-in link is invalid.", 400)
+		return
+	}
+	next, _ := query(r.URL.RawQuery, "next")
+	next = sso.SafeNext(next)
+	for _, c := range sessionCandidates(r) {
+		if u, _ := s.auth.SessionUser(c); u != nil {
+			code := sso.RandomB64URL(32)
+			parked := jsonx.Must(jsonx.O("session", auth.HashToken(c), "state", state, "next", next))
+			if err := s.auth.Transient().Set("grafana:"+code, string(parked), 60); err != nil {
+				s.opts.Log("[grafana] sign-in code not stored: " + err.Error())
+				http.Error(w, "Sign-in failed.", 500)
+				return
+			}
+			redirect(w, s.grafanaURL()+grafanaCallbackPath+"?code="+code)
+			return
+		}
+	}
+	redirect(w, "/login?next="+js.EncodeURIComponent("/api/auth/grafana/start?state="+state+"&next="+js.EncodeURIComponent(next)))
+}
+```
+
+**Edits outside the new file:**
+- **`preGate`** (`routes_auth.go:125-132`) gains two `case`s: `path == "/api/auth/grafana/verify" &&
+  GET` and `path == "/api/auth/grafana/start" && GET`.
+- **`auth.SessionUser`** (`auth.go:477-482`) becomes
+  `func (a *Auth) SessionUser(session string) (*UserRow, error) { return a.SessionHashUser(sha256Hex(session)) }`.
+  Its query moves unchanged into `SessionHashUser(idHash string)`, whose comment says only the
+  Grafana cookie reaches it.
+- **`Server`** gains `grafana atomic.Bool`. `Start` stores `inspect.GrafanaOn(s.host)` before
+  `go s.reindexLoop()` (`server.go:802`), and `reindexLoop`'s tick does the same after `s.reindex()`
+  (`server.go:823`).
+- **`/api/health`** (`routes_auth.go:36-43`) appends `jsonx.KV{K: "grafana", V: s.grafanaURL()}`
+  (`jsonx.go:94-100`) **only when `grafanaOn()`**.
+  - Off, the key is absent (Go rule 2: genuinely absent). `golden/host/expected/health.json` and
+    every older host's answer stay byte-identical.
+  - The route is unauthenticated, and the key reveals nothing DNS does not.
+  - `packages/client/src/types.ts` `Health` (`:56-66`) gains `grafana?: string`.
+- **`server.go`'s header comment** (`:5-9`, the route list and the pre-gate list) names both routes.
+
+### Hostnames and the wake handler
+
+- **`IsControlHostname`** (`domains.go:249-259`, as slice 1 leaves it, plan:6304-6316) gains
+  `|| h == "grafana."+d`, **always**, for the primary and every added domain. That one clause
+  covers:
+  - the wake exclusion (`server.go:643-649`);
+  - the deploy-time refusal of a `pstack.routing.host` naming `grafana.` (slice 1's
+    `autolabel.ControlHostname` seam, plan:6216-6218);
+  - the host refusal below.
+
+  The header comment names `grafana.` beside `loki.`.
+- **A service hostname never gets pstack's UI or API.**
+  - When the Grafana container is stopped, starting or unhealthy, Traefik's docker provider drops
+    its router. `grafana.<domain>` then matches `pstack-wake` (`init.go:643-655`).
+  - Today `handle()` would then serve the embedded UI and the whole API there (`server.go:877-889`).
+  - A password typed on that page sets `pstack_session` on `grafana.<domain>`, and every later
+    Grafana request would forward it to Grafana.
+  - On an added domain, `grafana.<d>` always lands here, because `domains.go:234-239` routes `*.<d>`
+    to pstack and Grafana is served on the primary only.
+
+  So this is the **first** check in `handle()`:
+
+  ```go
+  // A service hostname that reached THIS process came through the wake catch-all: its own router is
+  // gone (container stopped, starting or unhealthy) or, on an added domain, never existed. r.Host,
+  // not requestHost: forwardAuth's calls carry X-Forwarded-Host grafana.<domain> but Host pstack:7878.
+  if h := strings.ToLower(portRe.ReplaceAllString(r.Host, "")); (strings.HasPrefix(h, "grafana.") || strings.HasPrefix(h, "loki.")) && s.routing.IsControlHostname(h, s.opts.Domain) {
+  	switch d := strings.ToLower(s.opts.Domain); h {
+  	case "grafana." + d:
+  		http.Error(w, "Grafana is not running.", 503)
+  	case "loki." + d:
+  		http.Error(w, "Loki is not running.", 503)
+  	default: // an added domain's: never served
+  		http.Error(w, "Not found.", 404)
+  	}
+  	return
+  }
+  ```
+
+  - **The prefix test comes first**, because `IsControlHostname` reads the domains file
+    (`domains.go:99-104`).
+  - **`loki.` is included** because it is the same fall-through. Slice 1 says a request there "is
+    refused as a control hostname", and this check is what makes that true. A push that meets the
+    503 is retried twice and dropped, instead of reading pstack's `200` HTML as delivered.
+
+### The UI entry point
+
+- **`apps/ui`, reading.** `useAuth.ts` gains `grafana: null as string | null` in `authState`
+  (`:25-30`), and `authState.grafana = health.body.grafana ?? null` beside `hasUsers` (`:71-76`).
+- **`apps/ui`, the link.** `App.vue` gets one nav link after Jobs (`:146-150`). `settings` and `can`
+  are already imported (`:18-19`). `ScrollText` is added to the `lucide-vue-next` import list
+  (`:23-40`).
+  - **It is hidden when the SPA authenticates with a stored bearer**: `settings.token`, sent as
+    `Authorization` (`client.ts:89`) and kept in localStorage (`useSettings.ts:46-49`). That session
+    has no `pstack_session` (`useAuth.ts:9-12`), so start would bounce to `/login`, and the router
+    would send an authed visitor to `/` (`router.ts:79-80`).
+  - **Developer and above only** (`can('developer')`, as Submit's link at `:152`): verify refuses
+    viewers.
+
+  ```vue
+  <a v-if="authState.grafana && !settings.token && can('developer')" :href="authState.grafana" class="navlink" target="_blank" rel="noopener">
+    <ScrollText :size="17" aria-hidden="true" />
+    <span>Grafana</span>
+  </a>
+  ```
+
+- **`apps/ui`, login return.** `LoginView.vue:75` becomes:
+
+  ```ts
+  if (next.value.startsWith('/api/')) window.location.assign(api.url(next.value));
+  else void router.replace(next.value);
+  ```
+
+- **Basic UI** (`ui/index.html:1676-1688`). No link, the same call slice 1 made for its swarm panel
+  (plan:94). Its sign-in does honour `next`:
+  - `signIn()`: after `r.ok`, `const next = new URLSearchParams(location.search).get('next') || '';
+    if (next.startsWith('/api/')) { location.assign(next); return; }`.
+  - `signInWithProvider()` passes that `next` when it starts with `/`.
+
+### Failure modes
+
+| What goes wrong | What happens | Designed response |
+|---|---|---|
+| pstack down or restarting | forwardAuth's call fails, so every Grafana request gets Traefik's 500 | Fail closed; nothing bypasses verify. The same outage takes `control.<domain>` down. |
+| `pstack logging loki` or `off` while jobs run | pstack's service block is unchanged, so compose does not recreate pstack | Jobs survive. The health key follows within 30 s (reindexLoop); the nav link on the next page load. A render test pins pstack's block. |
+| Grafana stopped, starting, unhealthy | Traefik drops its router, and `grafana.<domain>` reaches `pstack-wake` | `503 Grafana is not running.`, never pstack's UI or API |
+| `grafana.<d>` on an added domain | the added domain's wake router sends it to pstack | `404 Not found.` |
+| A deployment already routed to `grafana.<domain>` before upgrade | its `Host(…)` rule ties `pstack-grafana`'s on length | `priority=10000` gives pstack the tie. Its next deploy is refused (plan:6216-6218). CHANGELOG line. |
+| Loki down | sign-in works; queries show Grafana's datasource error | Nothing new (slice 1's row) |
+| No Docker Hub egress at `init` / `upgrade` | the image cannot be pulled | `init` fails at `requires grafana image`, by name, before anything is recreated |
+| No grafana.com egress on Grafana's first start | Logs Drilldown is not installed; one error line | Explore still works. Known cost; an offline preinstall is out of scope. |
+| pstack session ends (sign-out, password change, account deleted, 30 days) | the next Grafana request fails the join | 401 or 302 → pstack login → back to the page |
+| An Explore tab left open after revocation | there is no WebSocket to keep streaming (Live off) | the next query gets 401 |
+| Role changed | the next request carries the new header | Grafana re-syncs the default-org role |
+| Hand-edited, unrankable role | — | 403, fail closed (`auth.go:119-122`) |
+| `PSTACK_TOKEN` rotated | every Grafana cookie fails the MAC | transparent re-sign-in |
+| A long `Store.Tx` or a CLI write | verify waits for the one SQLite connection (`store.go:84`) | a slower page load; nothing fails open |
+| Clock skew | not applicable | every expiry is compared on pstack's clock (`transient.go:41-62`, `auth.go:471-481`); cookies use relative Max-Age; Grafana keeps no session |
+| Cookie tossing: a preview sets `Domain=<domain>` cookies | a browser refuses `__Host-` names with `Domain`; unprefixed look-alikes are never read | `__Host-` names only |
+| Login CSRF: a victim opens an attacker's callback URL | `Take` burns the code; state mismatch | the victim restarts into their own sign-in |
+| A preview frames `grafana.<domain>` | `Sec-Fetch-Dest: iframe` | 401, no state cookie, no code |
+| A code leaks (Traefik's access log records the URI, `docker-compose.yml:100`) | the victim's browser presents it first and burns it | single use, 60 s, bound to that browser's state cookie |
+| Open redirect | `next` is `SafeNext`'d at verify and at start; every `Location` is `C` or `G` from config plus a path | `X-Forwarded-Host` is never read for a URL |
+| A preview page POSTs to Grafana (same-site) | `Origin` ≠ `G` | 403 in verify; `CSRF_ALWAYS_CHECK` in Grafana behind it |
+| A client forges `X-Forwarded-Method: GET` on a POST | the entrypoint deletes it, and forwardAuth sets it from `req.Method` (v3.6.1 `forwarded_header.go:190-194`, `forward.go:372-380`) | the Origin rule sees POST; real-host check |
+| A client sends `X-WEBAUTH-USER: admin`, or an alias `X_WEBAUTH_USER` / `X.WEBAUTH.USER` | Traefik deletes the listed names; Grafana's `Header.Get` never reads an alias | render test on the label; real-host probe of both aliases |
+| A preview container dials `grafana:3000` | not on `logs`; no published port | `networks: [logs]` only |
+| A spec declares `pstack-control_logs` external, or aliases `pstack` on preview-ingress | could reach Grafana, or answer verify | Out of the threat model: a spec is CI-trusted (`AGENTS.md:41`, plan:86). Same exposure as nginx dialling `pstack` (`apps/ui/nginx.conf:49`). |
+| `verify` called directly at `api.<domain>` | answers about the caller's own cookies only | no escalation; without `X-Forwarded-Method` an unsafe-method check fails closed |
+| Two Grafana tabs start sign-in at once | the later state cookie overwrites the earlier | the first callback restarts; converges once one sets the session cookie |
+| SPA signed in with a stored bearer | no `pstack_session` | nav link hidden; a direct visit to `grafana.<domain>` ends on pstack's home |
+| Browser blocks cookies | redirect loop until the browser gives up | none: Grafana needs cookies |
+| `pstack logging off` | Grafana container removed, volume kept; the health key goes within 30 s; the link on the next page load | turning it back on restores Grafana's users and preferences |
+
+### Security — where each requirement lands
+
+| Requirement | Lands in |
+|---|---|
+| Grafana and Loki's query API only on `logs`; no published port | `GrafanaService`: `networks: [logs]`, no `ports:`; tested |
+| Every header Grafana reads is in `authResponseHeaders` | the label + `TestGrafanaService/Traefik_strips_every_header_Grafana_reads` |
+| **Header aliases cannot impersonate.** v3.6.1 has no alias handling at all (no `aliasHeadersStrategy`; 3.7.13 warns about aliases, `forward.go:315-318`) | Grafana reads each proxy header with Go's `Header.Get` (`authn/clients/proxy.go` `getProxyHeader`), which looks up the canonical key `X-Webauth-User`. Go canonicalizes `X_WEBAUTH_USER` to `X_webauth_user` and folds neither `_` nor `.`, so an alias is a different header Grafana never reads. Real-host step 3 probes both aliases. |
+| Login form off, basic auth off, no initial admin, never `disable_login` | the env block; a test asserts `GF_AUTH_DISABLE_LOGIN:` is absent |
+| `CSRF_ALWAYS_CHECK` plus an Origin check for unsafe methods, on a method pstack can trust | env; `grafanaVerify`; v3.6.1 cites above; real-host forged-method check |
+| `__Host-` cookies; code bound to the state cookie; top-level navigations only | `hostCookie`, `grafanaCallback`, the `Sec-Fetch-Dest` check |
+| Absolute `Location` from the configured domain | `baseURL(s.opts.Domain, r)`, `grafanaURL()` |
+| `grafana.` in `IsControlHostname` and the reserved-host refusal; pstack's router wins the host | `domains.go`, one clause; `priority=10000` |
+| **No stream outlives revocation** | `GF_LIVE_MAX_CONNECTIONS: "0"`; tested |
+| **No path off the host for log lines.** Grafana's default publishes external snapshots to `snapshots.raintank.io` (`conf/defaults.ini:582-588`) | `GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"`; tested. Local snapshots and public dashboards (`defaults.ini:2475-2477`) stay behind verify, because every request to `grafana.<domain>` passes it. |
+| **Grafana lines are not redacted.** pstack's logs route and stream redact `PSTACK_TOKEN` and host secret values (`routes_deploy.go:645-650`, `sse.go:220`). Loki stores the driver's raw output, and Grafana serves it as stored. | Every Grafana role can read it: Editor and Admin in Explore, Viewer through panels and `/api/ds/query` (Roles). Developer and above gain little: they can already open a shell in those containers (`permissions.go:197`). **A pstack viewer gains unredacted reach**: pstack shows viewers redacted logs only (`permissions.go:193`, invariant 15). `usage.md` says so in the Grafana section. **So viewers are refused (403)** — the owner's decision, 2026-09-15. |
+
+### Testing
+
+**Go unit tests.** Each carries its `// negative control:` line. A plain-text body compares exactly,
+with `http.Error`'s trailing `\n`.
+
+- **`internal/api` `TestGrafanaVerify`.** httptest against a server with `Token` and `Domain`,
+  `s.grafana.Store(true)`, and a bootstrapped user logged in.
+  - **Top-level navigation without a cookie:** 302, `Location` exactly
+    `https://control.preview.example.com/api/auth/grafana/start?state=<S>&next=%2Fd%2Fx`, and a
+    Set-Cookie carrying the same `<S>` with `Secure`, `HttpOnly`, `SameSite=Lax`, `Max-Age=900`.
+    Mutation: a relative Location.
+  - **XHR without a cookie** (`Sec-Fetch-Mode: cors`): 401, no `Location`, no `Set-Cookie`.
+    Mutation: drop the mode check.
+  - **iframe without a cookie** (`navigate` + `Sec-Fetch-Dest: iframe`): 401, no `Set-Cookie`.
+    Mutation: drop the dest check.
+  - **`X-Forwarded-Host: evil.example`:** `Location` unchanged. Mutation: build it from
+    `requestHost`.
+  - **`X-Forwarded-Uri: //evil.example/x`:** `next=%2F`. Mutation: skip `SafeNext`.
+  - **Roles:** developer, maintainer and admin map as in the table; viewer and a hand-set `superuser`
+    get 403. Mutations: a default role for missing keys; restoring a viewer entry.
+  - **Spoofed headers:** `X-WEBAUTH-USER: admin` with alice's cookie answers `alice`. Without a
+    cookie the answer is 401 with no `X-WEBAUTH-*`. Mutation: copy request headers to the response.
+  - **Forged cookie:** a wrong MAC behaves as no cookie. Mutation: skip `hmac.Equal`.
+  - **`pstack_session` alone, and `Authorization: Bearer <PSTACK_TOKEN>` alone:** never 204.
+    Mutation: fall back to `s.principal(r)`.
+  - **Revocation:** after `Logout`, `SetPassword` and `DeleteUser`, the same cookie behaves as no
+    cookie. After `SetRole(viewer)` it gets 403. Mutation: cache the user.
+  - **Origin:**
+    - POST with Origin G → 204.
+    - POST with a preview Origin → 403.
+    - POST with no Origin → 403.
+    - No `X-Forwarded-Method` with a preview Origin → 403.
+    - GET with a preview Origin → 204.
+
+    Mutation: compare `Host` instead.
+  - **Callback:**
+    - A good code plus the state cookie → 302 to `G/d/x`, the session cookie, and the state cookie
+      cleared.
+    - The same code again → a fresh start redirect and no session cookie.
+    - A mismatched state → no session cookie, **and the code is burned**.
+    - A code parked with `Set(key, v, 0)` → no session cookie. `expires_at = now`, so `Take`'s
+      `expires_at > ?` fails.
+
+    Mutations: `Get` instead of `Take`; compare after the redirect.
+  - **Off:** `Domain` or `Token` empty, or `s.grafana` false → `404 Not found.` as plain text.
+- **`TestGrafanaStart`:**
+  - signed in: an absolute 302 to `G/-/pstack/callback?code=<K>`, and `Transient().Get("grafana:"+K)`
+    holds the session hash, the state and the `SafeNext`'d next;
+  - signed out: 302 to `/login?next=` with a double-encoded return that decodes back to the start URL;
+  - malformed state: `400 Sign-in link is invalid.`, `text/plain`.
+
+  Mutation: `writeError` (JSON) for the 400.
+- **`TestServiceHostnamesAreNeverServedByPstack`:**
+  - `Host: grafana.preview.example.com` and `Host: loki.preview.example.com`, on `/` and on
+    `/api/auth/me`, get 503 with `Grafana is not running.` / `Loki is not running.`;
+  - `Host: grafana.added.example` (an added domain) gets `404 Not found.`;
+  - verify with `Host: pstack:7878` and `X-Forwarded-Host: grafana.…` is not refused;
+  - `Host: control.…` is served.
+
+  Mutations: key on `requestHost`; drop the primary-domain case.
+- **`TestHealthNamesGrafanaOnlyWhenOn`:** the key is absent (not null) with `s.grafana` false, and
+  equals `https://grafana.preview.example.com` when true. Mutation: always append.
+- **`internal/inspect` `TestGrafanaOn`**, with `LokiPushURL`'s fake-host helper (plan:3447-3480):
+  - a `grafana` control container → true;
+  - only `loki` → false;
+  - `docker ps` failing → false;
+  - no ids → false.
+
+  Mutation: drop the service-name check.
+- **`internal/auth` `TestSessionHashUser`:** `SessionUser(c)` and `SessionHashUser(HashToken(c))`
+  return the same row, and an expired session gives nil. Mutation: drop `expires_at > ?`.
+- **`internal/initctl`:**
+  - `TestGrafanaService`, both challenges:
+    - the `tls.certresolver` label appears only under HTTP-01;
+    - the block has `networks: [logs]` and no `ports:` or `preview-ingress`;
+    - no `GF_AUTH_DISABLE_LOGIN:`;
+    - `GF_LIVE_MAX_CONNECTIONS: "0"` and `GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"` are present;
+    - `traefik.http.routers.pstack-grafana.priority=10000` is present;
+    - **the header names in `GF_AUTH_PROXY_HEADER_NAME` plus each `GF_AUTH_PROXY_HEADERS` value equal
+      the set in `authResponseHeaders`**, parsed out of the rendered compose.
+
+    Mutations: add `Email:X-WEBAUTH-EMAIL` to the env only; delete either GF_ line; delete the
+    priority label.
+  - `TestLokiWiring`, extended:
+    - the `grafana:` volume;
+    - **the `pstack:` service block is byte-identical with logging off and on.**
+
+    Mutation: add an env line to pstack's block in `LokiWiring`.
+  - `TestGrafanaDatasources`: byte-exact.
+  - `Init`: writes `grafana/datasources/loki.yaml` at 0644, runs both `requires … image` lines, and
+    prints `  grafana   https://grafana.preview.example.com\n`, all only with logging on (as
+    plan:1111 asserts slice 1's line).
+  - `TestInitGoldens`: logging off is still byte-identical.
+- **`internal/routing`:** `grafana.` on the primary, on an added domain, and on a nil store.
+  `grafana-pr-1.<d>` is not a control hostname.
+- **`internal/autolabel`:** `pstack.routing.host: grafana.preview.example.com` is refused.
+- **`internal/upgrade`:** a compose rendered by the real `init --logging loki`, Grafana included,
+  still reads `Logging == loki`. That file is also the fixture, per AGENTS.md's "generate the fixture
+  with the real init".
+- **Route lists:**
+  - `openapi_coverage_test.go`'s `notInTheSpec` gains `/api/auth/grafana/verify` ("Traefik's
+    forwardAuth, for grafana.<domain>") and `/api/auth/grafana/start` ("a 302 for a browser").
+  - `permissions_test.go`'s `preGatePaths` (`:197-201`) gains both.
+
+**Conformance** (black-box, `test/api-grafana.test.ts`). No real Grafana is needed:
+- `GRAFANA_SHIM` has two arms, shaped like `LOKI_SHIM` (plan:6744-6747):
+  `"ps -aq --filter label=com.docker.compose.project=pstack-control"` prints `gr4f`, and
+  `"inspect gr4f"` prints a container whose `com.docker.compose.service` is `grafana`.
+- The server boots with `bootServer({ domain: 'preview.example.com', pathPrefix: dockerShim(GRAFANA_SHIM).dir })`
+  (`harness/server.ts:34`, `:97`).
+- Requests use `redirect: 'manual'` (precedent `api-sso.test.ts:42`).
+- The test plays Traefik by sending `X-Forwarded-Uri/Method/Host` and `Sec-Fetch-Mode/Dest` itself.
+
+1. Bootstrap and log in `sami`, keeping `pstack_session`.
+2. Verify with no cookie and `navigate` + `document` → 302 to
+   `https://control.preview.example.com/api/auth/grafana/start?…` plus a
+   `__Host-pstack_grafana_state` cookie. `cors` → 401. `navigate` + `iframe` → 401.
+3. `GET` start's path and query with `pstack_session` → 302 to
+   `https://grafana.preview.example.com/-/pstack/callback?code=`. Without the session → 302 to
+   `/login?next=`.
+4. Verify with `X-Forwarded-Uri: /-/pstack/callback?code=…` and the state cookie → 302 to `…/d/x`
+   plus `__Host-pstack_grafana`. The same code again → no session cookie.
+5. Verify with the session cookie → 204, `x-webauth-user: sami`, `x-webauth-role: Admin`. A POST
+   with a foreign Origin → 403.
+6. `POST /api/auth/logout` with `pstack_session`, then verify with the Grafana cookie → 401.
+7. `GET /` with `host: grafana.preview.example.com` → 503, body `Grafana is not running.\n`.
+   - This sends Host through Bun's `fetch`, which `api-share-sleep-swarm.test.ts:173` already relies
+     on: it sends only `host`, expects the wake 503, and `requestHost` can read that only from
+     `r.Host` (`http.go:198-205`). That test is in `expected-pass.json:14`.
+   - The Go httptest case stays the negative control.
+8. `/api/health` has `grafana: "https://grafana.preview.example.com"`. A server booted with the
+   `ALWAYS_OK` shim has no `grafana` key, and its verify and start answer 404.
+
+Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the null server's `200 {}`.
+
+**Goldens:**
+- **Byte-identical:**
+  - the 8 logging-off render cells, and the cloud-init and swarm-join goldens;
+  - `golden/host/**`: no migration, and the health key is absent with no grafana container;
+  - the help, no-args and unknown-command goldens: no new flag or command.
+- **Changed, regenerated with `bun gen/goldens.ts`, and said in the CHANGELOG:**
+  - `render/control/http01-basic-compose-loki/` and `dns01-advanced-swarm-loki/`: `docker-compose.yml`,
+    plus the new `grafana/datasources/loki.yaml`;
+  - the `init-*-loki`, `init-dry-*-loki`, `logging-loki-dry-dns01-advanced-swarm`,
+    `logging-off-dry-*-loki` and `upgrade-plan-*-loki` transcripts, wherever they print the init dry
+    run. The diff is only the requires, mkdir, write and `  grafana   https://grafana.<domain>` lines.
+  - `cli-goldens.test.ts:9-11`, whose header names the new render file.
+- **Ratchet:** pass counts only go up.
+
+**Real host, before the release:**
+1. **Sign-in, password.** On a host from `cloud-init --logging loki`, signed out, open
+   `grafana.<domain>/explore` → pstack login → back on Explore → `{service_name="<stack>-web"}` shows
+   lines, as a maintainer.
+2. **Sign-in, SSO.** The same through an SSO provider.
+3. **Header spoofing.** Without a cookie, each of these → 401:
+   - `curl -H 'X-WEBAUTH-USER: admin' https://grafana.<domain>/api/user`
+   - the same with `-H 'X_WEBAUTH_USER: admin'`
+   - the same with `-H 'X.WEBAUTH.USER: admin'`
+
+   With a developer's cookie plus each header → the developer. With a viewer's cookie → 403.
+4. **Forged method.** With a maintainer's cookie:
+   `curl -X POST -H 'X-Forwarded-Method: GET' -H 'Origin: https://pr-1.<domain>' https://grafana.<domain>/api/dashboards/db`
+   → 403 `Cross-origin request refused.`
+5. **Network isolation.** From a preview container, `curl http://grafana:3000` does not connect.
+6. **Sign-out.** Sign out in pstack → the Grafana tab's next request bounces to the login page.
+7. **Demotion.** Demote a maintainer to viewer → the next Grafana request answers 403.
+8. **Grafana stopped.** `docker stop pstack-control-grafana-1` → `grafana.<domain>` shows
+   `Grafana is not running.`, not pstack's login.
+9. **Switch with a job running.** Start a deploy, run `pstack logging off` then `pstack logging loki`
+   → the pstack container's `StartedAt` is unchanged, the deploy finishes, the health key is present
+   within 30 s, and the Grafana link after a page reload.
+10. **Upgrade.** `pstack upgrade` from a slice-1 host → Grafana appears, and `LOKI_PUSH_PASSWORD` is
+    unchanged. A deployment routed to `grafana.<domain>` before the upgrade: `grafana.<domain>`
+    serves Grafana, and that deployment's redeploy is refused.
+11. **Certificates.** HTTP-01 host: a certificate is issued for `grafana.<domain>`. DNS-01 host:
+    none is ordered.
+12. **Code replay.** Traefik's access log shows the callback code once; replaying the URL restarts
+    sign-in.
+
+### Where the change lands
+
+| Area | Files |
+|---|---|
+| Init and the control stack | `internal/initctl/init.go`: `GrafanaVersion`, `GrafanaService`, `LokiWiring`'s volume edit, two `requires` image entries, the grafana dir + datasource write, the `  grafana   …` summary line. `templates/control/grafana/datasources.yaml` (new, embedded), `assets.go` |
+| Discovery | `internal/inspect/control.go` (`GrafanaOn`, beside `LokiPushURL`) |
+| Sign-in | `internal/api/routes_grafana.go` (new); `routes_auth.go` (two `preGate` cases, the health key); `server.go` (`grafana atomic.Bool`, `Start` + `reindexLoop` refresh, the service-host refusal in `handle()`, header route list); `internal/auth/auth.go` (`SessionHashUser`); `packages/client/src/types.ts` (`Health.grafana`) |
+| Hostnames | `internal/routing/domains.go` (`grafana.` and the comment) |
+| UI | `apps/ui/src/composables/useAuth.ts`, `App.vue` (the link, hidden with a stored bearer), `views/LoginView.vue` (full navigation for an `/api/` next), `packages/pstack/ui/index.html` (sign-in honours `next`) |
+| Tests | Go `_test.go` beside each; `openapi_coverage_test.go`, `permissions_test.go`; `packages/conformance` (`test/api-grafana.test.ts` with `GRAFANA_SHIM`, regenerated loki goldens, `cli-goldens.test.ts` header, `expected-pass.json`) |
+| Docs | **`usage.md`:** the Grafana section (URL, roles table, sign-in, **log lines unredacted and who can read them**, no server admin, no live tail, Drilldown egress, `logging off` keeps the volume) and the health `grafana` key. **`control-plane.md`:** new §5h "Grafana sign-in" after slice 1's §5g (plan:4498): forwardAuth, the derived cookie, callback inside verify, discovery from docker, the service-host refusal. **`bootstrap.md:132`:** `control stack (Traefik 512 MB + pstack 512 MB, + advanced UI 128 MB; with --logging loki + Loki 2 GB + Grafana 768 MB, all capped in the template)`, which also fixes the stale 256 MB (`docker-compose.yml:36`, `:108`; `init.go:688`; plan:905). **Also:** the `docs/README.md` row; this design's banner. **`CHANGELOG.md`:** upgrade adds Grafana (768m, a grafana.com download); a deployment on `grafana.<domain>` is refused on its next deploy; loki goldens change. |
+
+### Out of scope for slice 3
+
+- Grafana on added domains.
+- Grafana's HTTP API for scripts: service-account tokens pass verify only with a browser cookie.
+- Grafana for a bearer-token SPA session.
+- Explore's live tail and any Grafana Live feature: Live is off, because a WebSocket passes verify
+  once.
+- Provisioned dashboards or alerting.
+- A Grafana server admin.
+- A Grafana-only sign-out.
+- Deep links from the deployment logs tab into Explore.
+- The basic embedded UI's nav link.
+- `pattern_ingester` (Drilldown's Patterns view): the Loki config stays byte-for-byte slice 1's.
+- Offline preinstall of Logs Drilldown.
+- Redacting log lines in Grafana.
+- Multiple Grafana orgs.
 
 ---
 
