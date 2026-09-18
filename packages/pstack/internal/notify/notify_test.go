@@ -77,6 +77,8 @@ func TestEnvelopeAndSign(t *testing.T) {
 }
 
 // negative control: change "Teardown LEAKED" → the job.leaked line differs.
+// negative control: delete `case "loki-apply"` in actionWord → got "loki-apply started on pstack-control.".
+// negative control: delete `case "logging.changed"` in Summarize → got "logging.changed on this host.".
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	cases := map[string]string{
@@ -96,6 +98,8 @@ func TestSummarize(t *testing.T) {
 		"A read-only link to pr-1 was created by bob (logs, status).":                                Summarize(ev("share.created", `{"stack":"pr-1","by":"bob","views":["logs","status"]}`)),
 		"custom.event on this host.":                                                                 Summarize(ev("custom.event", `{}`)),
 		"Wake started on sleepy.":                                                                    Summarize(ev("job.started", `{"stack":"sleepy","action":"wake"}`)),
+		"Loki settings started on pstack-control.":                                                   Summarize(ev("job.started", `{"stack":"pstack-control","action":"loki-apply"}`)),
+		"Loki settings changed by alice: retention, storage.":                                        Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
 	}
 	for want, got := range cases {
 		if got != want {

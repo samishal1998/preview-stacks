@@ -37,6 +37,10 @@
 - **Loki settings.** Retention, chunks and storage (filesystem, or S3 from a cutover date) are held
   to pstack's ranges and rendered into `control/loki/config.yaml`. S3 keys go in a 0600 credentials
   file owned by Loki's uid, never in the config.
+- **`logging.changed`**, a webhook event: a Loki settings save was applied and Loki answered
+  ready. `data.changed` names the sections (`chunks`, `retention`, `storage`, `credentials`), never
+  the endpoint, bucket, key id or secret. The apply runs as a `loki-apply` job on `pstack-control`,
+  and its terminal event sends `verified: null`.
 
 ### Changed
 

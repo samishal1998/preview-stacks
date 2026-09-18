@@ -168,7 +168,7 @@ told the one caller holding that id.
 |---|---|---|
 | `jobId` | string | Follow it at `/jobs/<jobId>` (UI) or `GET /api/jobs/<jobId>`. |
 | `stack` | string | The stack being acted on. |
-| `action` | `"up"` \| `"down"` \| `"verify"` \| `"sleep"` \| `"wake"` | `sleep` takes the compose project down and keeps its volumes and axes; `wake` is `up` recorded under its own name (0.26.0). |
+| `action` | `"up"` \| `"down"` \| `"verify"` \| `"sleep"` \| `"wake"` \| `"loki-apply"` | `sleep` takes the compose project down and keeps its volumes and axes; `wake` is `up` recorded under its own name (0.26.0). `loki-apply` applies Loki's saved settings, on `pstack-control`. |
 | `startedAt` | number | Epoch ms. |
 
 ### `job.succeeded` / `job.failed` / `job.cancelled` / `job.leaked` / `job.superseded`
@@ -197,14 +197,14 @@ on one thing, page on this.
 |---|---|---|
 | `jobId` | string | |
 | `stack` | string | |
-| `action` | `"up"` \| `"down"` \| `"verify"` | |
+| `action` | `"up"` \| `"down"` \| `"verify"` \| `"loki-apply"` | |
 | `state` | `"ok"` \| `"failed"` \| `"cancelled"` \| `"leaked"` \| `"superseded"` | Matches the event name. |
 | `cancelledBy` | string? | `job.cancelled` only — the operator who stopped it. |
 | `startedAt` | number \| **null** | Epoch ms, or `null` for a `superseded` job — it never started, and `0` would be a lie about 1970. |
 | `endedAt` | number | Epoch ms. |
 | `durationMs` | number | `endedAt - startedAt`, and `0` when the job never started. |
 | `leakedAxes` | string[] | The axes whose `assert_gone` failed — the operator-actionable part of a leak. Empty unless `leaked`. |
-| `verified` | boolean \| **null** | Whether teardown was actually **proven**: `true` = at least one `assert_gone` ran; `false` = nobody looked (`verify: false`, or a spec with no `assert_gone`) — so `ok` does **not** mean "proven clean"; `null` = not applicable (`up` runs no `assert_gone` by design). |
+| `verified` | boolean \| **null** | Whether teardown was actually **proven**: `true` = at least one `assert_gone` ran; `false` = nobody looked (`verify: false`, or a spec with no `assert_gone`) — so `ok` does **not** mean "proven clean"; `null` = not applicable (`up` and `loki-apply` run no `assert_gone` by design). |
 | `unverifiable` | number | Steps that could not check anything (no probe defined). Non-zero means silence, not proof. |
 | `error` | string? | Crash path only: first line of the failure, redacted. Absent on success. |
 
@@ -369,6 +369,23 @@ only — the content can hold credentials and is never sent.
 |---|---|---|
 | `file` | string | e.g. `auth.yml`. |
 | `action` | `"created"` \| `"replaced"` \| `"deleted"` | |
+
+### `logging.changed`
+
+Fires when a Loki settings save (`PUT /api/logging`, `PUT /api/logging/storage`) is applied and Loki
+answered ready on it. Not for a rollback, a resume or a boot apply. The apply itself is the `job.*`
+family: `action: "loki-apply"`, `stack: "pstack-control"`.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `by` | string | Who saved (the newest save the job applied): a username, or `root (PSTACK_TOKEN)`. |
+| `job` | string | The apply job. |
+| `changed` | string[] | Any of `chunks`, `retention`, `storage`, `credentials`. Non-nil. |
+| `storage` | `"filesystem"` \| `"s3"` | After the change. |
+| `cutover` | string \| null | The S3 period's `from`, `YYYY-MM-DD`; `null` on filesystem. |
+| `retentionDays` | number | After the change. |
+
+Never the endpoint, the bucket, the key id or the secret.
 
 ### `stack.slept`
 

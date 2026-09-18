@@ -120,6 +120,9 @@ const (
 	Verify Action = "verify"
 	Sleep  Action = "sleep"
 	Wake   Action = "wake"
+	// Applies Loki's saved settings to pstack-control (logging slice 2). Not a lifecycle action:
+	// no startLifecycle branch, no `:id` route, not in preempts.
+	LokiApply Action = "loki-apply"
 )
 
 // preempts names the actions that CLEAR a stack instead of queueing behind it: the running job is
@@ -793,7 +796,9 @@ func (r *Registry) run(e *entry) {
 func (r *Registry) emitTerminal(snapshot Job, ended int64) {
 	leakedAxes := []string{}
 	unverifiable := 0
-	verified := any(nil)
+	// `verified: null` = not applicable: these actions run no assert_gone by design.
+	noAssertGone := map[Action]bool{Up: true, LokiApply: true}
+	verified := any(false)
 	if snapshot.Outcome != nil {
 		sawAssert := false
 		for _, s := range snapshot.Outcome.Steps {
@@ -807,11 +812,10 @@ func (r *Registry) emitTerminal(snapshot Job, ended int64) {
 				sawAssert = true
 			}
 		}
-		if snapshot.Action != Up {
-			verified = sawAssert
-		}
-	} else if snapshot.Action != Up {
-		verified = false
+		verified = sawAssert
+	}
+	if noAssertGone[snapshot.Action] {
+		verified = nil
 	}
 	name := "job.failed"
 	switch snapshot.State {

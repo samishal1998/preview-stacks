@@ -96,6 +96,10 @@ var Names = []string{
 	// nothing at all, so there is nothing to check and nobody to tell off. It fires only so a
 	// client holding that job id learns the id is finished with.
 	"job.superseded",
+	// Loki's settings changed through the API and Loki answered ready on them (logging slice 2).
+	// Appended, like `job.superseded`: the order is the contract. Which sections changed and the
+	// storage type — never the endpoint, the bucket, the key id or the secret.
+	"logging.changed",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a
