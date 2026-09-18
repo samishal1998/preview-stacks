@@ -1431,8 +1431,9 @@ exists locally, and the host can make one from what it has.
 
 ### Assets are embedded, not read from disk
 
-The web UI, the share page, `templates/control/docker-compose.yml` and the cloud-init template are
-`//go:embed`ded (`packages/pstack/assets.go`, seven explicit paths — never a glob, so the READMEs
+The web UI, the share page, the cloud-init template and the control templates
+(`templates/control/docker-compose.yml`, `loki/config.yaml`, `grafana/datasources.yaml`) are
+`//go:embed`ded (`packages/pstack/assets.go`, eight explicit paths — never a glob, so the READMEs
 beside them do not ship). Nothing resolves a path relative to a source tree at runtime; the
 failure mode where a tool passes every local test and then `init` dies on a missing template on
 the one host that matters cannot occur.
