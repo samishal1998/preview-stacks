@@ -74,7 +74,7 @@
 
 ## Decisions the plan fixed
 
-- C1 — Spec conflict with slice 2, resolved in favour of slice 2 (it lands first). Slice 2's fourth LokiWiring anchor adds `      - ./loki:/etc/loki` to pstack's service block when logging is on, and slice-2 spec 551-558 says so: `pstack logging off|loki` recreates pstack. So these slice-3 spec claims are false after slice 2: 'pstack is not recreated by the switch', 'running jobs survive', 'the pstack: service block is byte-identical with logging off and on', and real-host check 9's 'StartedAt unchanged'. The replacement property, pinned by T6's test: Grafana adds nothing to pstack's block. pstack's block with logging on equals the logging-off block plus exactly slice 2's one mount line. The reindexLoop refresh stays: compose may start pstack before it creates the grafana container. This is a deviation for the owner to see.
+- C1 — No deviation. Slice 2 mounts `      - ./loki:/etc/loki` into pstack's service block in every mode (`templates/control/docker-compose.yml`, not a `LokiWiring` anchor; `LokiWiring` keeps slice 1's three), so `pstack logging loki|off` leaves pstack's block unchanged. The slice-3 spec's claims hold as written: pstack is not recreated by the switch, running jobs survive, the `pstack:` service block is byte-identical with logging off and on, and real-host check 9's `StartedAt` is unchanged. T6's render test pins the block.
 - C2 — Nav link visibility. Spec line 719 ('every signed-in role sees it') contradicts spec 457 and the owner decision of 2026-09-15. The link is `v-if="authState.grafana && !settings.token && can('developer')"`.
 - C3 — App.vue already imports `settings` (App.vue:18) and `can` (:19). `ScrollText` is NOT imported, even though spec 715 says 'any lucide icon already imported' and then uses ScrollText. Add `ScrollText` to the lucide-vue-next named import list (the icon exists: node_modules/lucide-vue-next/dist/esm/icons/scroll-text.js).
 - C4 — Every plain-text refusal goes through `http.Error`. That sets `content-type: text/plain; charset=utf-8` and `x-content-type-options: nosniff`, and appends `\n` to the body. Exact bodies: `Not found.\n` (404), `Sign-in link is invalid.\n` (400), `Sign-in failed.\n` (500), `No Grafana access.\n` (403), `Cross-origin request refused.\n` (403), `Grafana is not running.\n` (503), `Loki is not running.\n` (503). The no-cookie non-navigation answer is `w.WriteHeader(401)` with an empty body. The log line is `[grafana] sign-in code not stored: <err>`.
@@ -125,25 +125,21 @@ What the body changes from the scratchpad spec (every edit is already applied in
 
 | Spec line | Why | Now says |
 |---|---|---|
-| :3-9 | slice 2 lands first | the preamble names slice 2's fourth `LokiWiring` anchor and its create-if-absent config write |
+| :3-9 | slice 2 lands first | the preamble names slice 2's unconditional `./loki` mount and its create-if-absent config write |
 | :14, :15 | the text now lives in the design doc | `(§Decisions, "Reading logs")`, `(Slice 1 › Control stack)` |
-| :18-22 | C1 | "Grafana adds nothing to pstack's service block". The switch recreates pstack (slice 2's mount), so a job in flight is lost. The render test pins "logging-off block plus exactly that mount line" |
-| :44 | C1 | pstack's block gets "nothing from Grafana"; slice 2's `./loki` mount is its only logging-on line |
-| :46-50 | slice 2's anchor | also cannot collide with slice 2's anchors: the block has no `./docker:/docker-config` line |
 | :241 | T4's nil guard | `if raw.Config != nil && raw.Config.Labels["com.docker.compose.service"] == "grafana" {` |
-| :257 | C1; `authState` reads health only in `checkAuth` | "The health key follows within 30 s of pstack's restart; the nav link on the next page load." The tick catches a grafana container compose created after pstack |
+| :257 | `authState` reads health only in `checkAuth` | "A switch shows up within 30 s, with no pstack restart: the health key on the next tick, the nav link on the next page load." |
 | :276-278 | this edit deletes the stale "host-only on `api.<domain>`" line it quoted | "It is never widened: previews on `*.<domain>` would receive it." |
 | after :289 | C4 | `http.Error`: `text/plain; charset=utf-8`, `nosniff`, body plus `\n`; verify's no-cookie 401 is empty |
 | :713-714 | C3 | `settings` and `can` already imported (`App.vue:18-19`); `ScrollText` added to the lucide import (`:23-40`) |
 | :719, :722 | C2 | "Developer and above only"; `v-if="authState.grafana && !settings.token && can('developer')"` |
-| :746 | C1; `checkAuth` | the failure row: pstack is recreated, the job in flight is lost, Grafana adds nothing to pstack's block; the health key within 30 s, the nav link on the next page load |
+| :746 | `checkAuth` | the failure row: the health key within 30 s, the nav link on the next page load |
 | :752 | the old section's "Known costs" goes away | "Known cost; an offline preinstall is out of scope." |
 | :774 | `checkAuth` | `pstack logging off`: "the health key goes within 30 s; the link on the next page load" |
 | :781 | T5's subtest name | `TestGrafanaService/Traefik_strips_every_header_Grafana_reads` |
 | :794 | C4 | Go tests compare plain-text bodies exactly, `\n` included |
-| :876 | C1 | "Grafana adds nothing to pstack's block: … plus exactly slice 2's `./loki:/etc/loki` mount line" |
 | :916 | C4 | conformance step 7 compares `Grafana is not running.\n` |
-| :959-961 | C1; `checkAuth` | real-host check 9: pstack is recreated; the health key within 30 s of pstack's restart, the Grafana link after a page reload |
+| :959-961 | `checkAuth` | real-host check 9: the health key within 30 s, the Grafana link after a page reload |
 | :980 | the api line is gone; the banner is T12's | "this design's banner." |
 
 - [ ] **Step 1: Write the failing check**
@@ -178,12 +174,6 @@ check 'Facts follows the section' "$(awk 'index($0, "## Slice 3 — Grafana at "
 # negative control: delete the `### Testing` heading from the body.
 check 'every spec section, in order' "$(printf '%s\n' "$sec" | grep -E '^#{3,4} ' | tr '\n' '|')" '### Turning it on|### Control stack|#### The service (`GrafanaService`), rendered only when logging is loki|#### The datasource file|### How pstack knows Grafana is on|### Sign-in|#### The flow|#### The Grafana cookie: derived, no table|#### Roles|#### Sign-out|#### The code|### Hostnames and the wake handler|### The UI entry point|### Failure modes|### Security — where each requirement lands|### Testing|### Where the change lands|### Out of scope for slice 3|'
 
-# negative control: keep spec :18-22 ("pstack is not recreated by the switch …") as it was.
-for s in 'is not recreated by the switch' 'running jobs survive' 'Jobs survive' 'StartedAt' 'byte-identical with logging off and on' 'with no pstack restart' 'service block is unchanged' '**unchanged**: no env var'; do
-  check "C1: '$s' gone" "$(n "$s")" 0
-done
-check "C1: Grafana adds nothing to pstack's block (3 places)" "$(n "Grafana adds nothing to pstack's")" 3
-check 'C1: real-host check 9' "$(n "→ pstack is recreated (slice 2's mount; the in-flight job is lost as on any upgrade), and the")" 1
 # negative control: keep "Otherwise every signed-in role sees it" and the old v-if.
 check "C2: 'every signed-in role sees it' gone" "$(grep -cF 'every signed-in role sees it' "$doc")" 0
 check "C2: the link's v-if" "$(n "<a v-if=\"authState.grafana && !settings.token && can('developer')\"")" 1
@@ -219,16 +209,6 @@ exit $fail
   FAIL new slice-3 heading, once (got '0', want '1')
   FAIL Facts follows the section (got '', want '## Facts this design stands on')
   FAIL every spec section, in order (got '', want '### Turning it on|### Control stack|#### The service (`GrafanaService`), rendered only when logging is loki|#### The datasource file|### How pstack knows Grafana is on|### Sign-in|#### The flow|#### The Grafana cookie: derived, no table|#### Roles|#### Sign-out|#### The code|### Hostnames and the wake handler|### The UI entry point|### Failure modes|### Security — where each requirement lands|### Testing|### Where the change lands|### Out of scope for slice 3|')
-  ok   C1: 'is not recreated by the switch' gone
-  ok   C1: 'running jobs survive' gone
-  ok   C1: 'Jobs survive' gone
-  ok   C1: 'StartedAt' gone
-  ok   C1: 'byte-identical with logging off and on' gone
-  ok   C1: 'with no pstack restart' gone
-  ok   C1: 'service block is unchanged' gone
-  ok   C1: '**unchanged**: no env var' gone
-  FAIL C1: Grafana adds nothing to pstack's block (3 places) (got '0', want '3')
-  FAIL C1: real-host check 9 (got '0', want '1')
   ok   C2: 'every signed-in role sees it' gone
   FAIL C2: the link's v-if (got '0', want '1')
   ok   C3: no "already imported" icon
@@ -290,8 +270,8 @@ exit $fail
 > plan: `initctl.Logging`/`Loki`, `LokiService`, `LokiWiring`, `inspect.LokiPushURL` and its
 > `idsByLabel`/`inspectIDs` path, `upgrade.ControlState.Logging`, `upgrade.SwitchLogging`,
 > `autolabel.ControlHostname`, `IsControlHostname`, the `logs` network, `LOKI_SHIM`. Slice 2 lands
-> first: its fourth `LokiWiring` anchor mounts `./loki` into pstack's service block, and its `init`
-> writes the Loki config only if absent. Line numbers into `init.go`, `domains.go` and `upgrade.go`
+> first: it mounts `./loki` into pstack's service block in every mode, and its `init` writes the
+> Loki config only if absent. Line numbers into `init.go`, `domains.go` and `upgrade.go`
 > are from the tree before slice 1, so apply each edit by the text it quotes. Traefik citations are
 > tag `v3.6.1` (the pinned `docker-compose.yml:32`) unless marked 3.7.13. Grafana citations are tag
 > `v13.2.1`.
@@ -303,12 +283,11 @@ exit $fail
   query API is on the `logs` network and nowhere else (Slice 1 › Control stack), so without
   Grafana nothing can read Loki.
 - `pstack logging loki|off` and `pstack cloud-init --logging loki` turn both on and off.
-- **Grafana adds nothing to pstack's service block.** pstack finds out about Grafana from docker, the
-  same way it finds Loki (below). The switch still recreates pstack: slice 2's fourth `LokiWiring`
-  anchor mounts `./loki` into pstack's block only with logging on. A job in flight is lost, as on
-  any upgrade: jobs live in this process's memory (`server.go:829-830`, `usage.md:1483`). A render
-  test pins that pstack's block with logging on is the logging-off block plus exactly that mount
-  line.
+- **pstack is not recreated by the switch.** Slice 3 adds nothing to pstack's service block. pstack
+  finds out about Grafana from docker, the same way it finds Loki (below). Slice 1's `LokiWiring`
+  edits only Traefik's networks line, the volumes block and the networks block (plan:954-972).
+  Compose leaves pstack running, so running jobs survive: they live in this process's memory
+  (`server.go:829-830`, `usage.md:1483`). A render test pins this.
 - **Upgrade carries it with nothing new to read back.**
   - `ReadControlState` already reads `Logging = loki` from `^\s{2}loki:` (plan:1797-1853).
   - `initFlags` already passes `--logging loki` (plan:1673-1674).
@@ -330,13 +309,12 @@ and anchors:
 | the `grafana` service | the `#__ADVANCED_UI_SERVICE__` substitution (`init.go:370`) becomes `AdvancedUIService(ui) + LokiService(logging, challenge, lokiPassword) + GrafanaService(logging, challenge)` |
 | the `grafana` volume | `LokiWiring`'s volume edit (plan:954-972) writes `volumes:\n  letsencrypt:\n  loki:\n  grafana:\n` |
 | Traefik on `logs`, the `logs` network | slice 1's edits, unchanged |
-| pstack's service block | **nothing from Grafana**: no env var, no network, no mount. Slice 2's `./loki` mount is its only logging-on line |
+| pstack's service block | **unchanged**: no env var, no network, no mount |
 
-The Grafana block cannot collide with slice 1's or slice 2's anchors, or the read-back:
+The Grafana block cannot collide with slice 1's anchors or its read-back:
 - It says `networks: [logs]`, so it cannot match anchor 1 (`    networks: [preview-ingress]\n`,
   plan:100).
 - Its `    volumes:` line is indented four spaces, so it cannot match `volumes:\n  letsencrypt:\n`.
-- It has no `./docker:/docker-config` line, so it cannot match slice 2's pstack mount anchor.
 - It has no `  loki:` line, so `ReadControlState`'s regex still means "Loki is on".
 
 With logging off, `GrafanaService` returns `""` and `LokiWiring` returns the template unchanged, so
@@ -544,9 +522,8 @@ func GrafanaOn(r exec.Runner) bool {
   - `reindexLoop` refreshes it on every tick, after `s.reindex()` (`server.go:815-826`). It is not
     added to `reindex()` itself, which request paths call (`server.go:678`, `routes_deploy.go:416`).
   - `server.go:29` already imports `inspect`. The cost is two docker calls every 30 s.
-- **The health key follows within 30 s of pstack's restart; the nav link on the next page load.**
-  The switch recreates pstack (slice 2's mount), and compose may start pstack before it creates the
-  `grafana` container, so the tick catches what Start missed.
+- **A switch shows up within 30 s**, with no pstack restart: the health key on the next tick, the nav
+  link on the next page load.
 - **`G` = `"https://grafana." + s.opts.Domain`**, built from `PSTACK_DOMAIN` (`docker-compose.yml:170`),
   never from a request header.
 - **`C` = `baseURL(s.opts.Domain, r)`**, which is `https://control.<domain>` (`http.go:175-178`).
@@ -1040,7 +1017,7 @@ func (s *Server) grafanaStart(w http.ResponseWriter, r *http.Request) {
 | What goes wrong | What happens | Designed response |
 |---|---|---|
 | pstack down or restarting | forwardAuth's call fails, so every Grafana request gets Traefik's 500 | Fail closed; nothing bypasses verify. The same outage takes `control.<domain>` down. |
-| `pstack logging loki` or `off` while jobs run | slice 2's `./loki` mount changes pstack's block, so compose recreates pstack and a job in flight is lost, as on any upgrade | Grafana adds nothing to pstack's block (a render test pins it). The health key follows within 30 s of pstack's restart (reindexLoop); the nav link on the next page load. |
+| `pstack logging loki` or `off` while jobs run | pstack's service block is unchanged, so compose does not recreate pstack | Jobs survive. The health key follows within 30 s (reindexLoop); the nav link on the next page load. A render test pins pstack's block. |
 | Grafana stopped, starting, unhealthy | Traefik drops its router, and `grafana.<domain>` reaches `pstack-wake` | `503 Grafana is not running.`, never pstack's UI or API |
 | `grafana.<d>` on an added domain | the added domain's wake router sends it to pstack | `404 Not found.` |
 | A deployment already routed to `grafana.<domain>` before upgrade | its `Host(…)` rule ties `pstack-grafana`'s on length | `priority=10000` gives pstack the tie. Its next deploy is refused (plan:6216-6218). CHANGELOG line. |
@@ -1171,8 +1148,7 @@ with `http.Error`'s trailing `\n`.
     priority label.
   - `TestLokiWiring`, extended:
     - the `grafana:` volume;
-    - **Grafana adds nothing to pstack's block:** with logging on, it is the logging-off block plus
-      exactly slice 2's `./loki:/etc/loki` mount line.
+    - **the `pstack:` service block is byte-identical with logging off and on.**
 
     Mutation: add an env line to pstack's block in `LokiWiring`.
   - `TestGrafanaDatasources`: byte-exact.
@@ -1256,8 +1232,8 @@ Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the n
 8. **Grafana stopped.** `docker stop pstack-control-grafana-1` → `grafana.<domain>` shows
    `Grafana is not running.`, not pstack's login.
 9. **Switch with a job running.** Start a deploy, run `pstack logging off` then `pstack logging loki`
-   → pstack is recreated (slice 2's mount; the in-flight job is lost as on any upgrade), and the
-   health key is present within 30 s of pstack's restart, and the Grafana link after a page reload.
+   → the pstack container's `StartedAt` is unchanged, the deploy finishes, the health key is present
+   within 30 s, and the Grafana link after a page reload.
 10. **Upgrade.** `pstack upgrade` from a slice-1 host → Grafana appears, and `LOKI_PUSH_PASSWORD` is
     unchanged. A deployment routed to `grafana.<domain>` before the upgrade: `grafana.<domain>`
     serves Grafana, and that deployment's redeploy is refused.
@@ -1355,16 +1331,6 @@ Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the n
   ok   new slice-3 heading, once
   ok   Facts follows the section
   ok   every spec section, in order
-  ok   C1: 'is not recreated by the switch' gone
-  ok   C1: 'running jobs survive' gone
-  ok   C1: 'Jobs survive' gone
-  ok   C1: 'StartedAt' gone
-  ok   C1: 'byte-identical with logging off and on' gone
-  ok   C1: 'with no pstack restart' gone
-  ok   C1: 'service block is unchanged' gone
-  ok   C1: '**unchanged**: no env var' gone
-  ok   C1: Grafana adds nothing to pstack's block (3 places)
-  ok   C1: real-host check 9
   ok   C2: 'every signed-in role sees it' gone
   ok   C2: the link's v-if
   ok   C3: no "already imported" icon
@@ -2612,7 +2578,7 @@ but commit -b claude/loki-logging-grafana -m "feat(initctl): render Grafana and 
     - `LokiService(logging, challenge, password)`, `LokiWiring(template, logging)`, `ensureDir`/`noMode`/`write` (init.go:800, :888, :943-977).
     - In init_test.go: `render`, `okRunner`, `read`, `substituted` (:29-69, :604-612), plus TestLokiWiring and TestInitLoki.
     - In upgrade_test.go: `lokiControl`, `lokiPassword`, `mustRead` (:75-129).
-  - From slice 2: LokiWiring's fourth anchor adds `      - ./loki:/etc/loki\n` after pstack's `      - ./docker:/docker-config\n` (slice-2 spec 551-558). The loki `config.yaml` write becomes create-if-absent.
+  - From slice 2: the template mounts `      - ./loki:/etc/loki\n` after pstack's `      - ./docker:/docker-config\n` in every mode (`templates/control/docker-compose.yml`, not a LokiWiring anchor; LokiWiring keeps 3). The loki `config.yaml` write becomes create-if-absent.
 - Produces:
   - Init's substitution becomes `template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui)+LokiService(logging, challenge, lokiPassword)+GrafanaService(logging, challenge), 1)`.
   - LokiWiring's volume entry becomes `{"letsencrypt volume", "volumes:\n  letsencrypt:\n", "volumes:\n  letsencrypt:\n  loki:\n  grafana:\n", identity}`.
@@ -2712,14 +2678,13 @@ with:
 ```go
 	t.Run("Grafana adds nothing to pstack's service block", func(t *testing.T) {
 		// pstack finds Grafana from docker (inspect.GrafanaOn), so Grafana needs nothing here. Slice 2's
-		// ./loki mount is the only line logging adds to pstack's block.
+		// ./loki mount is in both modes, so the switch leaves pstack's block, and pstack, alone.
 		// negative control: append {"pstack environment", "      DOCKER_CONFIG: /docker-config\n", "      DOCKER_CONFIG: /docker-config\n      PSTACK_GRAFANA: \"on\"\n", identity} to LokiWiring's entries — the blocks differ.
 		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
 		_, off := render(t, nil)
 		_, on := render(t, func(o *initctl.Options) { o.Logging = initctl.Loki })
-		want := strings.Replace(serviceBlock(off, "pstack"), "      - ./docker:/docker-config\n", "      - ./docker:/docker-config\n      - ./loki:/etc/loki\n", 1)
-		if got := serviceBlock(on, "pstack"); got == "" || got != want {
-			t.Errorf("pstack's block with loki on is not the off block plus the ./loki mount\n--- on\n%s\n--- want\n%s", got, want)
+		if got, want := serviceBlock(on, "pstack"), serviceBlock(off, "pstack"); got == "" || got != want {
+			t.Errorf("pstack's block differs with loki on\n--- on\n%s\n--- off\n%s", got, want)
 		}
 	})
 ```
@@ -2994,7 +2959,7 @@ with:
 ```go
 		{"letsencrypt volume", "volumes:\n  letsencrypt:\n", "volumes:\n  letsencrypt:\n  loki:\n  grafana:\n", identity},
 ```
-In LokiWiring's doc comment, replace the text ``the `loki` volume`` with ``the `loki` and `grafana` volumes``. Leave slice 2's fourth (pstack mount) entry unchanged.
+In LokiWiring's doc comment, replace the text ``the `loki` volume`` with ``the `loki` and `grafana` volumes``.
 
 - [ ] **Step 4: Run the tests and watch them pass**
 
@@ -5787,17 +5752,15 @@ The house precedent (commit `6e365cc`, and slice-1 plan T14) is that a feature c
   ```markdown
   >
   > Slice 3 (Grafana at `grafana.<domain>`): [usage.md](usage.md), `### Grafana`. Its section below is
-  > its spec with two corrections:
+  > its spec with one correction:
   >
-  > - `pstack logging loki|off` recreates pstack, because slice 2 mounts `./loki` into it, so a running
-  >   job is lost as on any upgrade. The spec said the switch left pstack running.
   > - The Grafana nav link shows for developer and above, matching verify's 403 for viewers. The spec
   >   also said every signed-in role sees it.
   ```
 
   If Step 1 found any other difference between the build and slice 3's section, add one bullet for it in the same form.
 
-  (d) The slices table under `| Slice | Ships | Depends on |`: slice 3 is stacked on slice 2, and its switch behaviour (pstack recreated) comes from slice 2's mount. Replace this row:
+  (d) The slices table under `| Slice | Ships | Depends on |`: slice 3 is stacked on slice 2. Replace this row:
 
   ```markdown
   | 3 | Grafana at `grafana.<domain>`, signed in with pstack accounts. | 1 |
@@ -5854,16 +5817,14 @@ The house precedent (commit `6e365cc`, and slice-1 plan T14) is that a feature c
   grep -o 'loki-logging-slice-[0-9]-plan.md](' docs/README.md | sort -u               # one per plan file that exists
   ```
 
-- [ ] **Step 5: The C1 grep — nothing still says the switch leaves pstack running**
+- [ ] **Step 5: The C1 grep — nothing says the switch recreates pstack**
 
   ```bash
   cd /Volumes/S1/code/preview-stacks
-  grep -n 'pstack is not recreated\|jobs survive\|Jobs survive\|StartedAt\|with no restart\|not this process' packages/pstack/CHANGELOG.md docs/usage.md docs/control-plane.md docs/loki-logging-design.md packages/pstack/internal/api/routes_grafana.go packages/pstack/internal/api/server.go | grep -v 'On demand, with no restart'
+  grep -n 'pstack is recreated\|recreates pstack\|job in flight is lost\|in-flight job is lost\|plus exactly slice 2' packages/pstack/CHANGELOG.md docs/usage.md docs/control-plane.md docs/loki-logging-design.md packages/pstack/internal/api/routes_grafana.go packages/pstack/internal/api/server.go
   ```
 
-  Expected: no output (exit 1).
-  - The `grep -v` removes two lines that predate slice 3 and are about the CLI re-reading `config.json`, not the logging switch: `CHANGELOG.md` `**On demand, with no restart:**` and `control-plane.md` `**On demand, with no restart.**` (both found on today's tree).
-  - The spec's Go code blocks, which T7-T9 copy verbatim, contain none of these phrases, so a hit in a `.go` file is a comment someone added.
+  Expected: no output (exit 1). Slice 2's mount is in both modes, so the switch never recreates pstack.
 
   A hit is a C1 miss in the task that wrote that text, and it gets amended there (Step 6's recipe):
   - `docs/loki-logging-design.md`: T1.
@@ -5952,7 +5913,7 @@ The house precedent (commit `6e365cc`, and slice-1 plan T14) is that a feature c
   6. **Sign-out.** Sign out in pstack → the Grafana tab's next request bounces to the login page. — not run (needs a real host)
   7. **Demotion.** Demote a maintainer to viewer → the next Grafana request answers 403. — not run (needs a real host)
   8. **Grafana stopped.** `docker stop pstack-control-grafana-1` → `grafana.<domain>` shows `Grafana is not running.`, not pstack's login. — not run (needs a real host)
-  9. **Switch with a job running.** Start a deploy, run pstack logging off then pstack logging loki → pstack is recreated (slice 2's mount; the in-flight job is lost as on any upgrade), and the health key is present within 30 s of pstack's restart, and the Grafana link after a page reload. — not run (needs a real host)
+  9. **Switch with a job running.** Start a deploy, run pstack logging off then pstack logging loki → the pstack container's `StartedAt` is unchanged, the deploy finishes, the health key is present within 30 s, and the Grafana link after a page reload. — not run (needs a real host)
   10. **Upgrade.** `pstack upgrade` from a slice-1 host → Grafana appears, and `LOKI_PUSH_PASSWORD` is unchanged. A deployment routed to `grafana.<domain>` before the upgrade: `grafana.<domain>` serves Grafana, and that deployment's redeploy is refused. — not run (needs a real host)
   11. **Certificates.** HTTP-01 host: a certificate is issued for `grafana.<domain>`. DNS-01 host: none is ordered. — not run (needs a real host)
   12. **Code replay.** Traefik's access log shows the callback code once; replaying the URL restarts sign-in. — not run (needs a real host)
