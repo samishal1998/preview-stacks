@@ -1,8 +1,8 @@
 # Loki logging — a design in three slices
 
-> **Slice 1 (`--logging loki`) is built (Unreleased); slices 2 and 3 are not.** Using it:
-> [usage.md](usage.md), `pstack logging`. Slice 1's spec below is kept as approved section by section
-> on 2026-09-14. Where the build differs from it:
+> **Slices 1 (`--logging loki`) and 2 (Loki settings) are built (Unreleased); slice 3 is not.**
+> Using it: [usage.md](usage.md), `pstack logging`. Slice 1's spec below is kept as approved section
+> by section on 2026-09-14. Where the build differs from it:
 >
 > - The compose plugin check fails with one sentence; the install line is in the job log, because a
 >   step message is cut at 300 runes.
@@ -20,7 +20,37 @@
 > - `pstack logging off` counts a deployment's root `compose.generated.yml` only.
 > - `pstack logging off` keeps `LOKI_PUSH_PASSWORD`; `pstack logging loki` reuses it.
 >
-> Slices 2 and 3 record the decisions already taken; each gets its own spec before it is built.
+> Slice 2 (Loki settings) was built from its own spec, task by task in
+> [loki-logging-slice-2-plan.md](loki-logging-slice-2-plan.md). Where the build differs from that
+> spec:
+>
+> - Two permission rows cover the three routes: `GET` and `PUT /api/logging` share one, like
+>   `/api/domains`.
+> - OpenAPI documents no 503 for the two PUTs: no 503 response component exists, and
+>   `/api/control/restart` leaves its own out.
+> - A one-way or fixed-field conflict answers 409 before an out-of-range field's 400: the merge
+>   checks conflicts first.
+> - The basic UI prints the job action raw (`loki-apply`); it has no label map.
+> - A job has no `by`. Who saved is the transcript's first line (`by <actor>`) and
+>   `logging.changed`'s `by`.
+> - `loki.Writable` repeats routing's write probe: `internal/loki` does not import `routing`.
+> - The apply, resume and boot reconcile are in `api/loki_apply.go`; `routes_logging.go` holds the
+>   handlers.
+> - `server.go`'s header has no route list, so it did not change.
+> - pstack mounts `./loki:/etc/loki` in every mode, not only with logging on.
+>   `pstack logging loki|off` leaves pstack's service unchanged; the next `pstack upgrade` recreates
+>   pstack once on every host.
+> - Nothing reconciles on `pstack logging loki`, since pstack is not recreated: a hand-deleted
+>   `control/loki` comes back as defaults until the next pstack restart.
+> - Without a writable `control/loki` the PUTs answer 409:
+>   `Loki's config.yaml is missing or read-only — run pstack upgrade on the host`.
+> - `PSTACK_LOKI_DIR`, `PSTACK_LOKI_READY_TIMEOUT_MS` and `PSTACK_LOKI_UID` are env only, like every
+>   other tuning knob; `serve` has no flags for them.
+> - Not fixed: slice 1's `DetectLogging` costs a `docker ps` and an inspect per compose verb, and
+>   `GET /api/logging` adds one `ControlRuntime` per 10s poll per open Control page. The
+>   `pstack-control_logs` network left by logging off is still not pruned.
+>
+> Slice 3 records the decisions already taken and gets its own spec before it is built.
 
 ## What it is
 
@@ -371,7 +401,7 @@ multi-tenant Loki.
 
 ---
 
-## Slice 2 — Loki settings in the UI (decisions recorded; own spec before building)
+## Slice 2 — Loki settings in the UI (decisions recorded; built)
 
 - **Surface:** a panel on the Control page beside Domains and Certificates; which role may write it
   is decided in slice 2's spec, against the role ladder in `usage.md` §7e. Chunking

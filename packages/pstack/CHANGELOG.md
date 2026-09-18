@@ -34,28 +34,36 @@
 - **`init` refuses a re-run that would drop Loki or mint a new push password** — two new cases for
   the silent-revert guard. A new password would get every running container's pushes refused
   until it is redeployed.
-- **Loki settings.** Retention, chunks and storage (filesystem, or S3 from a cutover date) are held
-  to pstack's ranges and rendered into `control/loki/config.yaml`. S3 keys go in a 0600 credentials
-  file owned by Loki's uid, never in the config.
-- **`logging.changed`**, a webhook event: a Loki settings save was applied and Loki answered
-  ready. `data.changed` names the sections (`chunks`, `retention`, `storage`, `credentials`), never
-  the endpoint, bucket, key id or secret. The apply runs as a `loki-apply` job on `pstack-control`,
-  and its terminal event sends `verified: null`.
-- **`PSTACK_LOKI_DIR`, `PSTACK_LOKI_READY_TIMEOUT_MS` and `PSTACK_LOKI_UID` on `serve`**: Loki's
-  config directory (`/etc/loki`, else `<PSTACK_DATA>/control/loki`), the apply's ready wait
-  (`300000`) and the owner of `s3-credentials` (`10001`).
-- **Loki settings over the API.** `GET`/`PUT /api/logging` (maintainer) for retention and chunks,
-  `PUT /api/logging/storage` (admin) for filesystem or S3; `pstack api logging get|set|storage-set`.
-  A save that changes something answers `202 { job }`; an unchanged one on an idle host, `200`.
-- **`logging` in the client SDK:** `logging.get()`, `logging.set()` and `logging.setStorage()`,
-  with the `LokiSettings`, `LokiChunks`, `LokiS3`, `LokiLimits` and `LokiStorageInput` types.
-  `JobAction` gains `loki-apply`.
-- **A Logging panel on the Control page.** Retention and chunks for maintainers; storage for
-  admins, S3 one-way behind a confirm. It follows the `loki-apply` job, listed as `Loki settings`.
+- **Loki settings, on the Control page and the API.** `GET /api/logging` and `PUT /api/logging`
+  (maintainer) read and set retention (1–365 days) and chunking: idle period 5–60 min, max age
+  30–180 min, target size 512–1536 KiB, encoding `snappy`, `gzip`, `lz4` or `zstd`.
+  `PUT /api/logging/storage` (admin) moves storage from the filesystem to an S3-compatible bucket.
+  The move is one-way: the bucket gets a schema period from a future UTC date, and after the save
+  only the access key and secret change. A save probes the bucket with a signed PUT and DELETE and
+  answers 400 when that fails. A save that changes something answers `202 { job }`; an unchanged one
+  on an idle host, `200`. The Control page's Logging panel sets retention and chunks for maintainers
+  and storage for admins, S3 behind a confirm. The secret is write-only (reads return `secretSet`)
+  and lives in `control/loki/s3-credentials` (0600, uid 10001), never in `config.yaml`. Also
+  `pstack api logging get|set|storage-set`, and the client's `logging.get|set|setStorage` with the
+  `LokiSettings`, `LokiChunks`, `LokiS3`, `LokiLimits` and `LokiStorageInput` types. The settings
+  are stored in a new `loki_config` table (migration 9); a config export names them in `skipped`
+  (`loki: host-specific — re-enter it on the target`) and does not carry them.
+- **The `loki-apply` job.** A save renders `config.yaml.next`, checks it with `loki -verify-config`
+  in a throwaway container, swaps it in, restarts only Loki and waits for its health check. A failed
+  restart or wait restores the previous files and settings and restarts Loki again, unless that
+  would drop an S3 period that starts too soon: then the change is left in place and the job fails
+  saying so. A save made while another applies is carried by the next job, never dropped. `verified`
+  is `null`; `JobAction` gains `loki-apply`, listed as `Loki settings`. At boot, pstack finishes or
+  undoes an apply it died in, and applies again when `config.yaml` differs from the settings.
+- **`logging.changed`**, once an apply is ready: `by`, `job`, `changed` (`chunks`, `retention`,
+  `storage`, `credentials`), `storage`, `cutover`, `retentionDays`. Never the endpoint, bucket, key
+  id or secret.
+- **`PSTACK_LOKI_DIR`, `PSTACK_LOKI_READY_TIMEOUT_MS` (300000) and `PSTACK_LOKI_UID` (10001)** on
+  `serve`. Without `PSTACK_LOKI_DIR` the directory is `/etc/loki` when it exists, else
+  `<PSTACK_DATA>/control/loki`.
 
 ### Changed
 
-- **A config export names Loki's settings in `skipped`** (`loki: host-specific — re-enter it on the target`). They are not carried.
 - **A compose stack on a logging-on host runs from `compose.generated.yml`** whenever a service
   got the logging block, even with no `pstack.routing.*` labels. With logging off nothing changes.
 - **`loki.<domain>` is a control hostname**, on the primary and every added domain, always — with
@@ -69,14 +77,19 @@
   `swarm-join-script-loki`, `swarm-join-cloud-config-loki` and `swarm-status-loki`. New render cells:
   `http01-basic-compose-loki` and `dns01-advanced-swarm-loki`. The existing render cells, the
   cloud-init goldens and the swarm-join goldens stay byte-identical.
-- **`init` keeps `control/loki/config.yaml`.** It writes the file only when absent; a dry run prints
-  `[dry-run] keep <path>`. pstack mounts `control/loki` read-write at `/etc/loki` in every mode, and
-  `init` makes the directory in every mode, so `pstack logging loki|off` leaves pstack's service
-  unchanged. Loki gets `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`. The next
-  `pstack upgrade` recreates pstack and Loki. Regenerated with `bun gen/goldens.ts`: every
-  `render/control/*/docker-compose.yml` and `cli/init-dry-*.json` (compose write +25 bytes, +85 with
-  Loki; a `mkdir -p <DATA>/control/loki` line with logging off). The control template's row in
-  `facts/yaml-corpus.json` was re-measured on Bun 1.3.12.
+- **`init` keeps `control/loki/config.yaml`.** It writes the file only when it is absent, and a dry
+  run prints `[dry-run] keep <path>`. `init`, `pstack upgrade` and `pstack logging loki` no longer
+  overwrite settings saved through the API. The file is the API's: a hand edit is reverted by the
+  next apply or pstack restart, except that a live schema period is never dropped.
+- **pstack mounts `control/loki` read-write at `/etc/loki` in every mode, and Loki gets
+  `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`.** `init` makes the directory in every
+  mode, so `pstack logging loki|off` leaves pstack's service unchanged. The next `pstack upgrade`
+  recreates pstack once on every host, and Loki where it runs.
+- **Goldens (Loki settings).** Regenerated with `bun gen/goldens.ts` for the mount and the env line:
+  every `golden/render/control/*/docker-compose.yml` and `golden/cli/init-dry-*.json`, 20 files
+  (compose write +25 bytes, +85 with Loki; a `mkdir -p <DATA>/control/loki` line with logging off).
+  The control template's row in `golden/facts/yaml-corpus.json` was re-measured on Bun 1.3.12.
+  Every other golden, both `loki/config.yaml` cells included, is unchanged.
 
 ### Fixed
 
