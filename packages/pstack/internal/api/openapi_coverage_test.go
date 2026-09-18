@@ -8,8 +8,8 @@
 //
 // Reading the source rather than the permissions table is deliberate: that table is DEFAULT-DENY, so
 // a route nobody listed is root's and simply absent from it, and the whole pre-gate set — health,
-// probe, login, logout, bootstrap, the SSO round trip — never appears there at all. A coverage test
-// built on it would pass while missing seven routes.
+// probe, login, logout, bootstrap, the SSO round trip, Grafana's verify and start — never appears
+// there at all. A coverage test built on it would pass while missing nine routes.
 package api
 
 import (
@@ -35,6 +35,11 @@ var notInTheSpec = map[string]string{
 	// command that printed the Location header would be a worse `curl`.
 	"/api/auth/sso/start":    "a 302 into a provider's authorize URL, for a browser",
 	"/api/auth/sso/callback": "the provider's redirect back, for a browser",
+
+	// Grafana sign-in. Traefik calls verify for every request to grafana.<domain>; a browser follows
+	// a redirect to start. Neither is a command.
+	"/api/auth/grafana/verify": "Traefik's forwardAuth, for grafana.<domain>",
+	"/api/auth/grafana/start":  "a 302 for a browser",
 
 	// Session cookies, which a CLI has no use for: it authenticates with a bearer token, and
 	// `pstack api tokens create` is how it gets one.

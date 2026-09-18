@@ -1542,6 +1542,36 @@ pstack api logging get
 pstack api logging set --data '{"retentionDays":14,"chunks":{"idlePeriodMinutes":30,"maxAgeMinutes":120,"targetSizeKiB":1536,"encoding":"snappy"}}'
 ```
 
+### Grafana
+
+With `--logging loki`, Grafana runs at `https://grafana.<domain>`. Sign in with your pstack account.
+A visit without a Grafana session goes through pstack's sign-in (password or SSO) and returns to the
+page you opened. A browser already signed in to pstack goes straight through.
+
+| pstack role | Grafana |
+|---|---|
+| `viewer` | `403 No Grafana access.` |
+| `developer` | Editor |
+| `maintainer` | Editor |
+| `admin` | Admin |
+
+- **pstack's sign-out is Grafana's.** Signing out, changing your password or losing the account ends
+  Grafana access on the next request. A role change applies on the next request. Grafana has no
+  sign-out menu.
+- **Only a browser session.** `PSTACK_TOKEN` and personal tokens are not Grafana access.
+- **Log lines in Grafana are not redacted.** Loki stores what containers printed, secrets included,
+  and Grafana shows it as stored. Editors and Admins read it in Explore. That is why viewers are
+  refused: pstack shows them redacted logs only. Developers and above can already open a shell in
+  those containers.
+- **No Grafana server admin.** Plugin installs and server settings are unavailable in Grafana's UI.
+- **No live tail.** Grafana Live is off, so nothing keeps streaming after a sign-out.
+- **Logs Drilldown downloads from grafana.com** on Grafana's first start. Without that egress,
+  Explore still works.
+- **`pstack logging off` keeps Grafana's volume.** Turning logging back on restores users and
+  preferences.
+- **A username deleted and created again** inherits the old Grafana user: its preferences, stars and
+  the dashboards it owns.
+
 ### Why `init` is CLI-only, and always will be
 
 `init` — and `upgrade` — are CLI-only and will never be HTTP routes,
@@ -2760,6 +2790,7 @@ every account until someone puts it in the table.
 | Route | Least role |
 |---|---|
 | `GET /api/health` | none — it is how `init` waits for the container |
+| `GET /api/auth/grafana/verify` · `/start` | none — verify decides by its own cookie; viewers get `403` |
 | `GET /api/auth/me` · `POST /api/auth/logout` | any account |
 | `GET`/`POST /api/tokens` · `DELETE /api/tokens/:id` | any account (they are already scoped to the caller) |
 | `PUT /api/users/:id/password` **for yourself** | any account |
@@ -3320,8 +3351,9 @@ an admin because there is nobody to promote it).
 
 `:id` is a **registry id** (e.g. `pr-123`), never the resolved stack name. **Every route requires a
 principal** — reads included, since 0.10.0 — except `/api/health`, the login/bootstrap routes and the
-two SSO legs, which are how you become one. A session cookie is what lets the log stream use
-`EventSource`, which cannot send headers. Since 0.31.0 a principal is not enough on its own: each
+two SSO legs, which are how you become one, and Grafana's two sign-in routes ([Grafana](#grafana)). A
+session cookie is what lets the log stream use `EventSource`, which cannot send headers. Since 0.31.0
+a principal is not enough on its own: each
 route also names a **least role** — [7e](#7e-who-can-do-what-the-four-roles-0320) is the matrix, and
 anything it does not list is the root token's alone.
 
@@ -3352,6 +3384,8 @@ anything it does not list is the root token's alone.
 | POST | `/api/deployments/:id/share` | `{ views?: ["details","logs"], ttl?: "7d" }` | **201** `{ url, token, views, expiresAt }` — a read-only link; 400 with no `PSTACK_TOKEN` to sign with, or a ttl over `30d` |
 | GET | `/api/auth/sso/start` | `?provider=<key>&next=<same-origin path>` | **302** to that provider, with PKCE. Keyless: one enabled provider is picked, several land on `/login?sso_error=…` naming the keys, none says so too. No auth — this *is* how you sign in |
 | GET | `/api/auth/sso/callback` | `?code=&state=` (the provider's redirect) | **302** with a session cookie, or **302** to `/login?sso_error=…` — completed against the provider the state was minted for. No auth |
+| GET | `/api/auth/grafana/verify` | Traefik's `X-Forwarded-Uri`/`-Method`/`-Host`, the browser's cookies | **204** with `X-WEBAUTH-USER`/`X-WEBAUTH-ROLE` · **302** to sign-in, or from `/-/pstack/callback` back to Grafana with the Grafana cookie · **401** a fetch or frame with no Grafana cookie · **403** `No Grafana access.` or `Cross-origin request refused.` · **404** on a host without Grafana. Traefik's forwardAuth for `grafana.<domain>`. No auth |
+| GET | `/api/auth/grafana/start` | `?state=&next=` | **302** to Grafana's callback with a 60-second code, or to `/login?next=…` when signed out · **400** `Sign-in link is invalid.` · **404** on a host without Grafana. A 302 for a browser. No auth |
 | GET | `/api/sso/config` | — | `{ providers: [{ key, config, secretSet, updatedAt }…], callbackUrl, presets[] }` — the secret has **no read path**, a read learns `secretSet` and nothing else |
 | PUT | `/api/sso/config` | `{ key, …config, clientSecret }` | `{ ok, key, config, callbackUrl }` · 400 on a bad field, an unreachable issuer, or a keyless body when several providers exist. Submitting the mask keeps that key's stored secret |
 | DELETE | `/api/sso/config` · `/api/sso/config/<key>` | — | forget that provider; the accounts it created stay · bare with several providers is 400 naming the keys · 404 if none |

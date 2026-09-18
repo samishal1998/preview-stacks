@@ -1147,6 +1147,78 @@ the apply pstack stopped in, and goes forward to the row:
 4. The render differs from `config.yaml` or `s3-credentials`: a job, `by pstack (boot)`. An S3 render
    pstack cannot chown for Loki: one line, no job.
 
+## 5h. Grafana sign-in
+
+With `--logging loki`, Grafana runs at `grafana.<domain>`, and people sign in with their pstack
+accounts. Grafana never sees a password. Traefik's forwardAuth asks pstack about every request, and
+Grafana's auth proxy trusts the two headers pstack answers with, `X-WEBAUTH-USER` and
+`X-WEBAUTH-ROLE`. The design and its failure modes are in
+[`loki-logging-design.md`](loki-logging-design.md); this section records where it plugs in.
+
+### Discovery: a grafana container, read from docker
+
+pstack learns that Grafana is on the way it learns about Loki (§5g). `inspect.GrafanaOn` looks for a
+`grafana` service in the control project with `docker ps -a`. There is no setting and no env var. The
+answer is cached in `Server.grafana`: stored once in `Start`, before the listener serves, and
+refreshed on every reindex tick, never per request. With no container, no `PSTACK_DOMAIN` or no
+`PSTACK_TOKEN`, both routes answer `404` and `/api/health` has no `grafana` key. A host without
+Grafana has no sign-in surface.
+
+### Two pre-gate routes, and verify never asks `principal()`
+
+`GET /api/auth/grafana/verify` is forwardAuth's address. `GET /api/auth/grafana/start` is for a
+browser on `control.<domain>`. Both run in `preGate`, for SSO's reason: nobody has a principal yet.
+Verify reads one cookie of its own and nothing else, not `pstack_session` and not a bearer. So neither
+a pstack session sent to `grafana.<domain>` nor `PSTACK_TOKEN` gives Grafana access. Only a browser
+session has a Grafana identity.
+
+### The Grafana cookie is derived: the share-link precedent again
+
+`__Host-pstack_grafana` is `<id_hash>.<base64url HMAC-SHA256(PSTACK_TOKEN, "pstack-grafana\n" + id_hash)>`,
+where `id_hash` is the parent pstack session's stored hash. There is no table, for §5e's reason.
+**The parent session's row is the Grafana session.** Every Grafana request joins `sessions` to `users`
+by primary key. So a sign-out, a password change, a deleted account or an expired session ends access
+on the next request, and a role change applies on the next request. Rotating `PSTACK_TOKEN` fails
+every MAC, and the browser signs in again. The prefix keeps this MAC apart from share JWTs, whose
+signing input starts `eyJ`. The hash is not a pstack credential anywhere else: `principal` and
+`Logout` hash whatever they are given.
+
+Both cookies are `__Host-`, so a preview on `*.<domain>` cannot plant either. They are always
+`Secure`, unlike `pstack_session`, because a browser drops a `__Host-` cookie without it.
+
+### The redirect sign-in, and the callback inside verify
+
+- A top-level navigation (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) without the cookie
+  gets a 302 to start and a fresh state in `__Host-pstack_grafana_state` (900 s).
+- Anything else gets `401`. A fetch would turn a 302 into a CORS error, and a same-site preview must
+  not frame a silent sign-in.
+- Start turns the browser's `pstack_session` into a 60-second, single-use code bound to that state,
+  kept in the SSO transient store under `grafana:<code>` (§5f). With no session, start sends the
+  browser to `/login` and back.
+- The callback is a branch of verify, on `/-/pstack/callback`. forwardAuth relays a 302 and its
+  `Set-Cookie`, so the callback needs no router and never reaches Grafana.
+- The callback `Take`s the code **before** comparing the state, so any presentation burns it. A
+  failure starts sign-in afresh.
+- Every `Location` is absolute and built from `PSTACK_DOMAIN`, because Traefik resolves a relative
+  one against `http://pstack:7878`. `next` is `SafeNext`'d at both ends.
+
+An unsafe method must carry `Origin: https://grafana.<domain>`. Every preview is same-site with
+Grafana, so `SameSite=Lax` does not stop its POSTs. `X-Forwarded-Method` comes from Traefik, and a
+request without it fails the check.
+
+### Roles, and why viewers are refused
+
+| pstack | Grafana |
+|---|---|
+| `viewer` | refused, `403` |
+| `developer`, `maintainer` | Editor |
+| `admin` | Admin |
+
+Any other role gets `403`, never a default, because Grafana keeps a user's old role when the header
+is missing. Viewers are refused because a Grafana Viewer can still run LogQL over Loki's unredacted
+lines through panels and `/api/ds/query`, and pstack shows viewers redacted logs only (invariant 15).
+There is no Grafana server admin.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves

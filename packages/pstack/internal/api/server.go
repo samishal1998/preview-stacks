@@ -3,7 +3,7 @@
 //
 // THIS API MUST NEVER MANAGE THE STACK IT RUNS IN (invariant 12). VARIABLES are merged from the
 // request's `?query` (and a PUT's `env`) over the process env, once, at resolve time. SECURITY:
-// every route but health/probe/openapi/login/logout/bootstrap/sso is behind the principal gate, and behind THAT
+// every route but health/probe/openapi/login/logout/bootstrap/sso/grafana verify+start is behind the principal gate, and behind THAT
 // a second one — permissions.go, a single ordered (path, method, minimum role) table consulted once
 // at the top of routes(), default-deny, so a route nobody listed is root's. Responses are built
 // field by field and never echo a resolved Stack.Env.

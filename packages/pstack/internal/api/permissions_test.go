@@ -202,11 +202,13 @@ var routeSources = []string{"routes.go", "routes_auth.go"}
 // scan, excluded here ON PURPOSE, so adding a pre-gate route is a deliberate edit to this list
 // rather than a silent hole.
 var preGatePaths = map[string]bool{
-	"/api/auth/login":        true,
-	"/api/auth/logout":       true,
-	"/api/auth/bootstrap":    true,
-	"/api/auth/sso/start":    true,
-	"/api/auth/sso/callback": true,
+	"/api/auth/login":          true,
+	"/api/auth/logout":         true,
+	"/api/auth/bootstrap":      true,
+	"/api/auth/sso/start":      true,
+	"/api/auth/sso/callback":   true,
+	"/api/auth/grafana/verify": true,
+	"/api/auth/grafana/start":  true,
 }
 
 // matchers maps the identifier a dispatch site uses to the compiled pattern. A matcher the scan
