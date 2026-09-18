@@ -50,6 +50,8 @@
 - **`logging` in the client SDK:** `logging.get()`, `logging.set()` and `logging.setStorage()`,
   with the `LokiSettings`, `LokiChunks`, `LokiS3`, `LokiLimits` and `LokiStorageInput` types.
   `JobAction` gains `loki-apply`.
+- **A Logging panel on the Control page.** Retention and chunks for maintainers; storage for
+  admins, S3 one-way behind a confirm. It follows the `loki-apply` job, listed as `Loki settings`.
 
 ### Changed
 

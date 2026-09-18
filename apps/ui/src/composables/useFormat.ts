@@ -55,6 +55,7 @@ const ACTION_LABELS: Record<string, string> = {
   verify: 'Verify',
   sleep: 'Sleep',
   wake: 'Wake',
+  'loki-apply': 'Loki settings',
 };
 
 export function actionLabel(action: string | undefined): string {

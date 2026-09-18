@@ -10,16 +10,28 @@
  * One action, one refusal: any control service can be restarted except `pstack` itself — the
  * server refuses its own container by name, whoever asks, and this page does not offer it.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
-import type { ControlRuntime, DomainsStatus, TlsRedeploy, TlsStatus } from '../api/types';
+import type {
+  ControlRuntime,
+  DomainsStatus,
+  JobResponse,
+  JobStub,
+  LokiSettings,
+  LokiStorageInput,
+  TlsRedeploy,
+  TlsStatus,
+} from '../api/types';
 import { usePolling } from '../composables/usePolling';
 import { can } from '../composables/useAuth';
+import { state } from '../composables/useControlPlane';
 import { ago, sentence, stamp } from '../composables/useFormat';
+import { isTerminal, supersededBy } from '../composables/useJobQueue';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import RefreshButton from '../components/RefreshButton.vue';
+import SelectMenu from '../components/SelectMenu.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 
 const view = ref<ControlRuntime | null>(null);
@@ -156,6 +168,129 @@ async function redeployAll(): Promise<void> {
   }
   redeployed.value = r.body;
   toast('ok', `Redeploying ${r.body.started.length}, skipped ${r.body.skipped.length}.`);
+}
+
+// ── Loki's settings ───────────────────────────────────────────────────────────────────────────────
+const logging = ref<LokiSettings | null>(null);
+const loggingError = ref('');
+const savingLogging = ref(false);
+/** The apply job a save here started — or the successor carrying it — until it ends. */
+const applyingJob = ref<string | null>(null);
+
+/** `type="number"` hands back a number once the box parses and '' while it is empty (useJobQueue.ts:64-71). */
+type Box = number | string;
+const draft = ref<{ retentionDays: Box; idlePeriodMinutes: Box; maxAgeMinutes: Box; targetSizeKiB: Box; encoding: string }>({
+  retentionDays: '',
+  idlePeriodMinutes: '',
+  maxAgeMinutes: '',
+  targetSizeKiB: '',
+  encoding: '',
+});
+const storageType = ref<'filesystem' | 's3'>('filesystem');
+const s3Draft = ref({ endpoint: '', region: '', bucket: '', pathStyle: false, accessKeyId: '' });
+const secretDraft = ref('');
+
+// Refill only when the SAVED values change (a rollback included): the 10s poll must not wipe typing.
+watch(
+  () => logging.value && JSON.stringify([logging.value.retentionDays, logging.value.chunks, logging.value.storage]),
+  () => {
+    const l = logging.value;
+    if (!l) return;
+    draft.value = { retentionDays: l.retentionDays, ...l.chunks };
+    storageType.value = l.storage.type;
+    const s3 = l.storage.s3;
+    s3Draft.value = {
+      endpoint: s3?.endpoint ?? '',
+      region: s3?.region ?? '',
+      bucket: s3?.bucket ?? '',
+      pathStyle: s3?.pathStyle ?? false,
+      accessKeyId: s3?.accessKeyId ?? '',
+    };
+  },
+);
+
+const onS3 = computed(() => logging.value?.storage.type === 's3');
+/** S3 is one-way and fixed once saved; below admin nothing in storage is writable. */
+const storageLocked = computed(() => onS3.value || !can('admin'));
+const encodings = computed(() => (logging.value?.limits.encodings ?? []).map((e) => ({ value: e, label: e })));
+const storageBadge = computed(() => {
+  const s3 = logging.value?.storage.s3;
+  if (!s3) return 'Filesystem';
+  // The cutover is 00:00 UTC of its day; before it Loki still writes to the filesystem.
+  return s3.cutover > new Date().toISOString().slice(0, 10) ? `S3 from ${s3.cutover}` : 'S3';
+});
+
+/** One read of the followed job: keep following, follow its successor, or end with a toast. */
+async function follow(id: string): Promise<void> {
+  const r = await api.get<JobResponse>(`/api/jobs/${encodeURIComponent(id)}`);
+  if (applyingJob.value !== id) return; // a newer save took over during the read
+  if (r.status === 404) {
+    applyingJob.value = null; // the record is gone
+    return;
+  }
+  if (!r.ok || !isTerminal(r.body.job.state)) return;
+  const job = r.body.job;
+  if (job.state === 'superseded') {
+    // No toast: the successor carries this save. Keep this id until the shell's job list shows it.
+    applyingJob.value = supersededBy(job, state.jobs)?.id ?? id;
+    return;
+  }
+  applyingJob.value = null;
+  const to = { to: `/jobs/${encodeURIComponent(id)}` };
+  if (job.state === 'ok') toast('ok', 'Applied.', to);
+  else if (job.state === 'cancelled') toast('warn', 'Cancelled.', to);
+  else toast('error', 'Apply failed.', to); // `leaked` cannot happen: an apply has no assert_gone
+}
+
+async function loadLogging(): Promise<void> {
+  if (!can('maintainer')) return; // the read is maintainer's; below it every tick would 403
+  if (applyingJob.value) await follow(applyingJob.value);
+  const r = await api.get<LokiSettings>('/api/logging');
+  if (r.ok) logging.value = r.body;
+}
+usePolling(loadLogging, 10_000);
+
+async function saveLogging(path: string, body: unknown): Promise<void> {
+  savingLogging.value = true;
+  const r = await api.put<{ job: JobStub } | { changed: false }>(path, body);
+  savingLogging.value = false;
+  if (!r.ok) {
+    loggingError.value = r.body.error ?? `HTTP ${r.status}`;
+    return;
+  }
+  loggingError.value = '';
+  secretDraft.value = '';
+  const res = r.body;
+  if ('job' in res) {
+    applyingJob.value = res.job.id;
+    toast('info', 'Applying.', { to: `/jobs/${encodeURIComponent(res.job.id)}`, toLabel: 'Follow' });
+  } else {
+    toast('ok', 'No change.');
+  }
+  await loadLogging();
+}
+
+const saveChunks = () =>
+  saveLogging('/api/logging', {
+    retentionDays: Number(draft.value.retentionDays),
+    chunks: {
+      idlePeriodMinutes: Number(draft.value.idlePeriodMinutes),
+      maxAgeMinutes: Number(draft.value.maxAgeMinutes),
+      targetSizeKiB: Number(draft.value.targetSizeKiB),
+      encoding: draft.value.encoding,
+    },
+  });
+
+async function saveStorage(): Promise<void> {
+  const l = logging.value;
+  if (!l) return;
+  const body: LokiStorageInput = {
+    type: 's3',
+    ...s3Draft.value,
+    secretAccessKey: secretDraft.value, // '' keeps the stored secret
+    cutover: l.storage.s3?.cutover ?? l.limits.earliestCutover, // the date the confirm named
+  };
+  await saveLogging('/api/logging/storage', body);
 }
 </script>
 
@@ -374,5 +509,175 @@ async function redeployAll(): Promise<void> {
         — watch them under Jobs.
       </p>
     </section>
+
+    <!-- ============================ Loki's settings ============================ -->
+    <!-- Hidden when this host runs no Loki. The body is what was saved; the apply job says what ran. -->
+    <section v-if="can('maintainer') && logging && logging.enabled !== false" class="panel settings-form">
+      <div class="phead">
+        <h2 class="section">Logging</h2>
+        <a
+          class="hint-btn"
+          href="https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#loki-settings"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Help"
+          >?</a
+        >
+        <span class="grow" />
+        <RouterLink v-if="applyingJob" class="badge running" :to="`/jobs/${encodeURIComponent(applyingJob)}`">Applying</RouterLink>
+        <span class="badge info">{{ storageBadge }}</span>
+      </div>
+
+      <p v-if="logging.enabled === null" class="mute">Docker did not answer.</p>
+      <template v-else>
+        <ErrorNote v-if="loggingError" :text="loggingError" />
+
+        <div class="field">
+          <label for="loki-retention">Retention</label>
+          <div class="row">
+            <input
+              id="loki-retention"
+              v-model="draft.retentionDays"
+              type="number"
+              step="1"
+              inputmode="numeric"
+              :min="logging.limits.retentionDays.min"
+              :max="logging.limits.retentionDays.max"
+              style="width: 8rem"
+            />
+            <span class="mute">days</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="loki-idle">Chunk idle</label>
+          <div class="row">
+            <input
+              id="loki-idle"
+              v-model="draft.idlePeriodMinutes"
+              type="number"
+              step="1"
+              inputmode="numeric"
+              :min="logging.limits.idlePeriodMinutes.min"
+              :max="logging.limits.idlePeriodMinutes.max"
+              style="width: 8rem"
+            />
+            <span class="mute">min</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="loki-max-age">Chunk max age</label>
+          <div class="row">
+            <input
+              id="loki-max-age"
+              v-model="draft.maxAgeMinutes"
+              type="number"
+              step="1"
+              inputmode="numeric"
+              :min="logging.limits.maxAgeMinutes.min"
+              :max="logging.limits.maxAgeMinutes.max"
+              style="width: 8rem"
+            />
+            <span class="mute">min</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="loki-size">Chunk size</label>
+          <div class="row">
+            <input
+              id="loki-size"
+              v-model="draft.targetSizeKiB"
+              type="number"
+              step="1"
+              inputmode="numeric"
+              :min="logging.limits.targetSizeKiB.min"
+              :max="logging.limits.targetSizeKiB.max"
+              style="width: 8rem"
+            />
+            <span class="mute">KiB</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="loki-encoding">Encoding</label>
+          <SelectMenu id="loki-encoding" v-model="draft.encoding" label="Encoding" :options="encodings" />
+        </div>
+        <div class="row" style="margin-top: var(--s4)">
+          <ActionButton variant="primary" :pending="savingLogging" @click="saveChunks">Save</ActionButton>
+          <span class="mute">Restarts Loki.</span>
+        </div>
+
+        <!-- Toggles, not a tablist (ui-rules "No ARIA is better than bad ARIA"). -->
+        <div class="row" role="group" aria-label="Storage" style="margin-top: var(--s5)">
+          <button :aria-pressed="storageType === 'filesystem'" :disabled="storageLocked" @click="storageType = 'filesystem'">
+            Filesystem
+          </button>
+          <button :aria-pressed="storageType === 's3'" :disabled="storageLocked" @click="storageType = 's3'">S3</button>
+        </div>
+        <!-- The reason sits beside the disabled controls as text: a disabled control leaves the tab order. -->
+        <p v-if="storageLocked" class="hint">{{ can('admin') ? 'Fixed once saved.' : 'Admin only.' }}</p>
+
+        <template v-if="storageType === 's3'">
+          <div class="field">
+            <label for="loki-endpoint">Endpoint</label>
+            <input id="loki-endpoint" v-model="s3Draft.endpoint" type="url" class="mono" spellcheck="false" :disabled="storageLocked" />
+          </div>
+          <div class="field">
+            <label for="loki-region">Region</label>
+            <input id="loki-region" v-model="s3Draft.region" type="text" class="mono" spellcheck="false" :disabled="storageLocked" />
+          </div>
+          <div class="field">
+            <label for="loki-bucket">Bucket</label>
+            <input id="loki-bucket" v-model="s3Draft.bucket" type="text" class="mono" spellcheck="false" :disabled="storageLocked" />
+          </div>
+          <div class="field">
+            <label class="check"><input v-model="s3Draft.pathStyle" type="checkbox" :disabled="storageLocked" /> Path-style</label>
+          </div>
+          <div class="field">
+            <label for="loki-key-id">Access key ID</label>
+            <input
+              id="loki-key-id"
+              v-model="s3Draft.accessKeyId"
+              type="text"
+              class="mono"
+              spellcheck="false"
+              autocomplete="off"
+              :disabled="!can('admin')"
+            />
+          </div>
+          <template v-if="can('admin')">
+            <div class="field">
+              <label for="loki-secret">Secret access key</label>
+              <input id="loki-secret" v-model="secretDraft" type="password" spellcheck="false" autocomplete="new-password" />
+              <p class="hint">Write-only.{{ logging.storage.s3?.secretSet ? ' Leave empty to keep.' : '' }}</p>
+            </div>
+            <!-- Two buttons, not one with a conditional `confirm`: with `confirm` set, a parent @click
+                 still fires on the arming click (ActionButton.vue:71). -->
+            <div class="row" style="margin-top: var(--s4)">
+              <ActionButton v-if="onS3" :pending="savingLogging" @click="saveStorage">Save keys</ActionButton>
+              <ActionButton
+                v-else
+                :pending="savingLogging"
+                :confirm="`One-way. S3 from ${logging.limits.earliestCutover} UTC?`"
+                @run="saveStorage"
+              >
+                Switch to S3
+              </ActionButton>
+            </div>
+          </template>
+        </template>
+      </template>
+    </section>
   </div>
 </template>
+
+<style scoped>
+/* A pressed toggle. app.css styles one only inside EquivalentCommand's own scope (:131). */
+button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+/* app.css has no rule for a disabled text input (SettingsView.vue:309-315). */
+input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+</style>
