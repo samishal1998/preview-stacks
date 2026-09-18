@@ -1314,11 +1314,11 @@ What it does, in order:
 | Step | Detail |
 |---|---|
 | 0. Preconditions | Docker socket at `/var/run/docker.sock`, the Compose v2 plugin, and the control image present. Fails by name, before anything is created — run `pstack build-image` if the image is missing — it builds from the installed package, no checkout needed |
-| 1. State dirs | `<data>/deployments` (the registry) and `<data>/control/traefik-dynamic` (Traefik's file provider, created empty so the mount does not fail) |
+| 1. State dirs | `<data>/deployments` (the registry), `<data>/control/traefik-dynamic` (Traefik's file provider, created empty so the mount does not fail) and `<data>/control/loki` (`0755`, in every mode; pstack mounts it read-write at `/etc/loki`) |
 | 1b. Swarm | under `--orchestrator swarm`: `docker swarm init` if this daemon is not already a manager. Never leaves a swarm |
 | 1c. Loki plugin | only with `--logging loki`: installs `grafana/loki-docker-driver:3.7.7` on this node as `loki` and enables it — skipped when present, enabled when disabled. A failure fails `init`: under compose every logged service would fail to create |
 | 2. Networks | `preview-ingress` and `preview-shared`, created idempotently — `bridge` under compose, `overlay --attachable` under swarm. A network that exists with the other driver is swapped only when nothing but the control stack is on it; a preview still attached is a hard stop naming it. **Both must be declared `external: true` in every per-PR compose file** — declare one non-external and Compose silently makes `pr-123_preview-ingress` instead, so the container comes up healthy and unreachable |
-| 3. Config | `control/docker-compose.yml` (the template, with the challenge, UI, swarm-provider and wake-router blocks rendered), `control/.env` (`0600`, holds `PSTACK_TOKEN` and `PSTACK_ORCHESTRATOR`), `control/dns.env` (`0600`, holds the DNS credential; written either way so switching modes needs no extra step). Traefik gains a metrics entrypoint on `:8082` (unpublished; the API reads it for `sleep.idle`) and the pstack container the catch-all `pstack-wake` router. With `--logging loki`: the `loki` service, `control/loki/config.yaml` (`0644` — Loki runs as uid 10001; no credential) and `LOKI_PUSH_PASSWORD` in `.env` (`PSTACK_LOKI_PASSWORD`, or 32 generated hex characters) |
+| 3. Config | `control/docker-compose.yml` (the template, with the challenge, UI, swarm-provider and wake-router blocks rendered), `control/.env` (`0600`, holds `PSTACK_TOKEN` and `PSTACK_ORCHESTRATOR`), `control/dns.env` (`0600`, holds the DNS credential; written either way so switching modes needs no extra step). Traefik gains a metrics entrypoint on `:8082` (unpublished; the API reads it for `sleep.idle`) and the pstack container the catch-all `pstack-wake` router. With `--logging loki`: the `loki` service, `control/loki/config.yaml` (`0644` — Loki runs as uid 10001; no credential; written only when absent) and `LOKI_PUSH_PASSWORD` in `.env` (`PSTACK_LOKI_PASSWORD`, or 32 generated hex characters) |
 | 4. Up | `docker compose -p pstack-control -f <path> up -d --remove-orphans` |
 | 5. **Prove it** | polls the container's `HEALTHCHECK` for ~60s. `up -d` exits 0 as soon as containers are *created*, so a crash-looping API would otherwise be reported as success |
 | 6. Next steps | the URLs, the rotation recipe, and the generated `PSTACK_TOKEN` — **the only time it is printed** |
@@ -1486,6 +1486,9 @@ the `loki` volume is left on purpose, for a later `pstack logging loki` to reuse
 
 `pstack upgrade` keeps whichever mode the host is in, and the push password with it. Workers get the
 plugin from the join material; see [Swarm mode](#swarm-mode).
+
+`control/loki/config.yaml` is kept on `init`, `upgrade` and `logging loki`. pstack mounts
+`control/loki` in both modes, so `pstack logging` never recreates the pstack container.
 
 #### Upgrading the plugin by hand
 

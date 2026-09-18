@@ -664,6 +664,17 @@ func TestLokiService(t *testing.T) {
 		}
 	})
 
+	t.Run("Loki reads S3 credentials from its mount, the line after GOMEMLIMIT", func(t *testing.T) {
+		// negative control: delete the AWS_SHARED_CREDENTIALS_FILE line from LokiService — the contiguous substring is missing.
+		// A container's env is fixed at creation and `docker restart` keeps it, so init sets this, not the API.
+		const want = "      GOMEMLIMIT: 1600MiB\n      AWS_SHARED_CREDENTIALS_FILE: /etc/loki/s3-credentials\n"
+		for _, c := range []initctl.Challenge{initctl.HTTP01, initctl.DNS01} {
+			if block := initctl.LokiService(initctl.Loki, c, pw); strings.Count(block, want) != 1 {
+				t.Errorf("%s: no %q:\n%s", c, want, block)
+			}
+		}
+	})
+
 	t.Run("logging off renders nothing", func(t *testing.T) {
 		// negative control: drop the `logging != Loki` early return — both cases render the service.
 		for _, l := range []initctl.Logging{initctl.LoggingNone, ""} {
@@ -864,7 +875,7 @@ func TestLokiConfig(t *testing.T) {
 }
 
 // init --logging loki: the push password, its .env line, Loki's config and the plugin step. Logging off
-// is today's bytes — TestInitGoldens proves that for all eight cells, so it is not repeated here.
+// renders no Loki beyond pstack's ./loki mount — TestInitGoldens pins all eight cells' bytes.
 func TestInitLoki(t *testing.T) {
 	loki := func(r *exec.Fake, out *bytes.Buffer) func(*initctl.Options) {
 		return func(o *initctl.Options) { o.Logging, o.Runner, o.Out = initctl.Loki, r, out }
@@ -986,6 +997,87 @@ func TestInitLoki(t *testing.T) {
 		}
 	})
 
+	// After a slice-2 save the file is the API's: an S3 schema period lives only there. init re-runs on
+	// every upgrade and `pstack logging loki`, and a rewrite would drop that period.
+	t.Run("an existing loki config.yaml is kept, and a dry run says keep", func(t *testing.T) {
+		// negative control: drop the os.Stat guard in Init so write always runs — the file is overwritten and the dry run prints `write`.
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		dir := t.TempDir()
+		p := filepath.Join(dir, "control", "loki", "config.yaml")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		saved := strings.Replace(pstack.LokiConfig, "  retention_period: 168h", "  retention_period: 72h", 1)
+		if saved == pstack.LokiConfig {
+			t.Fatal("templates/control/loki/config.yaml has no `  retention_period: 168h` line")
+		}
+		if err := os.WriteFile(p, []byte(saved), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		opts := func(dryRun bool, r exec.Runner, out *bytes.Buffer) initctl.Options {
+			return initctl.Options{
+				DataDir: dir, Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+				Orchestrator: spec.Compose, Logging: initctl.Loki, DryRun: dryRun, Runner: r, Out: out,
+			}
+		}
+
+		var out bytes.Buffer
+		if err := initctl.Init(opts(false, okRunner("inactive", ""), &out)); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, p); got != saved {
+			t.Errorf("init rewrote config.yaml:\n%s", got)
+		}
+		// "keep "+p, not a bare "keep": t.TempDir() folds this subtest's name into every printed path.
+		if strings.Contains(out.String(), "keep "+p) {
+			t.Errorf("a real run printed a keep line:\n%s", out.String())
+		}
+
+		// The real runner, not a Fake: only it prints `[dry-run]` lines.
+		var dry bytes.Buffer
+		if err := initctl.Init(opts(true, exec.New(exec.Options{DryRun: true, Out: &dry}), &dry)); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(dry.String(), "  [dry-run] keep "+p+"\n") {
+			t.Errorf("no keep line:\n%s", dry.String())
+		}
+		if strings.Contains(dry.String(), "  [dry-run] write "+p+" (") {
+			t.Errorf("the dry run would write config.yaml:\n%s", dry.String())
+		}
+	})
+
+	// The mount is in the template, not added by LokiWiring: `pstack logging loki|off` then leaves pstack's
+	// service byte-identical, so the switch never recreates pstack (and never kills a job in flight).
+	t.Run("pstack mounts ./loki read-write at /etc/loki with logging off and on", func(t *testing.T) {
+		// negative control: delete `      - ./loki:/etc/loki` from templates/control/docker-compose.yml — pstack's loki mounts read [] in both modes.
+		t.Setenv("PSTACK_LOKI_PASSWORD", "")
+		for _, l := range []initctl.Logging{initctl.LoggingNone, initctl.Loki} {
+			_, yaml := render(t, func(o *initctl.Options) { o.Logging = l })
+			v, err := yamlx.ParseString(yaml)
+			if err != nil {
+				t.Fatal(err)
+			}
+			svcs := v.(*omap.Map).GetMap("services")
+			lokiMounts := func(svc string) (out []string) {
+				for _, m := range svcs.GetMap(svc).GetSlice("volumes") {
+					if s, _ := m.(string); strings.HasPrefix(s, "./loki:") {
+						out = append(out, s)
+					}
+				}
+				return out
+			}
+			// Same container path as Loki's own: a filename means the same file to both.
+			if m := fmt.Sprint(lokiMounts("pstack")); m != "[./loki:/etc/loki]" {
+				t.Errorf("%q: pstack's loki mounts %s", l, m)
+			}
+			if l == initctl.Loki {
+				if m := fmt.Sprint(lokiMounts("loki")); m != "[./loki:/etc/loki:ro]" {
+					t.Errorf("loki's own mounts %s", m)
+				}
+			}
+		}
+	})
+
 	t.Run("control/loki is 0755 regardless of umask", func(t *testing.T) {
 		// negative control: pass noMode instead of 0o755 to ensureDir for control/loki — under a
 		// restrictive umask the directory renders 0700 and uid 10001 (Loki) cannot traverse it.
@@ -1004,21 +1096,27 @@ func TestInitLoki(t *testing.T) {
 
 	// R5 amends the plan: LOKI_PUSH_PASSWORD survives `pstack logging off` (spec 291 — `pstack upgrade`
 	// and `pstack logging` reuse the stored password), so a valid env password is kept even with logging
-	// none. Everything ELSE about "off" stays today's behaviour: no loki dir, no plugin, no compose block.
-	t.Run("logging off: no loki dir, no plugin, no compose block — but PSTACK_LOKI_PASSWORD is kept in .env", func(t *testing.T) {
+	// none. "Off" has no plugin, no loki service and no config.yaml; control/loki itself exists in every
+	// mode, because pstack mounts it in every mode.
+	t.Run("logging off: control/loki at 0755 but no config.yaml, no plugin, no loki service — PSTACK_LOKI_PASSWORD is kept in .env", func(t *testing.T) {
 		// negative control: re-gate `os.Getenv("PSTACK_LOKI_PASSWORD")` under `if logging == Loki` (pre-R5) — the .env line disappears.
+		// negative control: re-wrap control/loki's ensureDir in `if logging == Loki` — control/loki does not exist.
 		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
 		r := okRunner("inactive", "")
 		var out bytes.Buffer
 		dir, yaml := render(t, func(o *initctl.Options) { o.Runner, o.Out = r, &out })
-		if _, err := os.Stat(filepath.Join(dir, "control", "loki")); !os.IsNotExist(err) {
-			t.Errorf("control/loki exists: %v", err)
+		if st, err := os.Stat(filepath.Join(dir, "control", "loki")); err != nil || st.Mode().Perm() != 0o755 {
+			t.Errorf("control/loki: %v, want a 0755 directory", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "control", "loki", "config.yaml")); !os.IsNotExist(err) {
+			t.Errorf("control/loki/config.yaml exists: %v", err)
 		}
 		if env := read(t, filepath.Join(dir, "control", ".env")); !strings.Contains(env, "\nLOKI_PUSH_PASSWORD="+pw+"\n") {
 			t.Errorf(".env dropped the password it was handed (spec 291: it must survive `logging off`):\n%s", env)
 		}
-		if strings.Contains(yaml, "loki") {
-			t.Error("compose mentions loki")
+		// Not a bare "loki": pstack's `./loki:/etc/loki` mount is there in every mode.
+		if strings.Contains(yaml, "\n  loki:\n") || strings.Contains(yaml, "\n  logs: {}\n") {
+			t.Error("compose has the loki service or the logs network")
 		}
 		for _, c := range r.Commands() {
 			if strings.Contains(c, "docker plugin") {
