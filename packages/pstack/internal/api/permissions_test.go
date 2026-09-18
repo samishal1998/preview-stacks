@@ -40,7 +40,8 @@ func required(method, path string) auth.Role {
 // auth.Viewer → the POST /api/users case fails; drop the `{path: "/api/config"}` row → its two
 // cases still pass (default-deny returns root either way), which is the fallback working; give
 // /api/settings/default_role the same maintainer tier as /api/settings/max_jobs → the default_role
-// case fails, which is the per-key half of the settings contract. All four were run.
+// case fails, which is the per-key half of the settings contract. All four were run. Also: give the
+// /api/logging/storage row auth.Maintainer → the storage case fails.
 func TestPermissionTableIsTheSpecification(t *testing.T) {
 	cases := []struct {
 		method, path string
@@ -113,6 +114,12 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 
 		// the control stack
 		{"GET", "/api/control", auth.Viewer},
+
+		// Loki's settings: the read and chunks with host configuration, storage a tier up
+		{"GET", "/api/logging", auth.Maintainer},
+		{"PUT", "/api/logging", auth.Maintainer},
+		{"PUT", "/api/logging/storage", auth.Admin},
+		{"GET", "/api/logging/storage", rootOnly},
 
 		// logs, source, containers, the shell, runtime, readiness
 		{"GET", "/api/deployments/pr-1/logs", auth.Viewer},

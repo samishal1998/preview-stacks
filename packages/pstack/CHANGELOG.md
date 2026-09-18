@@ -44,6 +44,9 @@
 - **`PSTACK_LOKI_DIR`, `PSTACK_LOKI_READY_TIMEOUT_MS` and `PSTACK_LOKI_UID` on `serve`**: Loki's
   config directory (`/etc/loki`, else `<PSTACK_DATA>/control/loki`), the apply's ready wait
   (`300000`) and the owner of `s3-credentials` (`10001`).
+- **Loki settings over the API.** `GET`/`PUT /api/logging` (maintainer) for retention and chunks,
+  `PUT /api/logging/storage` (admin) for filesystem or S3; `pstack api logging get|set|storage-set`.
+  A save that changes something answers `202 { job }`; an unchanged one on an idle host, `200`.
 
 ### Changed
 

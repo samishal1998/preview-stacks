@@ -176,6 +176,19 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.tlsRedeploy(w, who)
 	}
 
+	// ---- Loki's settings ----
+	// Two tiers over three literals: chunks and retention are maintainer's, storage admin's
+	// (permissions.go). routes_logging.go's header has the PUT order.
+	if path == "/api/logging" && r.Method == http.MethodGet {
+		return s.loggingGet(w)
+	}
+	if path == "/api/logging" && r.Method == http.MethodPut {
+		return s.loggingPut(w, r, who)
+	}
+	if path == "/api/logging/storage" && r.Method == http.MethodPut {
+		return s.loggingStoragePut(w, r, who)
+	}
+
 	// ---- the swarm ----
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)

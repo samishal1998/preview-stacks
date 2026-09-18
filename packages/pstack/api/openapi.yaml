@@ -59,6 +59,8 @@ tags:
     description: 'Traefik''s dynamic-config files, and what it is actually serving.'
   - name: tls
     description: 'The host''s certificate mode, and the bring-your-own wildcard (dns-persist-01).'
+  - name: logging
+    description: 'Loki''s settings: chunks, retention, storage.'
   - name: registries
     description: 'Private-registry logins, used when a deploy pulls.'
   - name: notifiers
@@ -774,6 +776,55 @@ paths:
       x-cli-name: redeploy
       summary: 'Redeploy every awake stack so its router labels regenerate for the current mode — the migration loop from the TLS playbook, server-side. Asleep stacks are skipped (their labels regenerate on wake, and a redeploy would BE a wake). Each redeploy queues like any job. Maintainer.'
       responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── Loki's settings ─────────────────────────────────────────────────────────────────────────────
+  /api/logging:
+    get:
+      tags: [logging]
+      operationId: getLogging
+      x-cli-name: get
+      summary: 'Loki''s settings as saved, and the limits pstack enforces. `enabled` is null when docker did not answer. Never the S3 secret: `secretSet` only. Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    put:
+      tags: [logging]
+      operationId: setLogging
+      x-cli-name: set
+      summary: 'Retention and chunks, every field. 202 carries the loki-apply job, which restarts Loki. An unchanged body on an idle host is 200 `{changed: false}`. 409 when Loki is not on this host. Maintainer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retentionDays, chunks]
+              properties:
+                retentionDays: { type: integer, description: 'Days, within limits.retentionDays.' }
+                chunks: { type: object, description: '{ idlePeriodMinutes, maxAgeMinutes, targetSizeKiB, encoding }, every field, within limits.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '202': { $ref: '#/components/responses/Accepted' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
+
+  /api/logging/storage:
+    put:
+      tags: [logging]
+      operationId: setLoggingStorage
+      x-cli-name: storage-set
+      summary: 'Filesystem, or S3 from a future cutover date. One-way: once S3 is saved, only the keys change. The keys are probed with a PUT and a DELETE first. Admin.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [filesystem, s3] }
+                endpoint: { type: string, description: 'https://host[:port] or http://host[:port].' }
+                region: { type: string }
+                bucket: { type: string }
+                pathStyle: { type: boolean }
+                accessKeyId: { type: string }
+                secretAccessKey: { type: string, description: 'Write-only. Empty, omitted or the mask keeps the stored one.' }
+                cutover: { type: string, description: 'YYYY-MM-DD, UTC: the first day on S3. No earlier than limits.earliestCutover.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '202': { $ref: '#/components/responses/Accepted' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
 
   /api/control/runtime:
     get:

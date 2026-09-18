@@ -1503,6 +1503,45 @@ $ docker plugin enable loki
 $ sudo systemctl restart docker      # rc-service docker restart on Alpine
 ```
 
+### Loki settings
+
+On a host with `pstack logging loki`, the Control page has a **Logging** panel. Behind it:
+
+| Route | Least role | Body |
+|---|---|---|
+| `GET /api/logging` | `maintainer` | — |
+| `PUT /api/logging` | `maintainer` | `{ retentionDays, chunks: { idlePeriodMinutes, maxAgeMinutes, targetSizeKiB, encoding } }` |
+| `PUT /api/logging/storage` | `admin` | `{ type: "filesystem" }` or `{ type: "s3", endpoint, region, bucket, pathStyle, accessKeyId, secretAccessKey, cutover }` |
+
+- A save that changes something answers `202 { job }`: a `loki-apply` job that restarts Loki. An unchanged save on an idle host answers `200 { "changed": false }`.
+- Ranges and the earliest cutover come from `GET /api/logging` → `limits`.
+- **S3 is one-way.** Once saved, `endpoint`, `region`, `bucket`, `pathStyle` and `cutover` are fixed; only the keys change. `cutover` is the first UTC day on S3.
+- The secret is write-only. An empty, omitted or `••••••••` `secretAccessKey` keeps the stored one.
+- The `loki-apply` transcript is viewer-readable and may name the endpoint and bucket in Loki's error lines; only the secret and key id are scrubbed.
+- An S3 save first writes and deletes a `pstack-probe-<hex>` object. The probe runs from pstack's networks, not Loki's: an endpoint only Loki can reach fails after the cutover, not at save.
+- **`config.yaml` is pstack's: hand edits are reverted** by the next save or pstack start. A live schema period is never dropped.
+- `409 Loki is not running on this host`: run `pstack logging loki`. `409 Loki's config.yaml is missing or read-only`: run `pstack upgrade`.
+
+```console
+$ curl -s -X PUT https://api.preview.example.com/api/logging \
+    -H "authorization: Bearer $PSTACK_TOKEN" \
+    -d '{"retentionDays":14,"chunks":{"idlePeriodMinutes":30,"maxAgeMinutes":120,"targetSizeKiB":1536,"encoding":"snappy"}}'
+{
+  "job": { "id": "loki-apply-pstack-control-3-…", "stack": "pstack-control", "action": "loki-apply", "state": "running" }
+}
+$ curl -s -X PUT https://api.preview.example.com/api/logging/storage \
+    -H "authorization: Bearer $PSTACK_TOKEN" \
+    -d '{"type":"s3","endpoint":"https://s3.eu-central-1.amazonaws.com","region":"eu-central-1","bucket":"pstack-logs","pathStyle":false,"accessKeyId":"AKIA…","secretAccessKey":"…","cutover":"2026-09-16"}'
+{
+  "error": "S3 refused the probe: 403 InvalidAccessKeyId"
+}
+```
+
+```bash
+pstack api logging get
+pstack api logging set --data '{"retentionDays":14,"chunks":{"idlePeriodMinutes":30,"maxAgeMinutes":120,"targetSizeKiB":1536,"encoding":"snappy"}}'
+```
+
 ### Why `init` is CLI-only, and always will be
 
 `init` — and `upgrade` — are CLI-only and will never be HTTP routes,
@@ -2738,6 +2777,8 @@ every account until someone puts it in the table.
 | `GET`/`PUT /api/domains` | `maintainer` |
 | `GET /api/tls` · `POST /api/tls/redeploy` | `maintainer` |
 | `PUT`/`DELETE /api/tls/wildcard` | `admin` |
+| `GET`/`PUT /api/logging` | `maintainer` |
+| `PUT /api/logging/storage` | `admin` |
 | `GET /api/sso/config` | `maintainer` |
 | `GET /api/settings` | `viewer` |
 | `PUT /api/settings/max_jobs` | `maintainer` |
