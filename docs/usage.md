@@ -3203,6 +3203,9 @@ different problems with different owners.
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
 | `PSTACK_READINESS_RESTART_LOOP` | `serve` | `3` | restarts tolerated before the readiness watcher calls a container a crash loop. Unlike the two above, this is operator-facing: raise it on a swarm host — swarm has no `depends_on`, so a dependent service legitimately restarts a few times while its database converges. |
 | `PSTACK_SSO_STATE_TTL_S` · `PSTACK_SSO_DISCOVERY_TTL_S` | `serve` | `300` · `3600` | how long a half-finished SSO sign-in is remembered, and how long a provider's discovery document and JWKS are trusted. Same audience. |
+| `PSTACK_LOKI_DIR` | `serve` | `/etc/loki` if mounted, else `<PSTACK_DATA>/control/loki` | Loki's `config.yaml` and `s3-credentials`, written by Loki settings. |
+| `PSTACK_LOKI_READY_TIMEOUT_MS` | `serve` | `300000` | how long a Loki settings apply waits for Loki to be ready. Test harness tuning; a host never needs it. |
+| `PSTACK_LOKI_UID` | `serve` | `10001` | owner of `s3-credentials`, so Loki can read it. `0` reads as unset. |
 | `PSTACK_PORT` | `healthcheck` | `7878` | the port `pstack healthcheck` probes — the container HEALTHCHECK, exit 0 or 1 on `GET /api/health`. |
 | `PSTACK_BINARY` | `build-image` | *unset — the image installs this version from its release* | path to a `pstack` binary to copy into the control image instead, for a version that is not published yet or a host with no network at build time. |
 | `PSTACK_VERSION` · `PSTACK_INSTALL_DIR` | `install.sh` | *the script's release* · `/usr/local/bin` | pin the version the installer fetches; where it puts the binary. `pstack upgrade` sets both. |

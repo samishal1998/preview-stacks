@@ -41,6 +41,9 @@
   ready. `data.changed` names the sections (`chunks`, `retention`, `storage`, `credentials`), never
   the endpoint, bucket, key id or secret. The apply runs as a `loki-apply` job on `pstack-control`,
   and its terminal event sends `verified: null`.
+- **`PSTACK_LOKI_DIR`, `PSTACK_LOKI_READY_TIMEOUT_MS` and `PSTACK_LOKI_UID` on `serve`**: Loki's
+  config directory (`/etc/loki`, else `<PSTACK_DATA>/control/loki`), the apply's ready wait
+  (`300000`) and the owner of `s3-credentials` (`10001`).
 
 ### Changed
 
