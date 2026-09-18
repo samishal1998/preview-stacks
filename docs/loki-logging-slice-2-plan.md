@@ -107,7 +107,6 @@
 - Basic embedded UI: jobs render `{{ j.action }}` raw (ui/index.html:409, 1231). There is no label map, so spec:428/876's basic-UI copy is a no-op.
 - Tuning's num() treats 0 as unset (http.go:61-71): PSTACK_LOKI_UID=0 means 10001. Harmless, because euid 0 chowns to 10001 regardless.
 - New defaults an empty LokiDir to <DataDir>/control/loki (like routingDir, server.go:204-207). Otherwise every existing New(Options{DataDir: t.TempDir()}) test would stat /config.yaml. serve.go passes loki.Dir(dataDir) (env → /etc/loki → fallback).
-- SLICE-3 SEAM CONFLICT (flag to the owner; don't plan slice 3). slice-3-spec.md:17-21 and :41-44 say pstack's service block is unchanged, `pstack logging` does not recreate pstack, and its TestLokiWiring mutation is 'add an env line to pstack's block' (:874-878). Slice 2 adds `      - ./loki:/etc/loki\n` to pstack's block, so logging off/loki DOES recreate pstack (spec:555-558). Slice 3's spec needs amending: 'pstack's block gains exactly slice 2's loki mount and nothing else', and running jobs do not survive a logging switch. Seams kept for slice 3: LokiWiring's anchor slice is append-only, and slice 3 appends after anchor 4. LokiService keeps its 3-arg signature, the env line being a constant with no new param. Init's loki directory write stays create-if-absent, so slice 3's grafana datasource write is a separate `write` call beside it. The anchor-render in loki.Render stays byte-identical to LokiConfig at Defaults (slice 3 says the Loki config stays slice 1's bytes).
 - Slice-1 dependencies not yet in the tree (verify at build time against the tree): control-plane.md §5g (T8, plan:4498), usage.md `pstack logging` section (T6, plan:3339), the two *-loki render cells and init-dry-*-loki transcripts (T13), CHANGELOG `## Unreleased` (T14; create it if absent), and docs/README.md and the design banner as T14 leaves them. The goldens in T7 exist only after slice-1 T13 lands; slice 2 starts after slice 1 lands.
 - Permissions and job queue: the apply shares the pstack-control key. A waiting preempting `down` from a squatting deployment refuses Start (jobs.go:597-605), which the PUT answers with 409 `pstack-control is busy with a teardown — retry`. The pending entry stays and is carried by the next save.
 - A swap failure after the step-4 commit (rename error) enters the rollback path. The spec's table has no row for it, and this is the only safe direction: the row already holds the save and previous_*.
@@ -4024,16 +4023,16 @@ No attribution footer. Don't push.
   `pstack upgrade` keeps whichever mode the host is in, and the push password with it. Workers get the
   plugin from the join material; see [Swarm mode](#swarm-mode).
 
-  `control/loki/config.yaml` is kept on `init`, `upgrade` and `logging loki`. `loki` and `off` also
-  recreate the pstack container, which mounts `control/loki` only while Loki is on.
+  `control/loki/config.yaml` is kept on `init`, `upgrade` and `logging loki`. pstack mounts
+  `control/loki` in both modes, so `pstack logging` never recreates the pstack container.
   ```
 
   **7d. `/Volumes/S1/code/preview-stacks/packages/pstack/CHANGELOG.md`.** If `## Unreleased` has a `### Changed` subsection (slice-1 T14), append the bullet below as that subsection's last bullet, after the `**Goldens.**` bullet. Otherwise insert `## Unreleased`, a blank line, `### Changed` and a blank line before it, between `# Changelog` and the newest release heading (`## 0.39.1 — 2026-09-14` today).
   ```markdown
   - **`init` keeps `control/loki/config.yaml`.** It writes the file only when absent; a dry run prints
-    `[dry-run] keep <path>`. With `--logging loki`, pstack mounts `control/loki` read-write at
-    `/etc/loki` and Loki gets `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`, so the next
-    `pstack upgrade` recreates both, and `pstack logging loki|off` recreates pstack. Regenerated with
+    `[dry-run] keep <path>`. pstack mounts `control/loki` read-write at `/etc/loki` in every mode,
+    and Loki gets `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`. The next `pstack upgrade`
+    recreates pstack once, and Loki where it runs; `pstack logging loki|off` never recreates pstack. Regenerated with
     `bun gen/goldens.ts`: `render/control/{http01-basic-compose-loki,dns01-advanced-swarm-loki}/docker-compose.yml`
     and `cli/init-dry-{http01-basic-compose,dns01-advanced-swarm}-loki.json` (compose write +85 bytes).
   ```
@@ -9734,10 +9733,10 @@ but commit -b claude/loki-logging-settings -m "test(conformance): Loki settings 
     run prints `[dry-run] keep <path>`. `init`, `pstack upgrade` and `pstack logging loki` no longer
     overwrite settings saved through the API. The file is the API's: a hand edit is reverted by the
     next apply or pstack restart, except that a live schema period is never dropped.
-  - **With logging on, pstack mounts `control/loki` read-write at `/etc/loki`, and Loki gets
-    `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`.** On a host already running Loki, the
-    next `pstack upgrade` recreates both containers once. `pstack logging loki|off` now also
-    recreates pstack.
+  - **pstack mounts `control/loki` read-write at `/etc/loki` in every mode, and Loki gets
+    `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`.** The next `pstack upgrade` recreates
+    pstack once on every host, and Loki where it runs. `pstack logging loki|off` never recreates
+    pstack.
   - **Goldens (Loki settings).** Regenerated with `bun gen/goldens.ts` for the mount and the env line:
     `golden/render/control/http01-basic-compose-loki/docker-compose.yml`,
     `golden/render/control/dns01-advanced-swarm-loki/docker-compose.yml`, and the compose byte count
@@ -9939,8 +9938,7 @@ but commit -b claude/loki-logging-settings -m "test(conformance): Loki settings 
   6. `docker kill` pstack during the ready wait: after it restarts, the resume finishes without a second Loki restart and `previous_config` is NULL.
   7. `ls -ln control/loki`: `s3-credentials` is `-rw------- 10001`.
 
-  Add two lines for the owner:
+  Add a line for the owner:
   - "Unreleased" appears in `packages/pstack/CHANGELOG.md`, `docs/loki-logging-design.md` and `docs/README.md`. At release, replace it with the version (`grep -rn Unreleased docs packages/pstack/CHANGELOG.md`).
-  - Slice 3's spec needs amending. `slice-3-spec.md:17-21`, `:41-44` and `:874-878` assume pstack's service block is unchanged. Slice 2 added `      - ./loki:/etc/loki` to it, so `pstack logging loki|off` recreates pstack and a running job does not survive the switch.
 
 ---
