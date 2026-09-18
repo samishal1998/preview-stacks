@@ -839,6 +839,34 @@ func TestLokiResume(t *testing.T) {
 		}
 	})
 
+	t.Run("a resume whose swap fails leaves no .next file", func(t *testing.T) {
+		// negative control: move run's two `defer os.Remove(… .next)` back below the render step.
+		// s3-credentials.next, with the secret, stays behind.
+		var s *Server
+		s, _ = lokiFixture(t, func(cmd string) (exec.Result, bool) {
+			if strings.HasPrefix(cmd, "docker run --rm --network none") {
+				// A directory at s3-credentials makes the swap's rename fail.
+				if err := os.Mkdir(filepath.Join(s.opts.LokiDir, loki.CredentialsFile), 0o700); err != nil {
+					t.Error(err)
+				}
+			}
+			return exec.Result{}, false
+		})
+		if err := loki.Save(s.store, lokiS3("2030-01-15"), "s3cretKEY1", nil); err != nil {
+			t.Fatal(err)
+		}
+		j := boot(t, s)
+		resumed(t, j, jobs.Failed)
+		failedSwap := false
+		for _, st := range j.Outcome.Steps {
+			failedSwap = failedSwap || (st.Phase == phaseSwap && !st.OK)
+		}
+		if !failedSwap {
+			t.Fatalf("want a failed swap: %s", jsonx.Must(j))
+		}
+		assertNoNext(t, s)
+	})
+
 	t.Run("a save's job resumes first, then applies its own save", func(t *testing.T) {
 		// negative control: in the hook, replace the re-read `if row, err = loki.Read(s.store); err != nil
 		// { … }` with `return a.outcome()`. config.yaml stays at 336h and the 21-day save is never applied.
