@@ -58,6 +58,14 @@
   `swarm-join-script-loki`, `swarm-join-cloud-config-loki` and `swarm-status-loki`. New render cells:
   `http01-basic-compose-loki` and `dns01-advanced-swarm-loki`. The existing render cells, the
   cloud-init goldens and the swarm-join goldens stay byte-identical.
+- **`init` keeps `control/loki/config.yaml`.** It writes the file only when absent; a dry run prints
+  `[dry-run] keep <path>`. pstack mounts `control/loki` read-write at `/etc/loki` in every mode, and
+  `init` makes the directory in every mode, so `pstack logging loki|off` leaves pstack's service
+  unchanged. Loki gets `AWS_SHARED_CREDENTIALS_FILE=/etc/loki/s3-credentials`. The next
+  `pstack upgrade` recreates pstack and Loki. Regenerated with `bun gen/goldens.ts`: every
+  `render/control/*/docker-compose.yml` and `cli/init-dry-*.json` (compose write +25 bytes, +85 with
+  Loki; a `mkdir -p <DATA>/control/loki` line with logging off). The control template's row in
+  `facts/yaml-corpus.json` was re-measured on Bun 1.3.12.
 
 ### Fixed
 

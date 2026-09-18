@@ -154,6 +154,7 @@ services:
       # with nothing to restart. Add one from the host with
       # `docker login --config <DATA_DIR>/control/docker <registry>`, or through the API.
       - ./docker:/docker-config
+      - ./loki:/etc/loki
     environment:
       # Where the docker CLI looks for config.json — the mount above. Without this it would look in
       # /root/.docker, which is inside the image and empty.

@@ -323,13 +323,12 @@ func Init(opts Options) error {
 		return err
 	}
 	// Loki's config, mounted as a DIRECTORY (a file mount keeps the old inode when the file is replaced
-	// by rename). Explicit 0755, not the umask: the image runs as uid 10001 and must traverse it, and
-	// under umask 027/077 "left to the umask" renders 0700 root-owned — Loki can't read config.yaml and
-	// crash-loops. Matches the deliberate 0644 on config.yaml itself.
-	if logging == Loki {
-		if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, 0o755); err != nil {
-			return err
-		}
+	// by rename). Made in every mode: pstack mounts it in every mode, so `pstack logging` never changes
+	// pstack's service. Explicit 0755, not the umask: the image runs as uid 10001 and must traverse it,
+	// and under umask 027/077 "left to the umask" renders 0700 root-owned — Loki can't read config.yaml
+	// and crash-loops. Matches the deliberate 0644 on config.yaml itself.
+	if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, 0o755); err != nil {
+		return err
 	}
 
 	// ── 1b. Swarm ───────────────────────────────────────────────────────────────────────────────
@@ -458,8 +457,17 @@ func Init(opts Options) error {
 
 	// 0644, not 0600 like its neighbours: the Loki image runs as uid 10001 and must read it, and it holds
 	// no credential. The password stays in .env and reaches Traefik only as a hash.
+	//
+	// Written only when absent. Once it exists it is the API's file (PUT /api/logging renders it): a
+	// rewrite here would drop a saved S3 schema period and make every log in S3 unreadable. So a kept
+	// file also skips write's re-chmod; the API writes it 0644.
 	if logging == Loki {
-		if err := write(out, filepath.Join(controlDir, "loki", "config.yaml"), pstack.LokiConfig, 0o644, dryRun); err != nil {
+		path := filepath.Join(controlDir, "loki", "config.yaml")
+		if _, err := os.Stat(path); err == nil {
+			if dryRun {
+				fmt.Fprintf(out, "  [dry-run] keep %s\n", path)
+			}
+		} else if err := write(out, path, pstack.LokiConfig, 0o644, dryRun); err != nil {
 			return err
 		}
 	}
@@ -818,6 +826,9 @@ func LokiService(logging Logging, challenge Challenge, password string) string {
 		`    command: ["-config.file=/etc/loki/config.yaml"]`,
 		"    environment:",
 		"      GOMEMLIMIT: 1600MiB",
+		// Read only with S3 storage, from the file the API writes. The env is fixed when the container is
+		// created and survives `docker restart`, so init sets it, not the API's apply.
+		"      AWS_SHARED_CREDENTIALS_FILE: /etc/loki/s3-credentials",
 		"    volumes:",
 		"      - ./loki:/etc/loki:ro      # the directory, not the file: a renamed-in file is not seen through a file mount",
 		"      - loki:/loki",

@@ -149,6 +149,7 @@ services:
       # with nothing to restart. Add one from the host with
       # `docker login --config <DATA_DIR>/control/docker <registry>`, or through the API.
       - ./docker:/docker-config
+      - ./loki:/etc/loki
     environment:
       # Where the docker CLI looks for config.json — the mount above. Without this it would look in
       # /root/.docker, which is inside the image and empty.
@@ -226,6 +227,7 @@ services:
     command: ["-config.file=/etc/loki/config.yaml"]
     environment:
       GOMEMLIMIT: 1600MiB
+      AWS_SHARED_CREDENTIALS_FILE: /etc/loki/s3-credentials
     volumes:
       - ./loki:/etc/loki:ro      # the directory, not the file: a renamed-in file is not seen through a file mount
       - loki:/loki
