@@ -12,8 +12,11 @@
  */
 
 export type Kind = 'isolated' | 'shared';
-/** `sleep` takes the compose project down (volumes and axes stay); `wake` is `up` recorded under its own name. */
-export type JobAction = 'up' | 'down' | 'verify' | 'sleep' | 'wake';
+/**
+ * `sleep` takes the compose project down (volumes and axes stay); `wake` is `up` recorded under its own name.
+ * `loki-apply` writes Loki's settings and restarts Loki, on `pstack-control`.
+ */
+export type JobAction = 'up' | 'down' | 'verify' | 'sleep' | 'wake' | 'loki-apply';
 export type Orchestrator = 'compose' | 'swarm';
 export type ShareView = 'details' | 'logs';
 
@@ -495,3 +498,62 @@ export type SsoConfigResponse = {
   callbackUrl: string;
   presets: SsoPreset[];
 };
+
+/** Loki's chunk settings: read from `GET /api/logging`, sent by `PUT /api/logging`. */
+export type LokiChunks = {
+  idlePeriodMinutes: number;
+  maxAgeMinutes: number;
+  targetSizeKiB: number;
+  encoding: string;
+};
+
+/** The saved S3 storage. */
+export type LokiS3 = {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  pathStyle: boolean;
+  accessKeyId: string;
+  /** All a read learns about the secret. The value has no read path. */
+  secretSet: boolean;
+  /** `YYYY-MM-DD`, UTC. The first day Loki writes to the bucket. */
+  cutover: string;
+};
+
+/** The server's ranges. Read these; never hard-code them. */
+export type LokiLimits = {
+  retentionDays: { min: number; max: number };
+  idlePeriodMinutes: { min: number; max: number };
+  maxAgeMinutes: { min: number; max: number };
+  targetSizeKiB: { min: number; max: number };
+  encodings: string[];
+  /** The earliest `cutover` a switch to S3 accepts. */
+  earliestCutover: string;
+};
+
+/** `GET /api/logging`: what an operator saved, not what Loki runs. */
+export type LokiSettings = {
+  /** `null`: docker did not answer. `false`: no Loki on this host. */
+  enabled: boolean | null;
+  source: 'db' | 'default';
+  /** `null` when `source` is `default`. */
+  updatedAt: number | null;
+  retentionDays: number;
+  chunks: LokiChunks;
+  storage: { type: 'filesystem' | 's3'; s3: LokiS3 | null };
+  limits: LokiLimits;
+};
+
+/** `PUT /api/logging/storage`. S3 is one-way. Omit `secretAccessKey`, or send `''`, to keep the stored one. */
+export type LokiStorageInput =
+  | { type: 'filesystem' }
+  | {
+      type: 's3';
+      endpoint: string;
+      region: string;
+      bucket: string;
+      pathStyle: boolean;
+      accessKeyId: string;
+      secretAccessKey?: string;
+      cutover: string;
+    };
