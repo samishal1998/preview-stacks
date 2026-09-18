@@ -139,6 +139,7 @@ var groupShort = map[string]string{
 	"sso":         "Single sign-on providers.",
 	"swarm":       "The swarm, and what a new worker runs to join it.",
 	"tls":         "The host's certificate mode, and the bring-your-own wildcard.",
+	"logging":     "Loki's settings: chunks, retention, storage.",
 	"config":      "The whole portable configuration: export it, or apply one.",
 	"host":        "The host itself — health, the control stack, terminal history, the probe.",
 }

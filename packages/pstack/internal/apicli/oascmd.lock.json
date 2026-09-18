@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "ec6ad98a3227cf8ca69bd1ae752c775ee474977cdc33a8ed05e751ea52997332",
+  "specDigest": "2ae6a19b17f9eb09df67f967c269a2681fd2a1153567d0ed9ba0ed40fd1981b0",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -648,6 +648,18 @@
         "name": "live"
       },
       "digest": "bb689b301e1715fa"
+    },
+    "getLogging": {
+      "operationId": "getLogging",
+      "method": "GET",
+      "path": "/api/logging",
+      "command": "logging get",
+      "funcName": "NewLoggingGetCommand",
+      "summary": "Loki's settings as saved, and the limits pstack enforces. `enabled` is null when docker did not answer. Never the S3 secret: `secretSet` only. Maintainer.",
+      "ext": {
+        "name": "get"
+      },
+      "digest": "80d728bbf5e228ff"
     },
     "getNotifier": {
       "operationId": "getNotifier",
@@ -1349,6 +1361,91 @@
         "name": "set-default-role"
       },
       "digest": "5c27a683e8479e8d"
+    },
+    "setLogging": {
+      "operationId": "setLogging",
+      "method": "PUT",
+      "path": "/api/logging",
+      "command": "logging set",
+      "funcName": "NewLoggingSetCommand",
+      "summary": "Retention and chunks, every field. 202 carries the loki-apply job, which restarts Loki. An unchanged body on an idle host is 200 `{changed: false}`. 409 when Loki is not on this host. Maintainer.",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "set"
+      },
+      "digest": "5ad51c2c22c47681"
+    },
+    "setLoggingStorage": {
+      "operationId": "setLoggingStorage",
+      "method": "PUT",
+      "path": "/api/logging/storage",
+      "command": "logging storage-set",
+      "funcName": "NewLoggingStorageSetCommand",
+      "summary": "Filesystem, or S3 from a future cutover date. One-way: once S3 is saved, only the keys change. The keys are probed with a PUT and a DELETE first. Admin.",
+      "flags": [
+        {
+          "name": "access-key-id",
+          "apiName": "accessKeyId",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "bucket",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "cutover",
+          "source": "body",
+          "type": "string",
+          "description": "YYYY-MM-DD, UTC: the first day on S3. No earlier than limits.earliestCutover."
+        },
+        {
+          "name": "endpoint",
+          "source": "body",
+          "type": "string",
+          "description": "https://host[:port] or http://host[:port]."
+        },
+        {
+          "name": "path-style",
+          "apiName": "pathStyle",
+          "source": "body",
+          "type": "bool"
+        },
+        {
+          "name": "region",
+          "source": "body",
+          "type": "string"
+        },
+        {
+          "name": "secret-access-key",
+          "apiName": "secretAccessKey",
+          "source": "body",
+          "type": "string",
+          "description": "Write-only. Empty, omitted or the mask keeps the stored one."
+        },
+        {
+          "name": "type",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "filesystem",
+            "s3"
+          ]
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "storage-set"
+      },
+      "digest": "2c7c853a54220ef0"
     },
     "setMaxJobs": {
       "operationId": "setMaxJobs",

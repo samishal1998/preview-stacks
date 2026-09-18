@@ -65,6 +65,9 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("jobs").AddCommand(NewJobsListCommand(exec))
 	group("jobs").AddCommand(NewJobsGetCommand(exec))
 	group("jobs").AddCommand(NewJobsCancelCommand(exec))
+	group("logging").AddCommand(NewLoggingGetCommand(exec))
+	group("logging").AddCommand(NewLoggingSetCommand(exec))
+	group("logging").AddCommand(NewLoggingStorageSetCommand(exec))
 	group("notifiers").AddCommand(NewNotifiersListCommand(exec))
 	group("notifiers").AddCommand(NewNotifiersCreateCommand(exec))
 	group("notifiers").AddCommand(NewNotifiersMetaCommand(exec))
@@ -1158,6 +1161,145 @@ func NewJobsCancelCommand(exec oascmd.ExecOptions) *cobra.Command {
 			PathParams: map[string]string{},
 		}
 		req.PathParams["jobId"] = flagJobID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewLoggingGetCommand returns the "logging get" command (GET
+// /api/logging).
+func NewLoggingGetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "Loki's settings as saved, and the limits pstack enforces. `enabled` is null when docker did not answer. Never the S3 secret: `secretSet` only. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/logging",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewLoggingSetCommand returns the "logging set" command (PUT
+// /api/logging).
+func NewLoggingSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagData string
+	)
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "Retention and chunks, every field. 202 carries the loki-apply job, which restarts Loki. An unchanged body on an idle host is 200 `{changed: false}`. 409 when Loki is not on this host. Maintainer.",
+	}
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/logging",
+		}
+		body := map[string]any{}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewLoggingStorageSetCommand returns the "logging storage-set" command
+// (PUT /api/logging/storage).
+func NewLoggingStorageSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyType            string
+		bodyEndpoint        string
+		bodyRegion          string
+		bodyBucket          string
+		bodyPathStyle       bool
+		bodyAccessKeyID     string
+		bodySecretAccessKey string
+		bodyCutover         string
+		flagData            string
+	)
+	cmd := &cobra.Command{
+		Use:   "storage-set",
+		Short: "Filesystem, or S3 from a future cutover date. One-way: once S3 is saved, only the keys change. The keys are probed with a PUT and a DELETE first. Admin.",
+	}
+	cmd.Flags().StringVar(&bodyType, "type", "", "(one of: filesystem, s3)")
+	cmd.Flags().StringVar(&bodyEndpoint, "endpoint", "", "https://host[:port] or http://host[:port].")
+	cmd.Flags().StringVar(&bodyRegion, "region", "", "")
+	cmd.Flags().StringVar(&bodyBucket, "bucket", "", "")
+	cmd.Flags().BoolVar(&bodyPathStyle, "path-style", false, "")
+	cmd.Flags().StringVar(&bodyAccessKeyID, "access-key-id", "", "")
+	cmd.Flags().StringVar(&bodySecretAccessKey, "secret-access-key", "", "Write-only. Empty, omitted or the mask keeps the stored one.")
+	cmd.Flags().StringVar(&bodyCutover, "cutover", "", "YYYY-MM-DD, UTC: the first day on S3. No earlier than limits.earliestCutover.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("type") {
+			if err := oascmd.ValidateEnum("type", []string{"filesystem", "s3"}, bodyType); err != nil {
+				return err
+			}
+		}
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/logging/storage",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("type") {
+			body["type"] = bodyType
+		}
+		if cmd.Flags().Changed("endpoint") {
+			body["endpoint"] = bodyEndpoint
+		}
+		if cmd.Flags().Changed("region") {
+			body["region"] = bodyRegion
+		}
+		if cmd.Flags().Changed("bucket") {
+			body["bucket"] = bodyBucket
+		}
+		if cmd.Flags().Changed("path-style") {
+			body["pathStyle"] = bodyPathStyle
+		}
+		if cmd.Flags().Changed("access-key-id") {
+			body["accessKeyId"] = bodyAccessKeyID
+		}
+		if cmd.Flags().Changed("secret-access-key") {
+			body["secretAccessKey"] = bodySecretAccessKey
+		}
+		if cmd.Flags().Changed("cutover") {
+			body["cutover"] = bodyCutover
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw

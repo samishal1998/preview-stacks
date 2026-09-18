@@ -164,6 +164,14 @@ const TABLE: Row[] = [
   { method: 'POST', path: '/api/tls/redeploy', body: {}, min: 'maintainer', ok: 200 },
   { method: 'PUT', path: '/api/tls/wildcard', body: { cert: 'not-a-cert', key: 'not-a-key' }, min: 'admin', ok: 400 },
   { method: 'DELETE', path: '/api/tls/wildcard', min: 'admin', ok: 404 },
+  // Loki's settings. The shim lists no control containers, so the allowed role gets the handler's
+  // own answers: the read (enabled: false), and a PUT refused before its body is read — 409.
+  // negative control: give the /api/logging/storage row auth.Maintainer in permissions.go — the
+  // maintainer cell goes 403 → 409 and the matrix test reports it.
+  { method: 'GET', path: '/api/logging', min: 'maintainer', ok: 200 },
+  { method: 'PUT', path: '/api/logging', min: 'maintainer', ok: 409 },
+  // Storage is admin: one save sends every node's logs to an outside bucket, for good.
+  { method: 'PUT', path: '/api/logging/storage', min: 'admin', ok: 409 },
   // Reading the SSO configuration is a maintainer's — it returns a mask, never the client secret.
   // Writing it is two rows down, and admin, for a reason worth reading there.
   { method: 'GET', path: '/api/sso/config', min: 'maintainer', ok: 200 },

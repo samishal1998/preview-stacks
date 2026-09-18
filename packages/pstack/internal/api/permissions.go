@@ -172,6 +172,15 @@ var permissions = []perm{
 	{path: "/api/tls/wildcard", methods: mPutDelete, min: auth.Admin},
 	{path: "/api/tls/redeploy", methods: mPost, min: auth.Maintainer},
 
+	// ── Loki's settings ─────────────────────────────────────────────────────────────────────────
+	// Retention and chunks are host configuration: maintainer, who can already restart Loki through
+	// /api/control/restart. Storage is ADMIN for BLAST RADIUS, the wildcard argument above: one save
+	// sends every node's logs to an outside bucket, and it cannot be undone. Not an access boundary —
+	// viewers read logs through the logs routes. The read sits with the other host-configuration
+	// reads; it never carries the secret.
+	{path: "/api/logging", methods: []string{http.MethodGet, http.MethodPut}, min: auth.Maintainer},
+	{path: "/api/logging/storage", methods: mPut, min: auth.Admin},
+
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},
