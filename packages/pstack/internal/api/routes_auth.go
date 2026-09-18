@@ -135,6 +135,16 @@ func (s *Server) preGate(w http.ResponseWriter, r *http.Request, path string) bo
 	case path == "/api/auth/sso/callback" && r.Method == http.MethodGet:
 		s.ssoCallback(w, r)
 		return true
+
+	// Grafana sign-in: Traefik's forwardAuth, and the browser leg on control.<domain>. Neither asks
+	// principal(); see routes_grafana.go.
+	case path == "/api/auth/grafana/verify" && r.Method == http.MethodGet:
+		s.grafanaVerify(w, r)
+		return true
+
+	case path == "/api/auth/grafana/start" && r.Method == http.MethodGet:
+		s.grafanaStart(w, r)
+		return true
 	}
 	return false
 }
