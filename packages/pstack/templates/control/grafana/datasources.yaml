@@ -1,0 +1,13 @@
+# Written by `pstack init --logging loki`. Grafana re-applies it on every start.
+apiVersion: 1
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy            # Grafana's server calls Loki over the logs network; Traefik is not involved
+    url: http://loki:3100
+    isDefault: true
+    editable: false
+    jsonData:
+      maxLines: 1000
+      timeout: 60

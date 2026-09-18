@@ -1,4 +1,4 @@
-// Package pstack carries the seven files the binary embeds. Explicit paths, never a glob: the
+// Package pstack carries the eight files the binary embeds. Explicit paths, never a glob: the
 // READMEs beside the assets must not ship, and a pattern that matches nothing is a compile error —
 // which is exactly the failure mode `with { type: 'text' }` had at bundle time, moved earlier.
 package pstack
@@ -26,6 +26,13 @@ var ControlTemplate string
 //
 //go:embed templates/control/loki/config.yaml
 var LokiConfig string
+
+// GrafanaDatasources is Grafana's provisioned Loki datasource, which init writes to
+// control/grafana/datasources/loki.yaml with `--logging loki`. Embedded as-is for LokiConfig's
+// reasons: nothing in it varies by host, and it holds no credential.
+//
+//go:embed templates/control/grafana/datasources.yaml
+var GrafanaDatasources string
 
 // CloudInitTemplate is the cloud-config user-data template.
 //

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -685,6 +686,216 @@ func TestLokiService(t *testing.T) {
 	})
 }
 
+// grafanaServiceSpecLines is docs/loki-logging-design.md's GrafanaService block (Slice 3, the ```yaml
+// fence under "#### The service (`GrafanaService`)"), which is the HTTP-01 render. Copied for
+// lokiConfigSpecLines' reason: the render golden is generated from the binary, so only an independent
+// copy catches a line transcribed wrong, and most of these lines are sign-in controls no other check reads.
+var grafanaServiceSpecLines = []string{
+	"",
+	"  # Grafana, with --logging loki: the reader for Loki. Signed in with pstack accounts (forwardAuth).",
+	"  grafana:",
+	"    image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
+	"    restart: unless-stopped",
+	"    mem_limit: 768m                  # 13.x idles ~330Mi and OOMed under 400Mi (grafana#123017)",
+	"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
+	"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
+	"    networks: [logs]",
+	"    volumes:",
+	"      - grafana:/var/lib/grafana      # users, preferences, and the Drilldown plugin download",
+	"      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro",
+	"    environment:",
+	"      GF_SERVER_DOMAIN: grafana.${DOMAIN}",
+	"      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}/",
+	"      # Sign-in: Traefik's forwardAuth asks pstack, and pstack's answer is these two headers.",
+	`      GF_AUTH_PROXY_ENABLED: "true"`,
+	"      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER",
+	"      GF_AUTH_PROXY_HEADER_PROPERTY: username",
+	"      GF_AUTH_PROXY_HEADERS: Role:X-WEBAUTH-ROLE",
+	`      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"`,
+	"      # false: no grafana_session of Grafana's own, so pstack decides EVERY request and a pstack",
+	"      # sign-out applies on the next one.",
+	`      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "false"`,
+	"      # Never GF_AUTH_DISABLE_LOGIN: it unregisters the proxy client and silently turns sign-in off.",
+	`      GF_AUTH_DISABLE_LOGIN_FORM: "true"`,
+	`      GF_AUTH_DISABLE_SIGNOUT_MENU: "true"`,
+	`      GF_AUTH_BASIC_ENABLED: "false"`,
+	`      GF_AUTH_ANONYMOUS_ENABLED: "false"`,
+	`      GF_USERS_ALLOW_SIGN_UP: "false"`,
+	`      GF_USERS_ALLOW_ORG_CREATE: "false"`,
+	"      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer",
+	"      # No built-in `admin` row, so a pstack user named admin is a user, not the server admin.",
+	`      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"`,
+	"      # Previews on *.${DOMAIN} are same-site with Grafana: SameSite does not stop their POSTs.",
+	`      GF_SECURITY_CSRF_ALWAYS_CHECK: "true"`,
+	`      GF_SECURITY_COOKIE_SECURE: "true"`,
+	`      GF_SECURITY_DISABLE_GRAVATAR: "true"`,
+	"      # Off: a WebSocket passes forwardAuth once, at the upgrade, and would outlive a pstack sign-out.",
+	`      GF_LIVE_MAX_CONNECTIONS: "0"`,
+	"      # Off: an Editor could publish log panels to snapshots.raintank.io, outside verify.",
+	`      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"`,
+	`      GF_ANALYTICS_REPORTING_ENABLED: "false"`,
+	`      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"`,
+	`      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"`,
+	`      GF_NEWS_NEWS_FEED_ENABLED: "false"`,
+	`      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"`,
+	"      # Default preinstalls with no datasource here. Logs Drilldown (grafana-lokiexplore-app) stays.",
+	"      GF_PLUGINS_DISABLE_PLUGINS: grafana-pyroscope-app,grafana-exploretraces-app,grafana-metricsdrilldown-app,grafana-advisor-app",
+	"    healthcheck:",
+	`      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:3000/api/health"]`,
+	"      start_period: 60s",
+	"      interval: 30s",
+	"      timeout: 5s",
+	"      retries: 3",
+	"    labels:",
+	"      - traefik.enable=true",
+	"      - traefik.docker.network=pstack-control_logs",
+	"      - traefik.http.routers.pstack-grafana.rule=Host(`grafana.${DOMAIN}`)",
+	"      # A deployment routed to grafana.<domain> before this release has a rule of the same length",
+	"      # (autolabel's Host(`…`)), and equal priority is a coin toss for who gets the Grafana cookie.",
+	"      - traefik.http.routers.pstack-grafana.priority=10000",
+	"      - traefik.http.routers.pstack-grafana.entrypoints=websecure",
+	"      # TLS follows the challenge, exactly like pstack-loki: tls=true alone under DNS-01 (the wildcard",
+	"      # covers grafana.), plus its own certresolver under HTTP-01.",
+	"      - traefik.http.routers.pstack-grafana.tls=true",
+	"      - traefik.http.routers.pstack-grafana.tls.certresolver=le",
+	"      - traefik.http.routers.pstack-grafana.middlewares=pstack-grafana-auth",
+	"      # pstack, by service name, over preview-ingress, the network Traefik already reaches pstack on",
+	"      # (the advanced UI's nginx dials the same name). pstack does not join `logs`.",
+	"      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.address=http://pstack:7878/api/auth/grafana/verify",
+	"      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.trustForwardHeader=false",
+	"      # EVERY header Grafana reads: header_name plus each GF_AUTH_PROXY_HEADERS value. Traefik deletes",
+	"      # a listed header from the client's request unconditionally and passes an unlisted one through.",
+	"      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.authResponseHeaders=X-WEBAUTH-USER,X-WEBAUTH-ROLE",
+	"      - traefik.http.services.pstack-grafana.loadbalancer.server.port=3000",
+	"",
+}
+
+// Grafana's service block is its auth: the headers Traefik strips, the network, the router priority.
+// Each is silent when wrong. Grafana still serves, to the wrong people.
+func TestGrafanaService(t *testing.T) {
+	// negative control: delete the priority label in GrafanaService — the byte-for-byte and priority subtests fail.
+	challenges := []initctl.Challenge{initctl.HTTP01, initctl.DNS01}
+	// grafana is the block as compose reads it. Parsed, never grepped: the block's own comments say
+	// "Never GF_AUTH_DISABLE_LOGIN:" and "over preview-ingress", so a text search fails the right render.
+	grafana := func(t *testing.T, c initctl.Challenge) *omap.Map {
+		t.Helper()
+		v, err := yamlx.ParseString("services:" + initctl.GrafanaService(initctl.Loki, c))
+		if err != nil {
+			t.Fatalf("%s: %v", c, err)
+		}
+		svc := v.(*omap.Map).GetMap("services").GetMap("grafana")
+		if svc == nil {
+			t.Fatalf("%s: no grafana service", c)
+		}
+		return svc
+	}
+	// label is the value of the `key=value` label, or "".
+	label := func(svc *omap.Map, key string) string {
+		for _, l := range svc.GetSlice("labels") {
+			if s, _ := l.(string); strings.HasPrefix(s, key+"=") {
+				return strings.TrimPrefix(s, key+"=")
+			}
+		}
+		return ""
+	}
+
+	t.Run("the http01 block is the design doc's, byte for byte", func(t *testing.T) {
+		// negative control: change `forwardauth.trustForwardHeader=false` to `=true` in GrafanaService — a line no other subtest reads.
+		if got, want := initctl.GrafanaService(initctl.Loki, initctl.HTTP01), strings.Join(grafanaServiceSpecLines, "\n"); got != want {
+			t.Errorf("GrafanaService no longer matches the design doc's block\n--- got\n%s\n--- want\n%s", got, want)
+		}
+	})
+
+	t.Run("http01 orders grafana its own certificate, dns01 inherits the wildcard", func(t *testing.T) {
+		// negative control: append the certresolver label for every challenge in GrafanaService — the dns01 check fails.
+		const resolver = "traefik.http.routers.pstack-grafana.tls.certresolver"
+		for _, c := range challenges {
+			if got := label(grafana(t, c), "traefik.http.routers.pstack-grafana.tls"); got != "true" {
+				t.Errorf("%s: tls=%q", c, got)
+			}
+		}
+		if got := label(grafana(t, initctl.HTTP01), resolver); got != "le" {
+			t.Errorf("http01: certresolver=%q, want le", got)
+		}
+		if got := label(grafana(t, initctl.DNS01), resolver); got != "" {
+			t.Errorf("dns01 orders its own certificate: certresolver=%q", got)
+		}
+	})
+
+	t.Run("the logs network only: no preview-ingress, no published port", func(t *testing.T) {
+		// Anything that reaches :3000 directly can send X-WEBAUTH-USER and be anyone.
+		// negative control: render `networks: [logs, preview-ingress]` in GrafanaService, or add `    ports: ["3000:3000"]` under it — each fails.
+		for _, c := range challenges {
+			svc := grafana(t, c)
+			if n := fmt.Sprint(svc.GetSlice("networks")); n != "[logs]" {
+				t.Errorf("%s: networks %s", c, n)
+			}
+			if svc.Has("ports") {
+				t.Errorf("%s: a published port", c)
+			}
+			if b, err := json.Marshal(svc); err != nil || strings.Contains(string(b), "preview-ingress") {
+				t.Errorf("%s: preview-ingress outside a comment (err %v): %s", c, err, b)
+			}
+		}
+	})
+
+	t.Run("proxy sign-in stays registered; Live and external snapshots stay off", func(t *testing.T) {
+		// negative control: in GrafanaService delete the GF_LIVE_MAX_CONNECTIONS line, delete the GF_SNAPSHOTS_EXTERNAL_ENABLED line, unquote `"0"`, or add `GF_AUTH_DISABLE_LOGIN: "true"` — each fails.
+		for _, c := range challenges {
+			env := grafana(t, c).GetMap("environment")
+			if env.Has("GF_AUTH_DISABLE_LOGIN") {
+				t.Errorf("%s: GF_AUTH_DISABLE_LOGIN turns proxy sign-in off", c)
+			}
+			// GetString: an unquoted 0 or false parses as a number or boolean, which compose refuses.
+			for _, kv := range [][2]string{{"GF_LIVE_MAX_CONNECTIONS", "0"}, {"GF_SNAPSHOTS_EXTERNAL_ENABLED", "false"}} {
+				if got := env.GetString(kv[0]); got != kv[1] {
+					t.Errorf("%s: %s = %q, want the string %q", c, kv[0], got, kv[1])
+				}
+			}
+		}
+	})
+
+	t.Run("pstack-grafana outranks a deployment already routed to grafana.<domain>", func(t *testing.T) {
+		// negative control: delete the priority label in GrafanaService — priority is "".
+		for _, c := range challenges {
+			if got := label(grafana(t, c), "traefik.http.routers.pstack-grafana.priority"); got != "10000" {
+				t.Errorf("%s: priority=%q, want 10000", c, got)
+			}
+		}
+	})
+
+	t.Run("Traefik strips every header Grafana reads", func(t *testing.T) {
+		// A header Grafana reads that authResponseHeaders does not list passes from the client to Grafana.
+		// negative control: append ` Email:X-WEBAUTH-EMAIL` to GF_AUTH_PROXY_HEADERS only — the sets differ.
+		for _, c := range challenges {
+			svc := grafana(t, c)
+			env := svc.GetMap("environment")
+			reads := []string{env.GetString("GF_AUTH_PROXY_HEADER_NAME")}
+			for _, f := range strings.Fields(env.GetString("GF_AUTH_PROXY_HEADERS")) {
+				_, header, _ := strings.Cut(f, ":")
+				reads = append(reads, header)
+			}
+			stripped := strings.Split(label(svc, "traefik.http.middlewares.pstack-grafana-auth.forwardauth.authResponseHeaders"), ",")
+			slices.Sort(reads)
+			slices.Sort(stripped)
+			if slices.Contains(reads, "") || !slices.Equal(reads, stripped) {
+				t.Errorf("%s: Grafana reads %q, Traefik strips %q", c, reads, stripped)
+			}
+		}
+	})
+
+	t.Run("logging off renders nothing", func(t *testing.T) {
+		// negative control: drop the `logging != Loki` early return in GrafanaService — every case renders the service.
+		for _, l := range []initctl.Logging{initctl.LoggingNone, ""} {
+			for _, c := range challenges {
+				if got := initctl.GrafanaService(l, c); got != "" {
+					t.Errorf("%q/%s rendered:\n%s", l, c, got)
+				}
+			}
+		}
+	})
+}
+
 // Loki's plumbing is literal edits of lines the template already has. A template change that moves
 // one must fail by name, never render a Loki that Traefik cannot reach.
 func TestLokiWiring(t *testing.T) {
@@ -872,6 +1083,33 @@ func TestLokiConfig(t *testing.T) {
 			t.Error("templates/control/loki/config.yaml no longer matches docs/loki-logging-design.md's Loki config block byte-for-byte")
 		}
 	})
+}
+
+// grafanaDatasourcesSpecLines is docs/loki-logging-design.md's datasource block (Slice 3, the ```yaml
+// fence under "#### The datasource file"), copied for lokiConfigSpecLines' reason.
+var grafanaDatasourcesSpecLines = []string{
+	"# Written by `pstack init --logging loki`. Grafana re-applies it on every start.",
+	"apiVersion: 1",
+	"datasources:",
+	"  - name: Loki",
+	"    type: loki",
+	"    uid: loki",
+	"    access: proxy            # Grafana's server calls Loki over the logs network; Traefik is not involved",
+	"    url: http://loki:3100",
+	"    isDefault: true",
+	"    editable: false",
+	"    jsonData:",
+	"      maxLines: 1000",
+	"      timeout: 60",
+	"",
+}
+
+// Grafana's only datasource. A wrong url or uid is an empty Explore, not an error.
+func TestGrafanaDatasources(t *testing.T) {
+	// negative control: change `maxLines: 1000` to 500 in templates/control/grafana/datasources.yaml — fails.
+	if want := strings.Join(grafanaDatasourcesSpecLines, "\n"); pstack.GrafanaDatasources != want {
+		t.Errorf("templates/control/grafana/datasources.yaml no longer matches the design doc's datasource block\n--- got\n%s\n--- want\n%s", pstack.GrafanaDatasources, want)
+	}
 }
 
 // init --logging loki: the push password, its .env line, Loki's config and the plugin step. Logging off
