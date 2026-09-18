@@ -243,6 +243,10 @@ func (a *lokiApply) run(ctx context.Context) stack.Outcome {
 		by = a.by
 	}
 	a.sink.Emit(log.Info, "by "+by)
+	// The .next files are removed on every exit, the resume's included. Once swapped they no longer
+	// exist; before that, a failure or a cancel leaves none behind.
+	defer os.Remove(filepath.Join(s.opts.LokiDir, loki.ConfigFile+loki.NextSuffix))
+	defer os.Remove(filepath.Join(s.opts.LokiDir, loki.CredentialsFile+loki.NextSuffix))
 
 	// 1. find
 	view := inspect.ControlRuntime(runner)
@@ -311,10 +315,7 @@ func (a *lokiApply) run(ctx context.Context) stack.Outcome {
 	}
 	a.step(phaseRender, true, "")
 
-	// 3. verify. The .next files are removed on every exit. Once swapped they no longer exist; before
-	// that, a failure or a cancel mid-verify leaves none behind.
-	defer os.Remove(filepath.Join(s.opts.LokiDir, loki.ConfigFile+loki.NextSuffix))
-	defer os.Remove(filepath.Join(s.opts.LokiDir, loki.CredentialsFile+loki.NextSuffix))
+	// 3. verify
 	if !a.verify(runner, config, creds) {
 		return a.outcome()
 	}
