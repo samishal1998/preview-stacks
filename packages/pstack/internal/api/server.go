@@ -339,6 +339,9 @@ func New(o Options) (*Server, error) {
 	// serving the old console after a UI switch. Idempotent: it rewrites the same bytes when nothing
 	// changed, and does nothing at all when no domain has been added.
 	s.reconcileDomains()
+	// Finish or undo a Loki apply this process died in, and apply a saved row the files do not match.
+	// No docker command here: a job runs them, on its own goroutine.
+	s.reconcileLoki()
 	return s, nil
 }
 

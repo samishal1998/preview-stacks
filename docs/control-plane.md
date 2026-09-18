@@ -1116,6 +1116,37 @@ A failed swap, restart or ready wait after the commit undoes the apply, through 
 **Cancel.** Before the commit, a cancel stops the job with nothing changed. After it, the work ignores
 the cancel: it restarts, waits, and finishes or rolls back. The job still reads `cancelled`.
 
+### Who owns `config.yaml`
+
+`init` writes `control/loki/config.yaml` once. After that its content is the API's, as
+`pstack-domains.yml` is. An apply and a pstack start render the saved row over it, so a hand edit is
+reverted, except a live schema period, which is never dropped. `s3-credentials` is pstack's too: 0600,
+Loki's uid.
+
+### Resume
+
+`previous_*` is written with the save and cleared by finish or undo. A job that finds it set picks up
+the apply pstack stopped in, and goes forward to the row:
+
+- Loki has loaded the files only if its container started after their mtime. If not, the period
+  guard reads `Render(previous)` as loaded.
+- Rule 2 refuses and Loki never loaded the files: the previous files go back, the row reverts, no
+  restart. `cutover <date> passed while pstack was down — save again`.
+- Files differ from the row: verify, swap, restart. Files equal: restart only if Loki has not loaded
+  them.
+- Then ready and finish, or roll back. No `logging.changed`.
+- A save's job resumes first, then applies its own save. A failed resume fails the save with it.
+
+### Boot
+
+`New` calls `reconcileLoki` after `reconcileDomains`. It runs no docker command.
+
+1. No `config.yaml`: nothing.
+2. `previous_*` set: a `loki-apply` job.
+3. The row, or the defaults, does not render: one `loki:` line, no job.
+4. The render differs from `config.yaml` or `s3-credentials`: a job, `by pstack (boot)`. An S3 render
+   pstack cannot chown for Loki: one line, no job.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves

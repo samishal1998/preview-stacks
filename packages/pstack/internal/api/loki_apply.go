@@ -264,6 +264,16 @@ func (a *lokiApply) run(ctx context.Context) stack.Outcome {
 	if err != nil {
 		return a.end(phaseRender, false, err.Error())
 	}
+	// An apply pstack stopped in: finish or undo it, then this job's saves as a second pass. A failed
+	// resume fails this job, and with it the saves it took at the top of run.
+	if row != nil && row.InFlight {
+		if !a.resume(runner, row) {
+			return a.outcome()
+		}
+		if row, err = loki.Read(s.store); err != nil {
+			return a.end(phaseRender, false, err.Error())
+		}
+	}
 	merged, secret, err := loki.Merge(row, c, sp, lead)
 	if err != nil {
 		return a.end(phaseRender, false, err.Error())
@@ -305,19 +315,9 @@ func (a *lokiApply) run(ctx context.Context) stack.Outcome {
 	// that, a failure or a cancel mid-verify leaves none behind.
 	defer os.Remove(filepath.Join(s.opts.LokiDir, loki.ConfigFile+loki.NextSuffix))
 	defer os.Remove(filepath.Join(s.opts.LokiDir, loki.CredentialsFile+loki.NextSuffix))
-	if err := s.lokiWriteNext(config, creds); err != nil {
-		return a.end(phaseVerify, false, err.Error())
+	if !a.verify(runner, config, creds) {
+		return a.outcome()
 	}
-	res := runner.Run("docker run --rm --network none --volumes-from "+compose.Shq(a.container.ID+":ro")+" "+
-		compose.Shq(a.container.Image)+" -config.file=/etc/loki/"+loki.ConfigFile+loki.NextSuffix+" -verify-config",
-		exec.RunOptions{Label: "loki -verify-config"})
-	if !res.OK {
-		if out := strings.TrimSpace(res.Stderr); out != "" {
-			a.sink.Emit(log.Error, out)
-		}
-		return a.end(phaseVerify, false, lastLine(res.Stderr, res.Code))
-	}
-	a.step(phaseVerify, true, "")
 	// The last point where a cancel stops the job with nothing changed. From the commit on, the work
 	// ignores ctx.
 	if ctx.Err() != nil {
@@ -499,4 +499,197 @@ func (a *lokiApply) rollback(post exec.Runner, row *loki.Row) stack.Outcome {
 		return done("rollback did not come up")
 	}
 	return done("rolled back")
+}
+
+// ── resume and boot ─────────────────────────────────────────────────────────────────────────────
+//
+// previous_* is written with the save (step 4) and cleared by finish or undo. If it is set when a job
+// reaches step 2, pstack stopped mid-apply: a stop, a recreate, an OOM kill or a reboot. The job goes
+// FORWARD to the row. The one way back is when rule 2 refuses and Loki never loaded the files.
+
+// lokiBootBy is who a boot apply runs as, in its transcript's first line.
+const lokiBootBy = "pstack (boot)"
+
+// verify writes the .next files and has the running image's Loki parse them, recording the verify
+// step. A failure leaves no .next file.
+func (a *lokiApply) verify(runner exec.Runner, config, creds string) bool {
+	s := a.s
+	if err := s.lokiWriteNext(config, creds); err != nil {
+		a.step(phaseVerify, false, err.Error())
+		return false
+	}
+	res := runner.Run("docker run --rm --network none --volumes-from "+compose.Shq(a.container.ID+":ro")+" "+
+		compose.Shq(a.container.Image)+" -config.file=/etc/loki/"+loki.ConfigFile+loki.NextSuffix+" -verify-config",
+		exec.RunOptions{Label: "loki -verify-config"})
+	if res.OK {
+		a.step(phaseVerify, true, "")
+		return true
+	}
+	for _, name := range []string{loki.ConfigFile, loki.CredentialsFile} {
+		os.Remove(filepath.Join(s.opts.LokiDir, name+loki.NextSuffix))
+	}
+	if out := strings.TrimSpace(res.Stderr); out != "" {
+		a.sink.Emit(log.Error, out)
+	}
+	a.step(phaseVerify, false, lastLine(res.Stderr, res.Code))
+	return false
+}
+
+// resume finishes or undoes the cut-off apply that row records. false means it recorded the step that
+// ends the job. No event.
+func (a *lokiApply) resume(runner exec.Runner, row *loki.Row) bool {
+	s := a.s
+	a.step(phaseRender, true, "unfinished apply")
+	for _, r := range []*loki.Row{row, row.Previous} {
+		if r != nil {
+			a.scrubs = append(a.scrubs, r.Secret)
+			if r.Settings.Storage.S3 != nil {
+				a.scrubs = append(a.scrubs, r.Settings.Storage.S3.AccessKeyID)
+			}
+		}
+	}
+	fail := func(phase stack.Phase, msg string) bool {
+		a.step(phase, false, msg)
+		return false
+	}
+	prev, prevSecret := loki.Defaults(), ""
+	if row.Previous != nil {
+		prev, prevSecret = row.Previous.Settings, row.Previous.Secret
+	}
+	beforeCfg, beforeCreds, err := lokiRender(prev, prevSecret)
+	if err != nil {
+		return fail(phaseRender, err.Error())
+	}
+	config, creds, err := lokiRender(row.Settings, row.Secret)
+	if err != nil {
+		return fail(phaseRender, err.Error())
+	}
+	diskCfg, diskCreds, credsHere, err := s.lokiDisk()
+	if err != nil {
+		return fail(phaseRender, err.Error())
+	}
+	// Has Loki loaded the files on disk? Only if it started after both were written. The mtimes come
+	// from the host's clock, and pstack's rename is the only writer. No StartedAt means no.
+	var written time.Time
+	for _, name := range []string{loki.ConfigFile, loki.CredentialsFile} {
+		if st, err := os.Stat(filepath.Join(s.opts.LokiDir, name)); err == nil && st.ModTime().After(written) {
+			written = st.ModTime()
+		}
+	}
+	loaded := a.container.StartedAt != nil && *a.container.StartedAt > written.UnixMilli()
+	// The period guard reads what Loki runs: the files if it loaded them, else the previous render.
+	running := beforeCfg
+	if loaded {
+		running = diskCfg
+	}
+	live, err := loki.Periods(running)
+	if err != nil {
+		return fail(phaseRender, err.Error())
+	}
+	next, err := loki.Periods(config)
+	if err != nil {
+		return fail(phaseRender, err.Error())
+	}
+	now, lead := s.lokiNow(), s.lokiLead()
+	if guard := loki.CheckPeriods(live, next, now, lead, true); guard != nil {
+		if loaded || loki.CheckPeriods(live, next, now, lead, false) != nil {
+			return fail(phaseRender, guard.Error())
+		}
+		// Rule 2 alone, and Loki still runs the previous files: put them back. Files go first, then the
+		// row, so a stop between the two resumes into this same branch. No restart.
+		if err := s.lokiWriteNext(beforeCfg, beforeCreds); err != nil {
+			return fail(phaseSwap, err.Error())
+		}
+		if err := s.lokiSwap(beforeCreds != ""); err != nil {
+			return fail(phaseSwap, err.Error())
+		}
+		if err := loki.Revert(s.store); err != nil {
+			return fail(phaseCommit, "could not record the undo: "+err.Error())
+		}
+		msg := guard.Error()
+		if s3 := row.Settings.Storage.S3; s3 != nil {
+			msg = "cutover " + s3.Cutover + " passed while pstack was down — save again"
+		}
+		return fail(phaseRender, msg)
+	}
+	// From here on it is the forward path's post runner: a cancel still restarts, waits and finishes.
+	postCtx, cancel := context.WithTimeout(context.Background(), 2*s.lokiLead())
+	defer cancel()
+	post := s.lokiRunner(postCtx)
+	restart := !loaded
+	if diskCfg != config || credsHere != (creds != "") || diskCreds != creds {
+		if !a.verify(runner, config, creds) {
+			return false
+		}
+		if err := s.lokiSwap(creds != ""); err != nil {
+			a.step(phaseSwap, false, err.Error())
+			a.rollback(post, row.Previous)
+			return false
+		}
+		a.step(phaseSwap, true, "swapped")
+		restart = true
+	}
+	if restart {
+		if _, err := inspect.RestartControlService(post, lokiService); err != nil {
+			a.step(phaseRestart, false, err.Error())
+			a.rollback(post, row.Previous)
+			return false
+		}
+		a.step(phaseRestart, true, "")
+	}
+	if !a.ready(post) {
+		a.step(phaseReady, false, "not ready within "+scheduler.FormatDuration(s.opts.LokiReadyTimeoutMs))
+		a.rollback(post, row.Previous)
+		return false
+	}
+	a.step(phaseReady, true, "")
+	if err := loki.Finish(s.store); err != nil {
+		return fail(phaseFinish, "could not record the finished apply")
+	}
+	a.step(phaseFinish, true, "resumed")
+	return true
+}
+
+// reconcileLoki starts a boot loki-apply job when an apply was cut off, or when the files are not what
+// the row (or the defaults) renders. It runs no docker command. The job does, on its own goroutine, so
+// a wedged dockerd cannot stall New.
+func (s *Server) reconcileLoki() {
+	diskCfg, diskCreds, credsHere, err := s.lokiDisk()
+	if errors.Is(err, fs.ErrNotExist) {
+		return // logging off, or control/loki is not mounted here
+	}
+	if err != nil {
+		s.opts.Log("loki: " + err.Error())
+		return
+	}
+	row, err := loki.Read(s.store)
+	if err != nil {
+		s.opts.Log("loki: " + err.Error())
+		return
+	}
+	if row != nil && row.InFlight {
+		s.startLokiApply(0, lokiBootBy, true)
+		return
+	}
+	set, secret := loki.Defaults(), ""
+	if row != nil {
+		set, secret = row.Settings, row.Secret
+	}
+	// Render runs the save rules, so a row this release rejects (a later release wrote it, or hand SQL)
+	// is a line, never a job.
+	config, creds, err := lokiRender(set, secret)
+	if err != nil {
+		s.opts.Log("loki: " + err.Error())
+		return
+	}
+	if config == diskCfg && credsHere == (creds != "") && creds == diskCreds {
+		return
+	}
+	if creds != "" {
+		if err := loki.CredentialsOwner(s.opts.LokiUID); err != nil {
+			s.opts.Log("loki: " + err.Error())
+			return
+		}
+	}
+	s.startLokiApply(0, lokiBootBy, true)
 }
