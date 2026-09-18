@@ -1074,6 +1074,33 @@ followed. Loopback and private addresses are allowed: an internal MinIO is the n
 The probe runs from pstack's networks, not Loki's `logs` network. An endpoint that only
 `preview-shared` reaches passes the probe and fails in Loki after the cutover.
 
+### The apply
+
+A save is a `loki-apply` job on the `pstack-control` key: one runs, one waits, each counts against
+`PSTACK_MAX_JOBS`. A boot apply is the same job. Its transcript opens with `by <actor>`.
+
+| Step | What |
+|---|---|
+| `find` | The `loki` container's id and image. None: a save fails, a boot apply is `ok`. |
+| `render` | The row, the pending patches over it, every save rule again, then the period guard. Files and row already equal: `ok`, nothing to change. |
+| `verify` | `config.yaml.next` (0644) and `s3-credentials.next` (0600), then `-verify-config` in `docker run --rm --network none --volumes-from <loki>:ro <loki's image>`. |
+| `commit` | The row, with `previous_*` set to the row it replaces. |
+| `swap` | Credentials, then config, by rename. No S3: `s3-credentials` removed. |
+| `restart` | `loki` only, through the control restart path. |
+| `ready` | `docker exec <loki> /usr/bin/loki -health` until `PSTACK_LOKI_READY_TIMEOUT_MS`. |
+| `finish` | `previous_*` cleared. |
+| `log` | `level=error` lines since the restart: a non-fatal step. |
+
+Then `logging.changed`, when the row changed. Before the swap nothing live changes: a failure
+removes the `.next` files and leaves the row.
+
+**Pending patches.** A PUT stores its section's patch with a generation, then starts a job holding
+only that number. The job takes every patch at or below it. A superseded job's patch goes to its
+successor; a running job never takes a newer one.
+
+**The post runner.** From the swap on, commands run on a runner with its own deadline (2 × lead),
+not the job's. A cancel after the swap still restarts and waits.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves
