@@ -88,17 +88,18 @@ certificates reach Traefik as files, restarts cost nothing), switching modes thr
 instead of over SSH, and a runtime view of the control stack. The load-bearing finding: the file
 provider is already the API's writing hand, so most of it needs no init and no Traefik restart.
 
-### [`loki-logging-design.md`](loki-logging-design.md) — a design in three slices, slices 1 and 2 built
+### [`loki-logging-design.md`](loki-logging-design.md) — a design in three slices, all built
 
-**Slices 1 (`--logging loki`) and 2 (Loki settings) are built (Unreleased); slice 3 is not.** Loki
-as a logging option: a Loki container in the control stack, the Grafana Loki Docker plugin on every
-node, and a `logging:` block pstack adds to every deployed service that has none — pushed through
-Traefik with basic auth. Slice 2 sets Loki's chunking, retention and storage (filesystem or S3) from
-the Control page. Slice 1's spec is kept as approved; where each build differs is at the top.
-Slice 3 (Grafana with pstack sign-in) records its decisions and gets its own spec. Read before
-touching logging, the control template, or the join material. Build plans, task by task:
-[`loki-logging-slice-1-plan.md`](loki-logging-slice-1-plan.md) and
-[`loki-logging-slice-2-plan.md`](loki-logging-slice-2-plan.md).
+**All three slices are built.** Slice 3 is Unreleased; slices 1 and 2 are too. Loki as a logging
+option: a Loki container in the control stack, the Grafana Loki Docker plugin on every node, and a
+`logging:` block pstack adds to every deployed service that has none — pushed through Traefik with
+basic auth (slice 1); Loki's settings in the UI: chunking, retention, filesystem or S3 (slice 2); and
+Grafana at `grafana.<domain>`, signed in with pstack accounts through Traefik's forwardAuth (slice 3).
+Each slice's spec is kept, with where the build differs at the top. Read before touching logging,
+the control template, the join material, or Grafana sign-in. Build plans, task by task:
+[`loki-logging-slice-1-plan.md`](loki-logging-slice-1-plan.md),
+[`loki-logging-slice-2-plan.md`](loki-logging-slice-2-plan.md) and
+[`loki-logging-slice-3-plan.md`](loki-logging-slice-3-plan.md).
 
 ### [`secret-exposure.md`](secret-exposure.md) — a closed finding, kept as a record
 

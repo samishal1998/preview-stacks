@@ -61,6 +61,14 @@
 - **`PSTACK_LOKI_DIR`, `PSTACK_LOKI_READY_TIMEOUT_MS` (300000) and `PSTACK_LOKI_UID` (10001)** on
   `serve`. Without `PSTACK_LOKI_DIR` the directory is `/etc/loki` when it exists, else
   `<PSTACK_DATA>/control/loki`.
+- **Grafana at `grafana.<domain>`, with `--logging loki`, signed in with pstack accounts.**
+  `init --logging loki` and `pstack logging loki` run `grafana/grafana:13.2.1` beside Loki, with Loki
+  as its provisioned datasource. Traefik's forwardAuth asks pstack about every request: a pstack
+  browser session becomes a Grafana sign-in, and a pstack sign-out, password change or deleted
+  account ends it on the next request. developer and maintainer are Grafana Editors, admin is Admin,
+  and viewers are refused (403), because Grafana shows log lines unredacted. There is no Grafana
+  server admin and no live tail. The advanced UI links to it for developer and above (hidden when
+  the UI uses a stored token), and `/api/health` gains `grafana` on a host running it.
 
 ### Changed
 
@@ -90,6 +98,26 @@
   (compose write +25 bytes, +85 with Loki; a `mkdir -p <DATA>/control/loki` line with logging off).
   The control template's row in `golden/facts/yaml-corpus.json` was re-measured on Bun 1.3.12.
   Every other golden, both `loki/config.yaml` cells included, is unchanged.
+- **A host with `--logging loki` gains Grafana on its next `pstack upgrade`: 768m more on the
+  manager and a download from grafana.com on first start.** Without that egress Grafana starts
+  without Logs Drilldown. `init` now pulls `grafana/loki` and `grafana/grafana` before `up`, and a
+  host that cannot reach Docker Hub fails at the `requires … image` step, by name, before anything
+  is recreated.
+- **`grafana.<domain>` is a control hostname**, on the primary and every added domain, always —
+  logging off included. A deployment already routed there loses the host to pstack's Grafana router
+  (`priority=10000`), and its next deploy is refused.
+- **`grafana.` and `loki.` reaching pstack answer plain text, never pstack's UI or API:**
+  `503 Grafana is not running.` on the primary domain while Grafana is down; `404 Not found.` on
+  `loki.` of the primary while Loki is down, and on an added domain. Before, pstack's login page was
+  served there, and a password typed on it would set `pstack_session` on that host.
+- **Goldens, for Grafana.** Regenerated with `bun gen/goldens.ts`: the
+  `http01-basic-compose-loki` and `dns01-advanced-swarm-loki` render cells (`docker-compose.yml` gains the `grafana` service and
+  volume; `grafana/datasources/loki.yaml` is new); `init-http01-basic-compose-loki` and
+  `init-dns01-advanced-swarm-loki` (the `grafana` summary line); and
+  `init-dry-http01-basic-compose-loki` and `init-dry-dns01-advanced-swarm-loki` (the two
+  `requires … image` lines, the datasource `mkdir` and `write`, the compose byte count and the
+  summary line). Every logging-off render cell, `golden/host`, and the help, cloud-init and
+  swarm-join goldens are unchanged.
 
 ### Fixed
 
