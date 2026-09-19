@@ -3,23 +3,28 @@
 Instructions for an AI agent changing **this codebase**. Using `pstack` is a different job; this is
 about editing it.
 
-**Current version: 0.34.0.** One workspace: the Go binary (`packages/pstack`, released on GitHub),
+**Current version: 0.40.0.** One workspace: the Go binary (`packages/pstack`, released on GitHub),
 its black-box specification (`packages/conformance`), and two npm packages (the client SDK, the
 advanced UI). The control plane was a Bun/TypeScript package until 0.28.0; 0.29.0 is the Go port,
-byte-compatible with it (`docs/port-status.md`).
+byte-compatible with it (`docs/port-status.md`). 0.40.0 added Loki logging and Grafana
+(`docs/loki-logging-design.md`).
 
 ## Read this first
 
 1. This file, end to end. The **Invariants** section is the part that matters — each entry is a rule
    plus the failure that produced it.
 2. [`docs/README.md`](docs/README.md) — the documentation index, so you know what exists.
+   Open follow-ups: [`docs/loki-logging-as-built.md`](docs/loki-logging-as-built.md) §5.
 3. The **header comment of every file you are about to touch.** They are long on purpose and explain
    *why*, not *what*. Most questions you will have about a design decision are answered at the top of
    the file that made it. If a header contradicts this document, the header is newer — trust it and
    fix this file.
 
 For a specific change, `docs/control-plane.md` explains the architecture and refuses several
-plausible restructurings with reasons.
+plausible restructurings with reasons. For logging, the control template, the join material, Loki's
+settings or Grafana, read `docs/loki-logging-as-built.md` first (state, decisions, caveats, open
+follow-ups in §5). Then read control-plane.md §5g/§5h, and `docs/loki-logging-design.md` for what
+was approved and why.
 
 ## What this is
 
@@ -29,8 +34,8 @@ four hooks, provisioned around a Docker Compose project, torn down in reverse, a
 gone**.
 
 **The differentiator is isolation-axis lifecycle + leak verification.** Everything else — the API,
-the UI, notifiers, the terminal — is scaffolding around that. When a change makes the leak semantics
-harder to state, it is a net loss even if it adds a feature.
+the UI, notifiers, the terminal, logging — is scaffolding around that. When a change makes the leak
+semantics harder to state, it is a net loss even if it adds a feature.
 
 ## What this is not
 
@@ -45,30 +50,39 @@ harder to state, it is a net loss even if it adds a feature.
 
 ```
 packages/pstack/       the CLI, API and embedded basic UI — one static Go binary. The product.
-                       cmd/pstack (main), internal/<pkg> (everything), assets.go (the five embeds),
-                       ui/, templates/, examples/, package.json (the lockstep version of record).
+                       cmd/pstack (main), internal/<pkg> (everything), assets.go (the eight embeds),
+                       api/openapi.yaml (generates `pstack api`; served at /api/openapi.{yaml,json}),
+                       ui/, templates/ (control compose, loki/, grafana/, cloud-init), examples/,
+                       tools/yamlcat (a parser-diff tool, not shipped), CHANGELOG.md,
+                       package.json (the lockstep version of record).
 packages/conformance/  the black-box specification (bun:test): goldens + tests that spawn bin/pstack.
 packages/client/       @samyx/preview-stacks-client — zero-dependency API client + verifyWebhook.
 apps/ui/               @samyx/preview-stacks-ui — the advanced UI (Vue 3 SPA).
 docs/                  See docs/README.md.
+skills/pstack/         a skill for USING pstack (tracked).
+.claude/skills/        project skills for agents CHANGING pstack — see *Agent workflow*.
+Dockerfile, .goreleaser.yaml, install.sh, publish.config.ts (the two npm packages), turbo.json.
+.superpowers/          build ledgers; ignored only via .git/info/exclude, so a fresh clone has none.
 ```
 
-The root `go.mod` (`module github.com/samishal1998/preview-stacks`, go 1.23) holds seven
-dependencies, each justified: `modernc.org/sqlite` (pure Go, so `CGO_ENABLED=0` is a static
-binary), `github.com/goccy/go-yaml` (a PARSER only — `internal/yamlx` resolves scalars itself),
-`github.com/coder/websocket`, `golang.org/x/crypto` (argon2), and — for `pstack api` only —
-`github.com/samishal1998/openapi-commands` with `cobra`/`pflag`.
+The root `go.mod` (`module github.com/samishal1998/preview-stacks`, go 1.23.5) has five direct
+requires, each justified: `modernc.org/sqlite` (pure Go, so `CGO_ENABLED=0` is a static binary),
+`github.com/goccy/go-yaml` (a PARSER only — `internal/yamlx` resolves scalars itself),
+`golang.org/x/crypto` (argon2), and — for `pstack api` only — `github.com/samishal1998/openapi-commands`
+with `cobra`. `github.com/coder/websocket` is imported by `internal/api/ws.go` but listed
+`// indirect` (go.mod is not tidy); `pflag` arrives with cobra.
 
 `net/http` only; the CLI parser is hand-rolled and **cobra never owns the root command**, because
 flags may appear anywhere, `--ui` peeks ahead, and the usage text is a golden. Cobra owns the `api`
-subtree and nothing else. Its generator (`cmd/oascmd-gen`, which pulls libopenapi) is a TOOL
-dependency: the generated file is checked in, so the binary never links it.
+subtree and nothing else. Its generator (`openapi-commands/cmd/oascmd-gen`, which pulls libopenapi,
+run by the `go:generate` line in `internal/apicli`) is a TOOL dependency: the generated file is
+checked in, so the binary never links it.
 
 Do not add a module for what a few lines do.
 
 ### `packages/pstack/internal` — by responsibility
 
-One package per responsibility, named as the reference's files were (the port kept the map):
+One package per responsibility (41 of them), named as the reference's files were:
 
 **The core lifecycle** (read these first; the product is here):
 
@@ -76,8 +90,8 @@ One package per responsibility, named as the reference's files were (the port ke
 |---|---|
 | `spec` | Parse + validate `preview.yml` → resolved `Stack`. Owns interpolation, the stack-name charset rule, axis dedupe, `Warnings` (on the result — there is no module global). `subdomains.go` is the wildcard routing. |
 | `stack` | `Up` / `Down` / `Verify` / `Status` / `Report`. Owns the failure semantics — **the whole product is in this package**. `Outcome.Leaked()` is THE leak scan, the one copy. |
-| `compose` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm`. Owns the all-profiles-on-down rule, `ComposeSleep` (down **without** `-v`) and `Shq`. |
-| `swarm` | Docker Swarm: `Swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, and `JoinMaterial`/`SwarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. The leaf of the compose/autolabel/swarm triangle. |
+| `compose` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm`. Owns the all-profiles-on-down rule, `ComposeSleep` (down **without** `-v`), `Shq`, and the loki-plugin check before an `up` of a logged deployment. |
+| `swarm` | Docker Swarm: `Swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, and `JoinMaterial`/`SwarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. Owns `LokiVersion`, the one-line `LokiPluginInstall` and `MarkLokiPlugins` (per-node plugin reads). The leaf of the compose/autolabel/swarm triangle. |
 | `exec` | The only place a hook is spawned (`bash -c`, env as a REPLACEMENT, SIGTERM on cancel). Dry-run, output capture, `CaptureOutputs`, the `Runner` seam and its `Fake`. |
 | `log` | The `Sink` seam: `Writer` (CLI), `Buffer` (API jobs), `Null` (tests). |
 
@@ -85,38 +99,42 @@ One package per responsibility, named as the reference's files were (the port ke
 
 | File | Responsibility |
 |---|---|
-| `api` | HTTP API + UI host. **`server.go`'s header comment is the API's route list** — update it in the same edit as a route. `routes*.go` is the ordered if-chain, `principal.go` the gate, `sse.go`/`ws.go` the streams. Owns the `:id` → spec-variable binding. |
-| `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), **exit codes**, the `serve` loopback interlock, `healthcheck` (the container HEALTHCHECK — one GET, exit 0/1). `main.go` is one call. Logic belongs in the package, not here. |
-| `jobs` | In-memory job registry: one RUNNING job per stack (a real mutex held across the check-then-act) plus a queue one deep where the newest replaces the queued one, a global concurrency cap (`PSTACK_MAX_JOBS`, 4), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation per job and per stack. |
+| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, deploy, domains, grafana, logging, openapi, probe, settings, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). `server.go`'s header has no route list and still names the deleted `api.ts` — fix it when you next touch that file. Owns the `:id` → spec-variable binding. |
+| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (82) is a constant a test checks against the lock file. |
+| `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), per-command help and completion (`commands.go`, `completion.go`), the init silent-revert guard (`initguard.go`), **exit codes**, the `serve` loopback interlock, `healthcheck`. `main.go` is one call. Logic belongs in the package, not here. |
+| `jobs` | In-memory job registry: one RUNNING job per key plus a queue one deep where the newest supersedes the queued one, a global concurrency cap (`PSTACK_MAX_JOBS`, 4), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation per job and per stack. `loki-apply` is its one non-deployment action. |
 | `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
 | `specs` | Named specs: store once, reference from many deployments. |
-| `scheduler` | Sleep/wake: the `SleepIndex` (hostname → sleeping deployment, for the catch-all router), the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
+| `scheduler` | Sleep/wake: the `SleepIndex`, the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
 | `share` | Share links: an HS256 JWT signed with `PSTACK_TOKEN`. Sign, verify, and nothing stored. |
-| `initctl` | `pstack init` — stands up the control stack. CLI-only, permanently; its header explains why. |
-| `upgrade` | `pstack upgrade` and `pstack ui <mode>`. Reads back what `init` decided so nothing rotates. |
+| `settings` | Runtime knobs (`max_jobs`, `default_role`): a closed key list, env as the default not the authority, readers that never fail and resolve downward. |
+| `config` | The portable host configuration (`GET`/`POST /api/config`, `pstack pull config`/`push config`). `Assemble` is a full credential dump; `Apply` creates or skips, never updates or deletes. Loki settings stay behind. |
+| `initctl` | `pstack init` — stands up the control stack, including the Loki and Grafana services (`LokiService`, `GrafanaService`, `LokiWiring`). CLI-only, permanently; its header explains why. |
+| `upgrade` | `pstack upgrade`, `pstack ui <mode>` and `pstack logging loki`/`off`. Reads back what `init` decided so nothing rotates. |
 | `image` | `pstack build-image` — builds the control image, pinned to the running CLI's version. |
 | `cloudinit` | `pstack cloud-init` — renders the boot user-data, multi-distro. |
+| `loki` | Loki's settings, pure (no server, no docker): clamped `bounds` served as `limits`, `Render` by literal anchors over the embedded config, schema-period guard, the S3 credentials file, the signed S3 probe. |
 
 **Observation and safety:**
 
 | File | Responsibility |
 |---|---|
-| `inspect` | What is actually running + what Traefik was told. Answers "why does the hostname 404". Never returns a raw `docker inspect` (it contains the container's whole environment). |
+| `inspect` | What is actually running + what Traefik was told. Answers "why does the hostname 404". Discovers the control stack's `loki` (`LokiPushURL`) and `grafana` (`GrafanaOnChecked`; `ok=false` when docker did not answer) containers. Never returns a raw `docker inspect` (it contains the container's whole environment). |
 | `readiness` | Post-deploy watch: containers → ready / failed / timedout. Observational only; it starts and repairs nothing. |
 | `redact` | Redaction for anything a human is shown. |
 | `terminal` | The container shell. **The most dangerous route in the codebase** — read its header before touching it. |
-| `spec/subdomains.go`, `autolabel`, `routing` | Traefik wiring: wildcard routing, generated labels, dynamic-config files. |
+| `spec/subdomains.go`, `autolabel`, `routing` | Traefik wiring: wildcard routing, generated labels, dynamic-config files. `autolabel` also injects the Loki `logging:` block (`InjectLogging`, inside `MaterializeCompose`) and refuses a preview naming a control hostname. |
 
 **Persistence and delivery:**
 
 | File | Responsibility |
 |---|---|
-| `store` | SQLite (`<dataDir>/db/pstack.db`) + migrations. Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
-| `auth` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `SsoSignIn`. Argon2id with a PHC codec that PARSES m/t/p (`phc.go`); sessions and tokens stored as SHA-256. |
+| `store` | SQLite (`<dataDir>/db/pstack.db`) + 9 migrations, 13 tables. Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
+| `auth` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `SsoSignIn`. Argon2id with a PHC codec that PARSES m/t/p (`phc.go`); sessions and tokens stored as SHA-256. `SessionHashUser` serves the Grafana cookie. |
 | `sso` | The OIDC/OAuth2 protocol, and only that: presets, discovery (cached per `Client`), PKCE, the token exchange, ID-token verification (RS256/ES256, stdlib), claim mapping, the `TransientStore`. Touches no accounts. |
 | `hostvars` | Host-level `${vars.*}` / `${secrets.*}`. |
 | `registries` | Private-registry credentials for image pulls. |
-| `events` | The domain event bus. `Names` is a **public contract** — add, never rename. Listeners run inline, in registration order; `Data` is marshalled once. |
+| `events` | The domain event bus. `Names` (30) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
 | `webhooks` | Notifier registrations + the delivery log. |
 | `notify` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
 
@@ -125,10 +143,10 @@ Foundations under `internal/` with no product logic: `omap` (the ordered map eve
 `Number()`, `encodeURIComponent`, `URLSearchParams`…), `version`, `testfacts`. Every one is tested
 against `packages/conformance/golden/facts` — what the reference runtime measurably did.
 
-Every package has a `_test.go` beside it (the former in-process suite, ~330 tests). The black-box
-suite is `packages/conformance` (214 tests: every route group, 80 CLI transcripts, a complete host
-fixture). `packages/client/test/client.test.ts` drives the client against the spawned binary — that
-is the anti-drift check for the SDK.
+Every package has a `_test.go` beside it (~330 Go test functions). The black-box suite is
+`packages/conformance` (303 tests in 26 files: every route group, 93 CLI transcripts, a complete
+host fixture). `packages/client/test/client.test.ts` drives the client against the spawned binary —
+that is the anti-drift check for the SDK.
 
 ## Invariants — do not break these
 
@@ -174,9 +192,8 @@ that is deliberate.
 | 3 | bad spec / usage | the spec author |
 
 Leak detection is a **step scan**, not `Outcome.OK`: `Outcome.Leaked()` in `internal/stack` — a
-step with `Phase == PhaseAssertGone && !OK` — and it is the ONE copy (the reference had four; one
-function agrees with itself). `cli`, `jobs` and the wake page all call it. Add a leak-bearing
-phase and you edit it.
+step with `Phase == PhaseAssertGone && !OK` — and it is the ONE copy (the reference had four).
+`cli`, `jobs` and the wake page all call it. Add a leak-bearing phase and you edit it.
 
 **9. The API's loopback interlock has two halves** (`internal/cli`, `Serve`). Without `PSTACK_TOKEN`: the
 host is forced to `127.0.0.1`, **and** an explicit non-loopback `PSTACK_HOST` is a hard exit 3 rather
@@ -186,23 +203,27 @@ than a silent downgrade. An API that can delete databases must not be exposable 
 unpersisted. Restarting the server loses history, not correctness.
 
 *Amended in 0.10.0.* There **is** a SQLite database, and the line it holds is precise: accounts,
-sessions, tokens, notifier registrations, delivery logs, terminal audit, host variables. Every one is
-relational, secret-bearing, and has no source of truth in Docker to contradict. The deployment
-registry stayed a directory of YAML an operator can read and repair over SSH. **If you find yourself
-adding a table whose rows describe what is running, you are about to be wrong.**
+sessions, tokens, notifier registrations and deliveries, terminal audit, host variables, SSO
+(`sso_config`, `sso_links`, `sso_state`, `sso_providers`), runtime `settings`, and `loki_config`
+(one row: what an operator SAVED, not what Loki runs, plus a `previous_*` undo record for one
+apply). Every table is justified in its migration as configuration an operator chose, with no
+source of truth in Docker to contradict. The deployment registry stayed a directory of YAML an
+operator can read and repair over SSH. **If you find yourself adding a table whose rows describe
+what is running, you are about to be wrong.** Whether Loki or Grafana runs is read from docker for
+the same reason (invariant 23).
 
-**11. Tri-state fields never collapse to a boolean.** `busy`, `running`, `reachable`, `verified` are
-`boolean | null`, and `null` means *could not determine* — an unresolved spec has no stack name to
-look up, and a docker that did not answer is not the same fact as "nothing is running". Collapsing
-either to `false` is how a UI reports a live stack as torn down.
+**11. Tri-state fields never collapse to a boolean.** `busy`, `running`, `reachable`, `verified`,
+`enabled` (logging), a node's `lokiPlugin` are `boolean | null`, and `null` means *could not
+determine* — an unresolved spec has no stack name to look up, and a docker that did not answer is
+not the same fact as "nothing is running". Collapsing either to `false` is how a UI reports a live
+stack as torn down.
 
 **12. `init` and `upgrade` are CLI-only, permanently.** The API runs *inside* the control stack;
 recreating that stack from a request kills the process mid-operation, and a broken image leaves the
 host with no control plane and no remote way to repair it. Never add a route that calls them.
-`POST /api/control/restart` is not an exception but the boundary drawn exactly: it restarts a
-control container *other than pstack's own* (refused by name, whoever asks — root included), it
-re-renders nothing, and the same image comes back — the unrepairable-host failure mode cannot
-happen from it.
+`POST /api/control/restart` and the `loki-apply` job are not exceptions but the boundary drawn
+exactly: they restart a control container *other than pstack's own* (refused by name, whoever asks),
+they never recreate one, and the same image comes back.
 
 **13. The container name in a request is never trusted.** `docker exec`/`stop` accept any container
 on the daemon — including Traefik (every preview on the host) and `pstack-control` itself (whose
@@ -213,26 +234,32 @@ that deployment owns and 404s otherwise. See `internal/terminal` and the contain
 renaming one silently stops deliveries for everyone subscribed. Same for the delivery envelope's four
 fields — receivers verify a signature over those exact bytes.
 
-**15. A secret's value has no read path.** Notifier signing secrets, host secrets and registry
-passwords go in and never come back out. `Webhooks.get()`/`list()` mask; `rawConfigOf()` does not and
-is for the delivery path only. Conflating them is how a masked value gets POSTed to a masked URL —
-which happened.
+**15. A secret's value has no read path.** Notifier signing secrets, host secrets, registry
+passwords and the Loki S3 secret go in and never come back out. `Webhooks.get()`/`list()` mask;
+`rawConfigOf()` does not and is for the delivery path only. Conflating them is how a masked value
+gets POSTed to a masked URL — which happened. The S3 secret is stored unhashed (the probe and Loki
+need it) in `loki_config.secret`; `GET /api/logging` answers `secretSet`, and an empty, omitted or
+masked `secretAccessKey` keeps the stored one.
+
+The ONE deliberate exception is `GET /api/config`: every secret and hash in plaintext, to the root
+`PSTACK_TOKEN` **only**, never an admin session (`routes_config.go`'s header — "the inconsistency is
+the security control"). In tokenless loopback mode invariant 9 is its only guard.
 
 **16. A share principal is closed by default.** `shareAllows` in `internal/api` runs right after the auth
 gate and **before any route**: a `{ kind: 'share' }` principal reaches exactly the GETs its views
 name, on its own deployment, with the stored variables only. A new route is unreachable to it until
 someone lists it there. The raw `PSTACK_TOKEN` is never read from a query string — only a JWT is.
 
-**17. Sleep never removes volumes; wake IS `up`.** `composeSleep` is `down` without `-v` (swarm:
-`stack rm`, which never touches volumes), its own function rather than a flag so the `down -v` the
-leak tests assert on cannot be weakened by a default. A wake runs `up()` exactly — axis hooks are
-idempotent by contract and re-capture their outputs, so nothing is persisted between the two.
+**17. Sleep never removes volumes; wake IS `up`.** `compose.ComposeSleep` is `down` without `-v`
+(swarm: `stack rm`, which never touches volumes), its own function rather than a flag so the
+`down -v` the leak tests assert on cannot be weakened by a default. A wake runs `up()` exactly —
+axis hooks are idempotent by contract and re-capture their outputs, so nothing is persisted between
+the two.
 
 **18. Template substitution is literal.** The wake router's rule ends in `$$` precisely so compose
 hands Traefik a literal `$`. `internal/initctl` substitutes each marker with
 `strings.Replace(s, marker, block, 1)` and cloud-init with `strings.ReplaceAll` over an ordered
 list — never `regexp.ReplaceAllString` or `text/template`, to both of which `$` means something.
-(The reference had the inverse hazard: JS `String.replace` reads `$$` as one `$`.)
 
 **19. An SSO identity is `(providerKey, subject)`, and an email only ever ADOPTS.** `internal/auth`
 `SsoSignIn` looks up the link first; the email branch exists solely to take over a *pre-existing
@@ -241,10 +268,66 @@ between people and subjects do not, so keying on the address — or relaxing the
 adopting the first of several matches — is how one person signs in as another. `emailAllowed` fails
 CLOSED for the same reason: a non-empty allow-list plus no address is a refusal.
 
+**20. Logging off adds nothing to the control compose except pstack's unconditional
+`./loki:/etc/loki` mount (invariant 21).** `LokiService`/`GrafanaService` return `""` without
+`--logging loki` and ride the EXISTING `#__ADVANCED_UI_SERVICE__` marker; `LokiWiring` extends three
+existing lines through anchors checked with `Contains` before `Replace(…, 1)` and fails init by name
+if one moved; `loki.Render` walks 10 anchors the same way. *Why:* every `#__MARKER__` leaves a line
+behind when rendered off, so a new one changes every host's compose file. **Never add a marker.**
+0.40.0 changed every logging-off cell once, for that mount; that change is not a precedent.
+
+**21. pstack's `./loki:/etc/loki` mount is unconditional**, and init creates `control/loki` at 0755
+in every mode. *Why (ruling X1):* pstack's env is an explicit list, so its service block is then
+identical on and off and `pstack logging loki|off` never recreates pstack — a logging-on-only mount
+would, killing running jobs. Without a writable `control/loki` the Loki PUTs answer 409.
+
+**22. `control.`, `api.`, `loki.` and `grafana.` are reserved on every domain, ALWAYS** — logging
+off too. `autolabel` refuses a `pstack.routing.host` naming one (a service with its own `traefik.*`
+labels is the escape hatch); `IsControlHostname` keeps the wake catch-all off them; pstack itself
+answers `grafana.<primary>` 503 and every other `loki.`/`grafana.` host 404 (the driver does not
+retry a 404, so `docker stop` is not delayed), and never serves its UI on them. `control.` and
+`api.` are pstack's own. The Grafana router's `priority=10000` beats an older preview's
+equal-length rule for its cookie.
+
+**23. The Loki driver's options are constants.** Only `loki-url` and `service_name=<stack>-<service>`
+vary. *Why:* with Loki unreachable the driver holds a node-wide lock while it retries, so every
+`docker stop` on the node waits — retries 2, timeout 1s and max-backoff 800ms bound it.
+`mode: non-blocking` protects the app's stdout, not the stop. A service with ANY `logging` key opts
+out whole. Whether Loki runs is the `pstack.logging.push-url` label on the control `loki` container,
+never a setting, so the CLI and the API inject the same thing.
+
+**24. Grafana sign-in trusts one cookie, and viewers are refused.** Verify reads
+`__Host-pstack_grafana` only — never `pstack_session`, a bearer or `principal()`; the cookie is the
+session hash MAC'd with `PSTACK_TOKEN`, with no table. Developer/maintainer → Editor, admin → Admin,
+viewer → 403 (owner, 2026-09-15: a Grafana Viewer still queries Loki's unredacted lines). Grafana
+and Loki sit on the `logs` network only, no published port: anything reaching :3000 can send
+`X-WEBAUTH-USER`; `authResponseHeaders` lists every header Grafana trusts. On/off comes from docker,
+cached by `reindexLoop` (≤30 s), the last value kept when docker does not answer.
+
+**25. A Loki settings save restarts Loki and nothing else, and never strands data.** A `loki-apply`
+job on the `pstack-control` key: render → `-verify-config` → rename → restart Loki → ready → roll
+back on failure; `reconcileLoki` finishes a cut-off apply at boot. A live schema period is never
+dropped (checked against the FILES, never the row); filesystem→S3 is one-way. S3 keys go in a 0600
+file owned by uid 10001, never the env (`docker restart` keeps env). Retention/chunks are
+maintainer, storage is admin. Pending patches are per section with a generation: a later save
+supersedes the waiting job and rides it.
+
+**26. `init` refuses an omission that would silently change a host** (`cli/initguard.go`): token,
+`--ui`, DNS token, `--challenge`, `--dns-provider`, `--orchestrator`, `--logging loki`,
+`PSTACK_LOKI_PASSWORD` (a new push password breaks every running container's pushes). The password
+is env-only, 32 lowercase hex; `logging off` keeps `LOKI_PUSH_PASSWORD` so `loki` reuses it. A
+spelled flag passes; `upgrade` reads everything back and never trips it.
+
 ### Gotcha: dry-run proves ordering, never absence
 
 Skipped steps carry `ok: true`, so a dry-run `down` prints ✓ for every `assert_gone`. That is
 correct — nothing ran — but never read a green dry-run as "clean".
+
+### Known Loki minors, left on purpose
+
+`DetectLogging` costs a `docker ps` + inspect per compose verb even with logging off; `GET
+/api/logging` adds a `ControlRuntime` per 10 s poll per open Control page; `pstack-control_logs`
+survives `logging off`; nothing reconciles a hand-deleted `control/loki` until pstack restarts.
 
 ## Commands
 
@@ -252,12 +335,14 @@ correct — nothing ran — but never read a green dry-run as "clean".
 bun install                    # required in a fresh clone (the UI, the client, the conformance suite)
 
 bun run check                  # THE GATE: build + test + typecheck, every package (Go and bun)
-go test -race -timeout 120s ./...            # the Go suite — -race is not optional, it is in the script
+go test -race -timeout 120s ./...            # the Go suite — -race is not optional (CI uses 180s)
 go vet ./...
 go test -race ./packages/pstack/internal/jobs/ -run TestCancel   # one package / one test, faster loop
 go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack
+go generate ./packages/pstack/internal/apicli                     # after any openapi.yaml change
 cd packages/conformance && bun test          # the black-box suite against bin/pstack
 cd packages/conformance && bun test test/api-sso.test.ts        # one route group
+cd packages/conformance && bun gen/goldens.ts  # CLI + render goldens; the diff is the contract
 
 # Manual CLI runs. There is no root preview.yml, so pass -f; the example needs PR and GIT_SHA
 # (an undefined variable is fatal — invariant 7).
@@ -265,13 +350,22 @@ PR=123 GIT_SHA=abc go run ./packages/pstack/cmd/pstack -f packages/pstack/exampl
 PR=123 GIT_SHA=abc go run ./packages/pstack/cmd/pstack -f packages/pstack/examples/preview.yml up -n -v
 go run ./packages/pstack/cmd/pstack --help
 
-# A live server + UI, for driving the web interface.
-PSTACK_TOKEN=dev PSTACK_DATA=/tmp/pstack-dev go run ./packages/pstack/cmd/pstack serve   # :7878
-cd apps/ui && bun run dev                                                               # :5273, proxies /api
+# A live server + UI. With a token the SPA needs an account; the first admin comes from
+# PSTACK_ADMIN_USER/PASSWORD only while no account exists. Leave the SPA's Settings → apiBase
+# EMPTY (an override breaks login); PSTACK_API retargets vite's /api proxy.
+PSTACK_TOKEN=dev PSTACK_DATA=/tmp/pstack-dev PSTACK_ADMIN_USER=admin PSTACK_ADMIN_PASSWORD=… \
+  go run ./packages/pstack/cmd/pstack serve                                  # 127.0.0.1:7878
+cd apps/ui && PSTACK_API=http://127.0.0.1:7878 bun run dev                   # :5273, proxies /api
 ```
 
-There is **no linter** beyond `go vet` and `gofmt`. `bun run check` is the gate. No runtime
-dependencies in `packages/client`, and only the four listed modules in `go.mod` — keep it that way.
+Anything reading docker needs a fake `docker` first on `PATH`: `SWARM_SHIM`, `LOKI_SHIM`,
+`NODE_PLUGINS` in `packages/conformance/gen/goldens.table.ts`, `GRAFANA_SHIM` in
+`test/api-grafana.test.ts`, the shape in `harness/docker-shim.ts`. `PSTACK_LOKI_DIR`,
+`PSTACK_LOKI_READY_TIMEOUT_MS`, `PSTACK_LOKI_UID` are env-only, per the rule-18 carve-out.
+
+Linting is `go vet` (`gofmt` is not enforced in CI), plus CI's `shellcheck install.sh` and its
+`generated` job (`go generate` + `git diff --exit-code` on `internal/apicli`). `bun run check` is
+the gate. No runtime dependencies in `packages/client`, only the five direct requires in `go.mod`.
 
 ## Testing expectations
 
@@ -290,6 +384,9 @@ test.** Patterns to copy, in order of how much they prove:
 
 Assert on `Outcome.Steps` (phase / ok / message), not on printed output — `Report()` is presentation.
 Every Go test function carries a `// negative control: <the mutation that fails it>` line (rule 17).
+A test racing an async job orders its inputs, never sleeps: `TestLokiApplyCarriesASupersededSave`
+failed 49/50 under `-cpu=1` until it waited for the first job's first docker command (fix on
+`claude/fix-flaky-loki-apply-test`, not yet merged).
 
 ### The rule that matters most
 
@@ -307,8 +404,8 @@ If a test cannot fail, it is documentation with a misleading name.
 
 `packages/conformance` is the HTTP/CLI contract as tests that **spawn the real `pstack`** and never
 import the implementation. It graded the Go port against the TypeScript reference until the two were
-byte-identical; the reference is gone and the goldens are the specification. Three rules, each
-enforced by a script:
+byte-identical; the reference is gone and the goldens are the specification. Rules, each enforced by
+a script:
 
 - **`PSTACK_IMPL=go|null`** selects what is spawned (`harness/impl.ts`; `go` is the default). `go`
   runs `$PSTACK_BIN` (default `packages/pstack/bin/pstack`); `null` is a server answering `200 {}`
@@ -316,10 +413,14 @@ enforced by a script:
 - **Every test must fail against `null`** — `bun run vacuity` lists any that do not. A test that
   passes against a server that asserts nothing is the class of bug above, mechanised.
 - **Goldens are checked in and ARE the contract** (`golden/cli` exact CLI transcripts, `golden/render`
-  the control compose for all eight init cells, `golden/facts` the JavaScript semantics the port
-  reproduces, `golden/host` a complete data directory every binary must open unchanged). A change
-  to a golden is a deliberate contract change: regenerate with `bun run gen`, commit the diff with
-  the code, and say so in the CHANGELOG.
+  the control compose for all ten init cells — eight logging-off, two `-loki` — `golden/facts` the
+  JavaScript semantics the port reproduces, `golden/host` a complete data directory every binary
+  must open unchanged). A change to a golden is a deliberate contract change: regenerate with
+  `bun gen/goldens.ts` (it prints `wrote 93 goldens`), commit the diff with the code, and say so in
+  the CHANGELOG. `bun run gen` also runs `gen/host-fixture.ts`, which deletes and rebuilds
+  `golden/host`. Run it only for a deliberate on-disk format change (a migration), reviewed as one.
+  When a route's output changes, hand-edit `golden/host/expected/<route>.json` (R1). A run leaves
+  untracked `golden/host/db/pstack.db-shm` and `-wal` behind — never commit them.
 - **Differential mode** (`bun run diff --a <binary>`) replays nine scenarios on binary A then B over
   one data path and compares traces after masking; the docker argv the API issued is a step too.
   `--self` (the same binary twice) must be empty — it is the mask list's own control, and CI runs it.
@@ -332,7 +433,7 @@ A new HTTP-level test belongs in `packages/conformance`; a unit test beside the 
 
 The binary is a re-implementation of a fixed contract — the conformance suite, the goldens and
 the exact docker argv — and the contract has JavaScript semantics baked in (JSON key order,
-`.length` in UTF-16, `Number()`, last-wins query parsing). These rules are what keep thirty
+`.length` in UTF-16, `Number()`, last-wins query parsing). These rules are what keep forty-one
 packages byte-compatible with it, and they stay after the port because the contract stays:
 
 1. **JSON is structs (field order) or `*omap.Map`/`jsonx.Object` — never `map[string]any`**, and
@@ -344,7 +445,7 @@ packages byte-compatible with it, and they stay after the port because the contr
    `endedAt`, `outcome`, `error`, `cancelledBy`, `reason`, `hostPort`, …) are pointers **with**
    omitempty. Never omitempty on a plain bool or int — Go would delete `ok:false`.
 3. **Every `[]T` and map in a response, event payload or stored meta is non-nil at construction.**
-   `null` where the UI expects `[]` is a blank page. `AssertNoNilCollections` in every response test.
+   `null` where the UI expects `[]` is a blank page. Assert `[]`, not `null`, in every response test.
 4. Route on `r.URL.EscapedPath()` and decode per segment; query via `js.ParseQuery` (last value
    wins; numerics via `js.ParseNumber`, kept as float64 — `?tail=1.5` is accepted and echoed).
 5. Wherever JS iterated an object/Map/Set into output (notes, label lists, the missing-variable
@@ -354,16 +455,18 @@ packages byte-compatible with it, and they stay after the port because the contr
    `String(number)` → `js.NumberString`; `Number()` → `js.ParseNumber`.
 8. Templates: init markers `strings.Replace(s, marker, block, 1)`; cloud-init `strings.ReplaceAll`
    over an ordered list; never `regexp.ReplaceAllString` or `text/template` for either (invariant 18
-   inverts in Go: `$` is nothing to `strings.Replace` and everything to `regexp`).
+   inverts in Go: `$` is nothing to `strings.Replace` and everything to `regexp`). Extend the
+   control template by checked anchors, never a new marker (invariant 20).
 9. `escapeHostRegexp` is `regexp.QuoteMeta` (verified: the same fourteen bytes as the JS class);
    JS flags become `(?i)`/`(?m)` prefixes; a compile error is swallowed where the TS had try/catch.
-10. Files: `0o666`/`0o777` and let umask apply; an explicit `Chmod` only where the TS site chmods;
+10. Files: `0o666`/`0o777` and let umask apply; an explicit `Chmod` only where the TS site chmods —
+    or where a non-root container must read it (`control/loki`, Grafana's datasources, 0755);
     temp-then-rename where the TS does. `meta.json` keeps unknown fields (`Extra map[string]json.RawMessage`).
 11. Env: `??` sites use `os.LookupEnv` presence (empty is a value); `||` sites treat empty as unset;
     a child process ALWAYS gets an explicit `cmd.Env` (nil inherits — the opposite of Bun).
 12. HTTP clients: notify uses `CheckRedirect = http.ErrUseLastResponse` + a 5 s per-attempt
-    context (a 3xx is a failure, never a hop — that is the SSRF control); sso follows; no client
-    without a timeout.
+    context (a 3xx is a failure, never a hop — that is the SSRF control); the S3 probe refuses a
+    redirect the same way; sso follows; no client without a timeout.
 13. Hosts: parse with `net/netip`, never compare bracketed strings; WHATWG normalisation
     (lowercase, empty path → `/`) is explicit where the TS relied on `new URL()`.
 14. Concurrency: every shared struct names its owner or its mutex in a comment; **no method calls a
@@ -387,8 +490,13 @@ packages byte-compatible with it, and they stay after the port because the contr
     and `/proc/<pid>/cmdline` for as long as the process lives, and a value in `Parsed` also lands
     in the `t.Errorf("got %+v", p)` every parser test does. So a credential comes from the
     environment, a no-echo prompt, or a `--…-file <path>` flag — the PATH may be an argument
-    because a path is not a secret. `PSTACK_CONFIG_KEY` (no flag, prompt or env) and
-    `--dns-token-file` are the two shapes; copy whichever fits.
+    because a path is not a secret. `PSTACK_CONFIG_KEY` (no flag, prompt or env),
+    `PSTACK_LOKI_PASSWORD` (env only) and `--dns-token-file` are the shapes; copy whichever fits.
+
+    Carve-out: `serve`'s tuning knobs are env-only by precedent (S2-R9) — the `api.Tuning` fields
+    `TuningFromEnv` reads (`PSTACK_MAX_JOBS`, the `PSTACK_READINESS_*` knobs, the SSO TTLs,
+    `PSTACK_LOKI_READY_TIMEOUT_MS`/`_UID`) plus `PSTACK_LOKI_DIR` (`loki.Dir`). Rule 18 applies to
+    command inputs such as `init`, `cloud-init` and `swarm` flags.
 
 ## How to add things
 
@@ -401,41 +509,65 @@ The four-hook tuple is hardcoded in several places. All of them:
    (fatal or recorded? invariant 1).
 3. `internal/cli` and `internal/api` both print `Axis.Hooks()` — nothing to add there.
 4. If it can indicate a leak: `Outcome.Leaked()` in `internal/stack` — the ONE scan (invariant 8).
-6. Docs: `docs/usage.md`, `examples/preview.yml`.
-7. A test.
+5. Docs: `docs/usage.md`, `examples/preview.yml`.
+6. A test.
 
 ### A new CLI command
 
-`internal/cli`: add the `case` in `run.go`, add it to `Commands` (an unknown command must fail as
-*unknown*, not by hunting for a spec file — that bug shipped), add a line to `Usage()`, add flags
-to `ParseArgs` **and** `Usage()`, and return an `Exit` with a code from the table. Keep the logic in
-a package; `cli` is argv, dispatch and exit codes only. The usage text is a golden
-(`golden/cli/help.json`) — regenerate it deliberately. Then `docs/usage.md`.
+`internal/cli`: the `case` in `run.go`; an entry in `Commands` (an unknown command must fail as
+*unknown*, not by hunting for a spec file — that bug shipped); a `commandHelps` entry in
+`commands.go` (`commands_test.go` fails without one; its `flags` drive completion); subcommands in
+`completion.go`; a line in `Usage()`; flags in `ParseArgs` **and** `Usage()`; an `Exit` with a code
+from the table. Keep the logic in a package; `cli` is argv, dispatch and exit codes only. Four
+goldens list commands and move together — `help.json`, `help-h.json`, `no-args.json`,
+`unknown-command.json` — regenerate them deliberately. Then `docs/usage.md`.
 
 ### A new API route
 
-`internal/api`: add the route to the if-chain in `routes.go` (in order — a greedy pattern later in
-the chain is reachable only if nothing above it matched), **add it to `packages/pstack/api/openapi.yaml`
-and re-run `go generate ./packages/pstack/internal/apicli`** (or list it in `notInTheSpec` with a
-reason — `openapi_coverage_test.go` fails either way, and CI's `generated` job fails if the spec
-moved without the generated file), and return domain errors so `fail()` maps them to 400/409 rather than a 500. Long operations return `202 { job }`,
-never a held-open socket; one RUNNING job per stack with a queue one deep, so a busy stack answers 202-queued rather than 409. Reads that start something
-(a readiness watch) must not emit events — a page view must not manufacture a notification. Then the
-UI if it consumes it, and `packages/client` if a script would want it.
+The handler in the right `routes_<area>.go`, dispatched from the if-chain in `routes.go` (in order —
+a greedy pattern later in the chain is reachable only if nothing above it matched). A row in
+`permissions.go`: the table is default-deny, so an unlisted route is root-only, and
+`permissions_test.go` fails on a matcher with no row; `shareAllows` only if a share principal needs
+it (invariant 16). Add it to `packages/pstack/api/openapi.yaml`, run `go generate
+./packages/pstack/internal/apicli` and bump `apicli.OperationCount` (or list it in `notInTheSpec`
+with a reason — `openapi_coverage_test.go` fails either way, and CI's `generated` job fails if the
+spec moved without the generated file). Return domain errors so `fail()` maps them to 400/409, not
+500. Long operations return `202 { job }`, never a held-open socket; a busy stack answers
+202-queued, not 409. Reads that start something (a readiness watch) must not emit events. A
+conformance test that fails against `null` (`bun run vacuity`), the ratchet raised, `api-rbac`
+rows. Then the UI if it consumes it, and `packages/client` if a script would want it.
 
 ### A new event
 
-`internal/events` (`Names`), a chat line in `internal/notify`'s `Summarize`, the emit site, the
+Append to `Names` in `internal/events` — at the END: the order is the contract (`events_test.go`
+pins it), so never regroup. A chat line in `internal/notify`'s `Summarize`, the emit site, the
 catalogue in `docs/webhook-events.md`, and a test. Add-only — invariant 14.
 
 ### A new lifecycle action
 
 `sleep`/`wake` are the template. `jobs.Action`; the branch in `startLifecycle` (`internal/api`,
-`server.go`) — the ONE place jobs start, shared by the POST route, the wake dispatch and the
-scheduler; the lifecycle regex on the `:id` route; `actionWord` in `internal/notify`;
-`LifecycleAction` + `ACTION_LABELS` in both UIs; the client SDK's method and `JobAction`;
-`docs/webhook-events.md` (`job.started`'s `action`). If it can leave a leak behind, `Outcome.Leaked()`
-(invariant 8).
+`server.go`) — the one place *deployment* jobs start (POST route, wake dispatch, scheduler); the
+lifecycle regex on the `:id` route; `actionWord` in `internal/notify`; `LifecycleAction`
+(`useDeploymentActions.ts`) and `ACTION_LABELS` (`useFormat.ts`) in `apps/ui` only — the basic UI
+prints the action raw; `JobAction` in `apps/ui/src/api/types.ts` and `packages/client/src/types.ts`
+plus the client method; `docs/webhook-events.md`. If it can leave a leak behind, `Outcome.Leaked()`.
+A job not about a deployment copies `internal/api/loki_apply.go`: `s.jobs.Start` on its own key
+(`inspect.ControlProject`), no `startLifecycle` branch, no `:id` route, `verified: null`.
+
+### A runtime setting
+
+`internal/settings`: an arm in `Set`'s switch (unknown keys are refused), a reader beside
+`MaxJobs`, and a permissions row. An env var, if any, is the default, not the authority. Readers
+never return an error and resolve downward — never up to admin. Never call a reader inside
+`store.Tx` (one connection: a permanent self-deadlock).
+
+### A control-template change or a new init input
+
+Anchors, never a marker (invariant 20). The eight logging-off render cells and the init, upgrade,
+`ui`-switch, cloud-init and swarm-join transcripts stay byte-identical: `bun gen/goldens.ts` (never
+`bun run gen`, which rebuilds `golden/host`), then read the golden diff first. A new init input
+also needs the `upgrade` readback (which `pstack ui` and `pstack logging` re-run init from), an
+`initguard` row (invariant 26), cloud-init passthrough, and a flag + env pair (Go rule 18).
 
 ### A new notifier type
 
@@ -446,15 +578,23 @@ being worked against.
 
 ### A database change
 
-Append to `Migrations` in `internal/store` (`migrations.go`). **Never edit a shipped migration** — it will not re-run
-anywhere it already ran. The array index is the version.
+Append to `Migrations` in `internal/store` (`migrations.go`). **Never edit a shipped migration** — it
+will not re-run anywhere it already ran. The 1-based position is the version: `store.go` runs
+`Migrations[v-1]` while `user_version < N`. Migration text lands verbatim in `sqlite_master`
+(comments inside `CREATE TABLE` included), so it is part of `golden/host`'s bytes.
 
 ### UI work
 
 Read [`docs/ui-rules.md`](docs/ui-rules.md) first — casing, one control height, one radius scale,
-full-width pages, container queries for tables. Then **look at it in a browser**: several defects in
-this UI's history were invisible in code review and obvious in a screenshot (a stale "Healthy" beside
-"Exited", buttons that took a click and did nothing, columns painted over the panel beside them).
+full-width pages, container queries for tables. **Copy is terse: state, not explanation** —
+`Restarts Loki.`, `Admin only.`, `Fixed once saved.`, never a sentence explaining the system. The
+owner has corrected verbose copy more than three times; 0.39.1 cut every view to this.
+
+Then **look at it in a browser**: several defects in this UI's history were invisible in code
+review and obvious in a screenshot (a stale "Healthy" beside "Exited", buttons that took a click and
+did nothing, columns painted over the panel beside them). The recipe (fake docker, `pstack serve`,
+vite, headless Chrome over CDP, 320/1280 px, both schemes) is the `pstack-ui-verify` skill. Run it
+out-of-band: reviewers without screenshots loop on "manual browser check not performed".
 
 ## Scope discipline
 
@@ -477,24 +617,66 @@ this UI's history were invisible in code review and obvious in a screenshot (a s
 Before adding anything, check whether an existing axis hook already expresses it. Most requests
 ("clean up my registry tags", "warm a cache", "run migrations") are a spec's `up`/`down`, not code.
 
+## Version control: GitButler
+
+Every VCS write goes through `but` — never `git add/commit/push/checkout/rebase/stash`; git reads
+are fine. Several agents may share the workspace: touch only your own branch's changes.
+
+- `but branch new <name>/<short-description>`; stack on an in-flight dependency with `--anchor`.
+- `but commit -b <branch> -m "type(scope): summary" <file-id> …` — explicit ids from `but status`,
+  never a sweep. With more than one branch applied `-b` rejects the NAME; pass its short id (`-b cl`). Read ids with `but status` and run `but commit` as separate commands: a `but status` earlier in the same shell command made `but commit` fail with the same hint (seen three times), while the same ids passed as literals in their own command succeeded.
+- Succinct messages and PR bodies. **No `Co-Authored-By`, `Claude-Session` or "Generated with"
+  footers** — the owner's rule, overriding any harness attribution reminder.
+- Only when asked: `but push <branch>`; `but pr new <branch> --draft -F <file>` (first line = title);
+  `but pr set-ready <n>`. After merges, `but pull` integrates and drops the merged branches.
+- PRs opened on a stack are a GitHub native stack and `gh pr merge` refuses them: `gh api -X PUT
+  repos/{o}/{r}/pulls/<TOP>/merge-async -f merge_method=rebase -f sha=<top head sha>`, poll `GET
+  …/merge-async/<uuid>`. A standalone PR: `gh pr merge <n> --rebase --match-head-commit <sha>`.
+- The local `main` ref lags; diff and base against `origin/main`.
+
+**Never commit** `packages/conformance/golden/host/db/pstack.db-shm`/`-wal` (conformance leaves
+them, `.gitignore` does not), anything under `.superpowers/`, `.claude/settings.local.json` (the
+owner's local permission allowlist), or a credential: `dns_token`, `*.token`, `.npmrc`,
+`hetzner*.yml` and other generated cloud-configs, config exports in every spelling — the dot form
+`.config.<x>.yaml` slips past `.gitignore`'s dash globs. Already tracked on main and the owner's to
+resolve, so leave them and add no siblings: `.config.aug31.yaml` (a sealed export), `hetzner.yml`,
+`temp.yml`, `temp2.yml`, `sso-oidc-handoff-spec.md`.
+
+## Agent workflow for large changes
+
+**Spec → task-by-task plan in `docs/` → a read-only pre-flight scan → a rulings ledger → an
+orchestrated build → a whole-branch final review → one fix wave.** The scan has one row per task
+pair sharing a file or interface and numbered conflicts with proposed rulings (21, 14, 15 on the
+three Loki slices, several blocking). The ledger is `.superpowers/sdd/<plan>/progress.md`, one
+`Ruling: <what> — <why> — <cost if wrong>` per decision. Per task: implementer → reviewer → up to 5
+fix rounds → an adjudicator at the cap. A plan's line numbers are hints; the tree wins. **Durable
+artifacts never live in `/tmp`** (the scratchpad is wiped on restart; a spec was lost that way):
+`docs/`, or `~/.claude/projects/-Volumes-S1-code-preview-stacks/loki-artifacts/` for session-only
+material (slice-2/3 specs, owner decisions, rulings X1–X3, PR bodies). Recipes and harness
+recoveries: the `pstack-plan-build` and `pstack-ship-stack` skills.
+
 ## Releasing
 
-Lockstep across all three `package.json`s, from the repo root; `packages/pstack/package.json` is
-the version of record and what the binary reports (`internal/version`). A `v*` tag runs
-`.github/workflows/release.yml`: it asserts the tag equals every package version, runs the Go
-suite, the conformance ratchet and an image smoke test, then GoReleaser (the binaries,
-`checksums.txt`, the version-stamped `install.sh`), then publish-kit for the UI and the client.
+**Only when the owner asks** — never tag, publish or run `release:publish` on your own. Mechanics:
+the `pstack-release` skill.
 
-```bash
-bunx publish-kit bump patch|minor    # the two npm packages (publish-kit skips the private one)
-# set packages/pstack/package.json "version" to the same number — the release workflow asserts it
-bun run check                        # must be green
-git commit && git tag vX.Y.Z && git push origin main --tags
-```
-
-**Tagging and publishing are the maintainer's, not yours.** Never push a tag or run
-`release:publish`. Version numbers appear in docs ("since 0.X.0") — grep for the old version after
-a bump.
+1. `bunx publish-kit bump patch|minor` bumps `apps/ui` and `packages/client` only; hand-edit
+   `packages/pstack/package.json` (private, skipped by publish-kit) to match. It is the version of
+   record, what the binary reports, and never published; `verify` asserts the tag against all
+   three. `packages/pstack/CHANGELOG.md`'s `## Unreleased` becomes `## X.Y.Z — <date>`; fix
+   "Unreleased" banners in `docs/`; grep for the old version.
+2. `bun run check` green; a release branch and PR through `but`; merge.
+3. `but` cannot tag: `gh api` `POST repos/{o}/{r}/git/tags` (annotated), then `POST git/refs` for
+   `refs/tags/vX.Y.Z`. That ref triggers `.github/workflows/release.yml`: `verify` (lockstep, Go
+   `-race`, UI/client, ratchet, image smoke) → `release` (GoReleaser binaries, `checksums.txt`,
+   `install.sh`, installer smoke) → `npm` (`publish-kit publish --missing-only`). A flaky `verify`:
+   `gh run rerun --failed`.
+4. **A green npm job is not a publish:** `--missing-only` can report "0 package(s), 2 skipped".
+   Read the log's `N package(s)` and `npm view`. Since 0.38.0 CI's `NPM_TOKEN` is rejected (bun
+   falls back to web auth, hangs ~5 min, fails "does not exist in this registry"); 0.38.0–0.39.1
+   were hand-published and 0.40.0 is not on npm. The fix is the owner's — a granular automation
+   token, `gh secret set NPM_TOKEN` — then `gh workflow run release.yml --ref vX.Y.Z -f
+   npm_only=true`. Agents never handle credentials.
 
 ## Working style in this repo
 

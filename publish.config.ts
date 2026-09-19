@@ -2,7 +2,8 @@
  * Release config, consumed by `@samyx/publish-kit`: the two npm packages (the advanced UI and the
  * client SDK). `@samyx/preview-stacks` — the control plane — is a Go binary released on GitHub by
  * GoReleaser (.goreleaser.yaml) and is no longer published to npm; its package.json stays as the
- * lockstep version of record (private, so publish-kit bumps it and never publishes it).
+ * lockstep version of record (private, so publish-kit neither bumps nor publishes it; the release
+ * bumps it by hand).
  *
  * NOTE — no `import { defineConfig } from '@samyx/publish-kit/config'`.
  * In `@samyx/publish-kit@0.0.0-pre.1` that subpath is unusable: the package's `files` ships

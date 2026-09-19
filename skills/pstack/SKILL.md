@@ -1,6 +1,6 @@
 ---
 name: pstack
-description: Use when setting up, configuring, or debugging ephemeral per-PR preview stacks with pstack — installing it, standing up the control stack with pstack init, choosing an ACME challenge (HTTP-01 vs DNS-01) and the per-PR TLS labels each mode requires, writing a preview.yml, defining isolation axes and requires preconditions, choosing shared vs isolated kinds, wiring up/down/verify into CI, or diagnosing leaked preview resources.
+description: Use when setting up, configuring, or debugging ephemeral per-PR preview stacks with pstack — installing it, standing up the control stack with pstack init, choosing an ACME challenge (HTTP-01 vs DNS-01) and the per-PR TLS labels each mode requires, writing a preview.yml, defining isolation axes and requires preconditions, choosing shared vs isolated kinds, wiring up/down/verify into CI, diagnosing leaked preview resources, or turning on Loki logging (pstack init --logging loki, pstack logging), the loki log plugin on swarm workers, Loki retention and S3 storage settings, and Grafana at grafana.<domain>.
 ---
 
 # Using pstack
@@ -11,29 +11,24 @@ your Compose stack, tears everything down in reverse — and then **proves nothi
 
 ## Install
 
-It is a **global package** — a ~74 KB bundle, no runtime dependencies, Bun ≥ 1.3 required
-(`engines.bun`):
+One static binary (Go), Linux and macOS, amd64 and arm64 — no runtime, no dependencies, released
+on GitHub (not npm since 0.29.0):
 
 ```bash
-bun add -g @samyx/preview-stacks     # or: npm i -g @samyx/preview-stacks
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh
 pstack --help
 ```
 
-The published tarball is **8 files / 0.36 MB unpacked**: `dist/cli.js`, `dist/index.js`, their
-sourcemaps, and the four metadata files. **No source, no docs, no examples, no skills, no templates,
-no `ui/`.** Two things follow that matter when you are helping someone:
+The installer verifies the download against the release's `checksums.txt` and moves the binary into
+`/usr/local/bin` (`PSTACK_INSTALL_DIR` relocates, `PSTACK_VERSION` pins). Two things matter when
+you are helping someone:
 
-- **Do not tell a user to clone the repo, run `bun install`, or `bun link`.** `bun src/cli.ts …` is
-  the **contributor** path, for changing pstack itself. Users run `pstack`.
-- **Nothing is read from a path next to the source at runtime.** The web UI and the control-stack
-  compose template are `with { type: 'text' }` imports inlined into the bundle, so "it works from a
-  checkout but 404s once installed" cannot happen — and there is no `ui/` directory on an installed
-  host to look for, edit, or mount.
-
-It is a bundle rather than a `--compile`d binary because a standalone executable embeds the Bun
-runtime (~60 MB) per platform — a five-platform `optionalDependencies` matrix or a postinstall
-download. There is no Node fallback to preserve: `Bun.serve`, `Bun.YAML`, `Bun.spawn` and `Bun.file`
-have no Node equivalent.
+- **Do not tell a user to clone the repo or build it.** That is the **contributor** path, for
+  changing pstack itself. Users run `pstack`.
+- **Nothing is read from a path next to the source at runtime.** The web UI, the share page, the
+  control-stack compose template and the cloud-init template are embedded in the binary, so "it
+  works from a checkout but 404s once installed" cannot happen — and there is no `ui/` directory on
+  an installed host to look for, edit, or mount.
 
 ```bash
 PR=123 pstack up        # assert `requires`, provision axes in order, then compose up
@@ -43,6 +38,7 @@ PR=123 pstack validate  # parse, resolve interpolation, print warnings
 PR=123 pstack status    # compose ps for this stack
 pstack init --domain … --acme-email …   # HOST ONLY: stand up the control stack (§0)
 pstack serve            # HOST ONLY: the API + UI over the deployment registry
+pstack logging loki     # HOST ONLY: ship every service's logs to Loki; `off` to stop (§0)
 ```
 
 ## 0. The control-plane model — three layers, three sets of rules
@@ -62,9 +58,9 @@ Two rules that follow:
    the API — the process doing the work is inside the container being replaced, so it is killed
    mid-operation, the job transcript dies with it (jobs are in-memory), and a bad image leaves no
    control plane and no remote way back. The control stack belongs to **`pstack init`**, run from the
-   host (over SSH, from systemd, or from CI-with-a-key); `pstack self-upgrade` is not built yet — it
-   is `init` re-run after a fetch. **Nothing in the code enforces this**: the API cannot reliably know
-   its own deployment id, so it is on you.
+   host (over SSH, from systemd, or from CI-with-a-key); `pstack upgrade` re-runs it, reading the
+   host's settings back so nothing rotates. **Nothing in the code enforces this**: the API cannot
+   reliably know its own deployment id, so it is on you.
 2. **`down` on a `kind: shared` deployment is refused unless you force it explicitly** — see §2.
 
 If you are asked to "tear down the shared database" or "restart the preview host's Traefik", stop
@@ -85,10 +81,12 @@ pstack init --domain preview.example.com --acme-email <you>@example.com
 | `--acme-email` / `PSTACK_ACME_EMAIL` | yes | Let's Encrypt expiry mail |
 | `--challenge http01\|dns01` / `PSTACK_CHALLENGE` | no | **default `http01`** |
 | `--dns-provider <lego-code>` / `PSTACK_DNS_PROVIDER` | **`dns01` only** | ignored by `http01` |
+| `--logging none\|loki` / `PSTACK_LOGGING` | no | default `none`; see [Logs](#logs-loki-and-grafana) |
 | `PSTACK_DNS_TOKEN` | `dns01`, unless tokenless | env-only, no flag; written to `control/dns.env` (`0600`) |
 | `PSTACK_TOKEN` | no | the **API bearer token**. Generated and printed **once** when unset |
 | `PSTACK_IMAGE` | no | control image, default `pstack:local` (build it: `docker build -t pstack:local .`) |
 | `PSTACK_DATA` | no | default `/var/lib/pstack` |
+| `PSTACK_LOKI_PASSWORD` | no | with `loki`: the push password, 32 lowercase hex. Generated when unset; kept in `control/.env` as `LOKI_PUSH_PASSWORD` |
 
 It checks preconditions by name first (Docker socket, Compose plugin, control image), creates
 `<data>/deployments` and the two external networks **`preview-ingress`** and **`preview-shared`**
@@ -106,12 +104,16 @@ Never reuse one as the other.
 |---|---|
 | `control.<domain>` | the web UI (a browser) |
 | `api.<domain>` | the API (CI, `curl`, scripts) |
+| `loki.<domain>` | Loki's push endpoint for the nodes' log plugins (`--logging loki`) |
+| `grafana.<domain>` | Grafana (`--logging loki`), signed in with pstack accounts |
 | `<service-name>.<domain>` | the convention for a shared service's own hostname |
 | `<surface>-pr-<n>.<domain>` | a per-PR surface, e.g. `backend-pr-123.<domain>` |
 
 `control` and `api` are two routers on **one** container — the API process serves the UI, and the UI
 calls the API with **relative** `/api/…` paths, so it is same-origin from `control.<domain>` and needs
-no CORS. `api.<domain>` exists to give external callers an honest name.
+no CORS. `api.<domain>` exists to give external callers an honest name. `loki.` and `grafana.` are
+reserved even with logging off: a `pstack.routing.host` naming `control.`, `api.`, `loki.` or
+`grafana.` is refused at deploy.
 
 **Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
 `backend-pr-1.<domain>` is covered by `*.<domain>`; `backend.pr-1.<domain>` is **not**.
@@ -196,6 +198,76 @@ DNS records, either mode: `*.<domain>` and `<domain>` A-records pointing at the 
 hostname resolves. Under DNS-01 that is also what the single wildcard *certificate* covers; under
 HTTP-01 resolution and certification are separate problems and each hostname is certified on its
 first HTTPS request.
+
+### Logs: Loki and Grafana
+
+Off by default. Turn it on at install, at first boot, or on a running host — all on the host:
+
+```bash
+pstack init --domain … --acme-email … --logging loki   # or PSTACK_LOGGING=loki
+pstack cloud-init … --logging loki -o user-data.yaml   # passes it to init on first boot
+pstack logging loki                                    # an existing host; `off` removes it; -n previews
+```
+
+`pstack logging` re-runs `init` from `control/.env`, so the API token, DNS token and domain stay put.
+`loki` adds Loki and Grafana to the control stack, installs and enables the `loki` Docker log plugin
+on this node (`grafana/loki-docker-driver:3.7.7-<arch>`, amd64 or arm64), and writes the push password to `control/.env`.
+If the plugin does not install, the command fails.
+
+**Re-running `init` by hand on a Loki host is refused** unless it keeps Loki: without
+`--logging loki` it would remove Loki; without `PSTACK_LOKI_PASSWORD` it would mint a new push
+password, refusing every running container's pushes until redeployed. Pass both, or use
+`pstack upgrade` / `pstack logging`, which read them back:
+
+```bash
+PSTACK_LOKI_PASSWORD=$(. /var/lib/pstack/control/.env; echo "$LOKI_PUSH_PASSWORD") \
+  pstack init --domain … --acme-email … --logging loki
+```
+
+**What it does to deployed services.** Every deploy gives each service **without a `logging:` key of
+its own** the loki driver, labelled `service_name=<stack>-<service>` — the label to query in Grafana.
+A service with any `logging:` key (`json-file`, even an empty one) is left alone and named in the job
+log. Running deployments switch on their next deploy, a sleeping one on wake. After `off`, new
+deploys get no driver; containers still carrying it lose their logs (the push 404s) until
+redeployed. The Loki and Grafana volumes survive `off`, so `loki` again picks up where it left off.
+
+**Every node needs the plugin.** Under swarm, `pstack swarm join --format script` and
+`--format cloud-config` install it after Docker and before the join; a failed install never blocks
+the join. A worker that joined before logging was on has no plugin, and swarm keeps logged services
+off it. The Swarm page and `pstack swarm` name such nodes (`no loki plugin: <host>`) and print the
+install line; re-run the join script on the node, or run that line. `pstack upgrade` never upgrades
+the plugin: doing it by hand restarts dockerd and interrupts every preview on that node.
+
+**Settings.** With the advanced UI (`pstack ui advanced`), the Control page has a **Logging** panel:
+retention, chunking (idle period, max age, target size, encoding) and storage. Retention and
+chunking need `maintainer`; storage needs `admin`. Over the API it is `GET`/`PUT /api/logging` and
+`PUT /api/logging/storage`, or `pstack api logging …`. A save that changes something restarts Loki
+as a `loki-apply` job.
+
+- Storage is **filesystem** or **S3**, and **S3 is one-way**: once saved, endpoint, region, bucket,
+  path style and cutover (the first UTC day on S3) are fixed; only the keys change. The secret is
+  write-only. An S3 save first writes and deletes a probe object, so bad keys fail at save.
+- pstack owns `control/loki/config.yaml`: hand edits are reverted by the next save or pstack restart.
+- `pstack pull config` does not carry Loki's settings or its S3 secret. Re-enter them on the target.
+
+**Grafana** is at `https://grafana.<domain>`, signed in through pstack (password or SSO):
+
+| pstack role | Grafana |
+|---|---|
+| `viewer` | refused: `403 No Grafana access.` |
+| `developer`, `maintainer` | Editor |
+| `admin` | Admin |
+
+Browser sessions only — `PSTACK_TOKEN` and personal tokens are not Grafana access. Signing out of
+pstack signs you out of Grafana on the next request; Grafana has no sign-out of its own. **Log lines
+in Grafana are not redacted** — Loki stores what containers printed, secrets included — which is why
+viewers are refused.
+
+Details: the usage guide's
+[Turn Loki logging on or off](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#turn-loki-logging-on-or-off-pstack-logging),
+[Loki settings](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#loki-settings),
+[Grafana](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#grafana) and
+[Swarm mode](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#swarm-mode).
 
 ## 1. When to reach for it
 
@@ -354,6 +426,7 @@ pstack <up|down|verify|status|validate|init|serve> [flags]
 init flags: --domain <preview.example.com>  --acme-email <you@example.com>
             --challenge http01|dns01        (default http01 — no DNS credential needed)
             --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)
+            --logging none|loki             (default none — Loki log shipping)
 
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
             PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)
@@ -782,9 +855,10 @@ Or enumerate what actually exists on the host — `docker compose ls --all` (the
 
 Notes:
 
-- Install it in the job with **`bun add -g @samyx/preview-stacks`** after `oven-sh/setup-bun` — not by
-  checking out the pstack repo. Pin the version if you want teardown to behave exactly like the deploy
-  that created the stack.
+- Install it in the job with the installer (`curl -fsSL
+  https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh`) — not by
+  checking out the pstack repo. Pin the version (`… | PSTACK_VERSION=X.Y.Z sh`) if you want
+  teardown to behave exactly like the deploy that created the stack.
 - Pass variables as **env** (`PR=…`) or `--set PR=…`; both feed interpolation and reach hooks.
 - Run `pstack` from the repo root so relative hook paths and `compose.file` resolve.
 - `--no-verify` only when you are about to redeploy immediately and a resource is meant to survive.
@@ -844,7 +918,7 @@ Things to know:
   execution by design, not by bug. The socket mount is root-equivalent on the host. Gate *who may
   submit* (ingress auth, or an SSH tunnel); never try to sanitize what a spec contains.
 - **`GET /` — and every other non-`/api/` path — serves the UI**, a single HTML document **embedded in
-  the bundle**. There is no static-file directory to point at or mount, no filesystem lookup, and
+  the binary**. There is no static-file directory to point at or mount, no filesystem lookup, and
   therefore no path traversal; a deep link renders instead of 404ing. It does what the CLI does with a
   live job log, and it calls the API with **relative** `/api/…` paths, so it is same-origin from
   `control.<domain>` and needs no CORS.
@@ -917,6 +991,15 @@ For CI, prefer the CLI (`-f`, `--set`): no host access, no token, and the exit c
 | TLS suddenly broken **host-wide**, including `control.<domain>`, on a `dns01` host | a per-PR router carries `tls.certresolver=le`, so every PR ordered its own certificate and burned the limit | remove it — per-PR routers under `dns01` get `tls=true` and **nothing else** (§0) |
 | a preview hostname 404s while its container is healthy | a per-PR compose file declared `preview-ingress` non-`external`, so Compose made `pr-N_preview-ingress` | declare **both** networks `external: true` |
 | `https://pstack.<domain>` does not resolve or 404s | that hostname is gone — no router matches it | the UI is `control.<domain>`, the API `api.<domain>` |
+| compose host, logging on: the compose step fails with `loki log plugin not installed` | the `loki` plugin is absent or disabled on this node; every logged service would fail to create | run the install line the job log prints just above, or `pstack logging loki` to retry |
+| swarm host, logging on: a service's tasks stay pending, or the job log says `logging: no loki plugin: <host>` | swarm keeps logged services off a node without the plugin — usually a worker joined before logging was on | run the install line from the job log / `pstack swarm` on that node, or re-run its join script |
+| `loki.<domain>` answers `404 Not found.` | logging is off on this host — deliberate: the plugin does not retry a 404, so container stops are not delayed | `pstack logging loki`; containers deployed while it was off have no driver until redeployed |
+| a stopped container's output is missing from the logs tab | the plugin keeps no local file after a container stops (`keep-file=false`) | it is in Loki: query `service_name=<stack>-<service>` in Grafana |
+| a service's logs never reach Loki | it has its own `logging:` key, so pstack left it alone (named in the job log) | remove the key to get pstack's driver |
+| `grafana.<domain>` shows `Grafana is not running.` | the Grafana container is down | `docker compose -p pstack-control ps` / `logs grafana` on the host |
+| `403 No Grafana access.` | the account is a `viewer` — Grafana shows unredacted log lines | a `developer` or higher role |
+| `409 Loki is not running on this host` from the Logging panel or `/api/logging` | logging is off | `pstack logging loki` |
+| `409 Loki's config.yaml is missing or read-only` | `control/loki` is absent or not writable by pstack | `pstack upgrade` on the host |
 
 ## 9. Before you trust a spec in CI
 
@@ -954,3 +1037,5 @@ For CI, prefer the CLI (`-f`, `--set`): no host access, no token, and the exit c
 12. **Confirm both external networks are `external: true`** in the per-PR compose file
     (`preview-ingress`, `preview-shared`). A non-external declaration yields a healthy, unreachable
     container and a 404 that looks like a routing bug.
+13. **On a swarm host with logging on, run `pstack swarm`** before trusting a new worker. A node
+    listed under `no loki plugin:` never runs a logged service; install the plugin there first.
