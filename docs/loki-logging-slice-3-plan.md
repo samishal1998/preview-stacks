@@ -260,7 +260,7 @@ exit $fail
   Loki config.
 ````
 
-  **3b. The replacement.** It is 1010 lines. The last line is `- Multiple Grafana orgs.`, then the blank line that already comes before `---`:
+  **3b. The replacement.** It is 1006 lines. The last line is `- Multiple Grafana orgs.`, then the blank line that already comes before `---`:
 
 <!-- T1 section body -->
 ````markdown
@@ -1272,7 +1272,7 @@ Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the n
 - Multiple Grafana orgs.
 ````
 
-  **3c. Take both blocks out of this plan, check the anchors, then splice.** Take them by their `<!-- … -->` markers; don't retype 1010 lines. `PLAN` is the path of this plan file.
+  **3c. Take both blocks out of this plan, check the anchors, then splice.** Take them by their `<!-- … -->` markers; don't retype 1006 lines. `PLAN` is the path of this plan file.
 
   ```bash
   S=${S:-${TMPDIR:-/tmp}/t1}; mkdir -p "$S"
@@ -1283,9 +1283,9 @@ Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the n
   wc -l "$S/t1-old.md" "$S/t1-body.md"
   ```
 
-  Expected: `32` and `1010`.
+  Expected: `32` and `1006`.
 
-  **Fallback.** If `t1-body.md` is empty, the plan was assembled with indented fences, so the markers no longer match. Write 3a's fenced text to `"$S/t1-old.md"` and 3b's to `"$S/t1-body.md"` by hand: the lines between the fence lines, with the assembly's indent removed. Then run the splice below. In Step 4, run the check without `PLAN`. That skips only the byte-for-byte check; the other 23 checks still gate the commit.
+  **Fallback.** If `t1-body.md` is empty, the plan was assembled with indented fences, so the markers no longer match. Write 3a's fenced text to `"$S/t1-old.md"` and 3b's to `"$S/t1-body.md"` by hand: the lines between the fence lines, with the assembly's indent removed. Then run the splice below. In Step 4, run the check without `PLAN`. That skips only the byte-for-byte check; the other 13 checks still gate the commit.
 
   ```bash
   cd /Volumes/S1/code/preview-stacks
@@ -1300,7 +1300,7 @@ Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the n
   [ "$(awk -v h="$old" '$0 == h { f = 1 } f && $0 == "---" { g = 1; next } g && NF { print; exit }' "$doc")" = '## Facts this design stands on' ] || { echo "no --- then ## Facts after the old section"; exit 1; }
   diff <(printf '%s\n' "$(awk -v h="$old" '$0 == h { f = 1 } f && $0 == "---" { exit } f' "$doc")") <(norm "$S/t1-old.md") && echo 'old section is as quoted in 3a' || { echo "old section differs from 3a: an earlier slice edited it, so stop and report"; exit 1; }
   norm "$S/t1-body.md" > "$S/t1-body.n" && mv "$S/t1-body.n" "$S/t1-body.md"
-  [ "$(wc -l < "$S/t1-body.md" | tr -d ' ')" = 1010 ] || { echo "t1-body.md is not 1010 lines: not the body this task was written against"; exit 1; }
+  [ "$(wc -l < "$S/t1-body.md" | tr -d ' ')" = 1006 ] || { echo "t1-body.md is not 1006 lines: not the body this task was written against"; exit 1; }
 
   # Splice: the body, one blank line, then the untouched `---` and everything after it.
   awk -v h="$old" -v body="$S/t1-body.md" '
@@ -1343,7 +1343,7 @@ Every step asserts a 302, 204, 401, 403, 404 or 503, so each fails against the n
   ok   section = the plan body, byte for byte
   ```
 
-  After 3c's fallback, run `bash "$S/t1-check.sh"; echo "exit $?"` without `PLAN`: the last line is absent, and the other 23 are `ok` with `exit 0`.
+  After 3c's fallback, run `bash "$S/t1-check.sh"; echo "exit $?"` without `PLAN`: the last line is absent, and the other 13 are `ok` with `exit 0`.
 
   The first grep prints at most the `## Slice 2 — … (decisions recorded; own spec before building)` heading, and only if slice 2 left it there. It never prints slice 3's. The second prints `0` (and exits 1). The third prints `2` (the UI paragraph and the `v-if`).
 
