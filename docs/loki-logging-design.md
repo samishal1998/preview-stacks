@@ -1,6 +1,6 @@
 # Loki logging — a design in three slices
 
-> **All three slices are built.** Slice 3 is Unreleased; slices 1 and 2 are too.
+> **All three slices shipped in 0.40.0.**
 > Using it: [usage.md](usage.md), `pstack logging`. Slice 1's spec below is kept as approved section
 > by section on 2026-09-14. Where the build differs from it:
 >
