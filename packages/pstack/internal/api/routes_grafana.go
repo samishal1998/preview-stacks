@@ -3,7 +3,8 @@
 //
 // ── IS IT ON ─────────────────────────────────────────────────────────────────────────────────────
 //
-// Read from docker (inspect.GrafanaOn) and cached in s.grafana by Start and reindexLoop. It is never a
+// Read from docker (inspect.GrafanaOn) and cached in s.grafana by Start and reindexLoop, via
+// grafanaCheckIn, which keeps the last known value when docker does not answer. It is never a
 // setting and never asked per request, so a `pstack logging` switch shows within 30 s (the next
 // reindexLoop tick), with no pstack restart. Sign-in also needs PSTACK_DOMAIN (every URL here is
 // built from config, never from a request header) and PSTACK_TOKEN (the cookie's MAC key). When off,
