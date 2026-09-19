@@ -30,6 +30,7 @@ import {
   Network,
   Package,
   Plus,
+  ScrollText,
   ServerCog,
   Settings2,
   ShieldCheck,
@@ -76,11 +77,6 @@ async function signOut(): Promise<void> {
 void loadHealth();
 
 const runningJobs = computed(() => state.jobs.filter((j) => j.state === 'running').length);
-
-// The old "token required" warning is gone with 0.10.0: nobody sees this rail without already
-// being authenticated (session, personal token, or the machine token), so the warning could only
-// ever appear when it was already false.
-void settings;
 </script>
 
 <template>
@@ -148,6 +144,19 @@ void settings;
           <span>Jobs</span>
           <span class="count">{{ runningJobs ? `${runningJobs}\u25B8` : state.jobs.length }}</span>
         </RouterLink>
+
+        <!-- Developer and up: verify refuses viewers (Grafana reads unredacted lines). Hidden with a
+             stored token: no pstack_session, so Grafana's sign-in would end on / (router.ts guard). -->
+        <a
+          v-if="authState.grafana && !settings.token && can('developer')"
+          :href="authState.grafana"
+          class="navlink"
+          target="_blank"
+          rel="noopener"
+        >
+          <ScrollText :size="17" aria-hidden="true" />
+          <span>Grafana</span>
+        </a>
 
         <RouterLink v-if="can('developer')" to="/submit" class="navlink" title="g n">
           <Plus :size="17" aria-hidden="true" />

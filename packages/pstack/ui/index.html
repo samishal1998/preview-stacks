@@ -1671,16 +1671,21 @@ createApp({
     /**
      * Leave for the provider's consent screen. `location.assign`, not fetch: the flow is a pair of
      * redirects and the session cookie is set on the way back, so nothing here has a response to
-     * read. `next` is a same-origin path — the server refuses anything else.
+     * read. `next` is a same-origin path — the server refuses anything else. A `?next=` on the page
+     * (Grafana's sign-in sends one) wins over the page's own path.
      */
     signInWithProvider() {
-      location.assign('/api/auth/sso/start?next=' + encodeURIComponent(location.pathname === '/login' ? '/' : location.pathname + location.hash));
+      const next = new URLSearchParams(location.search).get('next') || '';
+      location.assign('/api/auth/sso/start?next=' + encodeURIComponent(next.startsWith('/') ? next : (location.pathname === '/login' ? '/' : location.pathname + location.hash)));
     },
     async signIn() {
       this.loginError = '';
       const r = await this.api('POST', '/api/auth/login', { username: this.loginUser, password: this.loginPass });
       this.loginPass = '';
       if (!r.ok) { this.loginError = r.body.error || 'sign-in failed'; return; }
+      // An /api/ next is Grafana's sign-in start, a server route: leave for it.
+      const next = new URLSearchParams(location.search).get('next') || '';
+      if (next.startsWith('/api/')) { location.assign(next); return; }
       this.me = { root: false, user: r.body.user };
       // Reload what the pre-auth mount could not: the same calls mounted() makes.
       this.loadDeployments();
