@@ -913,9 +913,23 @@ var shareViewRe = regexp.MustCompile(`^/deployments/[^/]+/public-logs-view/?$`)
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 
-	// wake-on-call FIRST: a request that reached this process through the catch-all router carries
-	// a PREVIEW hostname, and if it belongs to a sleeping stack the whole request is the visitor's.
-	// Cheap when nothing sleeps: one lookup.
+	// A service hostname that reached THIS process came through the wake catch-all: its own router is
+	// gone (container stopped, starting or unhealthy) or, on an added domain, never existed. r.Host,
+	// not requestHost: forwardAuth's calls carry X-Forwarded-Host grafana.<domain> but Host pstack:7878.
+	// loki. is 404, not 503: the loki driver does not retry a 404, so a push to a logging-off host
+	// never delays a container stop. The prefix test comes first: IsControlHostname reads the domains file.
+	if h := strings.ToLower(portRe.ReplaceAllString(r.Host, "")); (strings.HasPrefix(h, "grafana.") || strings.HasPrefix(h, "loki.")) && s.routing.IsControlHostname(h, s.opts.Domain) {
+		if h == "grafana."+strings.ToLower(s.opts.Domain) {
+			http.Error(w, "Grafana is not running.", 503)
+		} else {
+			http.Error(w, "Not found.", 404)
+		}
+		return
+	}
+
+	// wake-on-call before the UI and the API: a request that reached this process through the
+	// catch-all router carries a PREVIEW hostname, and if it belongs to a sleeping stack the whole
+	// request is the visitor's. Cheap when nothing sleeps: one lookup.
 	if s.sleepIndex.Size() > 0 {
 		if h := requestHost(r); h != "" && s.wakeFor(w, h) {
 			return

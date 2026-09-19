@@ -1219,6 +1219,31 @@ is missing. Viewers are refused because a Grafana Viewer can still run LogQL ove
 lines through panels and `/api/ds/query`, and pstack shows viewers redacted logs only (invariant 15).
 There is no Grafana server admin.
 
+### A service hostname is never pstack's
+
+`grafana.<domain>` and `loki.<domain>` reach pstack only through the wake catch-all (`pstack-wake`,
+priority 1). That happens when the service's own router is gone (container stopped, starting or
+unhealthy), or, on an added domain, never existed. `handle()` refuses them before wake-on-call, the
+UI and the API, in plain text:
+
+| Host | Answer |
+|---|---|
+| `grafana.<primary>` | `503 Grafana is not running.` |
+| `loki.<primary>` | `404 Not found.` |
+| `grafana.` or `loki.` of an added domain | `404 Not found.` |
+
+Serving the UI there would let a password typed on `grafana.<domain>` set `pstack_session` on that
+host, and Traefik would then forward that cookie to Grafana on every request. `loki.` gets a 404,
+not a 503: the loki driver does not retry a 404, so a push to a host with logging off is dropped
+without delaying a container stop, instead of reading pstack's `200` HTML as delivered. Loki's
+router matches only the push path, so every other path on `loki.<primary>` gets this 404 even while
+Loki runs.
+
+The check reads `Host`, never `requestHost`. forwardAuth's calls arrive with `Host: pstack:7878` and
+`X-Forwarded-Host: grafana.<domain>`, and verify must answer them. The check also runs with logging
+off, because `IsControlHostname` always includes `grafana.` and `loki.`. The prefix test runs first
+because `IsControlHostname` reads the domains file.
+
 ## 6. Submitting a deployment
 
 `:id` is a **registry id**, not a compose project name. The server owns the stored spec and resolves
