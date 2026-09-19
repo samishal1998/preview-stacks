@@ -1571,6 +1571,7 @@ page you opened. A browser already signed in to pstack goes straight through.
   preferences.
 - **A username deleted and created again** inherits the old Grafana user: its preferences, stars and
   the dashboards it owns.
+- **Grafana down.** `grafana.<domain>` shows `Grafana is not running.`
 
 ### Why `init` is CLI-only, and always will be
 

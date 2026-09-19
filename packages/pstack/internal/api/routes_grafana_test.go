@@ -11,6 +11,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
 )
 
@@ -484,6 +485,84 @@ func TestGrafanaStart(t *testing.T) {
 		w := grafanaStartReq(o, "state="+state+"&next=%2F", "")
 		if w.Code != 404 || w.Body.String() != "Not found.\n" || !strings.HasPrefix(w.Header().Get("content-type"), "text/plain") {
 			t.Fatalf("got %d %q %q", w.Code, w.Body.String(), w.Header().Get("content-type"))
+		}
+	})
+}
+
+func TestServiceHostnamesAreNeverServedByPstack(t *testing.T) {
+	// negative control: delete the whole service-host refusal block from handle() — grafana. and loki.
+	// get the UI's 200 on / and the added domain's grafana. gets the UI too.
+	s := grafanaServer(t)
+	s.grafana.Store(true) // without it verify answers 404, and the verify case could not tell refusal from off
+	if _, err := s.routing.SetDomains([]string{"added.example"}, routing.DomainOptions{Primary: "preview.example.com", Mode: "http01"}); err != nil {
+		t.Fatal(err)
+	}
+	// at sends one request through handle() the way Traefik delivers it: Host as the browser sent it.
+	// httptest.NewRequest defaults Host to example.com, so it is always set.
+	at := func(host, path string, header ...string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = host
+		for i := 0; i+1 < len(header); i += 2 {
+			r.Header.Set(header[i], header[i+1])
+		}
+		w := httptest.NewRecorder()
+		s.handle(w, r)
+		return w
+	}
+	// plain is an http.Error answer: exact status, exact body with its trailing newline, text/plain.
+	plain := func(t *testing.T, host, path string, code int, body string) {
+		t.Helper()
+		w := at(host, path)
+		if w.Code != code || w.Body.String() != body || !strings.HasPrefix(w.Header().Get("content-type"), "text/plain") {
+			t.Fatalf("%s%s: %d %q (%s), want %d %q as text/plain", host, path, w.Code, w.Body.String(), w.Header().Get("content-type"), code, body)
+		}
+	}
+
+	t.Run("grafana. of the primary domain is 503 on the UI and the API", func(t *testing.T) {
+		// negative control: change `h == "grafana."+strings.ToLower(s.opts.Domain)` to `false` — every answer becomes 404 "Not found.\n".
+		for _, host := range []string{"grafana.preview.example.com", "Grafana.Preview.Example.com:443"} {
+			for _, path := range []string{"/", "/api/auth/me"} {
+				plain(t, host, path, 503, "Grafana is not running.\n")
+			}
+		}
+	})
+
+	t.Run("loki. of the primary domain is 404 on the UI and the API", func(t *testing.T) {
+		// A 404 is not retried by the loki driver, so a push to a logging-off host does not delay a stop.
+		// negative control: widen the 503 test to `|| h == "loki."+strings.ToLower(s.opts.Domain)` — both answers
+		// become 503 "Grafana is not running.\n".
+		for _, path := range []string{"/", "/api/auth/me"} {
+			plain(t, "loki.preview.example.com", path, 404, "Not found.\n")
+		}
+	})
+
+	t.Run("an added domain's grafana. and loki. are 404", func(t *testing.T) {
+		// negative control: replace `s.routing.IsControlHostname(h, s.opts.Domain)` with the primary only,
+		// `(h == "grafana."+strings.ToLower(s.opts.Domain) || h == "loki."+strings.ToLower(s.opts.Domain))`
+		// — grafana.added.example falls through to the UI's 200.
+		plain(t, "grafana.added.example", "/", 404, "Not found.\n")
+		plain(t, "loki.added.example", "/", 404, "Not found.\n")
+	})
+
+	t.Run("forwardAuth's call to verify is not refused", func(t *testing.T) {
+		// negative control: key the refusal on requestHost(r) instead of r.Host — X-Forwarded-Host
+		// grafana.preview.example.com turns verify's 401 into 503 "Grafana is not running.\n".
+		w := at("pstack:7878", "/api/auth/grafana/verify",
+			"x-forwarded-host", "grafana.preview.example.com",
+			"x-forwarded-uri", "/d/x",
+			"x-forwarded-method", "GET",
+			"sec-fetch-mode", "cors")
+		if w.Code != 401 || w.Body.Len() != 0 {
+			t.Fatalf("verify: %d %q, want 401 with no body", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("control. is served", func(t *testing.T) {
+		// negative control: drop `(strings.HasPrefix(h, "grafana.") || strings.HasPrefix(h, "loki.")) &&`
+		// — control.preview.example.com is a control hostname too, and gets 404 "Not found.\n".
+		w := at("control.preview.example.com", "/")
+		if w.Code != 200 || !strings.HasPrefix(w.Header().Get("content-type"), "text/html") {
+			t.Fatalf("control.: %d (%s), want 200 text/html", w.Code, w.Header().Get("content-type"))
 		}
 	})
 }
