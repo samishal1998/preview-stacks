@@ -114,14 +114,25 @@ func LokiPushURL(r exec.Runner) string {
 // GrafanaOn reports whether the control project has a `grafana` container. `-a`, as LokiPushURL: a
 // Grafana that is restarting is still this host's, and `pstack logging off` removes the container.
 func GrafanaOn(r exec.Runner) bool {
+	on, _ := GrafanaOnChecked(r)
+	return on
+}
+
+// GrafanaOnChecked is GrafanaOn plus an ok flag, false when docker did not answer, so a caller that
+// polls on a timer (server.go's reindexLoop) can keep its last known value instead of flipping to
+// off on one missed `docker ps`.
+func GrafanaOnChecked(r exec.Runner) (on bool, ok bool) {
 	// nil when docker did not answer, and inspectIDs of nil asks nothing.
-	ids, _ := idsByLabel(r, "com.docker.compose.project="+ControlProject)
+	ids, ok := idsByLabel(r, "com.docker.compose.project="+ControlProject)
+	if !ok {
+		return false, false
+	}
 	for _, raw := range inspectIDs(r, ids) {
 		if raw.Config != nil && raw.Config.Labels["com.docker.compose.service"] == "grafana" {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // The three ways RestartControlService refuses, for the route to map onto statuses.

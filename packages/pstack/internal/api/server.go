@@ -844,7 +844,7 @@ func (s *Server) Start() error {
 	s.http = &http.Server{Handler: http.HandlerFunc(s.handle), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 240 * time.Second}
 	s.scheduler.Start()
 	// Before Serve, so the first /api/health is already right.
-	s.grafana.Store(inspect.GrafanaOn(s.host))
+	s.grafanaCheckIn()
 	go s.reindexLoop()
 	go func() { _ = s.http.Serve(ln) }()
 	return nil
@@ -869,8 +869,16 @@ func (s *Server) reindexLoop() {
 			s.reindex()
 			// Not inside reindex(): request paths call that, and this is two docker calls. Still needed
 			// after Start: `pstack logging` adds or removes grafana while pstack keeps running.
-			s.grafana.Store(inspect.GrafanaOn(s.host))
+			s.grafanaCheckIn()
 		}
+	}
+}
+
+// grafanaCheckIn is Start's and reindexLoop's shared "ask docker, update s.grafana" step. A failed
+// docker answer keeps the previous value: one flaky `docker ps` must not 404 Grafana for up to 30 s.
+func (s *Server) grafanaCheckIn() {
+	if on, ok := inspect.GrafanaOnChecked(s.host); ok {
+		s.grafana.Store(on)
 	}
 }
 
@@ -967,8 +975,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-gate: login, logout, bootstrap, the SSO round trip. These run before the gate, or nobody
-	// could ever log in.
+	// Pre-gate: login, logout, bootstrap, the SSO round trip, and Grafana's verify and start
+	// (routes_grafana.go). These run before the gate, or nobody could ever log in.
 	if done := s.preGate(w, r, path); done {
 		return
 	}

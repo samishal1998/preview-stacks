@@ -8,6 +8,7 @@ import (
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
@@ -83,6 +84,46 @@ func TestHealthNamesGrafanaOnlyWhenOn(t *testing.T) {
 			t.Fatalf("no PSTACK_DOMAIN, got grafana=%q", b.GetString("grafana"))
 		}
 	})
+}
+
+// TestGrafanaCheckInKeepsLastValueWhenDockerDoesNotAnswer: reindexLoop calls grafanaCheckIn every
+// 30s. One transient `docker ps` failure must not flip a known-on Grafana to off and 404 the UI for
+// up to 30s — grafanaCheckIn must keep s.grafana's previous value when docker did not answer.
+func TestGrafanaCheckInKeepsLastValueWhenDockerDoesNotAnswer(t *testing.T) {
+	// negative control: in grafanaCheckIn, drop the `ok` guard (`if on, _ := ...; true {`) — a failed
+	// docker answer stores on=false and this test's final check sees s.grafana false.
+	grafana := `{"Id":"g1","Name":"/pstack-control-grafana-1","Config":{"Image":"grafana/grafana:13.2.1","Labels":{"com.docker.compose.service":"grafana"}}}`
+	s := grafanaServer(t)
+
+	on := exec.NewFake(nil, "")
+	on.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.HasPrefix(cmd, "docker ps -aq"):
+			return exec.Result{OK: true, Stdout: "g1\n"}, true
+		case strings.HasPrefix(cmd, "docker inspect"):
+			return exec.Result{OK: true, Stdout: "[" + grafana + "]"}, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	s.host = on
+	s.grafanaCheckIn()
+	if !s.grafana.Load() {
+		t.Fatal("first check-in: got grafana=false, want true")
+	}
+
+	failed := exec.Result{OK: false, Code: 1, Stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"}
+	down := exec.NewFake(nil, "")
+	down.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.HasPrefix(cmd, "docker ps -aq") {
+			return failed, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	s.host = down
+	s.grafanaCheckIn()
+	if !s.grafana.Load() {
+		t.Fatal("second check-in (docker down): got grafana=false, want the previous true kept")
+	}
 }
 
 // ── Grafana sign-in: verify, the callback inside it, and start ──────────────────────────────────
@@ -531,7 +572,9 @@ func TestServiceHostnamesAreNeverServedByPstack(t *testing.T) {
 		// A 404 is not retried by the loki driver, so a push to a logging-off host does not delay a stop.
 		// negative control: widen the 503 test to `|| h == "loki."+strings.ToLower(s.opts.Domain)` — both answers
 		// become 503 "Grafana is not running.\n".
-		for _, path := range []string{"/", "/api/auth/me"} {
+		// negative control (push path): skip the refusal when path == "/loki/api/v1/push" — that path
+		// answers the UI's 200 instead of 404.
+		for _, path := range []string{"/", "/api/auth/me", "/loki/api/v1/push"} {
 			plain(t, "loki.preview.example.com", path, 404, "Not found.\n")
 		}
 	})

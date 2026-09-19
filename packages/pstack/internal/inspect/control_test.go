@@ -193,4 +193,15 @@ func TestGrafanaOn(t *testing.T) {
 			t.Error("got true")
 		}
 	})
+
+	t.Run("docker not answering reports ok=false, not on=false", func(t *testing.T) {
+		// negative control: change `!ok` to `false` in GrafanaOnChecked (always fall through to idsByLabel's
+		// result) — a failed docker answer reports ok=true, and a caller keeping its previous value on
+		// ok=false would wrongly overwrite it with on=false instead.
+		failed := exec.Result{OK: false, Code: 1, Stdout: "g1\n", Stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"}
+		on, ok := GrafanaOnChecked(lokiHost(failed, "["+grafana+"]"))
+		if ok {
+			t.Fatalf("got ok=true (on=%v), want ok=false", on)
+		}
+	})
 }
