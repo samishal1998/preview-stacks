@@ -139,7 +139,9 @@ export const CASES: Case[] = [
     const env = { ...initEnv(c), PSTACK_LOKI_PASSWORD: LOKI_PASSWORD };
     return [
       { name: `init-dry-${name}`, argv: [...argv, '-n'], env, shim: INIT_SHIM, freshData: true } as Case,
-      { name: `init-${name}`, argv, env, shim: INIT_SHIM, freshData: true, render: { dir: `control/${name}`, files: ['control/docker-compose.yml', 'control/.env', 'control/dns.env', 'control/loki/config.yaml'] } } as Case,
+      // negative control: drop Init's control/grafana/datasources/loki.yaml write and rebuild —
+      // init-<cell>-loki fails: the file's golden exists and the live file does not.
+      { name: `init-${name}`, argv, env, shim: INIT_SHIM, freshData: true, render: { dir: `control/${name}`, files: ['control/docker-compose.yml', 'control/.env', 'control/dns.env', 'control/loki/config.yaml', 'control/grafana/datasources/loki.yaml'] } } as Case,
       { name: `upgrade-plan-${name}`, argv: ['upgrade', '-n', '--to', '0.29.1'], env: { PSTACK_DATA: DATA_DIR, PSTACK_INSTALL_DIR: '/usr/local/bin' }, after: `init-${name}` } as Case,
       { name: `logging-off-dry-${name}`, argv: ['logging', 'off', '-n'], env: { PSTACK_DATA: DATA_DIR }, after: `init-${name}` } as Case,
     ];

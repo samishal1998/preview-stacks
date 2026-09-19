@@ -253,9 +253,86 @@ services:
       # every service it injects as loki-url.
       - pstack.logging.push-url=https://pstack:${LOKI_PUSH_PASSWORD}@loki.${DOMAIN}/loki/api/v1/push
 
+  # Grafana, with --logging loki: the reader for Loki. Signed in with pstack accounts (forwardAuth).
+  grafana:
+    image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)
+    restart: unless-stopped
+    mem_limit: 768m                  # 13.x idles ~330Mi and OOMed under 400Mi (grafana#123017)
+    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches
+    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.
+    networks: [logs]
+    volumes:
+      - grafana:/var/lib/grafana      # users, preferences, and the Drilldown plugin download
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      GF_SERVER_DOMAIN: grafana.${DOMAIN}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}/
+      # Sign-in: Traefik's forwardAuth asks pstack, and pstack's answer is these two headers.
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_HEADERS: Role:X-WEBAUTH-ROLE
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      # false: no grafana_session of Grafana's own, so pstack decides EVERY request and a pstack
+      # sign-out applies on the next one.
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "false"
+      # Never GF_AUTH_DISABLE_LOGIN: it unregisters the proxy client and silently turns sign-in off.
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
+      # No built-in `admin` row, so a pstack user named admin is a user, not the server admin.
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+      # Previews on *.${DOMAIN} are same-site with Grafana: SameSite does not stop their POSTs.
+      GF_SECURITY_CSRF_ALWAYS_CHECK: "true"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      # Off: a WebSocket passes forwardAuth once, at the upgrade, and would outlive a pstack sign-out.
+      GF_LIVE_MAX_CONNECTIONS: "0"
+      # Off: an Editor could publish log panels to snapshots.raintank.io, outside verify.
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
+      # Default preinstalls with no datasource here. Logs Drilldown (grafana-lokiexplore-app) stays.
+      GF_PLUGINS_DISABLE_PLUGINS: grafana-pyroscope-app,grafana-exploretraces-app,grafana-metricsdrilldown-app,grafana-advisor-app
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:3000/api/health"]
+      start_period: 60s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=pstack-control_logs
+      - traefik.http.routers.pstack-grafana.rule=Host(`grafana.${DOMAIN}`)
+      # A deployment routed to grafana.<domain> before this release has a rule of the same length
+      # (autolabel's Host(`…`)), and equal priority is a coin toss for who gets the Grafana cookie.
+      - traefik.http.routers.pstack-grafana.priority=10000
+      - traefik.http.routers.pstack-grafana.entrypoints=websecure
+      # TLS follows the challenge, exactly like pstack-loki: tls=true alone under DNS-01 (the wildcard
+      # covers grafana.), plus its own certresolver under HTTP-01.
+      - traefik.http.routers.pstack-grafana.tls=true
+      - traefik.http.routers.pstack-grafana.tls.certresolver=le
+      - traefik.http.routers.pstack-grafana.middlewares=pstack-grafana-auth
+      # pstack, by service name, over preview-ingress, the network Traefik already reaches pstack on
+      # (the advanced UI's nginx dials the same name). pstack does not join `logs`.
+      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.address=http://pstack:7878/api/auth/grafana/verify
+      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.trustForwardHeader=false
+      # EVERY header Grafana reads: header_name plus each GF_AUTH_PROXY_HEADERS value. Traefik deletes
+      # a listed header from the client's request unconditionally and passes an unlisted one through.
+      - traefik.http.middlewares.pstack-grafana-auth.forwardauth.authResponseHeaders=X-WEBAUTH-USER,X-WEBAUTH-ROLE
+      - traefik.http.services.pstack-grafana.loadbalancer.server.port=3000
+
 volumes:
   letsencrypt:
   loki:
+  grafana:
 
 networks:
   # Declared `external` here AND in every per-PR compose file, because `pstack init` creates them.
