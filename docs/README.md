@@ -90,7 +90,7 @@ provider is already the API's writing hand, so most of it needs no init and no T
 
 ### [`loki-logging-design.md`](loki-logging-design.md) — a design in three slices, all built
 
-**All three slices are built.** Slice 3 is Unreleased; slices 1 and 2 are too. Loki as a logging
+**All three slices shipped in 0.40.0.** Loki as a logging
 option: a Loki container in the control stack, the Grafana Loki Docker plugin on every node, and a
 `logging:` block pstack adds to every deployed service that has none — pushed through Traefik with
 basic auth (slice 1); Loki's settings in the UI: chunking, retention, filesystem or S3 (slice 2); and
