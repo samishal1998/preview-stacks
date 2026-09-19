@@ -37,6 +37,8 @@ export const authState = reactive({
    * mark (`''` for a bare OIDC issuer).
    */
   sso: null as { providers: Array<{ key: string; label: string; preset: string }> } | null,
+  /** From /api/health: `https://grafana.<domain>` on a host running Grafana, else null. */
+  grafana: null as string | null,
 });
 
 /**
@@ -70,10 +72,12 @@ export async function checkAuth(): Promise<void> {
   const health = await api.get<{
     hasUsers?: boolean;
     sso?: { providers: Array<{ key: string; label: string; preset: string }> } | null;
+    grafana?: string;
   }>('/api/health');
   if (health.ok) {
     authState.hasUsers = health.body.hasUsers ?? null;
     authState.sso = health.body.sso ?? null;
+    authState.grafana = health.body.grafana ?? null;
   }
 
   const me = await api.getAuthed<{ root: boolean; user?: User }>('/api/auth/me');

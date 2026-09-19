@@ -71,8 +71,10 @@ async function submit(): Promise<void> {
     return;
   }
   await checkAuth();
-  // Back to wherever the guard bounced them from, or home.
-  void router.replace(next.value);
+  // Back to wherever the guard bounced them from, or home. An /api/ next (Grafana's sign-in) is a
+  // server route the router would render as NotFound: a full navigation.
+  if (next.value.startsWith('/api/')) window.location.assign(api.url(next.value));
+  else void router.replace(next.value);
 }
 </script>
 
