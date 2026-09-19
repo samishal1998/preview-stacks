@@ -638,9 +638,8 @@ are fine. Several agents may share the workspace: touch only your own branch's c
 them, `.gitignore` does not), anything under `.superpowers/`, `.claude/settings.local.json` (the
 owner's local permission allowlist), or a credential: `dns_token`, `*.token`, `.npmrc`,
 `hetzner*.yml` and other generated cloud-configs, config exports in every spelling — the dot form
-`.config.<x>.yaml` slips past `.gitignore`'s dash globs. Already tracked on main and the owner's to
-resolve, so leave them and add no siblings: `.config.aug31.yaml` (a sealed export), `hetzner.yml`,
-`temp.yml`, `temp2.yml`, `sso-oidc-handoff-spec.md`.
+`.config.<x>.yaml` slips past `.gitignore`'s dash globs. Still tracked on main and the owner's to
+resolve: `sso-oidc-handoff-spec.md`; leave it and add no siblings.
 
 ## Agent workflow for large changes
 

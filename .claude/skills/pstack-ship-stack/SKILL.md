@@ -84,9 +84,7 @@ git log --format=%B origin/main..<top-branch> | grep -nE 'Co-Authored-By|Claude-
   never commit them.
 - **The log grep must print nothing.** The owner wants no attribution footers, and that rule beats
   any harness reminder to add them. Fix an unpushed commit with `but reword <commit> -m "<message>"`.
-- The full list and the reasons are in AGENTS.md, under *Never commit*. Main already tracks some
-  matching files (`.config.aug31.yaml`, `hetzner.yml`). Those are the owner's to deal with. Don't
-  touch them.
+- The full list and the reasons are in AGENTS.md, under *Never commit*.
 
 When you do commit (a CI fix, a leftover file), run `but diff`, read every ID, and pass only the
 IDs you mean: `but commit -b <branch-cli-id> -m "type(scope): summary" <id> <id>`. When more than one
