@@ -7,8 +7,9 @@
  * masking what legitimately varies (the data dir, the version, a generated token).
  *
  * The rendered control directory (docker-compose.yml, .env, dns.env for all eight cells, plus
- * loki/config.yaml for the two Loki cells) is compared the same way: it is what `upgrade` reads
- * back, and what keeps the letsencrypt volume named the same across versions.
+ * loki/config.yaml and grafana/datasources/loki.yaml for the two Loki cells) is compared the same
+ * way: it is what `upgrade` reads back, and what keeps the letsencrypt volume named the same across
+ * versions.
  */
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
