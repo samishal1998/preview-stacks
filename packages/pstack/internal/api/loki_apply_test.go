@@ -347,13 +347,18 @@ func TestLokiApplyCarriesASupersededSave(t *testing.T) {
 	// retention alone, the row stays filesystem, and the row check fails. (Also run: drop `secret`
 	// from the scrub values appended at render — the job record carries the secret and the record
 	// check fails.)
+	// The pending map is per section: a later chunks save replaces first's before first takes it, so
+	// wait for first's first docker command (proof its take ran) before the other two puts.
 	const secret = "wJalrXUtnFEMI-K7MDENG-bPxRfiCY"
 	const keyID = "AKIAIOSFODNN7EXAMPLE"
 	release := make(chan struct{})
 	var once, freed sync.Once
 	free := func() { freed.Do(func() { close(release) }) }
+	started := make(chan struct{})
+	var startOnce sync.Once
 	var s *Server
 	s, _ = lokiFixture(t, func(cmd string) (exec.Result, bool) {
+		startOnce.Do(func() { close(started) })
 		switch {
 		case strings.HasPrefix(cmd, "docker exec "):
 			once.Do(func() { <-release }) // the first apply waits here, after its commit and swap
@@ -375,6 +380,11 @@ func TestLokiApplyCarriesASupersededSave(t *testing.T) {
 	}}, Secret: secret}
 
 	first, _ := s.startLokiApply(s.lokiPut("alice", retention(10), nil), "alice", false)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("first apply never reached its first docker command")
+	}
 	queued, _ := s.startLokiApply(s.lokiPut("root (PSTACK_TOKEN)", nil, storage), "root (PSTACK_TOKEN)", false)
 	successor, _ := s.startLokiApply(s.lokiPut("alice", retention(14), nil), "alice", false)
 	if first.State != jobs.Running || queued.State != jobs.Queued || successor.State != jobs.Queued {
