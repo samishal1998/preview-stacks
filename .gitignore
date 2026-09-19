@@ -19,10 +19,13 @@ dns-token
 
 # Generated cloud-configs for a specific host. `pstack cloud-init > my-host.yml` is a normal thing
 # to do in the working tree, and the result names one operator's domain and dashboard — it belongs
-# to them, not to the repo. (One was committed by accident; it carried no credential, because the
-# generator embeds none — tokens are minted at boot.)
+# to them, not to the repo. (`hetzner.yml` was committed by accident; it carried only a dummy
+# dashboard password — the generator embeds no token, which is minted at boot. Untracked 2026-09-19.)
 hetzner*.yml
 *.cloud-init.yml
+# Root-level scratch cloud-configs (`temp.yml`, `temp2.yml` were committed by accident; untracked
+# 2026-09-19).
+/temp*.yml
 
 # GoReleaser`s pre-build scratch (the version-stamped installer).
 .build/
@@ -47,5 +50,8 @@ config.yaml
 # what people actually type" is right, and an enumeration of them is always one shape behind.
 config-*.yaml
 .config-*.yaml
+# …and the dot-separated shape: `.config.aug31.yaml` reached main the same way (untracked 2026-09-19).
+config.*.yaml
+.config.*.yaml
 config-*.json
 .config-*.json
