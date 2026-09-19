@@ -1,6 +1,6 @@
 # Loki logging — a design in three slices
 
-> **Slices 1 (`--logging loki`) and 2 (Loki settings) are built (Unreleased); slice 3 is not.**
+> **All three slices are built.** Slice 3 is Unreleased; slices 1 and 2 are too.
 > Using it: [usage.md](usage.md), `pstack logging`. Slice 1's spec below is kept as approved section
 > by section on 2026-09-14. Where the build differs from it:
 >
@@ -50,7 +50,16 @@
 >   `GET /api/logging` adds one `ControlRuntime` per 10s poll per open Control page. The
 >   `pstack-control_logs` network left by logging off is still not pruned.
 >
-> Slice 3 records the decisions already taken and gets its own spec before it is built.
+> Slice 3 (Grafana at `grafana.<domain>`): [usage.md](usage.md), `### Grafana`. Its section below is
+> its spec. Where the build differs from it:
+>
+> - The Grafana nav link shows for developer and above, matching verify's 403 for viewers. The spec
+>   also said every signed-in role sees it.
+> - `loki.<domain>` on the primary answers `404 Not found.` while Loki is not running, not
+>   `503 Loki is not running.`: the driver does not retry a 404, so container stops are not delayed.
+>   `grafana.<domain>` answers `503 Grafana is not running.` as specified.
+> - `control/grafana/datasources` is made 0755, not left to the umask: under umask 077 Grafana
+>   (uid 472) could not read it.
 
 ## What it is
 
@@ -68,7 +77,7 @@ Traefik, behind basic auth.
 |---|---|---|
 | 1 | `--logging loki`: Loki in the control stack, the plugin on every node, injection, push through Traefik. Fixed config. | — |
 | 2 | Loki settings in the UI: chunking, retention, filesystem or S3. | 1 |
-| 3 | Grafana at `grafana.<domain>`, signed in with pstack accounts. | 1 |
+| 3 | Grafana at `grafana.<domain>`, signed in with pstack accounts. | 1, 2 |
 
 ## Decisions (owner, 2026-09-14)
 
