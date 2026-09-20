@@ -24,6 +24,7 @@ browser); the version-control rules are in AGENTS.md.
 | Send deployed services' logs to **Loki** and read them in **Grafana** | [`usage.md` §7](usage.md#turn-loki-logging-on-or-off-pstack-logging) |
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
 | Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
+| Test a **multi-node swarm** on a laptop, because CI has one machine | [`swarm-local-testing.md`](swarm-local-testing.md) |
 | Know how the **Go binary** (0.29.0) was proven a drop-in for the TypeScript one, and what still differs | [`port-status.md`](port-status.md) |
 
 ## The documents
@@ -43,7 +44,7 @@ the web UI. Then, one section per thing a host grows into:
 
 | § | Covers | Since |
 |---|---|---|
-| 7b | **the two orchestrators** and how to switch, **swarm mode** (what the compose→swarm conversion changes, adding a worker), **sleep and wake-on-call** (the `sleep:` block, the catch-all router, the spinning-up page), and **share links** | 0.26.0 |
+| 7b | **the two orchestrators** and how to switch, **swarm mode** (what the compose→swarm conversion changes, adding a worker), **adding and removing worker machines** (what pstack reports, and drain → delete → forget), **sleep and wake-on-call** (the `sleep:` block, the catch-all router, the spinning-up page), and **share links** | 0.26.0, machines 0.41.0 |
 | 7c | **single sign-on** — several providers at once, the presets, who gets an account and with which role | 0.27.0 |
 | 7d | **moving a host's configuration** to another host, sealed, including onto a machine that does not exist yet | 0.30.0 |
 | 7e | **the four roles**, what each adds, and what sits outside the ladder | 0.32.0 |
@@ -69,7 +70,7 @@ socket-exposure tradeoff, and what to check when the certificate never arrives.
 ### [`webhook-events.md`](webhook-events.md) — every event a notifier receives (~450 lines)
 
 The envelope, headers, and a worked signature-verification receiver. Delivery semantics: at-least-
-once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 30 events** with
+once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 32 events** with
 every payload field — deployments, jobs (including `job.leaked`, the one to page on), specs, routing,
 Loki's settings, readiness, container actions, sleep and wake, share links, and configuration
 import/export.
@@ -113,6 +114,23 @@ why. Build plans, task by task:
 [`loki-logging-slice-1-plan.md`](loki-logging-slice-1-plan.md),
 [`loki-logging-slice-2-plan.md`](loki-logging-slice-2-plan.md) and
 [`loki-logging-slice-3-plan.md`](loki-logging-slice-3-plan.md).
+
+### [`node-signals-design.md`](node-signals-design.md) — what pstack tells a machine manager
+
+Two answers, and nothing else: is a task stuck for want of room (docker's own sentence, passed
+through), and is a worker running nothing. `GET /api/signals`, two events, and three routes that
+drain a node, undrain it, or forget one whose machine has gone. pstack creates and destroys no
+machines. The "what this deliberately does not do" section is the load-bearing half — an earlier
+draft added up CPU and memory to guess whether a sleeping stack would still fit, and that guess is
+the machine manager's job, not pstack's. Built in 0.41.0-rc.1; the five-task build plan is
+[`node-signals-plan.md`](node-signals-plan.md).
+
+### [`swarm-local-testing.md`](swarm-local-testing.md) — a real cluster on a laptop
+
+CI has one machine, so placement failures, draining, and a node going down are untested until they
+run somewhere real. One QEMU VM, three docker-in-docker nodes, fifteen minutes, ten checks — each
+one saying what it proves that a unit test cannot. Read it before claiming any swarm behaviour
+works.
 
 ### [`loki-logging-as-built.md`](loki-logging-as-built.md) — Loki logging as it stands
 

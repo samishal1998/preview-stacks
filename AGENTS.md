@@ -82,7 +82,7 @@ Do not add a module for what a few lines do.
 
 ### `packages/pstack/internal` — by responsibility
 
-One package per responsibility (41 of them), named as the reference's files were:
+One package per responsibility (42 of them), named as the reference's files were:
 
 **The core lifecycle** (read these first; the product is here):
 
@@ -91,7 +91,7 @@ One package per responsibility (41 of them), named as the reference's files were
 | `spec` | Parse + validate `preview.yml` → resolved `Stack`. Owns interpolation, the stack-name charset rule, axis dedupe, `Warnings` (on the result — there is no module global). `subdomains.go` is the wildcard routing. |
 | `stack` | `Up` / `Down` / `Verify` / `Status` / `Report`. Owns the failure semantics — **the whole product is in this package**. `Outcome.Leaked()` is THE leak scan, the one copy. |
 | `compose` | Builds `docker compose` command strings — or, when `spec.compose.orchestrator` is `swarm`, the `docker stack` ones from `swarm`. Owns the all-profiles-on-down rule, `ComposeSleep` (down **without** `-v`), `Shq`, and the loki-plugin check before an `up` of a logged deployment. |
-| `swarm` | Docker Swarm: `Swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, and `JoinMaterial`/`SwarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. Owns `LokiVersion`, the one-line `LokiPluginInstall` and `MarkLokiPlugins` (per-node plugin reads). The leaf of the compose/autolabel/swarm triangle. |
+| `swarm` | Docker Swarm: `Swarmify` (plain compose → the v3 subset `docker stack deploy` accepts, faithfully, every change named), the `docker stack` command lines, node listing, `NodeAvailabilityCmd`/`NodeRmCmd` (drain, undrain, forget a gone node), and `JoinMaterial`/`SwarmReport` — shared by `GET /api/swarm/join` and `pstack swarm`, so the two cannot hand an operator different commands for one cluster. Owns `LokiVersion`, the one-line `LokiPluginInstall` and `MarkLokiPlugins` (per-node plugin reads). The leaf of the compose/autolabel/swarm triangle. |
 | `exec` | The only place a hook is spawned (`bash -c`, env as a REPLACEMENT, SIGTERM on cancel). Dry-run, output capture, `CaptureOutputs`, the `Runner` seam and its `Fake`. |
 | `log` | The `Sink` seam: `Writer` (CLI), `Buffer` (API jobs), `Null` (tests). |
 
@@ -106,6 +106,7 @@ One package per responsibility (41 of them), named as the reference's files were
 | `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
 | `specs` | Named specs: store once, reference from many deployments. |
 | `scheduler` | Sleep/wake: the `SleepIndex`, the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
+| `signals` | What a machine manager needs from a swarm: every node with its task count, and every task docker would not place, read straight from docker (`Look`). No arithmetic and no policy — it reports, the caller decides. The ticker, the empty-clocks and the three node actions are in `api/routes_signals.go`. |
 | `share` | Share links: an HS256 JWT signed with `PSTACK_TOKEN`. Sign, verify, and nothing stored. |
 | `settings` | Runtime knobs (`max_jobs`, `default_role`): a closed key list, env as the default not the authority, readers that never fail and resolve downward. |
 | `config` | The portable host configuration (`GET`/`POST /api/config`, `pstack pull config`/`push config`). `Assemble` is a full credential dump; `Apply` creates or skips, never updates or deletes. Loki settings stay behind. |

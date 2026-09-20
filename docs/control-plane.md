@@ -1487,6 +1487,36 @@ was chosen to give you.
 
 ---
 
+## Node signals: reporting, not reconciling (0.41.0)
+
+A swarm with workers raises a question a preview tool cannot answer alone: when should a machine be
+added, and when can one go? pstack answers the two halves it can actually see — `GET /api/signals`
+reports every node with its task count and every task docker refused to place — and stops there.
+
+**Why it stops there.** Deciding *whether to buy a machine* needs things pstack does not have: a
+budget, a provider, a view of what else the fleet is doing, and a policy for how much spare room to
+keep. Deciding *whether a stack would fit* needs resource reservations, and swarm only counts the
+ones a compose file declares, which is almost never. An earlier draft of this feature added those
+sums up anyway, defaulted the missing reservations to a host-wide guess, and grew a setting, an
+`init` flag, a control-template change and an upgrade read-back to carry the guess around. All of it
+was machinery for a number nobody could trust. What survives is the part that is true: docker's own
+words about what it could not place, and a count of what is running where.
+
+This is the same line invariant 10 draws elsewhere. pstack holds no desired state about the fleet,
+runs no reconcile loop over it, and keeps exactly one thing in memory — when each node was first
+seen empty — which a restart is allowed to forget, because that only ever delays a signal.
+
+**The three writes it does make** (`drain`, `undrain`, `docker node rm`) are scheduling and
+bookkeeping, not provisioning: each is one command a person could type on the manager, and none of
+them creates or destroys a machine. `drain` exists because swarm prefers the emptiest node, so an
+idle worker is exactly where the next deploy lands while a consumer is deciding what to do with it;
+the remove is refused until docker reports the node `down`, because a node that has merely lost the
+network still holds everything it was running.
+
+See [node-signals-design.md](node-signals-design.md) for the contract and its caveats.
+
+---
+
 ## Distribution: one static binary
 
 `pstack` is a **host-installed CLI** — it runs on the host, over SSH or from systemd, precisely
