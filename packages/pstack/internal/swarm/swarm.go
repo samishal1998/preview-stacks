@@ -756,6 +756,18 @@ func MarkLokiPlugins(r exec.Runner, info *Info) {
 	}
 }
 
+// NodeAvailabilityCmd takes a node out of the running (`drain`) or puts it back (`active`). Draining
+// is scheduling, not provisioning: swarm stops placing work there and moves what is already on it.
+// The word is passed in by the caller and is never taken from a URL.
+func NodeAvailabilityCmd(id, availability string) string {
+	return "docker node update --availability " + Shq(availability) + " " + Shq(id)
+}
+
+// NodeRmCmd forgets a node whose machine is gone. NEVER `--force`: forcing it on a node that is
+// still up orphans every task placed there, and a manager cannot tell the two cases apart after the
+// fact. The caller checks that docker reports the node `down` first.
+func NodeRmCmd(id string) string { return "docker node rm " + Shq(id) }
+
 // WorkerJoinToken is the worker join token, or "" when docker would not hand one out. A SECRET:
 // whoever holds it can add a node that runs any task.
 func WorkerJoinToken(r exec.Runner) string {

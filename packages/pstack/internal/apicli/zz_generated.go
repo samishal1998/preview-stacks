@@ -103,6 +103,9 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("sso", "provider").AddCommand(NewSsoProviderPutCommand(exec))
 	group("swarm").AddCommand(NewSwarmGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmJoinCommand(exec))
+	group("swarm").AddCommand(NewSwarmNodeRemoveCommand(exec))
+	group("swarm").AddCommand(NewSwarmNodeDrainCommand(exec))
+	group("swarm").AddCommand(NewSwarmNodeUndrainCommand(exec))
 	group("host").AddCommand(NewHostTerminalSessionsCommand(exec))
 	group("tls").AddCommand(NewTlsStatusCommand(exec))
 	group("tls").AddCommand(NewTlsRedeployCommand(exec))
@@ -2421,6 +2424,99 @@ func NewSwarmJoinCommand(exec oascmd.ExecOptions) *cobra.Command {
 		if cmd.Flags().Changed("distro") {
 			req.Query.Set("distro", flagDistro)
 		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSwarmNodeRemoveCommand returns the "swarm node-remove" command
+// (DELETE /api/swarm/nodes/{id}).
+func NewSwarmNodeRemoveCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagID string
+	)
+	cmd := &cobra.Command{
+		Use:   "node-remove",
+		Short: "Forget a node whose machine is gone. Refused unless docker reports it down and drained.",
+	}
+	cmd.Flags().StringVar(&flagID, "id", "", "")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("id")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "DELETE",
+			Path:       "/api/swarm/nodes/{id}",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["id"] = flagID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSwarmNodeDrainCommand returns the "swarm node-drain" command (POST
+// /api/swarm/nodes/{id}/drain).
+func NewSwarmNodeDrainCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagID string
+	)
+	cmd := &cobra.Command{
+		Use:   "node-drain",
+		Short: "Take a node out of the running — swarm stops placing work on it and moves what is there.",
+	}
+	cmd.Flags().StringVar(&flagID, "id", "", "")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("id")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "POST",
+			Path:       "/api/swarm/nodes/{id}/drain",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["id"] = flagID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSwarmNodeUndrainCommand returns the "swarm node-undrain" command
+// (POST /api/swarm/nodes/{id}/undrain).
+func NewSwarmNodeUndrainCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagID string
+	)
+	cmd := &cobra.Command{
+		Use:   "node-undrain",
+		Short: "Put a drained node back into the running.",
+	}
+	cmd.Flags().StringVar(&flagID, "id", "", "")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("id")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "POST",
+			Path:       "/api/swarm/nodes/{id}/undrain",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["id"] = flagID
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw

@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "f5174c0b200af11360cce124586eb8ad8b5709d536f66afab38ab1209e860d7d",
+  "specDigest": "3d8dacf251293ec1fdcbd52cc9bf2ca0b34880fc44a24feda93bef7af21989c1",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -432,6 +432,26 @@
       },
       "ext": {},
       "digest": "a16815b0592792d6"
+    },
+    "drainSwarmNode": {
+      "operationId": "drainSwarmNode",
+      "method": "POST",
+      "path": "/api/swarm/nodes/{id}/drain",
+      "command": "swarm node-drain",
+      "funcName": "NewSwarmNodeDrainCommand",
+      "summary": "Take a node out of the running — swarm stops placing work on it and moves what is there.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "node-drain"
+      },
+      "digest": "91c00bcbc737fe46"
     },
     "exportConfig": {
       "operationId": "exportConfig",
@@ -1319,6 +1339,26 @@
       },
       "digest": "954f39e1d780a655"
     },
+    "removeSwarmNode": {
+      "operationId": "removeSwarmNode",
+      "method": "DELETE",
+      "path": "/api/swarm/nodes/{id}",
+      "command": "swarm node-remove",
+      "funcName": "NewSwarmNodeRemoveCommand",
+      "summary": "Forget a node whose machine is gone. Refused unless docker reports it down and drained.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "node-remove"
+      },
+      "digest": "8fb2c03e8f05f13e"
+    },
     "restartControlService": {
       "operationId": "restartControlService",
       "method": "POST",
@@ -1552,6 +1592,26 @@
       ],
       "ext": {},
       "digest": "5ea2e551f4c4c591"
+    },
+    "undrainSwarmNode": {
+      "operationId": "undrainSwarmNode",
+      "method": "POST",
+      "path": "/api/swarm/nodes/{id}/undrain",
+      "command": "swarm node-undrain",
+      "funcName": "NewSwarmNodeUndrainCommand",
+      "summary": "Put a drained node back into the running.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "node-undrain"
+      },
+      "digest": "f6e6ee2fc541596b"
     },
     "upDeployment": {
       "operationId": "upDeployment",

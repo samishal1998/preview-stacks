@@ -19,10 +19,13 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/signals"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
 
 // signalsView is one `Look`, with the empty clocks applied. The ticker and the route share it so
@@ -196,4 +199,87 @@ func (s *Server) signalsLoop() {
 			s.signalsTick()
 		}
 	}
+}
+
+// ── acting on a node ────────────────────────────────────────────────────────────────────────────
+//
+// Three one-command routes, each of which a person could run by hand on the manager. pstack creates
+// and destroys no machines; it takes one out of the running, puts it back, and forgets one whose
+// machine has gone.
+//
+// The order that keeps this safe is drain → delete the machine → DELETE here. Draining first
+// matters because swarm prefers the emptiest machine: an idle worker is exactly where the next
+// deploy would land while a consumer is deciding what to do about it.
+
+func (s *Server) swarmNodeRoutes(w http.ResponseWriter, r *http.Request, id, action string) error {
+	view := signals.Look(s.host)
+	if !view.Reachable {
+		writeError(w, 409, "docker did not answer")
+		return nil
+	}
+	if !view.Swarm {
+		writeError(w, 409, "this daemon is not a swarm manager")
+		return nil
+	}
+	var node *signals.Node
+	for i := range view.Nodes {
+		if view.Nodes[i].ID == id {
+			node = &view.Nodes[i]
+		}
+	}
+	if node == nil {
+		writeError(w, 404, "no such node: "+id)
+		return nil
+	}
+
+	switch {
+	case action == "drain" && r.Method == http.MethodPost:
+		return s.setAvailability(w, *node, "drain")
+	case action == "undrain" && r.Method == http.MethodPost:
+		return s.setAvailability(w, *node, "active")
+	case action == "" && r.Method == http.MethodDelete:
+		// `down` and nothing else: a node that briefly loses the network reads as not ready while
+		// still running everything it had, and removing it then orphans that work.
+		if node.State != "down" || node.Availability != "drain" {
+			writeError(w, 409, "refusing to remove "+node.Hostname+": docker reports it "+node.State+
+				" and "+node.Availability+". Drain it, delete the machine, then remove it here.")
+			return nil
+		}
+		if res := s.host.Run(swarm.NodeRmCmd(node.ID), exec.RunOptions{Label: "docker node rm"}); !res.OK {
+			writeError(w, 502, dockerSaid(res))
+			return nil
+		}
+		writeJSON(w, 200, jsonx.Object{{K: "node", V: node.ID}, {K: "removed", V: true}})
+		return nil
+	}
+	writeError(w, 405, "use POST /drain, POST /undrain or DELETE")
+	return nil
+}
+
+// setAvailability is drain and undrain: idempotent, because a consumer retrying after a timeout must
+// not get an error for a node that is already where it asked for it to be.
+func (s *Server) setAvailability(w http.ResponseWriter, node signals.Node, availability string) error {
+	if node.Availability != availability {
+		res := s.host.Run(swarm.NodeAvailabilityCmd(node.ID, availability), exec.RunOptions{Label: "docker node update"})
+		if !res.OK {
+			writeError(w, 502, dockerSaid(res))
+			return nil
+		}
+	}
+	writeJSON(w, 200, jsonx.Object{
+		{K: "node", V: node.ID},
+		{K: "hostname", V: node.Hostname},
+		{K: "availability", V: availability},
+	})
+	return nil
+}
+
+// dockerSaid is docker's first line of stderr, or a fallback — the route answers with what docker
+// refused, never a paraphrase.
+func dockerSaid(res exec.Result) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(res.Stderr), "\n")
+	if first == "" {
+		return "docker refused the command"
+	}
+	return first
 }

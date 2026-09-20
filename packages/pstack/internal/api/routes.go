@@ -35,6 +35,9 @@ var (
 	registryRe    = regexp.MustCompile(`^/api/registries/(.+)$`)
 	cancelRe      = regexp.MustCompile(`^/api/jobs/([^/]+)/cancel$`)
 	jobRe         = regexp.MustCompile(`^/api/jobs/([^/]+)(?:/(stream))?$`)
+	// The optional trailing action group has to be spelled exactly like this: openapi_coverage_test
+	// expands this shape into three paths (/nodes/{id}, …/drain, …/undrain) and collapses any other.
+	swarmNodeRe = regexp.MustCompile(`^/api/swarm/nodes/([^/]+)(?:/(drain|undrain))?$`)
 )
 
 // routes is the gated route table, in api.ts order. An ordered if-chain over precompiled
@@ -214,6 +217,9 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		fields = append(fields, jsonx.KV{K: "note", V: note})
 		writeJSON(w, 200, append(spread(info), fields...))
 		return nil
+	}
+	if m := swarmNodeRe.FindStringSubmatch(path); m != nil {
+		return s.swarmNodeRoutes(w, r, m[1], m[2])
 	}
 	if path == "/api/swarm/join" && r.Method == http.MethodGet {
 		// The admin check that used to be inline here is a row in permissions.go now, where it

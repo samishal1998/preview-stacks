@@ -239,3 +239,170 @@ func TestSignalsTickIgnoresAnUnreadableDocker(t *testing.T) {
 		t.Fatalf("emitted %v on an unreadable docker", *seen)
 	}
 }
+
+func nodeAction(t *testing.T, s *Server, method, path string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("authorization", "Bearer t0ken")
+	s.handle(rec, req)
+	return rec.Code, rec.Body.String()
+}
+
+// negative control: drop the `state == down` half of the DELETE guard → removing a ready node
+// answers 200 and `docker node rm` is recorded, which is how a network blip orphans live tasks.
+func TestNodeDeleteRefusesANodeThatIsStillUp(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	s.host = f
+
+	code, body := nodeAction(t, s, "DELETE", "/api/swarm/nodes/n2abcdef01234567")
+	if code != 409 {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	for _, cmd := range f.Commands() {
+		if strings.Contains(cmd, "node rm") {
+			t.Fatalf("ran %q on a live node", cmd)
+		}
+	}
+}
+
+// negative control: pass --force on the remove → the command below stops matching, and a node with
+// live tasks would go anyway.
+func TestNodeDeleteRemovesADownAndDrainedNode(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	// worker-2 has gone: docker reports it down and drained.
+	gone := `{"ID":"n1abcdef01234567","Hostname":"preview-host","Status":"Ready","Availability":"Active","ManagerStatus":"Leader","EngineVersion":"28.0.1","Self":"true"}
+{"ID":"n3abcdef01234567","Hostname":"worker-2","Status":"Down","Availability":"Drain","ManagerStatus":"","EngineVersion":"28.0.1","Self":"false"}`
+	inner := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.Contains(cmd, "node ls") {
+			return exec.Result{OK: true, Stdout: gone}, true
+		}
+		return inner(cmd)
+	}
+	s.host = f
+
+	code, body := nodeAction(t, s, "DELETE", "/api/swarm/nodes/n3abcdef01234567")
+	if code != 200 {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	found := false
+	for _, cmd := range f.Commands() {
+		if cmd == "docker node rm 'n3abcdef01234567'" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("node rm not run: %v", f.Commands())
+	}
+}
+
+func ran(f *exec.Fake, cmd string) bool {
+	for _, c := range f.Commands() {
+		if c == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+// negative control: send the availability straight from the URL instead of the fixed words → a
+// request for /drain would run whatever the caller typed.
+func TestDrainRunsOneDockerCommand(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	s.host = f
+
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/nodes/n2abcdef01234567/drain"); code != 200 {
+		t.Fatalf("drain: %d %s", code, body)
+	}
+	if !ran(f, "docker node update --availability 'drain' 'n2abcdef01234567'") {
+		t.Fatalf("drain not run: %v", f.Commands())
+	}
+}
+
+// negative control: drop the "already there" check in setAvailability → undraining an active node
+// shells out to docker for nothing, and this fails.
+func TestUndrainIsIdempotentAndRunsWhenItHasTo(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	s.host = f
+
+	// n2 is already active: 200, and nothing runs.
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/nodes/n2abcdef01234567/undrain"); code != 200 {
+		t.Fatalf("undrain: %d %s", code, body)
+	}
+	if ran(f, "docker node update --availability 'active' 'n2abcdef01234567'") {
+		t.Fatalf("ran an update on a node already active: %v", f.Commands())
+	}
+
+	// n3 is drained: the same call runs the command.
+	drained := `{"ID":"n1abcdef01234567","Hostname":"preview-host","Status":"Ready","Availability":"Active","ManagerStatus":"Leader","EngineVersion":"28.0.1","Self":"true"}
+{"ID":"n3abcdef01234567","Hostname":"worker-2","Status":"Ready","Availability":"Drain","ManagerStatus":"","EngineVersion":"28.0.1","Self":"false"}`
+	inner := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.Contains(cmd, "node ls") {
+			return exec.Result{OK: true, Stdout: drained}, true
+		}
+		return inner(cmd)
+	}
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/nodes/n3abcdef01234567/undrain"); code != 200 {
+		t.Fatalf("undrain: %d %s", code, body)
+	}
+	if !ran(f, "docker node update --availability 'active' 'n3abcdef01234567'") {
+		t.Fatalf("undrain not run: %v", f.Commands())
+	}
+}
+
+// negative control: skip the unknown-node check → draining a node that does not exist answers 200
+// and shells out to docker for nothing.
+func TestDrainAnUnknownNode(t *testing.T) {
+	s := signalsServer(t)
+	s.host = signalsShim(t, false)
+	if code, _ := nodeAction(t, s, "POST", "/api/swarm/nodes/nope/drain"); code != 404 {
+		t.Fatalf("status %d", code)
+	}
+}
+
+// negative control: answer these routes on a compose host → a single-machine host claims a swarm.
+func TestNodeRoutesOnAComposeHost(t *testing.T) {
+	s := signalsServer(t)
+	f := exec.NewFake(nil, "")
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.Contains(cmd, "docker info") {
+			return exec.Result{OK: true, Stdout: `{"LocalNodeState":"inactive"}`}, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	s.host = f
+	if code, _ := nodeAction(t, s, "POST", "/api/swarm/nodes/n2/drain"); code != 409 {
+		t.Fatalf("status %d", code)
+	}
+}
+
+// negative control: drop the `state == down` half of the DELETE guard → this node, drained but
+// still up and still holding whatever swarm has not moved yet, is removed and its tasks orphaned.
+func TestNodeDeleteRefusesADrainedNodeThatIsStillUp(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	up := `{"ID":"n1abcdef01234567","Hostname":"preview-host","Status":"Ready","Availability":"Active","ManagerStatus":"Leader","EngineVersion":"28.0.1","Self":"true"}
+{"ID":"n3abcdef01234567","Hostname":"worker-2","Status":"Ready","Availability":"Drain","ManagerStatus":"","EngineVersion":"28.0.1","Self":"false"}`
+	inner := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.Contains(cmd, "node ls") {
+			return exec.Result{OK: true, Stdout: up}, true
+		}
+		return inner(cmd)
+	}
+	s.host = f
+
+	code, body := nodeAction(t, s, "DELETE", "/api/swarm/nodes/n3abcdef01234567")
+	if code != 409 {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if ran(f, "docker node rm 'n3abcdef01234567'") {
+		t.Fatalf("removed a node that is still up: %v", f.Commands())
+	}
+}
