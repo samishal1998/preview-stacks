@@ -1,0 +1,3 @@
+{"ID":"svc1web00000000","Name":"pr-42_web","Mode":"replicated","Replicas":"1/1","Image":"web:pr-42"}
+{"ID":"svc2api00000000","Name":"pr-42_api","Mode":"replicated","Replicas":"0/1","Image":"api:pr-42"}
+{"ID":"svc3log00000000","Name":"logs","Mode":"global","Replicas":"3/3","Image":"promtail:2"}
