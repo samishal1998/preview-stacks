@@ -103,6 +103,9 @@ const TABLE: Row[] = [
   { method: 'GET', path: '/api/notifiers/999999/deliveries', min: 'viewer', ok: 404 },
   { method: 'GET', path: '/api/control', min: 'viewer', ok: 200 },
   { method: 'GET', path: '/api/swarm', min: 'viewer', ok: 200 },
+  // What the cluster looks like right now. It names nodes and stuck tasks and carries no credential,
+  // so it reads like the swarm panel beside it.
+  { method: 'GET', path: '/api/signals', min: 'viewer', ok: 200 },
   { method: 'GET', path: '/api/terminal-sessions', min: 'viewer', ok: 200 },
   // Decided: the roster is ordinary team information — who to hand a deployment to — and carries no
   // secret. Reading it is a viewer's; every write on it is an admin's, three rows down.
@@ -149,6 +152,11 @@ const TABLE: Row[] = [
   // with the others. Still a real credential (the token joins a machine to the cluster), so it stops
   // here and goes no lower. 409 = the handler answered: the shim's daemon is not a swarm manager.
   { method: 'GET', path: '/api/swarm/join', min: 'maintainer', ok: 409 },
+  // Taking a machine out of the running, putting it back, and forgetting one that has gone. Host
+  // configuration, like the join token above. 409 again: this shim's daemon is not a swarm manager.
+  { method: 'POST', path: '/api/swarm/nodes/n1/drain', body: {}, min: 'maintainer', ok: 409 },
+  { method: 'POST', path: '/api/swarm/nodes/n1/undrain', body: {}, min: 'maintainer', ok: 409 },
+  { method: 'DELETE', path: '/api/swarm/nodes/n1', min: 'maintainer', ok: 409 },
   // The control stack's operator page and its one action. The shim's docker lists no control
   // containers, so the allowed role gets the handler's own answers: an empty-but-reachable view,
   // and a restart that 404s on a service the (empty) view does not name — never the gate's 403.
