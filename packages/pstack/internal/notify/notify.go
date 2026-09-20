@@ -461,6 +461,20 @@ func Summarize(e events.Event) string {
 			s += ": " + strings.Join(xs, ", ")
 		}
 		return s + "."
+	case "signal.raised", "signal.cleared":
+		what := "a worker went empty"
+		if field(d, "type") == "stuck" {
+			what = field(d, "service") + " cannot be placed"
+			if r := field(d, "reason"); r != "" {
+				what += ": " + r
+			}
+		} else if h := field(d, "hostname"); h != "" {
+			what = h + " is empty"
+		}
+		if e.Event == "signal.cleared" {
+			return "Resolved — " + what + "."
+		}
+		return what + "."
 	default:
 		if stack == "" {
 			stack = "this host"

@@ -100,6 +100,12 @@ var Names = []string{
 	// Appended, like `job.superseded`: the order is the contract. Which sections changed and the
 	// storage type — never the endpoint, the bucket, the key id or the secret.
 	"logging.changed",
+	// The swarm changed shape in a way a machine manager acts on: a task docker would not place, or
+	// a worker that went empty. Appended, like the two above, because the order is the contract.
+	// `signal.raised` when it becomes true, `signal.cleared` when it stops; never repeated while it
+	// stays true, since `GET /api/signals` is there for the current picture.
+	"signal.raised",
+	"signal.cleared",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a

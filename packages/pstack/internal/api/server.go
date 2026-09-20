@@ -67,6 +67,11 @@ type Options struct {
 	// TerminalArgv opens a container shell. Default: docker exec -i <id> <shell>. Injectable for
 	// the same reason Runner is: the machine this is developed on has no Docker.
 	TerminalArgv func(containerID, shell string) []string
+	// SignalsTickMs is how often to compare the swarm with the last comparison and emit the
+	// difference. ZERO IS OFF, and off is the zero value on purpose: `serve` is the only caller
+	// that turns it on.
+	SignalsTickMs int64
+
 	// Readiness tuning; zero means the defaults (2s / 180s / 3 restarts).
 	ReadinessPollMs    int64
 	ReadinessTimeoutMs int64
@@ -161,6 +166,10 @@ type Server struct {
 	// and neither has any business waiting on writeMu.
 	emptyMu    sync.Mutex
 	emptySince map[string]int64
+	// signalsSent is what the ticker last told the world about, by signal id — so it can send the
+	// change and nothing else. Empty at boot, which is why a restart re-raises whatever is still
+	// true. Under emptyMu, like the clocks it is computed from.
+	signalsSent map[string]signalPayload
 
 	// probeSem bounds concurrent /api/probe work. Buffered channel as a semaphore rather than a
 	// mutex: the route must answer `busy` immediately instead of queueing, since the caller is a
@@ -277,7 +286,8 @@ func New(o Options) (*Server, error) {
 		sleepIndex: scheduler.NewSleepIndex(),
 		waking:     map[string]wakingUp{},
 		probeSem:   make(chan struct{}, probeSlots),
-		emptySince: map[string]int64{},
+		emptySince:  map[string]int64{},
+		signalsSent: map[string]signalPayload{},
 		spec:       newOpenAPIDoc(o.OpenAPISpec),
 		ssoClient:  sso.NewClient(nil),
 		bus:        o.Bus,
@@ -850,6 +860,11 @@ func (s *Server) Start() error {
 	// a route needs one.
 	s.http = &http.Server{Handler: http.HandlerFunc(s.handle), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 240 * time.Second}
 	s.scheduler.Start()
+	// Zero means off, and the default is zero: only `serve` turns this on, so a test server — and
+	// the conformance suite boots dozens — never starts shelling out to docker on a timer.
+	if s.opts.SignalsTickMs > 0 {
+		go s.signalsLoop()
+	}
 	// Before Serve, so the first /api/health is already right.
 	s.grafanaCheckIn()
 	go s.reindexLoop()

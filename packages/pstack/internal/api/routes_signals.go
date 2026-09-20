@@ -102,3 +102,98 @@ func (s *Server) signalsGet(w http.ResponseWriter) error {
 	writeJSON(w, 200, signalsBody(view, empty))
 	return nil
 }
+
+// ── telling people, instead of being asked ──────────────────────────────────────────────────────
+//
+// A ticker compares what is true now with what was true last time and sends the difference:
+// `signal.raised` when something appears, `signal.cleared` when it goes. Nothing repeats while it
+// stays true — a notifier subscribed to everything would otherwise post the same line all day, and
+// the poll route above is there for anyone who wants the current picture.
+//
+// Ids are `stuck/<service>` and `empty/<node id>`, which are stable for as long as the thing is
+// true. A restart forgets what was sent and raises everything still true, so a listener that missed
+// a delivery catches up; acting twice on one id has to be harmless on the receiving side, which is
+// the usual webhook contract.
+//
+// A docker that does not answer changes NOTHING: silence is not "the problem went away".
+
+type signalPayload struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Node     string `json:"node,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+	Task     string `json:"task,omitempty"`
+	Service  string `json:"service,omitempty"`
+	Stack    string `json:"stack,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Since    int64  `json:"since"`
+}
+
+// signalsNow is every signal that is true in this view, by id.
+func signalsNow(view signals.View, empty map[string]int64) map[string]signalPayload {
+	out := map[string]signalPayload{}
+	for _, t := range view.Stuck {
+		id := "stuck/" + t.Service
+		out[id] = signalPayload{
+			ID: id, Type: "stuck", Task: t.Task, Service: t.Service, Stack: t.Stack,
+			Reason: t.Reason, Since: time.Now().UnixMilli(),
+		}
+	}
+	for _, n := range view.Nodes {
+		at, ok := empty[n.ID]
+		if !ok {
+			continue
+		}
+		id := "empty/" + n.ID
+		out[id] = signalPayload{ID: id, Type: "empty", Node: n.ID, Hostname: n.Hostname, Since: at}
+	}
+	return out
+}
+
+// signalsTick is one comparison. Public enough for a test to drive it without waiting for a timer.
+func (s *Server) signalsTick() {
+	view, empty := s.signalsView()
+	if !view.Swarm || !view.Reachable {
+		return
+	}
+	now := signalsNow(view, empty)
+
+	// Work out the difference under the lock, then emit outside it: events.Emit calls its listeners
+	// there and then, and one of them writes to the database.
+	var raised, cleared []signalPayload
+	s.emptyMu.Lock()
+	for id, p := range now {
+		if _, had := s.signalsSent[id]; !had {
+			raised = append(raised, p)
+		}
+		s.signalsSent[id] = p
+	}
+	for id, p := range s.signalsSent {
+		if _, still := now[id]; !still {
+			cleared = append(cleared, p)
+			delete(s.signalsSent, id)
+		}
+	}
+	s.emptyMu.Unlock()
+
+	for _, p := range raised {
+		s.bus.Emit("signal.raised", p)
+	}
+	for _, p := range cleared {
+		s.bus.Emit("signal.cleared", p)
+	}
+}
+
+// signalsLoop ticks until the server stops. Started only when the interval is above zero.
+func (s *Server) signalsLoop() {
+	t := time.NewTicker(time.Duration(s.opts.SignalsTickMs) * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+			s.signalsTick()
+		}
+	}
+}
