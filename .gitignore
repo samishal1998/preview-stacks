@@ -55,3 +55,8 @@ config.*.yaml
 .config.*.yaml
 config-*.json
 .config-*.json
+
+# Scratch. Loose files that are nobody's business but this machine's: old cloud-configs, sealed
+# exports, a stray token, prompts. Moved here 2026-09-20 so the repo root stays readable — the
+# per-name rules above stay, because a file only lands here once someone notices it.
+/.temp/
