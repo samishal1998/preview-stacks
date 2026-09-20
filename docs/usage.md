@@ -2184,6 +2184,65 @@ the host, with every preview torn down first — the networks have to be recreat
 — the line that installs the plugin — is present only when logging is on. The Swarm page and
 `pstack swarm` flag the same nodes.
 
+### Adding and removing worker machines (0.41.0)
+
+Sleep frees a machine's worth of capacity that nobody turns off, and a busy afternoon needs a
+machine nobody adds. pstack does not create or delete machines — but it is the only thing that can
+say when one is needed or spare, so it says it and leaves the rest to you.
+
+```bash
+curl -s -H "Authorization: Bearer $PSTACK_TOKEN" https://api.<domain>/api/signals | jq
+```
+
+```json
+{
+  "v": 1, "swarm": true, "reachable": true, "at": 1758358800000,
+  "nodes": [
+    { "id": "xk3f…", "hostname": "worker-3", "role": "worker", "state": "ready",
+      "availability": "active", "tasks": 0, "emptySince": 1758357000000 }
+  ],
+  "stuck": [
+    { "task": "j8d2…", "service": "pr-42_web", "stack": "pr-42",
+      "reason": "no suitable node (insufficient resources on 2 nodes)" }
+  ]
+}
+```
+
+**`stuck` is "I need another machine".** Every task docker refused to place, with docker's own
+sentence. Read it before you buy anything: `insufficient resources` means the cluster is full, while
+`scheduling constraints not satisfied` usually means a spec is asking for a machine nobody has.
+
+**A worker with `tasks: 0` is "you can take this away".** `emptySince` is when pstack first saw it
+that way; how long you wait before acting is your policy, not pstack's. The manager never appears as
+a candidate: it runs pstack itself, and your axis hooks run beside it. Tasks of *global* services
+(one per machine, like a log shipper) do not count — they follow the machine.
+
+Rather be told than ask: `signal.raised` and `signal.cleared` fire on the change and carry the same
+fields ([webhook-events.md](webhook-events.md)). `PSTACK_SIGNALS_TICK_MS` sets how often pstack
+looks (default 30000; `0` turns it off).
+
+**Taking a machine out of service**, in this order:
+
+```bash
+H="Authorization: Bearer $PSTACK_TOKEN"                       # maintainer and up
+curl -X POST -H "$H" https://api.<domain>/api/swarm/nodes/<id>/drain    # swarm stops placing work there
+#   … now delete the machine at your provider …
+curl -X DELETE -H "$H" https://api.<domain>/api/swarm/nodes/<id>       # forget the node
+```
+
+Drain first, always. Swarm prefers the emptiest machine, so an idle worker is exactly where the next
+deploy would land while you are deciding. `POST …/undrain` puts it back if the delete never happens.
+The `DELETE` is refused with a 409 until docker reports the node **down** — a node that briefly
+loses the network still holds everything it was running, and removing it then orphans that work.
+
+Two things to know before you wire this to anything that spends money:
+
+- **A worker's disks go with the machine.** Anything a preview stored on it is gone. Under swarm
+  that is already shaky — a stack that sleeps and wakes can come back on another machine with an
+  empty volume — so treat preview data as disposable.
+- **"Empty" means no swarm tasks.** A manager cannot see plain containers on a worker, so a box
+  somebody is using by hand looks idle.
+
 ### Sleep and wake-on-call
 
 Most previews are deployed to be looked at once, then sit there until the PR merges. **Sleep** takes
@@ -3392,6 +3451,10 @@ anything it does not list is the root token's alone.
 | PUT | `/api/sso/config` | `{ key, …config, clientSecret }` | `{ ok, key, config, callbackUrl }` · 400 on a bad field, an unreachable issuer, or a keyless body when several providers exist. Submitting the mask keeps that key's stored secret |
 | DELETE | `/api/sso/config` · `/api/sso/config/<key>` | — | forget that provider; the accounts it created stay · bare with several providers is 400 naming the keys · 404 if none |
 | GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
+| GET | `/api/signals` | — | `{ swarm, reachable, nodes[], stuck[] }` — what the cluster looks like now, for whatever adds and removes machines ([§7b](#adding-and-removing-worker-machines-0410)) |
+| POST | `/api/swarm/nodes/:id/drain` | — | **maintainer and up** — stop placing work on a node and move what is there |
+| POST | `/api/swarm/nodes/:id/undrain` | — | **maintainer and up** — put it back |
+| DELETE | `/api/swarm/nodes/:id` | — | **maintainer and up** — forget a node whose machine is gone; 409 unless docker reports it down and drained |
 | GET | `/api/swarm/join` | `?format=token\|command\|script\|cloud-config[&distro=]` | `text/plain`, **maintainer and up** (it was admin before 0.31.0); 409 when this daemon is not a manager |
 | GET | `/api/control` | — | the control stack's summary `{ project, reachable, services[], note }` — the dashboard's card |
 | GET | `/api/control/runtime` | — | **maintainer and up** — the operator view: per container, `restartCount`, `oomKilled`, `memLimitBytes` beside the usual state ([why](#watch-the-control-stack-itself-0350)) |

@@ -23,6 +23,7 @@ browser); the version-control rules are in AGENTS.md.
 | **Copy a host's configuration** onto another host | [`usage.md` §7d](usage.md#7d-move-a-hosts-configuration-to-another-host-0300) |
 | Send deployed services' logs to **Loki** and read them in **Grafana** | [`usage.md` §7](usage.md#turn-loki-logging-on-or-off-pstack-logging) |
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
+| Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
 | Know how the **Go binary** (0.29.0) was proven a drop-in for the TypeScript one, and what still differs | [`port-status.md`](port-status.md) |
 
 ## The documents

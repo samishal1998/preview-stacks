@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Node signals, for whatever adds and removes worker machines** (swarm only). `GET /api/signals`
+  (viewer) answers the two questions a machine manager has: every node with its task count — a
+  worker at `tasks: 0` is one you can take away, with `emptySince` saying since when — and every
+  task docker refused to place, carrying docker's own sentence (`no suitable node (insufficient
+  resources on 2 nodes)`). Tasks of global services do not count towards a node, and the manager is
+  never offered as a candidate: it runs pstack and the axis hooks. Nothing is stored; each call asks
+  docker.
+- **`signal.raised` / `signal.cleared`**, for receivers that would rather be told: the same fields,
+  on the change only, ids `stuck/<service>` and `empty/<node id>`. A restart re-raises whatever is
+  still true, so act on the id idempotently. `PSTACK_SIGNALS_TICK_MS` (default 30000, `0` off).
+- **`POST /api/swarm/nodes/:id/drain`, `…/undrain` and `DELETE /api/swarm/nodes/:id`** (maintainer),
+  one docker command each. Drain before deleting a machine — swarm prefers the emptiest node, so an
+  idle worker is where the next deploy lands. The `DELETE` is refused until docker reports the node
+  `down`, and never uses `--force`: removing a node that is merely unreachable orphans its tasks.
+
+pstack still creates and destroys no machines, and holds no cloud credential.
+
+**Known issue, not introduced here:** `upgrade.LoggedDeployments` looks for
+`<deployment>/compose.generated.yml` and so misses a deployment whose compose file sits in a
+subdirectory. `autolabel.GeneratedComposePath` (added here) is the join it should use.
+
 ## 0.40.0 — 2026-09-19
 
 ### Added

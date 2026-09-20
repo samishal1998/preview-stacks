@@ -456,6 +456,35 @@ a hash, a token or a notifier URL.
 **Page on `config.imported` if you page on anything here.** A hostile document cannot repoint what
 exists, but it can *add* — an account, a token, a registry it controls.
 
+### `signal.raised` / `signal.cleared`
+
+The swarm changed in a way something that adds and removes machines acts on: a task docker would not
+place, or a worker that went empty. Swarm hosts only. (0.41.0)
+
+`signal.raised` fires when it becomes true, `signal.cleared` when it stops. Neither repeats while it
+stays true — `GET /api/signals` is there for the current picture, and a notifier subscribed to `*`
+would otherwise post the same line all day.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `id` | string | `stuck/<service>` or `empty/<node id>`. **Dedupe and act on this**, not on the envelope's `id`. |
+| `type` | string | `stuck` or `empty`. |
+| `since` | number | Epoch ms: when pstack first saw it. |
+| `node` | string | `empty` only: the node id. |
+| `hostname` | string | `empty` only: the machine's hostname, which is how a provisioner recognises it. |
+| `task` | string | `stuck` only: the task id. |
+| `service` | string | `stuck` only, `<stack>_<service>`. |
+| `stack` | string | `stuck` only: the swarm namespace. |
+| `reason` | string | `stuck` only: docker's own sentence, e.g. `no suitable node (insufficient resources on 2 nodes)`. |
+
+Three things a receiver needs to know:
+
+- **Make acting twice on one `id` harmless.** After a restart pstack raises everything still true,
+  because what it has already sent is only in memory.
+- **A `cleared` you never got a `raise` for is normal** — see the line above.
+- **Read `reason` before buying a machine.** `insufficient resources` means the cluster is full;
+  `scheduling constraints not satisfied` usually means a spec asks for a machine nobody has.
+
 ---
 
 ## Test deliveries
