@@ -711,6 +711,36 @@ paths:
       responses:
         '200': { description: The join instructions, as text., content: { text/plain: { schema: { type: string } } } }
 
+  /api/swarm/nodes/{id}:
+    delete:
+      tags: [swarm]
+      operationId: removeSwarmNode
+      x-cli-name: node-remove
+      summary: Forget a node whose machine is gone. Refused unless docker reports it down and drained.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/swarm/nodes/{id}/drain:
+    post:
+      tags: [swarm]
+      operationId: drainSwarmNode
+      x-cli-name: node-drain
+      summary: Take a node out of the running — swarm stops placing work on it and moves what is there.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/swarm/nodes/{id}/undrain:
+    post:
+      tags: [swarm]
+      operationId: undrainSwarmNode
+      x-cli-name: node-undrain
+      summary: Put a drained node back into the running.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
   /api/control:
     get:
       tags: [host]
