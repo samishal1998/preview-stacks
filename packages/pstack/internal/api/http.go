@@ -59,7 +59,16 @@ type Tuning struct {
 	// PSTACK_LOKI_UID=0 is 10001: a root pstack chowns s3-credentials to 10001 either way.
 	LokiReadyTimeoutMs float64
 	LokiUID            float64
+	// SignalsTickMs is PSTACK_SIGNALS_TICK_MS: how often the swarm is compared with the last
+	// comparison so `signal.raised` / `signal.cleared` can be sent. It does NOT go through num(),
+	// which cannot tell an unset variable from an explicit "0" — and an explicit 0, meaning "never
+	// tick", is exactly what the conformance harness sets. SignalsTickSet says which it was.
+	SignalsTickMs  float64
+	SignalsTickSet bool
 }
+
+// SignalsTickDefaultMs is what `serve` uses when PSTACK_SIGNALS_TICK_MS is unset.
+const SignalsTickDefaultMs = 30_000
 
 // TuningFromEnv reads the knobs.
 func TuningFromEnv(env func(string) (string, bool)) Tuning {
@@ -74,7 +83,15 @@ func TuningFromEnv(env func(string) (string, bool)) Tuning {
 		}
 		return n
 	}
+	tickMs, tickSet := float64(0), false
+	if v, ok := env("PSTACK_SIGNALS_TICK_MS"); ok && strings.TrimSpace(v) != "" {
+		if n := js.ParseNumber(v); js.IsFinite(n) && n >= 0 {
+			tickMs, tickSet = n, true
+		}
+	}
 	return Tuning{
+		SignalsTickMs:        tickMs,
+		SignalsTickSet:       tickSet,
 		ReadinessPollMs:      num("PSTACK_READINESS_POLL_MS"),
 		ReadinessTimeoutMs:   num("PSTACK_READINESS_TIMEOUT_MS"),
 		ReadinessRestartLoop: num("PSTACK_READINESS_RESTART_LOOP"),

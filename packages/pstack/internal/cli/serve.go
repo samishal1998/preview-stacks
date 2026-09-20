@@ -96,6 +96,7 @@ func Serve(o ServeOptions) *Exit {
 		// convenience endpoint, and the alternative — any unrecognised value disabling it — turns a
 		// typo into a CI pipeline that polls a 404 forever with nothing saying why.
 		ProbeOff:         strings.EqualFold(strings.TrimSpace(get("PSTACK_PROBE")), "off"),
+		SignalsTickMs:    signalsTick(tuning),
 		SSOStateTTLS:     int64(tuning.SSOStateTTLS),
 		SSODiscoveryTTLS: int64(tuning.SSODiscoveryTTLS),
 		Version:          version.Get(),
@@ -163,4 +164,14 @@ func Healthcheck(env func(string) (string, bool)) *Exit {
 		return &Exit{Code: ExitOK}
 	}
 	return &Exit{Code: ExitFailed}
+}
+
+// signalsTick is the interval the signals ticker runs at: what PSTACK_SIGNALS_TICK_MS says when it
+// says anything — including 0, which turns the ticker off — and 30s when it is unset. `serve` is the
+// only place this default lives, so a Server built by a test stays quiet unless it asks not to.
+func signalsTick(t api.Tuning) int64 {
+	if t.SignalsTickSet {
+		return int64(t.SignalsTickMs)
+	}
+	return api.SignalsTickDefaultMs
 }

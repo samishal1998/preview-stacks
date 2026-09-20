@@ -159,3 +159,83 @@ func TestSignalsRouteOnAComposeHost(t *testing.T) {
 		t.Fatalf("stuck = %v", body["stuck"])
 	}
 }
+
+// captureBus records what the ticker emits, in order.
+func captureBus(t *testing.T, s *Server) *[]string {
+	t.Helper()
+	seen := []string{}
+	off := s.bus.On(func(e events.Event) {
+		var d map[string]any
+		_ = json.Unmarshal(e.Data, &d)
+		seen = append(seen, e.Event+" "+asString(d["id"]))
+	})
+	t.Cleanup(off)
+	return &seen
+}
+
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// negative control: emit on every tick instead of on the change → the second tick repeats both
+// lines and this fails.
+func TestSignalsTickEmitsOnChangeOnly(t *testing.T) {
+	s := signalsServer(t)
+	s.host = signalsShim(t, false)
+	seen := captureBus(t, s)
+
+	s.signalsTick()
+	s.signalsTick()
+
+	if len(*seen) != 2 {
+		t.Fatalf("emitted %v", *seen)
+	}
+	want := map[string]bool{"signal.raised stuck/pr-42_api": true, "signal.raised empty/n3abcdef01234567": true}
+	for _, line := range *seen {
+		if !want[line] {
+			t.Fatalf("unexpected %q in %v", line, *seen)
+		}
+	}
+}
+
+// negative control: skip the cleared half → the second tick emits nothing and this fails.
+func TestSignalsTickClearsWhenTheClusterRecovers(t *testing.T) {
+	s := signalsServer(t)
+	s.host = signalsShim(t, false)
+	s.signalsTick()
+	seen := captureBus(t, s)
+
+	// Every task placed, nothing stuck: worker-1 now carries the api task too.
+	s.host = signalsShim(t, true)
+	s.signalsTick()
+
+	got := map[string]bool{}
+	for _, line := range *seen {
+		got[line] = true
+	}
+	if !got["signal.cleared stuck/pr-42_api"] {
+		t.Fatalf("no clear for the stuck task: %v", *seen)
+	}
+	if !got["signal.raised empty/n2abcdef01234567"] {
+		t.Fatalf("worker-1 went empty and nobody said so: %v", *seen)
+	}
+}
+
+// negative control: clear on an unreadable tick → this sees a cleared event, and one flaky docker
+// call would tell a consumer the cluster is fine.
+func TestSignalsTickIgnoresAnUnreadableDocker(t *testing.T) {
+	s := signalsServer(t)
+	s.host = signalsShim(t, false)
+	s.signalsTick()
+	seen := captureBus(t, s)
+
+	s.host = exec.NewFake(func(string) bool { return true }, "")
+	s.signalsTick()
+
+	if len(*seen) != 0 {
+		t.Fatalf("emitted %v on an unreadable docker", *seen)
+	}
+}
