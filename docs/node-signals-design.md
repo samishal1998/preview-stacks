@@ -1,7 +1,7 @@
 # Node signals — what pstack tells a machine manager
 
-> Status: rewritten and simplified 2026-09-20, not built. Build plan:
-> [node-signals-plan.md](node-signals-plan.md).
+> Status: built in 0.41.0-rc.1, exactly as written here. Build plan:
+> [node-signals-plan.md](node-signals-plan.md); using it: [usage.md](usage.md#adding-and-removing-worker-machines-0410).
 
 ## The job
 
