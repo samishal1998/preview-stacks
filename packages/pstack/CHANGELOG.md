@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A release-candidate tag no longer publishes itself as the latest release.** GoReleaser's
+  `prerelease` setting was unset, which means `false`, so `v0.41.0-rc.1` shipped as a full release,
+  GitHub called it "latest", and `install.sh` — which falls back to `releases/latest/download` —
+  would have handed a release candidate to anyone running the documented install line. That release
+  was corrected by hand; `prerelease: auto` now marks any hyphenated tag for itself.
+
+### Added
+
+- **[`docs/swarm-local-testing.md`](../../docs/swarm-local-testing.md)**: one QEMU VM, three
+  docker-in-docker nodes, and ten checks that a single-machine CI cannot run — a real placement
+  failure, a real drain, and a node genuinely going down.
+
 ## 0.41.0-rc.1 — 2026-09-20
 
 ### Added

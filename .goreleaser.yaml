@@ -44,6 +44,11 @@ release:
   github:
     owner: samishal1998
     name: preview-stacks
+  # A tag with a hyphen (v0.41.0-rc.1) is a PRERELEASE. Without this, GoReleaser publishes it as a
+  # full release, GitHub calls it "latest", and `install.sh` — which falls back to
+  # releases/latest/download — hands a release candidate to everyone running the documented install
+  # line. v0.41.0-rc.1 shipped that way and was corrected by hand.
+  prerelease: auto
   extra_files:
     - glob: .build/install.sh
   header: |
