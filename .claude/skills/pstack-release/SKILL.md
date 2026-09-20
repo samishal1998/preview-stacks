@@ -70,7 +70,36 @@ applied branch, including other agents' unmerged CHANGELOG bullets. If there is 
 commits with no CHANGELOG entry, or an open PR looks like it belongs in this release, ask before
 going on.
 
-## 2. Patch or minor
+## 2. Patch or minor — or a release candidate
+
+### Release candidates (first cut: 0.41.0-rc.1)
+
+When the owner asks for an `-rc`, everything below is the same except the version and two traps.
+
+```bash
+bunx publish-kit bump preminor --preid rc     # 0.40.0 -> 0.41.0-rc.0
+bunx publish-kit bump prerelease --preid rc   # 0.41.0-rc.0 -> 0.41.0-rc.1
+```
+
+Two bumps, because `preminor` alone stops at `rc.0` and the house convention starts at `rc.1`. Then
+set `packages/pstack/package.json` by hand as usual, and date the CHANGELOG heading with the RC
+version; the final release renames that same heading.
+
+- **The GitHub release must be marked prerelease.** `.goreleaser.yaml` now carries
+  `prerelease: auto`, which marks any tag containing a hyphen. Before that existed, `v0.41.0-rc.1`
+  published as a full release, GitHub called it **latest**, and `install.sh` falls back to
+  `releases/latest/download` — so the documented install line served a release candidate. Check it:
+  `gh api repos/{owner}/{repo}/releases/latest -q .tag_name` must still name the last stable
+  version. `gh release edit vX.Y.Z-rc.N --prerelease` fixes one that slipped.
+- **npm has the same trap and no fix yet.** The `npm` job runs for any tag, and `bun publish`
+  without `--tag` takes the `latest` dist-tag, so a working `NPM_TOKEN` would make
+  `npm i @samyx/preview-stacks-ui` install a release candidate. It has not bitten yet only because
+  the token is rejected. Before the token is fixed, the npm job needs a guard against hyphenated
+  tags (or a `--tag next`).
+- Tell the owner the install line for an RC pins the version, because the RC is not `latest`:
+  `PSTACK_VERSION=X.Y.Z-rc.N curl -fsSL …/download/vX.Y.Z-rc.N/install.sh | sh`.
+
+### Patch or minor
 
 pstack is 0.x, and the house scheme is:
 
