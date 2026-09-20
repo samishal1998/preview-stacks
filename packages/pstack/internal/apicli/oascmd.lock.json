@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "2ae6a19b17f9eb09df67f967c269a2681fd2a1153567d0ed9ba0ed40fd1981b0",
+  "specDigest": "f5174c0b200af11360cce124586eb8ad8b5709d536f66afab38ab1209e860d7d",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -733,6 +733,18 @@
         "name": "get"
       },
       "digest": "ec785e0671eb0ce1"
+    },
+    "getSignals": {
+      "operationId": "getSignals",
+      "method": "GET",
+      "path": "/api/signals",
+      "command": "swarm signals",
+      "funcName": "NewSwarmSignalsCommand",
+      "summary": "What the swarm looks like now — every node with its task count, and every task docker would not place.",
+      "ext": {
+        "name": "signals"
+      },
+      "digest": "d7f5b6f858465c8f"
     },
     "getSpec": {
       "operationId": "getSpec",

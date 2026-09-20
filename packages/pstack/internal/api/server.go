@@ -156,6 +156,12 @@ type Server struct {
 
 	writeMu sync.Mutex
 
+	// emptySince is node id → when a worker was first seen carrying no tasks, cleared the moment it
+	// picks one up. Its own mutex: routes_signals.go's read and the signals ticker both touch it,
+	// and neither has any business waiting on writeMu.
+	emptyMu    sync.Mutex
+	emptySince map[string]int64
+
 	// probeSem bounds concurrent /api/probe work. Buffered channel as a semaphore rather than a
 	// mutex: the route must answer `busy` immediately instead of queueing, since the caller is a
 	// polling loop and a queued probe is a probe that has already stopped being useful.
@@ -271,6 +277,7 @@ func New(o Options) (*Server, error) {
 		sleepIndex: scheduler.NewSleepIndex(),
 		waking:     map[string]wakingUp{},
 		probeSem:   make(chan struct{}, probeSlots),
+		emptySince: map[string]int64{},
 		spec:       newOpenAPIDoc(o.OpenAPISpec),
 		ssoClient:  sso.NewClient(nil),
 		bus:        o.Bus,

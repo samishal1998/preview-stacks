@@ -190,6 +190,11 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	}
 
 	// ---- the swarm ----
+	// What the cluster looks like right now, for whatever adds and removes machines. Read-only:
+	// it emits nothing (see routes_signals.go).
+	if path == "/api/signals" && r.Method == http.MethodGet {
+		return s.signalsGet(w)
+	}
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)
 		// Plugins are read only on a host that ships logs, found the way deploys find it; with logging
