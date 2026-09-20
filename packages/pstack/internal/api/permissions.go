@@ -183,6 +183,8 @@ var permissions = []perm{
 
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
+	// The cluster's shape carries no credential, so it reads like the swarm panel does.
+	{path: "/api/signals", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},
 
 	// ── host variables & secrets ────────────────────────────────────────────────────────────────

@@ -91,6 +91,7 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("settings").AddCommand(NewSettingsListCommand(exec))
 	group("settings").AddCommand(NewSettingsSetDefaultRoleCommand(exec))
 	group("settings").AddCommand(NewSettingsSetMaxJobsCommand(exec))
+	group("swarm").AddCommand(NewSwarmSignalsCommand(exec))
 	group("specs").AddCommand(NewSpecsListCommand(exec))
 	group("specs").AddCommand(NewSpecsDeleteCommand(exec))
 	group("specs").AddCommand(NewSpecsGetCommand(exec))
@@ -2036,6 +2037,30 @@ func NewSettingsSetMaxJobsCommand(exec oascmd.ExecOptions) *cobra.Command {
 			req.RawBody = []byte(flagData)
 		case len(body) > 0:
 			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSwarmSignalsCommand returns the "swarm signals" command (GET
+// /api/signals).
+func NewSwarmSignalsCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "signals",
+		Short: "What the swarm looks like now — every node with its task count, and every task docker would not place.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/signals",
 		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")

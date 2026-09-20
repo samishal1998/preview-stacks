@@ -684,6 +684,14 @@ paths:
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
   # ── the host itself ─────────────────────────────────────────────────────────────────────────────
+  /api/signals:
+    get:
+      tags: [swarm]
+      operationId: getSignals
+      x-cli-name: signals
+      summary: What the swarm looks like now — every node with its task count, and every task docker would not place.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
   /api/swarm:
     get:
       tags: [swarm]

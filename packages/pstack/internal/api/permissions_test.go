@@ -99,6 +99,7 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 
 		// the swarm
 		{"GET", "/api/swarm", auth.Viewer},
+		{"GET", "/api/signals", auth.Viewer},
 		{"GET", "/api/swarm/join", auth.Maintainer},
 
 		// host variables & secrets
