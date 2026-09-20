@@ -1,0 +1,4 @@
+{"ID":"task1web0000","Name":"pr-42_web.1","Image":"web:pr-42","Node":"worker-1","DesiredState":"Running","CurrentState":"Running 4 minutes ago","Error":"","Ports":""}
+{"ID":"task2api0000","Name":"pr-42_api.1","Image":"api:pr-42","Node":"","DesiredState":"Running","CurrentState":"Pending 2 minutes ago","Error":"\"no suitable node (insufficient resources on 2 nodes)\"","Ports":""}
+{"ID":"task3log0000","Name":"logs.n3abcdef01234567","Image":"promtail:2","Node":"worker-2","DesiredState":"Running","CurrentState":"Running 6 hours ago","Error":"","Ports":""}
+{"ID":"task4log0000","Name":"logs.n2abcdef01234567","Image":"promtail:2","Node":"worker-1","DesiredState":"Running","CurrentState":"Running 6 hours ago","Error":"","Ports":""}
