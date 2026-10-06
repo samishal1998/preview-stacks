@@ -24,7 +24,7 @@ import { router } from '../router';
 
 export type LifecycleAction = 'up' | 'verify' | 'down' | 'sleep' | 'wake';
 
-export const pending = ref<'' | LifecycleAction | 'forget'>('');
+export const pending = ref<'' | LifecycleAction | 'forget' | 'down-forget'>('');
 export const actionError = ref('');
 export const conflict = ref<Conflict | null>(null);
 export const conflictJobId = ref('');
@@ -81,17 +81,20 @@ export function whyDisabled(action: LifecycleAction, forceArmed = false): string
 
 export async function act(
   action: LifecycleAction,
-  opts: { verify?: boolean; force?: boolean } = {},
+  opts: { verify?: boolean; force?: boolean; forget?: boolean } = {},
 ): Promise<void> {
   if (!dep.detail) return;
-  pending.value = action;
+  const forget = action === 'down' && !!opts.forget;
+  const label = forget ? 'Tear down and forget' : actionLabel(action);
+  pending.value = forget ? 'down-forget' : action;
   actionError.value = '';
   conflict.value = null;
 
   const body =
     action === 'down'
       ? // `force` is only ever true for a shared deployment whose stack name was typed out in full.
-        { verify: opts.verify ?? true, force: opts.force ?? false }
+        // `forget` only ever travels with verify on: the server refuses it otherwise, and so does the button.
+        { verify: opts.verify ?? true, force: opts.force ?? false, ...(forget ? { forget: true } : {}) }
       : {};
 
   const r = await api.post<ActionResponse & ConflictBody>(
@@ -107,7 +110,7 @@ export async function act(
       // operator their deploy is running when it has not begun — the exact confusion the queued
       // state exists to remove.
       const verb = job.state === 'queued' ? 'queued' : 'started';
-      toast('info', `${actionLabel(action)} ${verb} on ${job.stack}`, {
+      toast('info', `${label} ${verb} on ${job.stack}`, {
         to: `/jobs/${encodeURIComponent(job.id)}`,
         toLabel: 'Follow',
       });
@@ -120,8 +123,8 @@ export async function act(
   }
   if (r.status === 409) return onConflict(r.body);
 
-  actionError.value = problem(r, actionLabel(action).toLowerCase());
-  toast('error', `${actionLabel(action)} was refused.`);
+  actionError.value = problem(r, label.toLowerCase());
+  toast('error', `${label} was refused.`);
 }
 
 /**

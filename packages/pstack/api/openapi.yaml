@@ -142,7 +142,8 @@ paths:
               properties:
                 verify: { type: boolean, default: true, description: Run the leak check afterwards. }
                 force: { type: boolean, description: 'Required to tear down a `kind: shared` deployment.' }
-      responses: { '202': { $ref: '#/components/responses/Accepted' }, '409': { $ref: '#/components/responses/Conflict' } }
+                forget: { type: boolean, description: 'Also forget the deployment, in the same job — only if the teardown finished clean (no failed step, no leak, no container left). Anything less keeps the record. Refused when verify is off.' }
+      responses: { '202': { $ref: '#/components/responses/Accepted' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
 
   /api/deployments/{id}/verify:
     parameters: [{ $ref: '#/components/parameters/DeploymentId' }]

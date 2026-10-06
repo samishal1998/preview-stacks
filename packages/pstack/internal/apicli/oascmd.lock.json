@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "3d8dacf251293ec1fdcbd52cc9bf2ca0b34880fc44a24feda93bef7af21989c1",
+  "specDigest": "5f4c34230059d7afac00414f2e308f4f16604bc5956e0a03363b72541c9098d6",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -413,6 +413,12 @@
           "description": "Required to tear down a `kind: shared` deployment."
         },
         {
+          "name": "forget",
+          "source": "body",
+          "type": "bool",
+          "description": "Also forget the deployment, in the same job — only if the teardown finished clean (no failed step, no leak, no container left). Anything less keeps the record. Refused when verify is off."
+        },
+        {
           "name": "id",
           "source": "path",
           "type": "string",
@@ -431,7 +437,7 @@
         "flat": true
       },
       "ext": {},
-      "digest": "a16815b0592792d6"
+      "digest": "884d23a0fc14fcc7"
     },
     "drainSwarmNode": {
       "operationId": "drainSwarmNode",

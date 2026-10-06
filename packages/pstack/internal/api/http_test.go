@@ -1343,3 +1343,34 @@ func TestFailMapsALokiErrorTo400(t *testing.T) {
 		}
 	})
 }
+
+// ── a preview hostname nobody is serving ──────────────────────────────────────────────────────
+
+func TestPreviewHostnameIsWhatTheCatchAllRoutesHere(t *testing.T) {
+	// negative control: return true for every hostname under a domain — control.<domain> and
+	// api.<domain> then answer with the "not answering" page, and the console is gone.
+	s := &Server{routing: routing.New(t.TempDir()), opts: Options{Domain: "preview.example.com"}}
+	if _, err := s.routing.SetDomains([]string{"other.dev"}, routing.DomainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for h, want := range map[string]bool{
+		"app-pr-1.preview.example.com": true,
+		"app-pr-1.other.dev":           true,
+		"control.preview.example.com":  false,
+		"api.preview.example.com":      false,
+		"grafana.preview.example.com":  false,
+		"loki.preview.example.com":     false,
+		"control.other.dev":            false,
+		"api.other.dev":                false,
+		"a.b.preview.example.com":      false, // the catch-all is one label deep
+		"preview.example.com":          false,
+		"127.0.0.1":                    false,
+		"localhost":                    false,
+		"pstack":                       false, // forwardAuth's own Host
+		"app.example.com":              false,
+	} {
+		if got := s.previewHostname(h); got != want {
+			t.Errorf("previewHostname(%q) = %v, want %v", h, got, want)
+		}
+	}
+}

@@ -388,6 +388,32 @@ describe('API: sleep, wake-on-call', () => {
       docker.remove();
     }
   }, 30_000);
+
+  // negative control: drop the previewHostname block in handle() — a preview hostname whose own
+  // router is gone (a crashed container) gets the control UI at `/` and this API's 401 at `/api/…`.
+  test('a preview hostname nothing is serving gets the not-answering page, never the console', async () => {
+    const docker = dockerShim('');
+    const s = await bootServer({ tag: 'unrouted', pathPrefix: docker.dir, domain: 'example.com' });
+    try {
+      for (const path of ['/', '/deep/link?x=1', '/api/deployments']) {
+        const r = await fetch(`${s.base}${path}`, { headers: { host: 'app-gone.example.com' } });
+        expect(r.status).toBe(503);
+        expect(r.headers.get('retry-after')).toBe('5');
+        expect(r.headers.get('x-pstack-wake')).toBeNull(); // nothing is waking
+        const html = await r.text();
+        expect(html).toContain('This preview isn&#39;t answering');
+        expect(html).toContain('<body class="down"');
+        expect(html).not.toContain('<div id="app">');
+      }
+      // The control plane's own hostnames, and a direct request by address, are untouched.
+      expect((await fetch(`${s.base}/`, { headers: { host: 'control.example.com' } })).status).toBe(200);
+      expect((await fetch(`${s.base}/api/health`, { headers: { host: 'api.example.com' } })).status).toBe(200);
+      expect((await fetch(`${s.base}/api/health`)).status).toBe(200);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  }, 30_000);
 });
 
 describe('swarm discovery and the swarm routes', () => {

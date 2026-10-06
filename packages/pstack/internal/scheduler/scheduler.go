@@ -425,6 +425,10 @@ const (
 	// See the api package's wakeVerdict, which is the only thing that ends this state.
 	Starting WakeState = "starting"
 	Failed   WakeState = "failed"
+	// Down is a preview hostname that is not asleep and not waking, yet its own router is gone: a
+	// container crashed or stopped, or nothing by that name exists. Nothing here can bring it back,
+	// so the page only says so — and keeps checking, because a restarting container may return.
+	Down WakeState = "down"
 )
 
 // WakePage is what a visitor sees while the stack wakes. Self-contained (served on the PREVIEW's
@@ -441,6 +445,9 @@ func WakePage(host, stack string, state WakeState, errText string) string {
 		}
 		detail = "Waking <b>" + js.Esc(stack) + "</b> didn't work this time. Reload to try again — and if it keeps happening, the note below is what the person who runs your previews will want to see."
 		failure = "\n  <pre class=\"why\"><code>" + js.Esc(errText) + "</code></pre>"
+	case Down:
+		title, aria = "This preview isn't answering", "your preview is not answering"
+		detail = "Nothing is serving this address right now — a container stopped or crashed, or the preview was torn down. This page will take you in if it comes back."
 	case Busy:
 		aria = "your preview is busy"
 		detail = "<b>" + js.Esc(stack) + "</b> is in the middle of another update. Your preview will answer as soon as that wraps up — nothing for you to do."
@@ -481,7 +488,7 @@ func WakePage(host, stack string, state WakeState, errText string) string {
     box-shadow:0 0 .6rem .15rem var(--ember),0 0 2.6rem .9rem rgba(242,166,90,.38),0 0 7rem 2.6rem rgba(242,166,90,.14);
     animation:breathe 4.6s ease-in-out infinite}
   .starting .lamp i{animation-duration:1.7s}
-  .failed .lamp i{animation:none;background:#8a4a33;box-shadow:0 0 .5rem .1rem rgba(180,86,46,.45),0 0 2rem .6rem rgba(180,86,46,.12);opacity:.8}
+  .failed .lamp i,.down .lamp i{animation:none;background:#8a4a33;box-shadow:0 0 .5rem .1rem rgba(180,86,46,.45),0 0 2rem .6rem rgba(180,86,46,.12);opacity:.8}
   @keyframes breathe{0%,100%{transform:scale(.82);opacity:.62}50%{transform:scale(1.06);opacity:1}}
   @media (prefers-reduced-motion:reduce){.lamp i{animation:none}}
   h1{font-size:clamp(1.35rem,4.5vw,1.7rem);font-weight:650;letter-spacing:-.015em;color:var(--bright);margin:0 0 .35rem}

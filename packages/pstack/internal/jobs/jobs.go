@@ -157,10 +157,14 @@ func (s State) Terminal() bool { return s != Queued && s != Running }
 
 // Job is one transcript. The wire shape of GET /api/jobs/:id — see MarshalJSON for the key order.
 type Job struct {
-	ID     string
-	Stack  string
-	Action Action
-	State  State
+	ID    string
+	Stack string
+	// Deployment is the registry id of the deployment this job acts on, or nil for a job that is not
+	// about one (the Loki settings apply, on the control stack). The stack name alone cannot say:
+	// two deployments may resolve to one stack, and the UI links a job to its deployment by this.
+	Deployment *string
+	Action     Action
+	State      State
 	// StartedAt is nil for as long as the job is queued — it has not started, and `0` would be a
 	// lie a UI renders as 1970 (invariant 11: null is not absent, and not a zero either).
 	StartedAt   *int64
@@ -196,7 +200,7 @@ func (j Job) MarshalJSON() ([]byte, error) {
 	if j.StartedAt != nil {
 		started = *j.StartedAt
 	}
-	out := jsonx.O("id", j.ID, "stack", j.Stack, "action", j.Action, "state", j.State, "startedAt", started, "log", logs)
+	out := jsonx.O("id", j.ID, "stack", j.Stack, "deployment", j.Deployment, "action", j.Action, "state", j.State, "startedAt", started, "log", logs)
 	if j.CancelledBy != nil {
 		out = append(out, jsonx.KV{K: "cancelledBy", V: *j.CancelledBy})
 	}
@@ -214,14 +218,18 @@ func (j Job) MarshalJSON() ([]byte, error) {
 
 // Stub is the 202 body: four fields, not the whole job.
 type Stub struct {
-	ID     string `json:"id"`
-	Stack  string `json:"stack"`
-	Action Action `json:"action"`
-	State  State  `json:"state"`
+	ID    string `json:"id"`
+	Stack string `json:"stack"`
+	// Deployment: see Job.Deployment. Null, never absent (Go rule 2).
+	Deployment *string `json:"deployment"`
+	Action     Action  `json:"action"`
+	State      State   `json:"state"`
 }
 
 // Stub is the 202 shape of a job.
-func (j Job) Stub() Stub { return Stub{ID: j.ID, Stack: j.Stack, Action: j.Action, State: j.State} }
+func (j Job) Stub() Stub {
+	return Stub{ID: j.ID, Stack: j.Stack, Deployment: j.Deployment, Action: j.Action, State: j.State}
+}
 
 // MaxJobs bounds the transcripts KEPT, so a long-lived server cannot grow without limit. Nothing
 // to do with concurrency — that is DefaultMaxRunning.
@@ -553,7 +561,13 @@ func (r *Registry) fanout(id string, e log.Event) {
 // the common case) and `queued` when it is waiting. `scrub` is applied to every string that lands
 // in the RECORD: step messages, captured outputs and the crash error.
 func (r *Registry) Start(stackName string, action Action, work Work, scrub func(string) string) (Job, bool) {
-	return r.start(stackName, action, work, scrub, false)
+	return r.start("", stackName, action, work, scrub, false)
+}
+
+// StartFor is Start (or StartIfIdle, with onlyIfIdle) for a job that acts on a deployment, recording
+// which one. The api package's startLifecycle is its one caller.
+func (r *Registry) StartFor(deployment, stackName string, action Action, work Work, scrub func(string) string, onlyIfIdle bool) (Job, bool) {
+	return r.start(deployment, stackName, action, work, scrub, onlyIfIdle)
 }
 
 // StartIfIdle is Start for a caller that wants the OLD refuse-don't-queue rule: ok=false unless the
@@ -570,10 +584,10 @@ func (r *Registry) Start(stackName string, action Action, work Work, scrub func(
 // The fix is not another check-then-act. It is one atomic accept-or-refuse under the same mutex,
 // named for what those callers actually mean.
 func (r *Registry) StartIfIdle(stackName string, action Action, work Work, scrub func(string) string) (Job, bool) {
-	return r.start(stackName, action, work, scrub, true)
+	return r.start("", stackName, action, work, scrub, true)
 }
 
-func (r *Registry) start(stackName string, action Action, work Work, scrub func(string) string, onlyIfIdle bool) (Job, bool) {
+func (r *Registry) start(deployment, stackName string, action Action, work Work, scrub func(string) string, onlyIfIdle bool) (Job, bool) {
 	if scrub == nil {
 		scrub = func(s string) string { return s }
 	}
@@ -618,6 +632,9 @@ func (r *Registry) start(stackName string, action Action, work Work, scrub func(
 	ctx, cancel := context.WithCancel(context.Background())
 	buf := log.NewBuffer(func(ev log.Event) { r.fanout(id, ev) })
 	job := &Job{ID: id, Stack: stackName, Action: action, State: Queued, Log: []log.Event{}}
+	if deployment != "" {
+		job.Deployment = &deployment
+	}
 	e := &entry{seq: r.seq, acceptedAt: now, job: job, buf: buf, cancel: cancel, ctx: ctx, work: work, scrub: scrub}
 	r.jobs[id] = e
 	r.queue[stackName] = e
@@ -682,7 +699,7 @@ func (r *Registry) pump() {
 
 	for _, d := range out {
 		// Emitted AFTER unlocking: a listener may call IsBusy.
-		r.bus.Emit("job.started", jsonx.O("jobId", d.e.job.ID, "stack", d.e.job.Stack, "action", d.e.job.Action, "startedAt", d.at))
+		r.bus.Emit("job.started", jsonx.O("jobId", d.e.job.ID, "stack", d.e.job.Stack, "deployment", d.e.job.Deployment, "action", d.e.job.Action, "startedAt", d.at))
 		// Fire and forget: the HTTP handler returned long ago with the job id. Jobs derive from
 		// context.Background, not the server: stopping the server never aborts a teardown half-way.
 		go r.run(d.e)
@@ -838,6 +855,7 @@ func (r *Registry) emitTerminal(snapshot Job, ended int64) {
 	payload := jsonx.O(
 		"jobId", snapshot.ID,
 		"stack", snapshot.Stack,
+		"deployment", snapshot.Deployment,
 		"action", snapshot.Action,
 		"state", snapshot.State,
 		"startedAt", started,

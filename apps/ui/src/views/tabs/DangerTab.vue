@@ -265,6 +265,19 @@ async function forget(): Promise<void> {
           >
             {{ isShared ? 'Tear down (force)' : 'Tear down' }}
           </ActionButton>
+          <!--
+            One job: the teardown, then the record — but only if the teardown finished clean. Needs
+            the leftovers check, because forgetting after an unchecked teardown hides a leak.
+          -->
+          <ActionButton
+            variant="danger"
+            :pending="pending === 'down-forget'"
+            :disabled="!!pending || (isShared && !forceArmed) || !downVerify"
+            :title="!downVerify ? 'Needs the leftovers check — forgetting without it would hide a leak.' : whyDisabled('down', forceArmed)"
+            @click="act('down', { verify: true, force: isShared && forceArmed, forget: true })"
+          >
+            Tear down and forget
+          </ActionButton>
           <label class="check">
             <input v-model="downVerify" type="checkbox" />
             Check for leftovers afterwards
@@ -275,6 +288,7 @@ async function forget(): Promise<void> {
           A job is running on <b>{{ dep.detail.stack }}</b> — tearing down <b>cancels it first</b>.
         </p>
         <p v-if="!downVerify" class="hint">Nothing will check that the teardown finished.</p>
+        <p class="hint">Tear down and forget keeps the record if anything is left behind.</p>
 
         <!--
           Gate 1 of 2. The typed name is the point: a checkbox is one stray click, typing the stack

@@ -219,7 +219,7 @@ var preGatePaths = map[string]bool{
 // finds that is NOT here fails the test — that is the drift protection: a new route matcher cannot
 // be added to the chain without being named to the table.
 var matchers = map[string]*regexp.Regexp{
-	"swarmNodeRe": swarmNodeRe,
+	"swarmNodeRe":    swarmNodeRe,
 	"hostVarRe":      hostVarRe,
 	"specRe":         specRe,
 	"routingFileRe":  routingFileRe,

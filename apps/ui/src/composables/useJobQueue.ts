@@ -80,3 +80,13 @@ export function capProblem(draft: string | number): string {
   if (!Number.isInteger(n) || n < 1) return 'the limit is a whole number, 1 or more';
   return '';
 }
+
+/**
+ * Where a job's stack lives in this app: its deployment's page, or Control for a job the control
+ * plane runs on itself (`deployment: null`). An older server sends no `deployment` at all, and then
+ * there is nothing to link — guessing from the stack name could open the wrong deployment.
+ */
+export function jobTarget(job: Pick<Job, 'deployment'>): string | null {
+  if (job.deployment) return `/deployments/${encodeURIComponent(job.deployment)}`;
+  return job.deployment === null ? '/control' : null;
+}

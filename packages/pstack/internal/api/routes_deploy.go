@@ -400,6 +400,17 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, dep *registry.Deploymen
 			"removing the record now would orphan them beyond the control plane's view.", "stack", st.Stack, "containers", len(containers)))
 		return nil
 	}
+	if err := s.removeDeployment(dep, st); err != nil {
+		return err
+	}
+	writeJSON(w, 200, jsonx.O("removed", dep.ID, "stack", st.Stack))
+	return nil
+}
+
+// removeDeployment forgets a deployment once the caller has proved it torn down: DELETE after its
+// container check, and a `down` with { "forget": true } after a clean teardown. One copy, so the
+// two cannot drift on what forgetting does.
+func (s *Server) removeDeployment(dep *registry.Deployment, st *spec.Stack) error {
 	/*
 	 * Stop watching it BEFORE the directory goes.
 	 *
@@ -411,7 +422,7 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, dep *registry.Deploymen
 	 */
 	s.readiness.Cancel(st.Stack)
 	s.writeMu.Lock()
-	err = s.registry.Remove(dep.ID)
+	err := s.registry.Remove(dep.ID)
 	if err == nil {
 		s.reindex()
 	}
@@ -419,8 +430,8 @@ func (s *Server) deleteDeployment(w http.ResponseWriter, dep *registry.Deploymen
 	if err != nil {
 		return err
 	}
+	// Outside writeMu: Emit calls its listeners there and then, and one of them writes to the store.
 	s.bus.Emit("deployment.deleted", jsonx.O("id", dep.ID, "stack", st.Stack, "kind", dep.Kind))
-	writeJSON(w, 200, jsonx.O("removed", dep.ID, "stack", st.Stack))
 	return nil
 }
 
@@ -467,6 +478,19 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, dep *registry
 	if v, present := body.Get("force"); present && v != nil {
 		b := truthy(v)
 		o.Force = &b
+	}
+	if v, present := body.Get("forget"); present && truthy(v) {
+		if action != jobs.Down {
+			writeError(w, 400, "`forget` belongs to down — nothing else removes the record")
+			return nil
+		}
+		// The check is the whole guarantee: forgetting after a teardown nobody verified would remove
+		// the one record that could show what it left behind.
+		if o.Verify != nil && !*o.Verify {
+			writeError(w, 400, "`forget` needs `verify` — forgetting without checking for leftovers would hide a leak")
+			return nil
+		}
+		o.Forget = true
 	}
 	job, ok := s.startLifecycle(dep.ID, dep, st, action, o)
 	if !ok {
