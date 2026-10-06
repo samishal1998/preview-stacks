@@ -58,6 +58,10 @@ packages/pstack/       the CLI, API and embedded basic UI — one static Go bina
 packages/conformance/  the black-box specification (bun:test): goldens + tests that spawn bin/pstack.
 packages/client/       @samyx/preview-stacks-client — zero-dependency API client + verifyWebhook.
 apps/ui/               @samyx/preview-stacks-ui — the advanced UI (Vue 3 SPA).
+apps/docs/             the documentation site (Astro Starlight), published to GitHub Pages at
+                       https://samishal1998.github.io/preview-stacks/ by .github/workflows/docs.yml.
+                       Private, never on npm. Almost every page is GENERATED from the files below by
+                       scripts/sync-docs.ts — edit docs/*.md, not the site. See *The docs site*.
 docs/                  See docs/README.md.
 skills/pstack/         a skill for USING pstack (tracked).
 .claude/skills/        project skills for agents CHANGING pstack — see *Agent workflow*.
@@ -596,6 +600,25 @@ review and obvious in a screenshot (a stale "Healthy" beside "Exited", buttons t
 did nothing, columns painted over the panel beside them). The recipe (fake docker, `pstack serve`,
 vite, headless Chrome over CDP, 320/1280 px, both schemes) is the `pstack-ui-verify` skill. Run it
 out-of-band: reviewers without screenshots loop on "manual browser check not performed".
+
+## The docs site
+
+`apps/docs` is the public site, and it has almost no prose of its own. `scripts/sync-docs.ts`
+generates every guide and reference page on each `dev`/`build` from what the repo already says:
+`docs/usage.md` (one page per `## ` section), the other user-facing `docs/*.md`, the two READMEs,
+`skills/pstack/SKILL.md`, the `--help` golden and the `pstack api` lock file. Generated pages are
+gitignored, so there is nothing to keep in step by hand: **change the doc, and the site follows.**
+Each page's "Edit page" link opens its real source.
+
+Only three pages are written in `apps/docs/src/content/docs/`: the home page, the quick start and
+the concepts page. They restate facts the docs already hold, so a behaviour change that touches
+hooks, exit codes, the installer, `kind`, sleep or the control plane must update them too. The
+quick start's transcripts are real output — rerun them rather than editing them by hand.
+
+`bun run build` there is sync → `astro build` → `check-links`. A relative link in any synced doc that
+resolves to nothing fails the sync, and an anchor Astro did not render fails the check — so a broken
+link in `docs/` now breaks CI, which is the point. A new user-facing doc goes into `STANDALONE` in
+the sync script; an internal one (a plan, a design record) stays out of the site.
 
 ## Scope discipline
 

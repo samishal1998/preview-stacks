@@ -1,0 +1,68 @@
+---
+title: Preview environments for every pull request
+description: A preview environment for every pull request — provisioned with the resources it needs, torn down in reverse, and proven gone.
+template: splash
+hero:
+  title: pstack
+  tagline: A preview environment for every pull request — provisioned with the resources it needs, torn down in reverse, and proven gone.
+  actions:
+    - text: Quick start
+      link: /preview-stacks/start/quick-start/
+      icon: right-arrow
+    - text: Read the guide
+      link: /preview-stacks/guide/overview/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/samishal1998/preview-stacks
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+```bash
+curl -fsSL https://github.com/samishal1998/preview-stacks/releases/latest/download/install.sh | sh
+```
+
+One static binary for Linux and macOS. It is the CLI, the HTTP API and the web UI.
+
+## What it does
+
+<CardGrid>
+  <Card title="Isolation axes" icon="puzzle">
+    A preview needs more than containers: a database branch, a queue namespace, per-PR images, DNS.
+    Each is an **axis** with up to four shell hooks — `up`, `assert_live`, `down`, `assert_gone` —
+    provisioned around your Compose project and torn down in reverse.
+  </Card>
+  <Card title="Teardown you can prove" icon="approve-check">
+    `down` is best-effort, so it never stops halfway. Then every axis with an `assert_gone` hook
+    proves its resource is gone, and anything still there makes the run exit `2`. A leak is a failed job, not a surprise on the
+    bill.
+  </Card>
+  <Card title="A control plane" icon="setting">
+    `pstack init` stands up Traefik with TLS on your domain, an HTTP API with a generated
+    `pstack api` client, a web UI and signed webhooks. Deploy from CI in two requests: submit the
+    spec, then `up`.
+  </Card>
+  <Card title="Swarm, sleep and wake" icon="rocket">
+    Spread previews across worker machines with Docker Swarm. Idle previews sleep and wake on the
+    next request, and pstack tells a machine manager when a worker is needed or spare.
+  </Card>
+  <Card title="Teams" icon="star">
+    Sign in with GitHub, Google, Okta or any OIDC provider. Four roles divide what people may do,
+    and share links show one preview's details and logs to someone without an account.
+  </Card>
+  <Card title="Logs" icon="list-format">
+    Optional Loki and Grafana in the control stack. Every preview service without a `logging:` of
+    its own ships its logs there, and Grafana signs in with pstack accounts.
+  </Card>
+</CardGrid>
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard title="Quick start" description="A spec with one axis, up and down, and the leak it catches — ten minutes on any machine with docker." href="/preview-stacks/start/quick-start/" />
+  <LinkCard title="Concepts" description="Stacks, axes, hooks, shared vs isolated, and why teardown is the part that matters." href="/preview-stacks/start/concepts/" />
+  <LinkCard title="Run a host" description="From an empty cloud account to a control plane on your own domain." href="/preview-stacks/operate/bootstrap/" />
+  <LinkCard title="Reference" description="Every command, route, webhook event and setting." href="/preview-stacks/reference/cli/" />
+</CardGrid>

@@ -1,0 +1,64 @@
+# The documentation site, https://samishal1998.github.io/preview-stacks/ — built from apps/docs and
+# published to GitHub Pages on every push to main that could change it.
+#
+# The site is generated from the repository's own documents (apps/docs/scripts/sync-docs.ts), so
+# the trigger paths are every file it reads, not just apps/docs. Miss one and the site goes stale
+# exactly when the docs it claims to show change.
+#
+# `bun run build` in apps/docs is sync → astro build → check-links: a link that resolves to nothing
+# in the repo's docs, or an anchor Astro did not render, fails the build and nothing is published.
+# CI's `web` job runs the same build on every pull request, so a broken link is caught before merge.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'apps/docs/**'
+      - 'packages/pstack/README.md'
+      - 'packages/pstack/package.json'
+      - 'packages/client/README.md'
+      - 'skills/pstack/SKILL.md'
+      - 'packages/conformance/golden/cli/help.json'
+      - 'packages/pstack/internal/apicli/oascmd.lock.json'
+      - 'packages/pstack/api/openapi.yaml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one half-way: a cancelled Pages deploy can leave the
+# site on neither version.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Build the site (sync from the repo's docs, build, check every link)
+        working-directory: apps/docs
+        run: bun run build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: apps/docs/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

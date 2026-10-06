@@ -1,5 +1,9 @@
 # Documentation index
 
+**Reading, not changing?** The same documents, as a site with search:
+[samishal1998.github.io/preview-stacks](https://samishal1998.github.io/preview-stacks/). The site is
+generated from these files on every build (`apps/docs/scripts/sync-docs.ts`), so edit here, never there.
+
 Every document in this repo, what it answers, and when to read it. Start with the row that matches
 your question rather than reading in order — these are references, not a manual.
 
