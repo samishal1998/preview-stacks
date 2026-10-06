@@ -76,6 +76,10 @@ const (
 	// SWARM stacks wants it higher: swarm has no `depends_on`, so a dependent legitimately restarts
 	// a few times while its database converges, and 3 calls that a crash loop.
 	RestartLoop = 3
+	// NotAllocatedMs is how long a swarm task may sit in `new` before the watch calls it failed. A task
+	// leaves `new` within a second unless swarm cannot give it an address — and then it never does, so
+	// waiting out the whole timeout only delays the answer. See inspect.NotAllocated.
+	NotAllocatedMs = 60_000
 )
 
 func readinessOf(c inspect.ContainerInfo, restartLoop int64) ContainerReadiness {
@@ -150,7 +154,9 @@ type Options struct {
 	TimeoutMs int64
 	// RestartLoop is the crash-loop threshold; non-positive means the RestartLoop default.
 	RestartLoop int64
-	Bus         *events.Bus
+	// NotAllocatedMs: non-positive means the NotAllocatedMs default.
+	NotAllocatedMs int64
+	Bus            *events.Bus
 }
 
 // Watcher holds one watch per stack. Held by the server, never a singleton, so stopping a server
@@ -164,7 +170,9 @@ type Watcher struct {
 	pollMs      int64
 	timeoutMs   int64
 	restartLoop int64
-	bus         *events.Bus
+	// notAllocatedMs: see NotAllocatedMs.
+	notAllocatedMs int64
+	bus            *events.Bus
 }
 
 // New makes a watcher.
@@ -178,10 +186,13 @@ func New(o Options) *Watcher {
 	if o.RestartLoop <= 0 {
 		o.RestartLoop = RestartLoop
 	}
+	if o.NotAllocatedMs <= 0 {
+		o.NotAllocatedMs = NotAllocatedMs
+	}
 	if o.Bus == nil {
 		o.Bus = events.Default
 	}
-	return &Watcher{byStack: map[string]*watch{}, pollMs: o.PollMs, timeoutMs: o.TimeoutMs, restartLoop: o.RestartLoop, bus: o.Bus}
+	return &Watcher{byStack: map[string]*watch{}, pollMs: o.PollMs, timeoutMs: o.TimeoutMs, restartLoop: o.RestartLoop, notAllocatedMs: o.NotAllocatedMs, bus: o.Bus}
 }
 
 // Get returns a copy of the current snapshot, if a watch exists.
@@ -357,7 +368,7 @@ func (ws *Watcher) loop(w *watch, r exec.Runner) {
 
 func (ws *Watcher) tick(w *watch, r exec.Runner) {
 	w.mu.Lock()
-	stack := w.snap.Stack
+	stack, started := w.snap.Stack, w.snap.StartedAt
 	w.mu.Unlock()
 	rt := inspect.DeploymentRuntime(inspect.RuntimeArgs{Stack: stack, Runner: r, Challenge: inspect.Unknown, Orchestrator: w.orchestrator})
 	if w.ctx.Err() != nil {
@@ -371,8 +382,16 @@ func (ws *Watcher) tick(w *watch, r exec.Runner) {
 		return
 	}
 	containers := make([]ContainerReadiness, 0, len(rt.Containers))
+	stuck := time.Now().UnixMilli()-started >= ws.notAllocatedMs
 	for _, c := range rt.Containers {
-		containers = append(containers, readinessOf(c, w.restartLoop))
+		cr := readinessOf(c, w.restartLoop)
+		// Swarm only: `new` is a task state. Measured from the start of the watch, which a deploy or a
+		// wake starts the moment it submits the stack — so a task still `new` this late never moved.
+		if c.State == "new" && stuck {
+			reason := inspect.NotAllocated
+			cr.Failed, cr.Reason = true, &reason
+		}
+		containers = append(containers, cr)
 	}
 	var toEmit []func()
 	w.mu.Lock()

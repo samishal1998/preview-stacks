@@ -2,6 +2,8 @@
 // machine on or off:
 //
 //   - "Do you need another machine?" — a task docker refused to place says yes, in docker's words.
+//     A task swarm never allocated at all (stuck in `New`) is listed too, with a reason saying it is
+//     NOT a machine shortage, so nobody buys one for a network that ran out of addresses.
 //   - "Can I take this one away?" — a worker running nothing says yes.
 //
 // That is all it does. It counts no CPU and no memory, and it decides nothing: how much spare room
@@ -30,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
 
@@ -100,6 +103,12 @@ func Look(r exec.Runner) View {
 	}
 	for _, t := range tasks(r, ids) {
 		service := serviceOf(t.Name)
+		// Never allocated. Not a machine shortage — swarm never got as far as looking for a machine —
+		// so the reason says so, and nobody buys a machine for a network that is out of addresses.
+		if t.unallocated() {
+			v.Stuck = append(v.Stuck, Stuck{Task: t.ID, Service: service, Stack: stackOf(service), Reason: inspect.NotAllocated})
+			continue
+		}
 		if t.pending() {
 			if reason := unquote(t.Error); strings.HasPrefix(reason, Unplaced) {
 				v.Stuck = append(v.Stuck, Stuck{
@@ -156,6 +165,24 @@ type rawTask struct {
 func (t rawTask) pending() bool {
 	f := strings.Fields(t.CurrentState)
 	return len(f) > 0 && strings.EqualFold(f[0], "pending")
+}
+
+// unallocated is a task still `New` a minute or more after swarm created it (see inspect.NotAllocated).
+// Docker writes the age through go-units' HumanDuration, lowercased: under a minute it reads
+// `N seconds` or `less than a second`, from a minute on `about a minute`, `N minutes`, `N hours` and
+// so on. So "the age names a minute or longer" is "a minute or more", with no clock and no extra call.
+func (t rawTask) unallocated() bool {
+	f := strings.Fields(strings.ToLower(t.CurrentState))
+	if len(f) < 2 || f[0] != "new" {
+		return false
+	}
+	for _, w := range f[1:] {
+		switch strings.TrimSuffix(w, "s") {
+		case "minute", "hour", "day", "week", "month", "year":
+			return true
+		}
+	}
+	return false
 }
 
 // tasks lists every task that should be running, across the services given.

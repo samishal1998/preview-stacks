@@ -568,6 +568,14 @@ func stackTasks(r exec.Runner, stack string) ([]rawTask, bool) {
 	return tasks, true
 }
 
+// NotAllocated is what pstack says about a swarm task stuck in `New`: created, but never given an
+// address or a machine. A task normally leaves `New` within a second; one that stays is waiting on
+// swarm's allocator, which in practice means a network with no addresses left. Swarm writes the
+// reason only to the manager's docker log — `docker service ps` shows no error at all — so the
+// sentence points there. One copy, for readiness and for /api/signals.
+const NotAllocated = "never allocated: swarm gave it no address or machine. On the manager, " +
+	"`journalctl -u docker | grep 'available IP'` shows whether a network ran out of addresses"
+
 // TaskState is `Running 3 minutes ago` → running; Failed/Rejected → restarting (swarm is about to
 // replace it); Shutdown/Complete → exited.
 func TaskState(current string) string {
