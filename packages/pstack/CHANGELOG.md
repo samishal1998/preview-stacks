@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.41.0 — 2026-10-06
+
+The release candidate made final, plus the fixes from a 0.39.0 host whose routed services sat in
+`New` for four weeks. Everything listed under 0.41.0-rc.1 below ships in this release too.
 
 ### Added
 
@@ -14,6 +17,11 @@
   To enlarge an existing host: put its previews to sleep, then
   `PSTACK_INGRESS_SUBNET=10.250.0.0/16 pstack upgrade`. `init` notes a network smaller than the
   default instead of touching it.
+
+
+- **[`docs/swarm-local-testing.md`](../../docs/swarm-local-testing.md)**: one QEMU VM, three
+  docker-in-docker nodes, and ten checks that a single-machine CI cannot run — a real placement
+  failure, a real drain, and a node genuinely going down.
 
 ### Fixed
 
@@ -29,12 +37,6 @@
   GitHub called it "latest", and `install.sh` — which falls back to `releases/latest/download` —
   would have handed a release candidate to anyone running the documented install line. That release
   was corrected by hand; `prerelease: auto` now marks any hyphenated tag for itself.
-
-### Added
-
-- **[`docs/swarm-local-testing.md`](../../docs/swarm-local-testing.md)**: one QEMU VM, three
-  docker-in-docker nodes, and ten checks that a single-machine CI cannot run — a real placement
-  failure, a real drain, and a node genuinely going down.
 
 ## 0.41.0-rc.1 — 2026-09-20
 

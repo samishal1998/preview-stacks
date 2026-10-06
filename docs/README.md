@@ -123,7 +123,7 @@ through), and is a worker running nothing. `GET /api/signals`, two events, and t
 drain a node, undrain it, or forget one whose machine has gone. pstack creates and destroys no
 machines. The "what this deliberately does not do" section is the load-bearing half — an earlier
 draft added up CPU and memory to guess whether a sleeping stack would still fit, and that guess is
-the machine manager's job, not pstack's. Built in 0.41.0-rc.1; the five-task build plan is
+the machine manager's job, not pstack's. Shipped in 0.41.0; the five-task build plan is
 [`node-signals-plan.md`](node-signals-plan.md).
 
 ### [`swarm-local-testing.md`](swarm-local-testing.md) — a real cluster on a laptop
