@@ -535,6 +535,7 @@ func NewDeploymentsDownCommand(exec oascmd.ExecOptions) *cobra.Command {
 		flagID     string
 		bodyVerify bool
 		bodyForce  bool
+		bodyForget bool
 		flagData   string
 	)
 	cmd := &cobra.Command{
@@ -544,6 +545,7 @@ func NewDeploymentsDownCommand(exec oascmd.ExecOptions) *cobra.Command {
 	cmd.Flags().StringVar(&flagID, "id", "", "The registry id, e.g. `pr-123`.")
 	cmd.Flags().BoolVar(&bodyVerify, "verify", true, "Run the leak check afterwards.")
 	cmd.Flags().BoolVar(&bodyForce, "force", false, "Required to tear down a `kind: shared` deployment.")
+	cmd.Flags().BoolVar(&bodyForget, "forget", false, "Also forget the deployment, in the same job — only if the teardown finished clean (no failed step, no leak, no container left). Anything less keeps the record. Refused when verify is off.")
 	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
 	_ = cmd.MarkFlagRequired("id")
@@ -560,6 +562,9 @@ func NewDeploymentsDownCommand(exec oascmd.ExecOptions) *cobra.Command {
 		}
 		if cmd.Flags().Changed("force") {
 			body["force"] = bodyForce
+		}
+		if cmd.Flags().Changed("forget") {
+			body["forget"] = bodyForget
 		}
 		switch {
 		case flagData != "":

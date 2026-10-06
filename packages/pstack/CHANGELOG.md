@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Tear down and forget.** `POST /api/deployments/:id/down` takes `forget: true`
+  (`pstack api deployments down --forget`): one job tears the stack down and, only if the teardown
+  finished clean — no failed step, no leak, docker confirming no container is left — forgets the
+  deployment. Anything less keeps the record and says why in the job log. Refused (400) with
+  `verify: false`, and on any action but `down`. A button on the Danger tab.
+- **Every job names its deployment.** Jobs, their 202 stubs and the `job.started` / terminal job
+  events carry `deployment` (the id, or `null` for the control plane's own `loki-apply`).
+- **Advanced UI: bulk actions on the Deployments list** — a checkbox per row, select-all over what the
+  filters show, and Deploy / Verify / Sleep / Wake / Tear down / Tear down and forget. One request per
+  deployment; shared deployments are skipped by tear down; the results link each job.
+- **Advanced UI: jobs and deployments link both ways.** A job's stack opens its deployment (Control for
+  control-plane jobs); a deployment's **Jobs** link opens `/jobs?deployment=<id>`.
+
+### Fixed
+
+- **A preview whose container crashed no longer shows the control plane's UI.** Its hostname falls
+  through Traefik's wake catch-all to pstack, which answered with the console (or, for `/api/…`, the
+  API). It now answers 503 with a "This preview isn't answering" page that reloads into the preview if
+  it comes back. Sleeping and waking stacks keep their own pages.
+
 ## 0.41.0 — 2026-10-06
 
 The release candidate made final, plus the fixes from a 0.39.0 host whose routed services sat in

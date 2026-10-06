@@ -341,7 +341,7 @@ func TestStateFromOutcomeAndEventPayload(t *testing.T) {
 			t.Fatalf("case %d: events %v", i, names)
 		}
 		raw := c.data(1)
-		want := `{"jobId":"` + j.ID + `","stack":"s","action":"` + string(tc.action) + `","state":"` + string(tc.state) + `","startedAt":`
+		want := `{"jobId":"` + j.ID + `","stack":"s","deployment":null,"action":"` + string(tc.action) + `","state":"` + string(tc.state) + `","startedAt":`
 		if !strings.HasPrefix(raw, want) {
 			t.Fatalf("case %d: payload order %s", i, raw)
 		}
@@ -923,7 +923,7 @@ func TestGetReturnsCopies(t *testing.T) {
 	}
 	b, _ := json.Marshal(again)
 	// Key order is the reference's assignment order: …startedAt, log, outcome, endedAt.
-	if !regexp.MustCompile(`^\{"id":"[^"]+","stack":"s","action":"up","state":"ok","startedAt":\d+,"log":\[\{"seq":1,.*\],"outcome":\{"ok":true,.*\},"endedAt":\d+\}$`).Match(b) {
+	if !regexp.MustCompile(`^\{"id":"[^"]+","stack":"s","deployment":null,"action":"up","state":"ok","startedAt":\d+,"log":\[\{"seq":1,.*\],"outcome":\{"ok":true,.*\},"endedAt":\d+\}$`).Match(b) {
 		t.Fatalf("wire shape %s", b)
 	}
 }
@@ -938,7 +938,7 @@ func TestQueuedWireShapeSaysStartedAtNull(t *testing.T) {
 	q, _ := r.Start("s", Verify, okWork(stack.Outcome{OK: true}), nil)
 	got, _ := r.Get(q.ID)
 	b, _ := json.Marshal(got)
-	if !regexp.MustCompile(`^\{"id":"[^"]+","stack":"s","action":"verify","state":"queued","startedAt":null,"log":\[\]\}$`).Match(b) {
+	if !regexp.MustCompile(`^\{"id":"[^"]+","stack":"s","deployment":null,"action":"verify","state":"queued","startedAt":null,"log":\[\]\}$`).Match(b) {
 		t.Fatalf("queued wire shape %s", b)
 	}
 	if got.Stub().State != Queued {
@@ -949,7 +949,7 @@ func TestQueuedWireShapeSaysStartedAtNull(t *testing.T) {
 	dead := waitTerminal(t, r, q.ID)
 	b, _ = json.Marshal(dead)
 	// Terminal, never started: startedAt stays null and endedAt is there.
-	if !regexp.MustCompile(`^\{"id":"[^"]+","stack":"s","action":"verify","state":"cancelled","startedAt":null,"log":\[.*\],"cancelledBy":"alice","endedAt":\d+\}$`).Match(b) {
+	if !regexp.MustCompile(`^\{"id":"[^"]+","stack":"s","deployment":null,"action":"verify","state":"cancelled","startedAt":null,"log":\[.*\],"cancelledBy":"alice","endedAt":\d+\}$`).Match(b) {
 		t.Fatalf("cancelled-while-queued wire shape %s", b)
 	}
 	close(release)
@@ -1165,4 +1165,42 @@ func TestSetMaxRunning(t *testing.T) {
 			t.Fatalf("SetMaxRunning(0) left the cap at %d", got)
 		}
 	})
+}
+
+// negative control: drop the `job.Deployment = &deployment` assignment in start — the job, its stub
+// and its event all read null, and the UI cannot link the job to the deployment it acted on.
+func TestAJobStartedForADeploymentNamesIt(t *testing.T) {
+	bus := events.New()
+	succeeded := make(chan map[string]any, 1)
+	off := bus.On(func(e events.Event) {
+		if e.Event == "job.succeeded" {
+			var p map[string]any
+			_ = json.Unmarshal(e.Data, &p)
+			succeeded <- p
+		}
+	})
+	defer off()
+	r := New(bus, 0)
+	j, ok := r.StartFor("pr-7", "pr-7-stack", Up, okWork(stack.Outcome{OK: true}), nil, false)
+	if !ok || j.Deployment == nil || *j.Deployment != "pr-7" {
+		t.Fatalf("job %+v", j)
+	}
+	b, _ := json.Marshal(j.Stub())
+	if !strings.Contains(string(b), `"stack":"pr-7-stack","deployment":"pr-7"`) {
+		t.Fatalf("stub %s", b)
+	}
+	// The event is emitted just after the state turns ok, so wait for the event itself.
+	select {
+	case payload := <-succeeded:
+		if payload["deployment"] != "pr-7" {
+			t.Fatalf("job.succeeded payload %v", payload)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no job.succeeded")
+	}
+	// A job that is not about a deployment says so with null, not with an absent key.
+	c, _ := r.Start("pstack-control", LokiApply, okWork(stack.Outcome{OK: true}), nil)
+	if c.Deployment != nil {
+		t.Fatalf("control job %+v", c)
+	}
 }

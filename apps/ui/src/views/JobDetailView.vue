@@ -18,7 +18,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api, problem } from '../api/client';
 import type { Job, LogEvent } from '../api/types';
 import { state } from '../composables/useControlPlane';
-import { isTerminal, supersededBy, waitReason } from '../composables/useJobQueue';
+import { isTerminal, jobTarget, supersededBy, waitReason } from '../composables/useJobQueue';
 import { leakedAxes, countUnverifiable } from '../composables/useSteps';
 import { actionLabel, stamp, took } from '../composables/useFormat';
 import LogViewer from '../components/LogViewer.vue';
@@ -201,7 +201,8 @@ onBeforeUnmount(closeStream);
         </h1>
         <div class="sub">
           <template v-if="job">
-            <code>{{ job.stack }}</code>
+            <RouterLink v-if="jobTarget(job)" :to="jobTarget(job)!"><code>{{ job.stack }}</code></RouterLink>
+            <code v-else>{{ job.stack }}</code>
             <template v-if="job.startedAt"> · started {{ stamp(job.startedAt) }}</template>
             <template v-else-if="queued"> · not started yet</template>
             <template v-else> · never started</template>

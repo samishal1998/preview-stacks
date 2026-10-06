@@ -249,6 +249,12 @@ export type Outcome = { ok: boolean; steps: StepResult[]; outputs: Record<string
 export type Job = {
   id: string;
   stack: string;
+  /**
+   * The deployment this job acted on, or `null` for one that is not about a deployment (the Loki
+   * settings apply). What the UI links a job to — never a guess from the stack name, which two
+   * deployments may share.
+   */
+  deployment: string | null;
   action: JobAction;
   state: JobState;
   /**
@@ -265,7 +271,7 @@ export type Job = {
 };
 
 /** The 202 body from an action. */
-export type JobStub = { id: string; stack: string; action: JobAction; state: JobState };
+export type JobStub = { id: string; stack: string; deployment: string | null; action: JobAction; state: JobState };
 
 /** One row of `GET /api/specs` → `{ specs }`. Absent entirely on a server built before specs. */
 export type SpecMeta = {

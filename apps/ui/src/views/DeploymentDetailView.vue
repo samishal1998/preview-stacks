@@ -80,6 +80,7 @@ watch(
           </span>
           <span v-else-if="dep.error">unresolved</span>
           <span v-else>loading…</span>
+          · <RouterLink :to="{ path: '/jobs', query: { deployment: id } }">Jobs</RouterLink>
         </div>
       </div>
       <span class="grow" />

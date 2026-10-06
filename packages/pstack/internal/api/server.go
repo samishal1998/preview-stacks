@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/hostvars"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
@@ -270,32 +272,32 @@ func New(o Options) (*Server, error) {
 	// operator's choice survives a restart.
 	set := settings.New(st, o.MaxJobs)
 	s := &Server{
-		opts:       o,
-		env:        env,
-		jobs:       jobs.New(o.Bus, set.MaxJobs()),
-		registry:   registry.New(o.DataDir),
-		specs:      specs.New(o.DataDir),
-		routing:    routing.New(routingDir),
-		registries: registries.New(registryDir),
-		store:      st,
-		auth:       auth.New(st),
-		settings:   set,
-		terminals:  terminal.NewAudit(st),
-		hostVars:   hostvars.New(st),
-		readiness:  readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, RestartLoop: o.ReadinessRestartLoop, Bus: o.Bus}),
-		sleepIndex: scheduler.NewSleepIndex(),
-		waking:     map[string]wakingUp{},
-		probeSem:   make(chan struct{}, probeSlots),
+		opts:        o,
+		env:         env,
+		jobs:        jobs.New(o.Bus, set.MaxJobs()),
+		registry:    registry.New(o.DataDir),
+		specs:       specs.New(o.DataDir),
+		routing:     routing.New(routingDir),
+		registries:  registries.New(registryDir),
+		store:       st,
+		auth:        auth.New(st),
+		settings:    set,
+		terminals:   terminal.NewAudit(st),
+		hostVars:    hostvars.New(st),
+		readiness:   readiness.New(readiness.Options{PollMs: o.ReadinessPollMs, TimeoutMs: o.ReadinessTimeoutMs, RestartLoop: o.ReadinessRestartLoop, Bus: o.Bus}),
+		sleepIndex:  scheduler.NewSleepIndex(),
+		waking:      map[string]wakingUp{},
+		probeSem:    make(chan struct{}, probeSlots),
 		emptySince:  map[string]int64{},
 		signalsSent: map[string]signalPayload{},
-		spec:       newOpenAPIDoc(o.OpenAPISpec),
-		ssoClient:  sso.NewClient(nil),
-		bus:        o.Bus,
-		followers:  map[int]func(){},
-		terms:      map[int]func(){},
-		ctx:        ctx,
-		cancel:     cancel,
-		reidx:      make(chan struct{}, 1),
+		spec:        newOpenAPIDoc(o.OpenAPISpec),
+		ssoClient:   sso.NewClient(nil),
+		bus:         o.Bus,
+		followers:   map[int]func(){},
+		terms:       map[int]func(){},
+		ctx:         ctx,
+		cancel:      cancel,
+		reidx:       make(chan struct{}, 1),
 	}
 	s.registry.Env = env
 	s.hooks = webhooks.New(st, notify.PublicConfig)
@@ -575,6 +577,11 @@ const WakeRetryMs = 60_000
 type lifecycleOptions struct {
 	Verify *bool
 	Force  *bool
+	// Forget is `down` with { "forget": true }: after a teardown that finished clean — no failed
+	// step, no leak — remove the deployment's record too, by the same rule DELETE applies. Anything
+	// less keeps the record, so what was left behind stays visible and the teardown can be retried.
+	// The route refuses it with verify off: forgetting without the check would hide a leak.
+	Forget bool
 	By     string
 	Reason string
 	// ReadinessTimeoutMs is the deadline of the watch an `up`/`wake` hands off to; 0 means the
@@ -678,12 +685,33 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 		outcome := stack.Down(st, runner, stack.DownOptions{NoVerify: !verify, Force: force}, sink)
 		// Torn down is not asleep, and not waking either: nothing should wake it.
 		s.clearSleep(id, st.Stack, false)
+		if o.Forget {
+			s.forgetAfterDown(dep, st, outcome, sink)
+		}
 		return outcome, nil
 	}
-	if o.OnlyIfIdle {
-		return s.jobs.StartIfIdle(st.Stack, action, work, scrub)
+	return s.jobs.StartFor(id, st.Stack, action, work, scrub, o.OnlyIfIdle)
+}
+
+// forgetAfterDown is the second half of `down` with { "forget": true }. It runs inside the teardown
+// job, which already holds the stack, and it forgets only what DELETE would: a teardown that proved
+// itself clean, with docker confirming no container is left. Every other case keeps the record and
+// says why in the job's own log, which is where the operator who asked is already looking.
+func (s *Server) forgetAfterDown(dep *registry.Deployment, st *spec.Stack, outcome stack.Outcome, sink log.Sink) {
+	switch containers := s.containersFor(st.Stack); {
+	case !outcome.OK || outcome.Leaked():
+		sink.Emit(log.Warn, "kept the record — the teardown did not finish clean, and forgetting it would hide what is left")
+	case containers == nil:
+		sink.Emit(log.Warn, "kept the record — docker did not answer, so "+st.Stack+" cannot be confirmed torn down")
+	case len(containers) > 0:
+		sink.Emit(log.Warn, "kept the record — "+st.Stack+" still has "+js.NumberString(float64(len(containers)))+" container(s)")
+	default:
+		if err := s.removeDeployment(dep, st); err != nil {
+			sink.Emit(log.Warn, "kept the record — "+err.Error())
+			return
+		}
+		sink.Emit(log.Info, "forgotten — the deployment's record is removed")
 	}
-	return s.jobs.Start(st.Stack, action, work, scrub)
 }
 
 func dedupe(xs []string) []string {
@@ -696,6 +724,24 @@ func dedupe(xs []string) []string {
 		}
 	}
 	return out
+}
+
+// previewHostname reports whether a hostname is one the wake catch-all routes here — one label under
+// a domain this host answers on — and not one of the control plane's own.
+func (s *Server) previewHostname(h string) bool {
+	oneLabelUnder := func(d string) bool {
+		label, ok := strings.CutSuffix(h, "."+strings.ToLower(d))
+		return d != "" && ok && label != "" && !strings.Contains(label, ".")
+	}
+	if oneLabelUnder(s.opts.Domain) {
+		// A nil store checks the primary's own names only, which is all one label under the primary
+		// can be — so the console's own requests never read the domains file.
+		return !(*routing.RoutingStore)(nil).IsControlHostname(h, s.opts.Domain)
+	}
+	if !strings.Contains(h, ".") || !slices.ContainsFunc(s.routing.Domains(), oneLabelUnder) {
+		return false
+	}
+	return !s.routing.IsControlHostname(h, s.opts.Domain)
 }
 
 // wakeFor answers a request for a sleeping stack's hostname: starts the wake (once) and answers the
@@ -964,6 +1010,19 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		if h := requestHost(r); h != "" && s.wakeFor(w, h) {
 			return
 		}
+	}
+
+	// Any OTHER preview hostname here came through the same catch-all because its own router is gone:
+	// a container crashed or stopped, or the preview no longer exists. The request is the visitor's,
+	// and answering it with the UI — or, for /api/…, with this API — is the control plane on their
+	// preview's URL. r.Host, not requestHost, for the reason the grafana. check above gives.
+	if h := strings.ToLower(portRe.ReplaceAllString(r.Host, "")); s.previewHostname(h) {
+		w.Header().Set("content-type", "text/html; charset=utf-8")
+		w.Header().Set("cache-control", "no-store")
+		w.Header().Set("retry-after", "5")
+		w.WriteHeader(503)
+		_, _ = w.Write([]byte(scheduler.WakePage(h, "", scheduler.Down, "")))
+		return
 	}
 
 	// The UI: a single embedded document, so there is no filesystem lookup and no path traversal

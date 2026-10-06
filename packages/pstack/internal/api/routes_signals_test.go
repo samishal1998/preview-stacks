@@ -41,9 +41,9 @@ func signalsShim(t *testing.T, empty bool) *exec.Fake {
 		ps = "" // no tasks anywhere: every worker reads empty
 	}
 	answers := map[string]string{
-		"docker info --format '{{json .Swarm}}'":    `{"LocalNodeState":"active","ControlAvailable":true,"NodeID":"n1abcdef01234567","NodeAddr":"10.0.0.1"}`,
-		"docker node ls --format '{{json .}}'":      readFile("node-ls.jsonl"),
-		"docker service ls --format '{{json .}}'":   readFile("service-ls.jsonl"),
+		"docker info --format '{{json .Swarm}}'":  `{"LocalNodeState":"active","ControlAvailable":true,"NodeID":"n1abcdef01234567","NodeAddr":"10.0.0.1"}`,
+		"docker node ls --format '{{json .}}'":    readFile("node-ls.jsonl"),
+		"docker service ls --format '{{json .}}'": readFile("service-ls.jsonl"),
 		"docker service ps --no-trunc --filter desired-state=running --format '{{json .}}' 'svc1web00000000' 'svc2api00000000' 'svc3log00000000'": ps,
 	}
 	f := exec.NewFake(nil, "")

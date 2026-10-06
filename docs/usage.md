@@ -1198,6 +1198,28 @@ It does what the CLI does, with a live log: enter a deployment id, **Load**, the
 
 [`packages/pstack/ui/README.md`](../packages/pstack/ui/README.md) documents the UI's internals and the exact routes it consumes.
 
+### Act on several deployments at once
+
+The **advanced UI**'s Deployments list has a checkbox per row. Tick some — or tick the header box to
+select every row the current filters show — and a bar offers **Deploy**, **Verify**, **Sleep**,
+**Wake**, **Tear down** and **Tear down and forget**.
+
+- Each deployment gets its own request and its own job, exactly as if you had pressed the button on
+  its page. The results list under the bar links each job, or says why one was refused or skipped.
+- **Shared deployments are skipped by tear down**: their page asks for the stack name typed out, and
+  a select-all must not be a way around that. The bar says how many are shared.
+- Rows that need variables are skipped for every action; sleep and wake skip rows where they mean
+  nothing (already asleep, not asleep, no compose section).
+- The two teardowns ask for a second click, naming how many will go. Teardown here always checks for
+  leftovers.
+
+**Tear down and forget** (here and on a deployment's Danger tab) is `down` with `forget: true`: one
+job that tears the stack down and, only if the teardown finished clean, forgets the deployment.
+Anything left behind keeps the record, so the leak stays visible.
+
+Jobs and deployments link both ways: a job's stack opens its deployment (or Control, for the control
+plane's own jobs), and a deployment's **Jobs** link opens the jobs list filtered to it.
+
 ### Copy a variable list out, paste one back
 
 Three places in the **advanced UI** hold a list of `NAME` / `value` pairs: the **Variables & secrets**
@@ -1979,6 +2001,9 @@ curl -sS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" \
 
 curl -sS -X DELETE -H "Authorization: Bearer $PSTACK_TOKEN" \
      "$API/api/deployments/pr-123?PR=123"            # forget, after a clean down
+
+curl -sS -X POST -H "Authorization: Bearer $PSTACK_TOKEN" -d '{"forget":true}' \
+     "$API/api/deployments/pr-123/down?PR=123"       # both, in one job: tear down, forget if clean
 ```
 
 **Under swarm, the PUT tells you what the conversion will change** (0.30.0). The response carries
@@ -3461,7 +3486,7 @@ anything it does not list is the root token's alone.
 | PUT | `/api/deployments/:id` | `{ spec, compose?, env? }` — **body only**, the query string is *not* read here | `{ id, kind, stack, createdAt, updatedAt }`, plus `swarmNotes` under swarm — what the conversion will change, [named at submit time](#submitting-a-deployment) rather than in the deploy transcript. Omitted, never `[]`, when nothing was checked · **201** new · **200** replaced · 400 bad spec/body · 409 while a job is in flight. The spec is **parsed before it is stored**, so its variables must be in the body's `env` or the submit is a 400 |
 | DELETE | `/api/deployments/:id` | spec variables as `?K=V` | forget it. Refused while containers exist **and** when Docker did not answer |
 | POST | `/api/deployments/:id/up` | spec variables as `?K=V` | **202** `{ job }` — `state: "queued"` when the stack is busy |
-| POST | `/api/deployments/:id/down` | `{ verify?, force? }` (`verify` defaults true) | **202** `{ job }` — **preempts**: cancels what is running, drops what is queued · 409 on `kind: shared` without `force` |
+| POST | `/api/deployments/:id/down` | `{ verify?, force?, forget? }` (`verify` defaults true) | **202** `{ job }` — **preempts**: cancels what is running, drops what is queued · 409 on `kind: shared` without `force` · `forget: true` also forgets the deployment in the same job, only if the teardown finished clean (no failed step, no leak, no container left); 400 with `verify: false` |
 | POST | `/api/deployments/:id/verify` | spec variables as `?K=V` | **202** `{ job }` — `state: "queued"` when the stack is busy |
 | POST | `/api/deployments/:id/sleep` | spec variables as `?K=V` | **202** `{ job }` — queued when busy · 409 on `kind: shared` · 400 without a compose section. Compose project down, volumes and axes kept |
 | POST | `/api/deployments/:id/wake` | spec variables as `?K=V` | **202** `{ job }` — `up`, recorded as a wake |

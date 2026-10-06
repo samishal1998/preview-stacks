@@ -146,9 +146,10 @@ Fires when `PUT /api/deployments/:id` stores a new record (`created`) or replace
 
 ### `deployment.deleted`
 
-Fires when `DELETE /api/deployments/:id` forgets the record. **Nothing was torn down** — the
-server refuses to forget while containers exist, so by the time this fires the stack was already
-gone or was never up.
+Fires when `DELETE /api/deployments/:id` forgets the record, or when `down` with `forget: true`
+finishes clean and forgets it in the same job. **This event tears nothing down** — the server
+refuses to forget while containers exist, so by the time it fires the stack was already gone or was
+never up.
 
 | `data.` field | Type | Meaning |
 |---|---|---|
@@ -168,6 +169,7 @@ told the one caller holding that id.
 |---|---|---|
 | `jobId` | string | Follow it at `/jobs/<jobId>` (UI) or `GET /api/jobs/<jobId>`. |
 | `stack` | string | The stack being acted on. |
+| `deployment` | string \| null | The deployment id the job acted on; `null` for a job the control plane runs on itself (`loki-apply`). |
 | `action` | `"up"` \| `"down"` \| `"verify"` \| `"sleep"` \| `"wake"` \| `"loki-apply"` | `sleep` takes the compose project down and keeps its volumes and axes; `wake` is `up` recorded under its own name (0.26.0). `loki-apply` applies Loki's saved settings, on `pstack-control`. |
 | `startedAt` | number | Epoch ms. |
 
@@ -197,6 +199,7 @@ on one thing, page on this.
 |---|---|---|
 | `jobId` | string | |
 | `stack` | string | |
+| `deployment` | string \| null | As on `job.started`. |
 | `action` | `"up"` \| `"down"` \| `"verify"` \| `"loki-apply"` | |
 | `state` | `"ok"` \| `"failed"` \| `"cancelled"` \| `"leaked"` \| `"superseded"` | Matches the event name. |
 | `cancelledBy` | string? | `job.cancelled` only — the operator who stopped it. |
@@ -212,6 +215,7 @@ on one thing, page on this.
 {
   "jobId": "down-shopfront-pr-7-42-x1y2z3",
   "stack": "shopfront-pr-7",
+  "deployment": "pr-7",
   "action": "down",
   "state": "leaked",
   "startedAt": 1754000000000,

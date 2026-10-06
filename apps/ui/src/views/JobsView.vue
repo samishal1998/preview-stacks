@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** Job history. Polled by the shell already, so this view only filters what is in memory. */
 import { computed, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { Search } from 'lucide-vue-next';
 import { loadJobs, state } from '../composables/useControlPlane';
 import { actionLabel, took } from '../composables/useFormat';
@@ -10,11 +11,14 @@ import RelativeTime from '../components/RelativeTime.vue';
 import SelectMenu from '../components/SelectMenu.vue';
 import InfoHint from '../components/InfoHint.vue';
 import type { Job, JobState } from '../api/types';
-import { supersededBy, waitReason } from '../composables/useJobQueue';
+import { jobTarget, supersededBy, waitReason } from '../composables/useJobQueue';
 import RefreshButton from '../components/RefreshButton.vue';
 
 const q = ref('');
 const only = ref<'all' | JobState>('all');
+/** `?deployment=<id>`: set by the Jobs link on a deployment's page. Cleared by leaving the query. */
+const route = useRoute();
+const deployment = computed(() => (typeof route.query.deployment === 'string' ? route.query.deployment : ''));
 
 /**
  * Why a queued row is not moving, in the width of a table cell.
@@ -39,6 +43,7 @@ const rows = computed(() => {
   const needle = q.value.trim().toLowerCase();
   return state.jobs.filter((j) => {
     if (only.value !== 'all' && j.state !== only.value) return false;
+    if (deployment.value && j.deployment !== deployment.value) return false;
     if (!needle) return true;
     return j.stack.toLowerCase().includes(needle) || j.action.includes(needle);
   });
@@ -95,6 +100,10 @@ const rows = computed(() => {
             { value: 'superseded', label: 'Superseded' },
           ]"
         />
+        <span v-if="deployment" class="badge">
+          {{ deployment }}
+          <RouterLink to="/jobs" class="mute" aria-label="Clear deployment filter">✕</RouterLink>
+        </span>
       </div>
 
       <p v-if="state.jobsError" class="s-failed">{{ state.jobsError }}</p>
@@ -132,7 +141,8 @@ const rows = computed(() => {
             </td>
             <td role="cell" data-label="action">{{ actionLabel(j.action) }}</td>
             <td role="cell" class="name" data-label="stack">
-              <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">{{ j.stack }}</RouterLink>
+              <RouterLink v-if="jobTarget(j)" :to="jobTarget(j)!">{{ j.stack }}</RouterLink>
+              <span v-else>{{ j.stack }}</span>
             </td>
             <td role="cell" class="dim nowrap" data-label="started"><RelativeTime :at="j.startedAt" /></td>
             <td role="cell" class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
@@ -142,7 +152,7 @@ const rows = computed(() => {
             <td role="cell" colspan="6" class="mute">
               <template v-if="state.jobs.length">
                 Nothing matches this filter.
-                <button class="ghost sm" @click="q = ''; only = 'all'">Clear filters</button>
+                <button class="ghost sm" @click="q = ''; only = 'all'; deployment && $router.replace('/jobs')">Clear filters</button>
               </template>
               <template v-else>No jobs recorded.</template>
             </td>

@@ -183,7 +183,9 @@ export function createClient(opts: ClientOptions) {
        * `force` is required for a `kind: shared` stack and is refused without it — `down` runs
        * `compose down -v`, which on a shared deployment destroys the volumes every tenant depends on.
        */
-      down: (id: string, body: { verify?: boolean; force?: boolean } = {}, vars?: Vars) =>
+      // `forget` also removes the deployment's record, in the same job — but only after a teardown
+      // that finished clean; anything less keeps it. Refused with `verify: false`.
+      down: (id: string, body: { verify?: boolean; force?: boolean; forget?: boolean } = {}, vars?: Vars) =>
         post<{ job: Job }>(`/api/deployments/${enc(id)}/down${qs(vars)}`, body).then((r) => r.job),
       /**
        * Take the compose project down and KEEP its volumes and axes. A request to any of its

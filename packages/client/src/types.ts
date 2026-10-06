@@ -153,6 +153,12 @@ export type StepResult = {
 export type Job = {
   id: string;
   stack: string;
+  /**
+   * The registry id of the deployment this job acted on; `null` for a job that is not about one
+   * (the Loki settings apply, on the control stack). The stack name alone cannot say: two
+   * deployments may resolve to one stack.
+   */
+  deployment: string | null;
   action: JobAction;
   state: JobState;
   /** `null` while the job is `queued`, and on a `superseded` one — it never started. */
@@ -164,8 +170,8 @@ export type Job = {
   cancelledBy?: string;
 };
 
-/** The four fields a 202 carries — `state` is `running` when it dispatched, `queued` when it waits. */
-export type JobStub = { id: string; stack: string; action: JobAction; state: JobState };
+/** What a 202 carries — `state` is `running` when it dispatched, `queued` when it waits. */
+export type JobStub = { id: string; stack: string; deployment: string | null; action: JobAction; state: JobState };
 
 /**
  * `POST /api/deployments/:id/cancel` — stop everything this deployment's stack has outstanding: the
