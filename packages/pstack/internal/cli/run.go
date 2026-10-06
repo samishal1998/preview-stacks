@@ -245,6 +245,7 @@ func run(argv []string, io IO) *Exit {
 			DataDir: dataDir, Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
 			Challenge: initctl.Challenge(args.Challenge), UI: initctl.UI(args.UI), Orchestrator: spec.Orchestrator(args.Orchestrator),
 			Logging: initctl.Logging(args.Logging), Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
+			IngressSubnet: args.IngressSubnet, SharedSubnet: args.SharedSubnet,
 		})
 		if err != nil {
 			return &Exit{Code: ExitFailed, Msg: err.Error()}

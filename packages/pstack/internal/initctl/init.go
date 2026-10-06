@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -63,6 +64,22 @@ const (
 	netIngress = "preview-ingress"
 	netShared  = "preview-shared"
 	socket     = "/var/run/docker.sock"
+)
+
+// The two networks' address ranges under swarm, when nobody chose one.
+//
+// Docker's default for a swarm overlay network is a /24 — about 250 addresses — and every routed
+// service in every preview takes at least one there, plus one per machine in the swarm. A busy host
+// fills that honestly, and swarm also hands out addresses it never takes back: on one 0.39.0 host
+// the /24 filled in nine days, and every routed service after that sat in `New` forever with the
+// reason only in docker's own log (docs/preview-ingress-address-leak.md). A /16 is 65,534.
+//
+// Both sit inside swarm's default address pool (10.0.0.0/8) on purpose: a range docker manages is
+// one it will not hand to another network later, where a range outside it could collide with the
+// host's own LAN or docker's local bridges.
+const (
+	DefaultIngressSubnet = "10.250.0.0/16"
+	DefaultSharedSubnet  = "10.251.0.0/16"
 )
 
 // Challenge is how Let's Encrypt verifies the domain.
@@ -185,6 +202,12 @@ type Options struct {
 	// Out is where init's own lines go (stdout when nil). Pass the runner's Out so a dry-run
 	// transcript interleaves in order.
 	Out io.Writer
+	// IngressSubnet and SharedSubnet are the networks' address ranges under swarm. "" means "nobody
+	// asked": a new network gets the default above and an existing one is KEPT as it is, so
+	// `pstack upgrade` never recreates a network on its own. A value is a request: a network whose
+	// range differs is recreated, which needs every preview off it first.
+	IngressSubnet string
+	SharedSubnet  string
 }
 
 // randomHex is n random bytes, hex. Hex on purpose: `$` in a `.env` value is expanded by Compose, and
@@ -396,6 +419,9 @@ func Init(opts Options) error {
 	if orchestrator == spec.Swarm {
 		driver, createArgs = "overlay", "-d overlay --attachable "
 	}
+	subnets := map[string]string{netIngress: opts.IngressSubnet, netShared: opts.SharedSubnet}
+	defaults := map[string]string{netIngress: DefaultIngressSubnet, netShared: DefaultSharedSubnet}
+	var subnetNotes []string
 	for _, net := range []string{netIngress, netShared} {
 		have := runner.Run("docker network inspect -f '{{.Driver}}' "+net+" 2>/dev/null", exec.RunOptions{Label: "network " + net + " driver"})
 		current := ""
@@ -405,15 +431,7 @@ func Init(opts Options) error {
 		// Only a driver docker could have meant. Anything else is "could not tell", and a network that
 		// cannot be read is not one to remove.
 		if (current == "bridge" || current == "overlay") && current != driver {
-			attached := runner.Run("docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "+net,
-				exec.RunOptions{Label: "network " + net + " members"})
-			var foreign []string
-			for _, n := range strings.Fields(attached.Stdout) {
-				if !strings.HasPrefix(n, ControlProject+"-") {
-					foreign = append(foreign, n)
-				}
-			}
-			if len(foreign) > 0 {
+			if foreign := attachedTo(runner, net); len(foreign) > 0 {
 				keep := "compose"
 				if current == "overlay" {
 					keep = "swarm"
@@ -430,7 +448,43 @@ func Init(opts Options) error {
 				return errors.New("could not replace network " + net + ":\n" + exec.Indent(firstOf(rm.Stderr, rm.Stdout)))
 			}
 		}
-		runner.Run("docker network create "+createArgs+net+" 2>/dev/null || true", exec.RunOptions{Label: "network " + net})
+		// The address range, swarm only: a bridge network's comes from docker's local pools, which are
+		// already /16s. An overlay that exists is kept unless a range was asked for and differs.
+		subnetArg := ""
+		if orchestrator == spec.Swarm {
+			want, asked := subnets[net], subnets[net] != ""
+			if !asked {
+				want = defaults[net]
+			}
+			subnetArg = "--subnet " + want + " "
+			if current == "overlay" {
+				had := firstField(runner.Run("docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}' "+net+" 2>/dev/null",
+					exec.RunOptions{Label: "network " + net + " subnet"}).Stdout)
+				switch {
+				case asked && had != "" && had != want:
+					if foreign := attachedTo(runner, net); len(foreign) > 0 {
+						return fmt.Errorf("network %s is %s and you asked for %s, which means re-creating it, "+
+							"but these are attached to it: %s.\n"+
+							"  Put those previews to sleep or tear them down, then run this again.",
+							net, had, want, strings.Join(foreign, ", "))
+					}
+					runner.Run("docker compose -p "+ControlProject+" down 2>/dev/null || true", exec.RunOptions{Label: "control stack down (network " + net + " resized)"})
+					if rm := runner.Run("docker network rm "+net, exec.RunOptions{Label: "network " + net + " rm"}); !rm.OK {
+						return errors.New("could not replace network " + net + ":\n" + exec.Indent(firstOf(rm.Stderr, rm.Stdout)))
+					}
+				case !asked && addressesIn(had) > 0 && addressesIn(had) < addressesIn(want):
+					flag := "--ingress-subnet"
+					if net == netShared {
+						flag = "--shared-subnet"
+					}
+					subnetNotes = append(subnetNotes,
+						"  note      "+net+" is "+had+": room for "+fmt.Sprint(addressesIn(had))+" addresses, and swarm takes one per routed",
+						"            service and does not always give it back. When previews stick in `New`, sleep them and run",
+						"            "+flag+" "+want+" (docs/preview-ingress-address-leak.md).")
+				}
+			}
+		}
+		runner.Run("docker network create "+createArgs+subnetArg+net+" 2>/dev/null || true", exec.RunOptions{Label: "network " + net})
 	}
 
 	// ── 3. Configuration ────────────────────────────────────────────────────────────────────────
@@ -541,8 +595,9 @@ func Init(opts Options) error {
 		"  config    " + composePath,
 		"  registry  " + filepath.Join(dataDir, "deployments"),
 		"  networks  " + netIngress + ", " + netShared + "   (" + driver + "; declare both as `external: true` in every per-PR compose file)",
-		"  previews  " + previews,
 	}
+	lines = append(lines, subnetNotes...)
+	lines = append(lines, "  previews  "+previews)
 	if orchestrator == spec.Swarm {
 		lines = append(lines, "            workers need "+swarm.PortList()+" open to and from this host")
 	}
@@ -1112,4 +1167,57 @@ func write(out io.Writer, path, body string, mode os.FileMode, dryRun bool) erro
 		return err
 	}
 	return os.Chmod(path, mode)
+}
+
+// attachedTo names what besides the control stack is attached to a network: swarm services on any
+// node, and plain containers on this one. Docker refuses to remove a network anything is attached
+// to, so this is asked BEFORE the control stack goes down — finding out from `network rm` would leave
+// the control plane down with the network still there.
+func attachedTo(runner exec.Runner, net string) []string {
+	var found []string
+	members := runner.Run("docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "+net,
+		exec.RunOptions{Label: "network " + net + " members"})
+	for _, n := range strings.Fields(members.Stdout) {
+		if !strings.HasPrefix(n, ControlProject+"-") {
+			found = append(found, n)
+		}
+	}
+	// A service's tasks on a worker are invisible to `.Containers` above, which only sees this node.
+	id := strings.TrimSpace(runner.Run("docker network inspect -f '{{.ID}}' "+net+" 2>/dev/null",
+		exec.RunOptions{Label: "network " + net + " id"}).Stdout)
+	if id == "" {
+		return found
+	}
+	services := runner.Run("docker service ls -q 2>/dev/null | xargs -r docker service inspect --format '{{.Spec.Name}} {{range .Spec.TaskTemplate.Networks}}{{.Target}} {{end}}' 2>/dev/null",
+		exec.RunOptions{Label: "services on " + net})
+	for _, line := range strings.Split(services.Stdout, "\n") {
+		f := strings.Fields(line)
+		for _, target := range f[min(1, len(f)):] {
+			if target == id || target == net {
+				found = append(found, f[0])
+				break
+			}
+		}
+	}
+	return found
+}
+
+func firstField(s string) string {
+	if f := strings.Fields(s); len(f) > 0 {
+		return f[0]
+	}
+	return ""
+}
+
+// addressesIn is how many hosts a CIDR range holds, or 0 when it is not one.
+func addressesIn(cidr string) int {
+	_, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return 0
+	}
+	ones, bits := n.Mask.Size()
+	if bits-ones >= 31 {
+		return 1 << 30
+	}
+	return 1<<(bits-ones) - 2
 }

@@ -8,6 +8,7 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
@@ -51,14 +52,18 @@ type Parsed struct {
 	Challenge    string // http01 | dns01
 	Orchestrator string // swarm | compose
 	Logging      string // none | loki
-	Distro       string
-	Format       string
-	Tag          string
-	UI           string // basic | advanced
-	UIImage      bool
-	UIDist       string
-	SSHKey       string
-	Password     string
+	// IngressSubnet / SharedSubnet are the two networks' address ranges under swarm. "" = nobody
+	// asked: init keeps an existing network and gives a new one the default. Normalised CIDR.
+	IngressSubnet string
+	SharedSubnet  string
+	Distro        string
+	Format        string
+	Tag           string
+	UI            string // basic | advanced
+	UIImage       bool
+	UIDist        string
+	SSHKey        string
+	Password      string
 	// AdminUser / AdminPassword / APIToken are cloud-init's credential flags. Deliberately WITHOUT
 	// environment defaults, unlike --password (PSTACK_DASHBOARD_PASSWORD) beside them: an operator's
 	// shell has PSTACK_TOKEN set precisely because it is talking to a host that already exists, and a
@@ -138,10 +143,13 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		Tag:          get("PSTACK_IMAGE", "pstack:local"),
 		UI:           or("PSTACK_UI", "basic"),
 		Logging:      or("PSTACK_LOGGING", "none"),
-		SSHKey:       get("PSTACK_SSH_KEY", ""),
-		Password:     get("PSTACK_DASHBOARD_PASSWORD", ""),
-		Distro:       get("PSTACK_DISTRO", "ubuntu"),
-		To:           "latest",
+		// Empty counts as unset: an exported-but-empty variable is not a request to recreate a network.
+		IngressSubnet: or("PSTACK_INGRESS_SUBNET", ""),
+		SharedSubnet:  or("PSTACK_SHARED_SUBNET", ""),
+		SSHKey:        get("PSTACK_SSH_KEY", ""),
+		Password:      get("PSTACK_DASHBOARD_PASSWORD", ""),
+		Distro:        get("PSTACK_DISTRO", "ubuntu"),
+		To:            "latest",
 	}
 	var rest []string
 	next := func(i *int, cur string) string {
@@ -244,6 +252,10 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 				return nil, fail(fmt.Sprintf(`--orchestrator must be swarm or compose, got "%s"`, o))
 			}
 			p.Orchestrator = o
+		case "--ingress-subnet":
+			p.IngressSubnet = next(&i, "")
+		case "--shared-subnet":
+			p.SharedSubnet = next(&i, "")
 		case "--logging":
 			p.Typed["--logging"] = true
 			l := next(&i, "")
@@ -285,6 +297,21 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 	}
 	if len(rest) > 1 {
 		p.Sub = rest[1]
+	}
+	// Checked after the walk so the environment's values get the same check as the flags'. Docker
+	// would refuse a bad range too — but only after init had already taken the control stack down.
+	for _, s := range []struct {
+		flag string
+		v    *string
+	}{{"--ingress-subnet", &p.IngressSubnet}, {"--shared-subnet", &p.SharedSubnet}} {
+		if *s.v == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(*s.v)
+		if err != nil || n.IP.To4() == nil {
+			return nil, fail(fmt.Sprintf(`%s must be an IPv4 range like 10.250.0.0/16, got "%s"`, s.flag, *s.v))
+		}
+		*s.v = n.String()
 	}
 	return p, nil
 }
@@ -353,6 +380,9 @@ func Usage(version string) string {
 		"                                            A path, never the token: argv is world-readable.",
 		"            --orchestrator swarm|compose    (default swarm — one manager; workers join from the Swarm page)",
 		"            --logging none|loki             (default none — Loki log shipping)",
+		"            --ingress-subnet <cidr>         swarm: preview-ingress's range (default 10.250.0.0/16)",
+		"            --shared-subnet <cidr>          swarm: preview-shared's range (default 10.251.0.0/16). Given, a",
+		"                                            network with another range is re-created — previews must be off it.",
 		"",
 		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator] [--logging]",
 		"            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)",

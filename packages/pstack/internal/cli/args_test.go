@@ -482,3 +482,30 @@ func TestAskSecretRefusesRatherThanEchoingIt(t *testing.T) {
 		t.Errorf("no way out offered: %v", err)
 	}
 }
+
+// negative control: drop the n.String() normalisation — "10.250.3.4/16" stays as typed, init then
+// compares it with docker's "10.250.0.0/16" and recreates a network that was already right.
+func TestNetworkRangeFlags(t *testing.T) {
+	p, e := ParseArgs([]string{"init", "--ingress-subnet", "10.250.3.4/16", "--shared-subnet", "10.251.0.0/16"}, noEnv)
+	if e != nil || p.IngressSubnet != "10.250.0.0/16" || p.SharedSubnet != "10.251.0.0/16" {
+		t.Fatalf("got %+v %v", p, e)
+	}
+	// Unset and empty both mean "nobody asked" — init must then keep an existing network.
+	env := func(k string) (string, bool) {
+		if k == "PSTACK_INGRESS_SUBNET" {
+			return "", true
+		}
+		return "", false
+	}
+	if p, _ := ParseArgs([]string{"init"}, env); p.IngressSubnet != "" || p.SharedSubnet != "" {
+		t.Fatalf("empty env read as a request: %+v", p)
+	}
+	// The environment gets the same check as the flag.
+	bad := func(k string) (string, bool) { return "lots", k == "PSTACK_SHARED_SUBNET" }
+	if _, e := ParseArgs([]string{"init"}, bad); e == nil || e.Msg != `--shared-subnet must be an IPv4 range like 10.250.0.0/16, got "lots"` {
+		t.Fatalf("got %v", e)
+	}
+	if _, e := ParseArgs([]string{"init", "--ingress-subnet", "fd00::/64"}, noEnv); e == nil {
+		t.Fatal("accepted an IPv6 range")
+	}
+}
