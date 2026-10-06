@@ -141,7 +141,7 @@ service it produces. If you build on the host rather than in CI, budget for
 Disk matters for a second-order reason. Per-PR images accumulate — `docker compose down -v` never
 removes them — and once the disk fills, Docker evicts the build cache, which is the single biggest
 lever on per-PR deploy time. That is precisely what the `images` axis in
-[`../examples/preview.yml`](../examples/preview.yml) exists to prevent. Give yourself headroom
+[`../examples/preview.yml`](../packages/pstack/examples/preview.yml) exists to prevent. Give yourself headroom
 anyway.
 
 Pick a concrete server type from live data rather than a number in a doc:
@@ -182,7 +182,7 @@ things to leak.
 | `backend-pr-123.preview.example.com` | ✅ yes |
 | `backend.pr-123.preview.example.com` | ❌ **no** — two labels deep |
 
-So flatten with dashes. [`../examples/preview.yml`](../examples/preview.yml) already does
+So flatten with dashes. [`../examples/preview.yml`](../packages/pstack/examples/preview.yml) already does
 (`backend-${STACK}.${PREVIEW_DOMAIN}` → `backend-pr-123.preview.example.com`). Invent a dotted
 scheme and the name does not even resolve — and under DNS-01 it also misses the certificate, so
 Traefik falls back to its self-signed default and browsers throw `ERR_CERT_AUTHORITY_INVALID` on a
@@ -566,7 +566,7 @@ sensitive.
 
 ## 5. The control stack, explained
 
-`init` renders [`../templates/control/docker-compose.yml`](../templates/control/docker-compose.yml)
+`init` renders [`../templates/control/docker-compose.yml`](../packages/pstack/templates/control/docker-compose.yml)
 to `/var/lib/pstack/control/docker-compose.yml`, substituting exactly two markers — the ACME
 challenge flags and the control router's TLS labels — and leaving everything else byte-for-byte.
 These are the decisions inside it.
@@ -634,7 +634,7 @@ A shared Postgres, a queue cluster, a registry mirror — anything every preview
   `requires: [{ name: shared-queue, assert: … }]` and fails by name before it creates anything. That
   only reads cleanly when the dependency is a deployment with an identity.
 
-See [`../examples/shared.yml`](../examples/shared.yml) — and note its `down` is refused without
+See [`../examples/shared.yml`](../packages/pstack/examples/shared.yml) — and note its `down` is refused without
 `--force`, because `compose down -v` there destroys the state every tenant depends on.
 
 ### What a per-PR compose file must declare

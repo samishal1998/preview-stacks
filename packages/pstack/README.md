@@ -49,7 +49,7 @@ replaced, so it is killed mid-operation, and a bad image leaves the host with no
 no remote way to fix it. `pstack init` / `pstack upgrade` handle that from the host instead.
 
 Full rationale, the registry contract, and the trust boundary:
-**[docs/control-plane.md](docs/control-plane.md)**.
+**[docs/control-plane.md](../../docs/control-plane.md)**.
 
 ### TLS: HTTP-01 by default, DNS-01 when you outgrow it
 
@@ -67,7 +67,7 @@ Start on HTTP-01; move to DNS-01 when PR volume or pre-deploy URLs demand it. Bo
 wildcard **DNS** record (`*.<domain>` + apex) so any per-PR host resolves — HTTP-01 changes what
 gets certified, not what resolves. The per-PR router labels differ between the two modes, and
 getting that wrong is what burns the rate limit: see
-[docs/control-plane.md](docs/control-plane.md#tls-two-challenge-modes-opposite-per-pr-rules).
+[docs/control-plane.md](../../docs/control-plane.md#tls-two-challenge-modes-opposite-per-pr-rules).
 
 > Status: `kind`, `requires`, the `shared` `down` guard, the deployment registry, the
 > registry-backed API (`/api/deployments/*`), `pstack init` (both challenge modes) and the released
@@ -185,11 +185,11 @@ The installer verifies the download against the release's `checksums.txt` and mo
 into `/usr/local/bin` (`PSTACK_INSTALL_DIR` relocates, `PSTACK_VERSION` pins). The web UI, the share
 page, the control-stack compose template and the cloud-init template are embedded in the binary,
 so nothing is read from a path relative to a source tree at runtime. See
-[docs/control-plane.md](docs/control-plane.md#distribution-one-static-binary).
+[docs/control-plane.md](../../docs/control-plane.md#distribution-one-static-binary).
 
 Until 0.28.0 this was the npm package `@samyx/preview-stacks` on Bun; that package is deprecated
 and stops there. An existing host takes the one-time move in
-[docs/usage.md §9](docs/usage.md#9-day-2-operations).
+[docs/usage.md §9](../../docs/usage.md#9-day-2-operations).
 
 ### Contributing
 
@@ -320,30 +320,30 @@ than deploy created.
 anything but `127.0.0.1`**, so an unauthenticated instance cannot be exposed by accident. Job
 history is in-memory and unpersisted, consistent with the no-state-store rule.
 
-[docs/control-plane.md §6](docs/control-plane.md#6-submitting-a-deployment) has the worked
+[docs/control-plane.md §6](../../docs/control-plane.md#6-submitting-a-deployment) has the worked
 `curl` flow and the five behaviours that surface is carrying — why variables are not persisted, why
 `PUT` parses before it writes, and why `DELETE` fails closed.
 
 Since 0.26.0 a new host runs previews as **Docker Swarm** stacks (one manager; workers join from
 the Swarm page — you keep writing plain compose, the file is converted on every deploy), a spec can
 carry a `sleep:` policy so an idle preview **goes to sleep and wakes on the next request**, and a
-deployment can be **shared** by link. [docs/usage.md §7b](docs/usage.md#7b-scale-out-sleep-and-share-0260).
+deployment can be **shared** by link. [docs/usage.md §7b](../../docs/usage.md#7b-scale-out-sleep-and-share-0260).
 
 Since 0.27.0 people can **sign in with your own identity provider** — you register one OAuth/OIDC
 application in your org (Google Workspace, Okta, GitHub, GitLab, …), paste the client id and secret
 in, and accounts appear on first login instead of being created by hand. Local accounts, the machine
 token and personal API tokens are untouched.
-[docs/usage.md §7c](docs/usage.md#7c-sign-in-with-your-identity-provider-0270).
+[docs/usage.md §7c](../../docs/usage.md#7c-sign-in-with-your-identity-provider-0270).
 
-See [docs/control-plane.md](docs/control-plane.md) for the architecture,
-[docs/usage.md](docs/usage.md) for worked examples, and [docs/bootstrap.md](docs/bootstrap.md) to
+See [docs/control-plane.md](../../docs/control-plane.md) for the architecture,
+[docs/usage.md](../../docs/usage.md) for worked examples, and [docs/bootstrap.md](../../docs/bootstrap.md) to
 build a host from scratch (Hetzner + cloud-init).
 
 ## Scope
 
 **In:** the spec (`kind`, `requires`, axes), the CLI, leak verification, the HTTP API, the web UI,
 and the **deployment registry** — a control plane holding many deployments addressed by id
-(`internal/registry`; see [docs/control-plane.md](docs/control-plane.md)).
+(`internal/registry`; see [docs/control-plane.md](../../docs/control-plane.md)).
 
 **Not built, deliberately:** a persistent job store, a plugin system, a reconciliation loop. The
 registry is a *cache of intent* — truth lives in Docker and in each axis's `assert_*` probe — so

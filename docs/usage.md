@@ -352,7 +352,7 @@ later.
 
 ### More axes
 
-[`../examples/preview.yml`](../examples/preview.yml) is a fully-commented four-axis stack — database,
+[`../examples/preview.yml`](../packages/pstack/examples/preview.yml) is a fully-commented four-axis stack — database,
 queue namespace, images, ingress — with the fail-closed pattern applied to each. Two of those axes
 exist because Compose won't do the job:
 
@@ -1196,7 +1196,7 @@ It does what the CLI does, with a live log: enter a deployment id, **Load**, the
 - The step table uses **four** marks where the CLI report uses three: `✓` ok, `?` unverifiable, `!`
   leaked, `✗` otherwise failed. The CLI folds `!` into `✗` and puts the count in the summary line.
 
-[`../ui/README.md`](../ui/README.md) documents the UI's internals and the exact routes it consumes.
+[`packages/pstack/ui/README.md`](../packages/pstack/ui/README.md) documents the UI's internals and the exact routes it consumes.
 
 ### Copy a variable list out, paste one back
 
