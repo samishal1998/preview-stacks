@@ -475,7 +475,7 @@ would otherwise post the same line all day.
 | `task` | string | `stuck` only: the task id. |
 | `service` | string | `stuck` only, `<stack>_<service>`. |
 | `stack` | string | `stuck` only: the swarm namespace. |
-| `reason` | string | `stuck` only: docker's own sentence, e.g. `no suitable node (insufficient resources on 2 nodes)`. |
+| `reason` | string | `stuck` only: docker's own sentence, e.g. `no suitable node (insufficient resources on 2 nodes)`. A task stuck in `New` for a minute reads `never allocated: …` instead (0.41.0) — not a machine shortage. |
 
 Three things a receiver needs to know:
 
