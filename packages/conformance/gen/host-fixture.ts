@@ -183,6 +183,11 @@ try {
 {
   const db = new Database(join(data, 'db', 'pstack.db'));
   const now = Date.now();
+  // The sessions above were minted through the real login and SSO flows, so they carry a real expiry
+  // — and every test that resolves one went red the day it passed: a fixture made on 2026-08-22
+  // expired on 2026-09-21. The fixture records what a host's database looks like, not when; pin the
+  // expiry far enough out that a regenerated fixture never becomes a date-triggered failure.
+  db.query(`UPDATE sessions SET expires_at = ?`).run(Date.UTC(2100, 0, 1));
   db.query(`INSERT INTO terminal_sessions (actor, deployment, container, container_id, shell, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run('admin', 'pr-1', 'pr-1-app-1', 'c0ffee123456', 'sh', now - 60_000, now - 30_000);
   db.query(`INSERT INTO terminal_sessions (actor, deployment, container, container_id, shell, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run('root (PSTACK_TOKEN)', 'pr-1', 'pr-1-app-1', 'c0ffee123456', 'bash', now - 20_000, null);
   // deliveries as a pre-0.25.0 release left them: no stored payload, no response code, no error
