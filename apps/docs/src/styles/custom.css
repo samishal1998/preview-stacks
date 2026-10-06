@@ -1,0 +1,12 @@
+/* One accent, chosen for the subject: a preview is a short-lived branch of something real, so the
+   palette is a steady teal rather than a loud brand colour. Starlight derives every other shade. */
+:root {
+  --sl-color-accent-low: #0f2f33;
+  --sl-color-accent: #1f8a96;
+  --sl-color-accent-high: #a8e4ea;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #cfeff2;
+  --sl-color-accent: #11717c;
+  --sl-color-accent-high: #0c3d43;
+}

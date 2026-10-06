@@ -1,0 +1,29 @@
+// Overrides the root pipeline for the docs site.
+//
+// Most of the site is generated from files OUTSIDE this package (docs/, the READMEs, the agent skill,
+// the --help golden, the API lock file), so they are build inputs too — leave them out and turbo
+// serves a cached site that no longer matches the docs it claims to show.
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "outputs": ["dist/**"],
+      "inputs": [
+        "src/**",
+        "scripts/**",
+        "astro.config.mjs",
+        "tsconfig.json",
+        "package.json",
+        "$TURBO_ROOT$/docs/**",
+        "$TURBO_ROOT$/packages/pstack/README.md",
+        "$TURBO_ROOT$/packages/pstack/package.json",
+        "$TURBO_ROOT$/packages/client/README.md",
+        "$TURBO_ROOT$/skills/pstack/SKILL.md",
+        "$TURBO_ROOT$/packages/conformance/golden/cli/help.json",
+        "$TURBO_ROOT$/packages/pstack/internal/apicli/oascmd.lock.json",
+        "$TURBO_ROOT$/packages/pstack/api/openapi.yaml"
+      ]
+    }
+  }
+}

@@ -1,5 +1,8 @@
 # preview-stacks
 
+**Documentation: [samishal1998.github.io/preview-stacks](https://samishal1998.github.io/preview-stacks/)** —
+the quick start, the guide and the reference, generated from [`docs/`](docs/).
+
 A monorepo. The product is **[`packages/pstack`](packages/pstack)** — a control plane for ephemeral
 per-PR preview stacks, released as one static Go binary on
 [GitHub Releases](https://github.com/samishal1998/preview-stacks/releases). Its README is the
@@ -10,6 +13,7 @@ packages/pstack        the CLI, HTTP API, and the basic embedded UI   (Go; GitHu
 packages/conformance   the black-box specification: goldens + tests that grade the binary
 packages/client        the TypeScript API client                       (npm: @samyx/preview-stacks-client)
 apps/ui                the optional advanced web UI                   (npm: @samyx/preview-stacks-ui; its own container)
+apps/docs              the documentation site (Astro Starlight)       (GitHub Pages; generated from docs/)
 docs/                  guides that span all of it — bootstrap, usage, control-plane architecture
 skills/pstack/         a skill teaching an agent to use pstack
 ```

@@ -1,0 +1,17 @@
+{
+  "name": "@samyx/preview-stacks-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "bun scripts/sync-docs.ts",
+    "dev": "bun scripts/sync-docs.ts && astro dev",
+    "build": "bun scripts/sync-docs.ts && astro build && bun scripts/check-links.ts",
+    "preview": "astro preview",
+    "test": "bun test scripts"
+  },
+  "devDependencies": {
+    "@astrojs/starlight": "^0.42.5",
+    "astro": "^7.3.5",
+    "github-slugger": "^2.0.0"
+  }
+}
