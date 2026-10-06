@@ -271,8 +271,12 @@ func TestInitSwarmModeAndWakeCatchAll(t *testing.T) {
 		if !has(r.log, "docker swarm init") {
 			t.Error("no swarm init")
 		}
-		if n := count(r.log, "docker network create -d overlay --attachable preview-"); n != 2 {
-			t.Errorf("overlay creates: %d", n)
+		// negative control: set subnetArg to "" — both checks below fail.
+		if !has(r.log, "docker network create -d overlay --attachable --subnet 10.250.0.0/16 preview-ingress") {
+			t.Errorf("preview-ingress not created as a /16: %v", r.log)
+		}
+		if !has(r.log, "docker network create -d overlay --attachable --subnet 10.251.0.0/16 preview-shared") {
+			t.Errorf("preview-shared not created as a /16: %v", r.log)
 		}
 		for _, want := range []string{
 			"--providers.swarm=true", "--providers.swarm.network=preview-ingress",
@@ -380,6 +384,114 @@ func TestInitSwarmModeAndWakeCatchAll(t *testing.T) {
 		}
 		if has(r2.Commands(), "docker network rm") {
 			t.Error("removed a network with a preview on it")
+		}
+	})
+}
+
+// subnetRunner is a swarm manager whose preview-ingress already exists as an overlay with `had` as its
+// range, with `services` (docker service inspect lines: "<name> <network ids…>") on it.
+func subnetRunner(had, services string) *exec.Fake {
+	r := okRunner("active", "overlay\n")
+	orig := r.Answer
+	r.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.Contains(cmd, ".IPAM.Config") && strings.HasSuffix(strings.Fields(cmd)[len(strings.Fields(cmd))-2], "preview-ingress"):
+			return exec.Result{OK: true, Stdout: had + " \n"}, true
+		case strings.Contains(cmd, ".IPAM.Config"):
+			return exec.Result{OK: true, Stdout: "10.251.0.0/16 \n"}, true
+		case strings.Contains(cmd, "-f '{{.ID}}' preview-ingress"):
+			return exec.Result{OK: true, Stdout: "ingressnetid\n"}, true
+		case strings.Contains(cmd, "docker service ls -q"):
+			return exec.Result{OK: true, Stdout: services}, true
+		case strings.Contains(cmd, "range .Containers"):
+			return exec.Result{OK: true, Stdout: "pstack-control-traefik-1 pstack-control-pstack-1\n"}, true
+		}
+		return orig(cmd)
+	}
+	return r
+}
+
+func TestInitSwarmNetworkRanges(t *testing.T) {
+	run := func(t *testing.T, r *exec.Fake, ingress string) (string, []string, error) {
+		t.Helper()
+		var out bytes.Buffer
+		err := initctl.Init(initctl.Options{
+			DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			UI: initctl.Basic, Orchestrator: spec.Swarm, Runner: r, Out: &out, IngressSubnet: ingress,
+		})
+		return out.String(), r.Commands(), err
+	}
+	ran := func(log []string, prefix string) bool {
+		for _, c := range log {
+			if strings.HasPrefix(c, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("an existing small network is kept, and init says why that matters", func(t *testing.T) {
+		// negative control: drop the `!asked` guard so a default recreates — `network rm` runs and this fails.
+		out, log, err := run(t, subnetRunner("10.0.1.0/24", ""), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ran(log, "docker network rm") || ran(log, "docker compose -p pstack-control down") {
+			t.Fatalf("an upgrade with no range asked for recreated a network: %v", log)
+		}
+		if !strings.Contains(out, "preview-ingress is 10.0.1.0/24: room for 254 addresses") ||
+			!strings.Contains(out, "--ingress-subnet 10.250.0.0/16") {
+			t.Fatalf("no note about the small range:\n%s", out)
+		}
+		// preview-shared is already a /16: nothing to say about it.
+		if strings.Contains(out, "preview-shared is") {
+			t.Fatalf("noted a network that is already big:\n%s", out)
+		}
+	})
+
+	t.Run("a range asked for is applied: control stack down, network removed, created again", func(t *testing.T) {
+		// negative control: skip the `docker network rm` — rm is never seen and the order check fails.
+		_, log, err := run(t, subnetRunner("10.0.1.0/24", ""), "10.250.0.0/16")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rm, create := -1, -1
+		for i, c := range log {
+			if c == "docker network rm preview-ingress" {
+				rm = i
+			}
+			if strings.HasPrefix(c, "docker network create -d overlay --attachable --subnet 10.250.0.0/16 preview-ingress") {
+				create = i
+			}
+		}
+		if rm < 0 || create < rm {
+			t.Fatalf("want rm then create, got rm=%d create=%d: %v", rm, create, log)
+		}
+		if !ran(log, "docker compose -p pstack-control down") {
+			t.Fatal("control stack not taken down first")
+		}
+	})
+
+	t.Run("a preview still on the network stops it, before anything is taken down", func(t *testing.T) {
+		// negative control: look only at local containers — the service on a worker is missed and the
+		// control stack goes down for a removal docker then refuses.
+		_, log, err := run(t, subnetRunner("10.0.1.0/24", "pr-7_web ingressnetid othernet\npr-7_db othernet\n"), "10.250.0.0/16")
+		if err == nil || !strings.Contains(err.Error(), "pr-7_web") || strings.Contains(err.Error(), "pr-7_db") {
+			t.Fatalf("got %v", err)
+		}
+		if ran(log, "docker compose -p pstack-control down") || ran(log, "docker network rm") {
+			t.Fatalf("took something down despite a preview on the network: %v", log)
+		}
+	})
+
+	t.Run("a range already in place is left alone", func(t *testing.T) {
+		// negative control: drop the `had != want` condition — a network already right is recreated.
+		out, log, err := run(t, subnetRunner("10.250.0.0/16", ""), "10.250.0.0/16")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ran(log, "docker network rm") || strings.Contains(out, "note") {
+			t.Fatalf("touched a network already right:\n%s\n%v", out, log)
 		}
 	})
 }
