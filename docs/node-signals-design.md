@@ -47,7 +47,9 @@ Asks docker, answers straight away. Nothing is stored.
 - **`stuck`** — every task docker refused to place, with docker's own words for why. That is the
   "I need another machine" answer. The caller reads `reason` and decides whether a machine would
   actually help: `insufficient resources` means yes, `scheduling constraints not satisfied` usually
-  means a spec needs fixing.
+  means a spec needs fixing. A task stuck in `New` for a minute is listed too, with a reason starting
+  `never allocated` — swarm never got as far as looking for a machine, so a machine won't help
+  ([the address leak](preview-ingress-address-leak.md)).
 
 Anyone who can read the API can read this. It exposes no credentials.
 
@@ -103,7 +105,9 @@ next deploy lands. Draining takes it out of the running before you act on it.
   somebody is using by hand looks idle.
 - **The primary is never reported as empty.** It runs pstack itself, and the isolation-axis hooks
   run there too.
-- **`stuck` is docker's opinion, passed through.** pstack neither re-words it nor diagnoses it.
+- **`stuck` is docker's opinion, passed through.** pstack neither re-words it nor diagnoses it — with
+  one exception: a task stuck in `New` has no docker sentence to pass through (swarm writes the reason
+  only to the manager's log), so pstack supplies one that says where to look.
 
 ## How it fits Fleet Plane later
 

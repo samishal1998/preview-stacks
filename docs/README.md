@@ -25,6 +25,7 @@ browser); the version-control rules are in AGENTS.md.
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
 | Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
 | Test a **multi-node swarm** on a laptop, because CI has one machine | [`swarm-local-testing.md`](swarm-local-testing.md) |
+| Fix containers stuck in **`New`** on a swarm host (`could not find an available IP`) | [`preview-ingress-address-leak.md`](preview-ingress-address-leak.md) |
 | Know how the **Go binary** (0.29.0) was proven a drop-in for the TypeScript one, and what still differs | [`port-status.md`](port-status.md) |
 
 ## The documents

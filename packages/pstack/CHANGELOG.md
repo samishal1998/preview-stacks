@@ -2,7 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **`--ingress-subnet` / `--shared-subnet`** (`PSTACK_INGRESS_SUBNET`, `PSTACK_SHARED_SUBNET`) on
+  `init`, swarm only. A new host now creates `preview-ingress` and `preview-shared` as `/16`s
+  (`10.250.0.0/16`, `10.251.0.0/16`) instead of docker's default `/24`, which a busy host fills — and
+  which swarm, on one 0.39.0 host, filled with addresses it never gave back, leaving every routed
+  service stuck in `New` for four weeks. An existing network is **kept** unless you set one of these;
+  set and different, `init` re-creates the network, after checking that nothing but the control stack
+  is attached (swarm services on any machine included) and stopping with their names if anything is.
+  To enlarge an existing host: put its previews to sleep, then
+  `PSTACK_INGRESS_SUBNET=10.250.0.0/16 pstack upgrade`. `init` notes a network smaller than the
+  default instead of touching it.
+
 ### Fixed
+
+- **A task stuck in `New` is reported instead of silently timing out.** Swarm puts the reason only in
+  the manager's docker log, so the deploy succeeded, the UI showed `New`, and readiness gave up after
+  three minutes without saying why. Readiness now fails a task still `new` a minute in, with
+  `never allocated: swarm gave it no address or machine` and the `journalctl` line to run, carried by
+  `container.start-failed` and `stack.failed`. `GET /api/signals` lists it under `stuck` with the same
+  sentence, so a machine manager does not buy a machine for a network that is out of addresses.
 
 - **A release-candidate tag no longer publishes itself as the latest release.** GoReleaser's
   `prerelease` setting was unset, which means `false`, so `v0.41.0-rc.1` shipped as a full release,

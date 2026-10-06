@@ -69,6 +69,8 @@ init flags: --domain <preview.example.com>  --acme-email <you@example.com>
             --challenge http01|dns01        (default http01 — no DNS credential needed)
             --dns-provider <lego-code>      (dns01 only; token via PSTACK_DNS_TOKEN)
             --logging none|loki             (default none — Loki log shipping)
+            --ingress-subnet <cidr>         (swarm: preview-ingress's range, default 10.250.0.0/16)
+            --shared-subnet <cidr>          (swarm: preview-shared's range, default 10.251.0.0/16)
 
 serve env:  PSTACK_TOKEN (required to bind off-loopback) · PSTACK_PORT (7878)
             PSTACK_HOST (127.0.0.1) · PSTACK_DATA (/var/lib/pstack)
@@ -1299,6 +1301,8 @@ Everything `init` reads:
 | `--dns-provider <lego-code>` | `PSTACK_DNS_PROVIDER` | — | **required for `dns01` only**, ignored by `http01` |
 | `--orchestrator swarm\|compose` | `PSTACK_ORCHESTRATOR` | `swarm` | how previews deploy. `swarm` makes this daemon a one-node manager (overlay networks, the swarm provider in Traefik); `compose` is what every host before 0.26.0 ran. `upgrade` keeps whatever the host has — see [Swarm mode](#swarm-mode) |
 | `--logging none\|loki` | `PSTACK_LOGGING` | `none` | `loki`: a Loki service in the control stack, its log plugin on this node, and a `logging:` block on every deployed service that has none. Anything else exits 3. `upgrade` keeps whatever the host has |
+| `--ingress-subnet <cidr>` | `PSTACK_INGRESS_SUBNET` | `10.250.0.0/16` | swarm only: the address range of `preview-ingress`, which every routed preview service takes an address on. Used when the network is created; an existing network is **kept as it is** unless you set this, and then one with a different range is re-created — every preview must be asleep or down first, and `init` stops naming the ones still attached. See [the address leak](preview-ingress-address-leak.md) |
+| `--shared-subnet <cidr>` | `PSTACK_SHARED_SUBNET` | `10.251.0.0/16` | the same, for `preview-shared` |
 | — | `PSTACK_DNS_TOKEN` | *unset* | the DNS-01 credential, written to `dns.env`. Omit for the tokenless providers |
 | — | `PSTACK_TOKEN` | *generated* | the API bearer token. Supply it to keep or rotate a known one; leave it unset to be handed a fresh one **printed exactly once** |
 | — | `PSTACK_LOKI_PASSWORD` | *generated* | with `--logging loki`: the push password (32 lowercase hex), kept in `control/.env` as `LOKI_PUSH_PASSWORD`. Supply it to keep the host's |
@@ -2184,6 +2188,31 @@ the host, with every preview torn down first — the networks have to be recreat
 — the line that installs the plugin — is present only when logging is on. The Swarm page and
 `pstack swarm` flag the same nodes.
 
+### A service stuck in `New` (0.41.0)
+
+A swarm task in `New` has been created but never given an address or a machine. That normally lasts
+under a second. One that stays is waiting on swarm's address allocator — in practice, a network with
+no addresses left — and swarm writes the reason only to the manager's docker log, never to
+`docker service ps`. Since 0.41.0 the deploy's readiness watch fails it after a minute and says so,
+and `GET /api/signals` lists it under `stuck` with the same sentence.
+
+Confirm on the manager:
+
+```bash
+journalctl -u docker --since "1 hour ago" --no-pager | grep "available IP"
+```
+
+Output means the network is full. `systemctl restart docker` on the manager clears it for now (every
+preview URL and the control panel blink for 10–30 seconds), and a bigger network stops it coming back:
+
+```bash
+# every preview on the network asleep or down first — init names any still attached and stops
+PSTACK_INGRESS_SUBNET=10.250.0.0/16 pstack upgrade
+```
+
+New hosts get that range already. The whole story, including what does not help:
+[preview-ingress-address-leak.md](preview-ingress-address-leak.md).
+
 ### Adding and removing worker machines (0.41.0)
 
 Sleep frees a machine's worth of capacity that nobody turns off, and a busy afternoon needs a
@@ -2210,7 +2239,9 @@ curl -s -H "Authorization: Bearer $PSTACK_TOKEN" https://api.<domain>/api/signal
 
 **`stuck` is "I need another machine".** Every task docker refused to place, with docker's own
 sentence. Read it before you buy anything: `insufficient resources` means the cluster is full, while
-`scheduling constraints not satisfied` usually means a spec is asking for a machine nobody has.
+`scheduling constraints not satisfied` usually means a spec is asking for a machine nobody has. A task
+that starts `never allocated` is the opposite case — it is stuck in `New` and no machine will help
+([above](#a-service-stuck-in-new-0410)).
 
 **A worker with `tasks: 0` is "you can take this away".** `emptySince` is when pstack first saw it
 that way; how long you wait before acting is your policy, not pstack's. The manager never appears as
@@ -3284,6 +3315,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
 | `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
 | `--logging none\|loki` | `init` `cloud-init` | default **`none`** (or `PSTACK_LOGGING`). `loki` runs Loki in the control stack and ships every deployed service's logs to it; `cloud-init` passes it to `init`. Any other value exits 3. |
+| `--ingress-subnet <cidr>` `--shared-subnet <cidr>` | `init` | swarm only: the two networks' ranges, `10.250.0.0/16` and `10.251.0.0/16` by default. Unset keeps an existing network; set and different re-creates it. Not an IPv4 range exits 3. |
 | `--format <shape>` | `swarm join` | `command` (default), `script`, `cloud-config` or `token`. An unknown one exits 3. |
 | `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
 | `-o`, `--out <file>` | `cloud-init` `swarm join` `pull config` | write the rendered file instead of printing it. **Required** for `pull config`, which never writes an export to stdout and creates the file `0600`. |
@@ -3329,6 +3361,7 @@ different problems with different owners.
 | `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_LOGGING` | `init` `cloud-init` | `none` | same as `--logging` |
+| `PSTACK_INGRESS_SUBNET` `PSTACK_SHARED_SUBNET` | `init` (and `upgrade`, which runs it) | *unset* | same as `--ingress-subnet` / `--shared-subnet`. Set on `pstack upgrade`, it reaches the `init` the upgrade runs — the one-command way to enlarge an existing host's network |
 | `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
 | `PSTACK_PROBE` | `serve` | *on* | `off` removes `GET /api/probe/:id`, the unauthenticated [probe](#probe-a-preview-without-a-token-0340); the path then 404s like any unknown one. Any other value, including a misspelling, leaves it on — a typo should not silently turn a CI pipeline into one that polls a 404 forever |
