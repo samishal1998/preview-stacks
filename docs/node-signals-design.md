@@ -1,6 +1,7 @@
 # Node signals — what pstack tells a machine manager
 
-> Status: built in 0.41.0-rc.1, exactly as written here. Build plan:
+> Status: shipped in 0.41.0 (first as 0.41.0-rc.1). The one addition since: `stuck` also lists a
+> task never allocated (see below). Build plan:
 > [node-signals-plan.md](node-signals-plan.md); using it: [usage.md](usage.md#adding-and-removing-worker-machines-0410).
 
 ## The job
