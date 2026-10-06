@@ -36,9 +36,9 @@ const infoActive = `{"LocalNodeState":"active","ControlAvailable":true,"NodeID":
 func manager(t *testing.T) *exec.Fake {
 	t.Helper()
 	return shim(t, map[string]string{
-		"docker info --format '{{json .Swarm}}'":    infoActive,
-		"docker node ls --format '{{json .}}'":      read(t, "node-ls.jsonl"),
-		"docker service ls --format '{{json .}}'":   read(t, "service-ls.jsonl"),
+		"docker info --format '{{json .Swarm}}'":  infoActive,
+		"docker node ls --format '{{json .}}'":    read(t, "node-ls.jsonl"),
+		"docker service ls --format '{{json .}}'": read(t, "service-ls.jsonl"),
 		"docker service ps --no-trunc --filter desired-state=running --format '{{json .}}' 'svc1web00000000' 'svc2api00000000' 'svc3log00000000'": read(t, "service-ps.jsonl"),
 	})
 }
@@ -136,5 +136,42 @@ func TestLookWithNoServices(t *testing.T) {
 		if strings.Contains(cmd, "service ps") {
 			t.Fatalf("asked for tasks with no services: %q", cmd)
 		}
+	}
+}
+
+// negative control: make unallocated() look only at the first word — a task `New` for seconds is
+// reported, and every deploy raises a false alarm.
+func TestATaskStuckInNewIsReportedOnlyOnceItHasWaitedAMinute(t *testing.T) {
+	cases := map[string]bool{
+		"New 30 minutes ago":         true,
+		"New about a minute ago":     true,
+		"New 2 hours ago":            true,
+		"New 45 seconds ago":         false,
+		"New less than a second ago": false,
+		"Pending 30 minutes ago":     false,
+		"Running 30 minutes ago":     false,
+	}
+	for state, want := range cases {
+		if got := (rawTask{CurrentState: state}).unallocated(); got != want {
+			t.Errorf("%q: got %v, want %v", state, got, want)
+		}
+	}
+}
+
+// negative control: drop the unallocated branch in Look — the task never appears in Stuck.
+func TestLookReportsATaskNeverAllocated(t *testing.T) {
+	ps := `{"ID":"task9new00000","Name":"pr-19044_inngest.1","Node":"","DesiredState":"Running","CurrentState":"New 30 minutes ago","Error":""}`
+	f := shim(t, map[string]string{
+		"docker info --format '{{json .Swarm}}'":  infoActive,
+		"docker node ls --format '{{json .}}'":    read(t, "node-ls.jsonl"),
+		"docker service ls --format '{{json .}}'": `{"ID":"svc9inn00000000","Name":"pr-19044_inngest","Mode":"replicated","Replicas":"0/1"}`,
+		"docker service ps --no-trunc --filter desired-state=running --format '{{json .}}' 'svc9inn00000000'": ps,
+	})
+	v := Look(f)
+	if len(v.Stuck) != 1 || v.Stuck[0].Service != "pr-19044_inngest" || v.Stuck[0].Stack != "pr-19044" {
+		t.Fatalf("stuck = %+v", v.Stuck)
+	}
+	if !strings.HasPrefix(v.Stuck[0].Reason, "never allocated") || strings.HasPrefix(v.Stuck[0].Reason, Unplaced) {
+		t.Fatalf("reason = %q", v.Stuck[0].Reason)
 	}
 }

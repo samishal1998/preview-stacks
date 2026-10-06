@@ -2,6 +2,7 @@ package readiness
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -322,5 +323,44 @@ func TestRestartLoopThresholdIsConfigurable(t *testing.T) {
 	s, _ := ws.Wait("probe", 3000)
 	if s.State != Failed {
 		t.Fatalf("RestartLoop 0 falls back to the default of %d: %+v", RestartLoop, s)
+	}
+}
+
+// negative control: drop the `c.State == "new" && stuck` rule — the watch never fails and this times
+// out instead of failing with the reason.
+func TestATaskStuckInNewFailsWithTheReasonInsteadOfTimingOut(t *testing.T) {
+	bus := events.New()
+	c := captureOn(bus)
+	defer c.off()
+	d := newDocker()
+	d.set("new", "", 0, 0)
+	ws := New(Options{PollMs: 20, TimeoutMs: 5000, NotAllocatedMs: 1, Bus: bus})
+	ws.Start("probe", d.runner(), StartOptions{Emit: true})
+	s, _ := ws.Wait("probe", 3000)
+	if s.State != Failed || !s.Containers[0].Failed || s.Containers[0].Reason == nil ||
+		!strings.HasPrefix(*s.Containers[0].Reason, "never allocated: swarm gave it no address or machine") {
+		t.Fatalf("got %+v", s)
+	}
+	if d := c.data("container.start-failed"); !strings.Contains(fmt.Sprint(d["reason"]), "available IP") {
+		t.Errorf("start-failed does not point at the log: %v", d)
+	}
+}
+
+// negative control: fail `new` immediately (drop the elapsed check) — a task that is merely young is
+// reported broken.
+func TestATaskThatIsOnlyBrieflyNewIsStillConverging(t *testing.T) {
+	bus := events.New()
+	d := newDocker()
+	d.set("new", "", 0, 0)
+	ws := New(Options{PollMs: 20, TimeoutMs: 5000, NotAllocatedMs: 60_000, Bus: bus})
+	ws.Start("probe", d.runner(), StartOptions{})
+	time.Sleep(100 * time.Millisecond)
+	s, _ := ws.Get("probe")
+	if s.State != Watching || (len(s.Containers) > 0 && s.Containers[0].Failed) {
+		t.Fatalf("a young task was failed: %+v", s)
+	}
+	d.set("running", "", 0, 0)
+	if s, _ := ws.Wait("probe", 3000); s.State != Ready {
+		t.Fatalf("got %+v", s)
 	}
 }
