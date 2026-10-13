@@ -1,8 +1,22 @@
 # @samyx/preview-stacks-ui-hearth
 
-An alternative web UI for pstack, built on [Hearth UI](https://hearth-ui.samyx.net/llms.txt). A first
-slice: sign in, Deployments and Jobs, read-only. Private and unreleased; `apps/ui` stays the
-advanced UI until this one covers what it does.
+An alternative web UI for pstack, built on [Hearth UI](https://hearth-ui.samyx.net/llms.txt) rather
+than ported from `apps/ui`: it uses the components Hearth ships for each job instead of rebuilding
+the advanced UI's screens. Private and unreleased; `apps/ui` stays the advanced UI until this covers
+what it does.
+
+| Job | Hearth component |
+|---|---|
+| Frame, navigation, account | `HDashboardShell`, `HCommandPalette` (Ctrl/Cmd+K), `HTheme`, `HThemeSwitcher`, `HPopover` |
+| Sign in | `HAuthPage` |
+| Overview | `HPageHeader` (hero), `HStatCard`, `HSparkline`, `HTimeline` |
+| Deployments list | `HDataTable` (sort, select, page, row actions), `HFilterBar`, `HChipGroup`, `HToolbar`, `HAlertDialog` |
+| One deployment | `HResourceDetail`, `HDropdownMenu`, `HLogViewer`, `HCopyField`, `HSwitch`, `HSelect` |
+| One job | `HResourceDetail`, `HStepper`, `HLogViewer`, `HProgress` |
+| Feedback | `HToaster`, `HConnectionState`, `HAlert`, `HEmptyState`, `HSkeleton`, `HErrorPage` |
+
+Everything the advanced UI does beyond this — editing specs, routing, registries, settings, users,
+the control stack — is still there and not yet here.
 
 ## Why a separate app, not a switch inside `apps/ui`
 
@@ -25,5 +39,6 @@ cd apps/ui-hearth && bun run dev   # 127.0.0.1:5274, /api → 7878
 
 ## Next
 
-Deployment page (overview, logs, danger), lifecycle actions, jobs with a live log, routing. Take the
-component names from the Hearth index, not from memory.
+Submit and edit specs (`HFirstRunSetup` / `HSettingsPage` / `HFileUpload`), routing and domains,
+registries, users and single sign-on, the control stack and Swarm. Take component names from the
+Hearth index, not from memory.

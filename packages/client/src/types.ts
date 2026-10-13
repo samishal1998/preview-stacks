@@ -248,6 +248,8 @@ export type RuntimeRoute = {
   certresolver: string | null;
   priority: string | null;
   target: string | null;
+  /** Why `target` is null: "" when it is set, else the one reason nothing here can know the address. */
+  targetReason?: '' | 'no-port' | 'not-on-ingress' | 'unknown-node';
 };
 
 export type Runtime = {
