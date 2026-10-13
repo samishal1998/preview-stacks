@@ -573,4 +573,28 @@ describe('swarm discovery and the swarm routes', () => {
       docker.remove();
     }
   }, 20_000);
+
+  // negative control: build `services` from the container rows only — a service whose every task
+  // failed (swarm keeps none desired-running, so there is no row) vanishes, and the Logs tab cannot
+  // offer the one service whose logs are the reason someone opened it.
+  test('a swarm service with no running task still names itself, so its logs can be picked', async () => {
+    const noTasks = routeArms({ vip: true }).replace(/("stack ps sw[^"]*"\)) printf .*?;;/, '$1 true ;;');
+    expect(noTasks).not.toContain('task2');
+    const docker = dockerShim(noTasks);
+    const s = await bootServer({ tag: 'swarm-taskless', pathPrefix: docker.dir });
+    try {
+      const put = await fetch(`${s.base}/api/deployments/sw`, {
+        method: 'PUT',
+        headers: s.H,
+        body: JSON.stringify({ spec: 'version: 1\nstack: sw\ncompose:\n  file: compose.yml\n  orchestrator: swarm\naxes: []\n', compose: 'services:\n  app:\n    image: nginx\n' }),
+      });
+      expect(put.status).toBe(201);
+      const rt = (await (await fetch(`${s.base}/api/deployments/sw/runtime`, { headers: s.H })).json()) as { containers: unknown[]; services: string[] };
+      expect(rt.containers).toHaveLength(0);
+      expect(rt.services).toEqual(['app']);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  }, 20_000);
 });

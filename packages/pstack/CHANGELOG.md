@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`services` on `GET /api/deployments/:id/runtime`**: every service the stack has, by name. Under
+  swarm a service whose tasks all failed has no entry in `containers` (swarm keeps only the tasks it
+  still wants running), so its logs could not be picked in the Logs tab. The advanced UI now lists
+  it as "No task running", and clicking it reads its logs.
+
 ## 0.42.0 — 2026-10-06
 
 ### Added

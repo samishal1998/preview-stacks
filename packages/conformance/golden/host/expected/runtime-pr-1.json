@@ -49,6 +49,9 @@
     ],
     "findings": [],
     "challenge": "dns01",
-    "reachable": true
+    "reachable": true,
+    "services": [
+      "app"
+    ]
   }
 }

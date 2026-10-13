@@ -428,3 +428,30 @@ func TestSwarmRouteTargetIsTheServiceVIPThenALocalTask(t *testing.T) {
 		}
 	}
 }
+
+func TestAServiceWithNoRunningTaskKeepsItsNameInServices(t *testing.T) {
+	// negative control: build `Services` from containers only — `web` (every task failed, so swarm
+	// wants none running and no container row exists) disappears from the list, and the Logs tab
+	// cannot offer the one service whose logs are the reason someone opened it.
+	f := exec.NewFake(nil, "")
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.HasPrefix(cmd, "docker ps -aq"):
+			return exec.Result{OK: true, Stdout: ""}, true
+		case strings.HasPrefix(cmd, "docker service ls"):
+			return exec.Result{OK: true, Stdout: `{"ID":"web1","Name":"sw_web","Mode":"replicated","Replicas":"0/1"}` + "\n"}, true
+		case strings.HasPrefix(cmd, "docker service inspect"):
+			return exec.Result{OK: true, Stdout: `[{"ID":"web1full0000","Spec":{"Name":"sw_web","Labels":{"com.docker.stack.namespace":"sw"},"TaskTemplate":{"ContainerSpec":{"Image":"web:1"},"Networks":[]}}}]`}, true
+		case strings.HasPrefix(cmd, "docker stack ps"):
+			return exec.Result{OK: true, Stdout: ""}, true
+		}
+		return exec.Result{OK: true}, true
+	}
+	rt := DeploymentRuntime(RuntimeArgs{Stack: "sw", Runner: f, Challenge: DNS01, Orchestrator: spec.Swarm})
+	if len(rt.Containers) != 0 {
+		t.Fatalf("a service with no running task has no container row: %+v", rt.Containers)
+	}
+	if len(rt.Services) != 1 || rt.Services[0] != "web" {
+		t.Fatalf("services = %v, want [web]", rt.Services)
+	}
+}
