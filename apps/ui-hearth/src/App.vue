@@ -1,55 +1,73 @@
 <script setup lang="ts">
 /**
- * The first slice of an alternative console: sign in, Deployments, Jobs — read-only, on Hearth.
+ * The frame: theme island, sign-in gate, dashboard shell, command palette and toaster.
  *
- * It is a separate app from apps/ui, not a theme of it: the two share the API (through the client
- * package's types) and nothing else, so either can change without the other. Everything the
- * advanced UI does beyond this — lifecycle actions, logs, routing, settings — is still there.
+ * Everything below the frame is a view that reads `state.ts`; none of them owns navigation,
+ * authentication or persistence beyond what Hearth's contract leaves to the application.
  */
 import { computed, onMounted, ref } from 'vue';
-import { HAuthPage, HBadge, HCard, HDashboardShell, HPageHeader, HEmptyState } from '@hearth-ui/vue';
-import type { DeploymentRow, Job } from '@samyx/preview-stacks-client';
+import { useRoute, useRouter } from 'vue-router';
+import {
+  HAuthPage,
+  HButton,
+  HCommandPalette,
+  HConnectionState,
+  HDashboardShell,
+  HPopover,
+  HSelect,
+  HStack,
+  HSkeleton,
+  HTheme,
+  HThemeSwitcher,
+  HToaster,
+  type CommandItem,
+  type NavItem,
+} from '@hearth-ui/vue';
 import { api } from './api';
+import { auth, data, dismissToast, prefs, refresh, signOut, start, toasts } from './state';
 
-const checked = ref(false);
-const authed = ref(false);
-const username = ref('');
+const route = useRoute();
+const router = useRouter();
+
 const loginError = ref('');
 const loggingIn = ref(false);
+const paletteOpen = ref(false);
 
-const view = ref<'deployments' | 'jobs'>('deployments');
-const deployments = ref<DeploymentRow[]>([]);
-const jobs = ref<Job[]>([]);
-const loadError = ref('');
+const items = computed<NavItem[]>(() => [
+  { id: 'overview', label: 'Overview', icon: 'home' },
+  { id: 'deployments', label: 'Deployments', icon: 'apps', badge: data.deployments.length || undefined },
+  { id: 'jobs', label: 'Jobs', icon: 'clock', badge: data.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length || undefined },
+]);
+const active = computed(() => {
+  const n = String(route.name ?? '');
+  return n === 'deployment' ? 'deployments' : n === 'job' ? 'jobs' : n;
+});
+const pageTitle = computed(() => items.value.find((i) => i.id === active.value)?.label ?? 'pstack');
 
-const items = [
-  { id: 'deployments', label: 'Deployments', icon: 'apps' },
-  { id: 'jobs', label: 'Jobs', icon: 'activity' },
-];
-const title = computed(() => (view.value === 'jobs' ? 'Jobs' : 'Deployments'));
-
-async function refresh(): Promise<void> {
-  loadError.value = '';
-  const [d, j] = await Promise.all([api.deployments(), api.jobs()]);
-  if (d.status === 401 || j.status === 401) {
-    authed.value = false;
-    return;
-  }
-  if (!d.ok || !j.ok) loadError.value = d.body.error ?? j.body.error ?? 'could not load';
-  deployments.value = d.body.deployments ?? [];
-  jobs.value = j.body.jobs ?? [];
+function go(id: string): void {
+  void router.push(id === 'overview' ? '/' : `/${id}`);
 }
 
-async function start(): Promise<void> {
-  const me = await api.me();
-  if (me.status === 0) {
-    loginError.value = me.body.error ?? '';
-  } else if (me.ok) {
-    authed.value = true;
-    username.value = me.body.user?.username ?? (me.body.root ? 'root' : '');
-    await refresh();
-  }
-  checked.value = true;
+const commands = computed<CommandItem[]>(() => [
+  { id: 'go:overview', label: 'Overview', group: 'Go to', icon: 'home' },
+  { id: 'go:deployments', label: 'Deployments', group: 'Go to', icon: 'apps' },
+  { id: 'go:jobs', label: 'Jobs', group: 'Go to', icon: 'clock' },
+  { id: 'refresh', label: 'Refresh now', group: 'Actions', icon: 'arrow' },
+  ...data.deployments.map((d) => ({
+    id: `dep:${d.id}`,
+    label: d.id,
+    description: d.stack ?? 'needs variables',
+    group: 'Deployments',
+    icon: 'server',
+    keywords: [d.kind, d.stack ?? ''],
+  })),
+]);
+
+function onCommand(id: string): void {
+  paletteOpen.value = false;
+  if (id === 'refresh') void refresh();
+  else if (id.startsWith('go:')) go(id.slice(3));
+  else if (id.startsWith('dep:')) void router.push(`/deployments/${encodeURIComponent(id.slice(4))}`);
 }
 
 async function signIn(c: { username: string; password: string }): Promise<void> {
@@ -64,62 +82,76 @@ async function signIn(c: { username: string; password: string }): Promise<void> 
   await start();
 }
 
-async function signOut(): Promise<void> {
-  await api.logout();
-  authed.value = false;
-  deployments.value = [];
-  jobs.value = [];
-}
-
-const tone = (s: string) =>
-  s === 'ok' || s === 'running' ? 'success' : s === 'failed' || s === 'leaked' ? 'danger' : 'neutral';
+const palettes = ['sunset', 'ocean', 'forest', 'dusk', 'rose'].map((v) => ({ value: v, label: v[0]!.toUpperCase() + v.slice(1) }));
+const densities = [
+  { value: 'comfortable', label: 'Comfortable' },
+  { value: 'compact', label: 'Compact' },
+];
 
 onMounted(start);
 </script>
 
 <template>
-  <HAuthPage
-    v-if="checked && !authed"
-    brand="pstack"
-    title="Sign in"
-    description="Preview stacks for this host."
-    :loading="loggingIn"
-    :error="loginError"
-    @submit="signIn"
-  />
+  <HTheme :theme="prefs.theme" :mode="prefs.mode" :density="prefs.density">
+    <HStack v-if="!auth.checked" style="padding: 2rem" aria-busy="true">
+      <HSkeleton variant="text" />
+    </HStack>
 
-  <HDashboardShell
-    v-else-if="authed"
-    brand="pstack"
-    :items="items"
-    :active="view"
-    :page-title="title"
-    :username="username"
-    :show-workspace="false"
-    navigation-label="pstack"
-    user-role="signed in"
-    footer-note="Preview stacks"
-    @navigate="view = $event as 'deployments' | 'jobs'"
-    @logout="signOut"
-  >
-    <HPageHeader :title="title" />
-    <p v-if="loadError">{{ loadError }}</p>
+    <HAuthPage
+      v-else-if="!auth.authed"
+      brand="pstack"
+      title="Sign in"
+      eyebrow="Preview stacks"
+      description="The control plane for this host's previews."
+      story-eyebrow="One host"
+      story-title="Every preview."
+      story-accent="One console."
+      story-description="Deploy, verify, sleep and tear down the stacks on this host, and see what each job did."
+      story-footer="pstack"
+      note="Sessions are per browser."
+      :scenery="false"
+      :loading="loggingIn"
+      :error="loginError || (data.connection === 'failed' ? data.error : '')"
+      @submit="signIn"
+    />
 
-    <template v-if="view === 'deployments'">
-      <HEmptyState v-if="!deployments.length" title="Nothing submitted yet" />
-      <HCard v-for="d in deployments" :key="d.id" :title="d.id" :description="d.stack ?? 'needs variables'">
-        <HBadge :label="d.kind" />
-        <HBadge v-if="d.asleep" label="asleep" />
-        <HBadge v-else-if="d.busy" label="busy" tone="info" />
-        <HBadge v-else-if="d.running" label="running" tone="success" />
-      </HCard>
-    </template>
+    <HDashboardShell
+      v-else
+      brand="pstack"
+      :items="items"
+      :active="active"
+      :page-title="pageTitle"
+      :username="auth.username"
+      user-role="signed in"
+      :show-workspace="false"
+      navigation-label="Console"
+      footer-note="pstack"
+      inner-scroll
+      @navigate="go"
+      @logout="signOut"
+    >
+      <template #header-actions>
+        <HConnectionState
+          v-if="data.connection !== 'connected'"
+          :state="data.connection"
+          label="Server"
+          :description="data.error"
+          @retry="refresh"
+        />
+        <HButton variant="ghost" size="compact" icon="search" label="Search" @click="paletteOpen = true" />
+        <HPopover label="Appearance" icon="settings" icon-only variant="ghost" panel-label="Appearance" placement="bottom">
+          <HStack direction="column" :gap="3">
+            <HThemeSwitcher v-model="prefs.mode" />
+            <HSelect v-model="prefs.theme" label="Palette" :options="palettes" />
+            <HSelect v-model="prefs.density" label="Density" :options="densities" />
+          </HStack>
+        </HPopover>
+      </template>
 
-    <template v-else>
-      <HEmptyState v-if="!jobs.length" title="No jobs recorded" />
-      <HCard v-for="j in jobs" :key="j.id" :title="`${j.action} · ${j.stack}`" :description="j.deployment ?? 'control plane'">
-        <HBadge :label="j.state" :tone="tone(j.state)" />
-      </HCard>
-    </template>
-  </HDashboardShell>
+      <RouterView />
+    </HDashboardShell>
+
+    <HCommandPalette v-model:open="paletteOpen" :items="commands" shortcut placeholder="Go to, or find a deployment…" @select="onCommand" />
+    <HToaster :items="toasts" @dismiss="dismissToast" />
+  </HTheme>
 </template>
