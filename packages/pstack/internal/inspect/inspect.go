@@ -123,9 +123,14 @@ const (
 type Runtime struct {
 	Stack      string          `json:"stack"`
 	Containers []ContainerInfo `json:"containers"`
-	Routes     []RouteInfo     `json:"routes"`
-	Findings   []Finding       `json:"findings"`
-	Challenge  Challenge       `json:"challenge"`
+	// Services is every service the stack has, by name. Under swarm a service whose tasks have all
+	// failed has NO container row — swarm keeps only the tasks it still wants running — so this is
+	// the one place its name survives, and the only way to offer its logs, which `docker service
+	// logs` can still read. Compose lists every container, exited or not: names come from those.
+	Services  []string    `json:"services"`
+	Routes    []RouteInfo `json:"routes"`
+	Findings  []Finding   `json:"findings"`
+	Challenge Challenge   `json:"challenge"`
 	// Reachable: true when docker answered. False means every field above is "unknown", never "empty".
 	Reachable bool `json:"reachable"`
 }
@@ -819,7 +824,7 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 	stack, r := a.Stack, a.Runner
 	swarm := a.Orchestrator == spec.Swarm
 	empty := func() Runtime {
-		return Runtime{Stack: stack, Containers: []ContainerInfo{}, Routes: []RouteInfo{}, Findings: []Finding{}, Challenge: Unknown, Reachable: false}
+		return Runtime{Stack: stack, Containers: []ContainerInfo{}, Services: []string{}, Routes: []RouteInfo{}, Findings: []Finding{}, Challenge: Unknown, Reachable: false}
 	}
 	label := "com.docker.compose.project"
 	if swarm {
@@ -838,6 +843,7 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 	findings := []Finding{}
 	var subjects []subject
 
+	var swarmServices []SwarmService
 	if swarm {
 		sres := r.Run("docker service ls --format '{{json .}}' --filter "+shq("label="+StackLabel+"="+stack), exec.RunOptions{Label: "docker service ls"})
 		if !sres.OK {
@@ -873,6 +879,7 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 		tasks := []rawTask{}
 		if len(sids) > 0 {
 			services = inspectServices(r, sids, networkNames(r))
+			swarmServices = services
 			var tok bool
 			if tasks, tok = stackTasks(r, stack); !tok {
 				return empty()
@@ -1154,7 +1161,26 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 			findings = append(findings, Finding{"error", `Router name "` + rt.Router + `" is declared by ` + js.ToString(int64(len(owners))) + " containers on this host (" + strings.Join(owners, ", ") + "). Traefik's router namespace is global: these overwrite each other, and one hostname will serve the wrong container. Include the stack in the router name."})
 		}
 	}
-	return Runtime{Stack: stack, Containers: containers, Routes: routes, Findings: findings, Challenge: challenge, Reachable: true}
+	serviceNames := []string{}
+	seenService := map[string]bool{}
+	addService := func(n string) {
+		if n != "" && !seenService[n] {
+			seenService[n] = true
+			serviceNames = append(serviceNames, n)
+		}
+	}
+	if swarm {
+		for _, svc := range swarmServices {
+			addService(svc.Service)
+		}
+	}
+	for _, c := range containers {
+		if c.Service != nil {
+			addService(*c.Service)
+		}
+	}
+	sort.Strings(serviceNames)
+	return Runtime{Stack: stack, Containers: containers, Services: serviceNames, Routes: routes, Findings: findings, Challenge: challenge, Reachable: true}
 }
 
 func containsStr(list []string, s string) bool {

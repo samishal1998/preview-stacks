@@ -370,6 +370,8 @@ export type RuntimeResponse = {
   id: string;
   stack: string;
   containers: RuntimeContainer[];
+  /** Every service the stack has; a swarm service with no running task has no `containers` entry. */
+  services?: string[];
   routes: RuntimeRoute[];
   findings: Array<{ level: 'error' | 'warn' | 'info'; message: string }>;
   challenge: 'http01' | 'dns01' | 'dns-persist-01' | 'unknown';

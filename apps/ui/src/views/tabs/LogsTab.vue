@@ -43,6 +43,9 @@ const timestamps = ref(false);
 const selected = ref('');
 const containers = ref<RuntimeContainer[]>([]);
 
+/** Real containers only — a service with no running task is listed too, and is not one. */
+const running = computed(() => containers.value.filter((c) => !c.id.startsWith('service:')).length);
+
 const current = computed(() => containers.value.find((c) => c.name === selected.value) ?? null);
 /** What the server is asked to narrow to — compose narrows by service, not by container. */
 const service = computed(() => current.value?.service ?? '');
@@ -52,7 +55,30 @@ async function loadContainers(): Promise<void> {
     `/api/deployments/${encodeURIComponent(dep.id)}/runtime${query(dep.vars)}`,
   );
   if (!r.ok) return; // the panel is a convenience; the whole-stack read still works without it
-  containers.value = [...r.body.containers].sort((a, b) =>
+  // A swarm service whose tasks have all failed has no container, but `docker service logs` still
+  // reads them — and it is the service someone opens this tab for. Listed, so it can be picked.
+  const have = new Set(r.body.containers.map((c) => c.service));
+  const taskless: RuntimeContainer[] = (r.body.services ?? [])
+    .filter((s) => !have.has(s))
+    .map((s) => ({
+      id: `service:${s}`,
+      name: s,
+      service: s,
+      image: '',
+      state: 'no task running',
+      health: null,
+      exitCode: null,
+      restartCount: 0,
+      networks: [],
+      ingressIp: null,
+      ports: [],
+      traefikLabels: {},
+      startedAt: null,
+      node: null,
+      remote: false,
+      job: false,
+    }));
+  containers.value = [...r.body.containers, ...taskless].sort((a, b) =>
     (a.service ?? a.name).localeCompare(b.service ?? b.name),
   );
 }
@@ -348,7 +374,7 @@ const stateTone = (c: RuntimeContainer): string =>
         <aside class="clist" aria-label="Containers">
           <button class="clist-item" :class="{ on: selected === '' }" @click="select('')">
             <span class="clist-name">All services</span>
-            <span class="clist-sub">{{ containers.length }} container{{ containers.length === 1 ? '' : 's' }}</span>
+            <span class="clist-sub">{{ running }} container{{ running === 1 ? '' : 's' }}</span>
           </button>
           <button
             v-for="c in containers"

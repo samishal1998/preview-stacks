@@ -256,6 +256,11 @@ export type Runtime = {
   asleep?: SleepRecord | null;
   stack: string;
   containers: RuntimeContainer[];
+  /**
+   * Every service the stack has. Under swarm a service whose tasks all failed has no entry in
+   * `containers`, so this is where its name survives. Absent on a server older than 0.43.0.
+   */
+  services?: string[];
   routes: RuntimeRoute[];
   findings: Array<{ level: 'error' | 'warn' | 'info'; message: string }>;
   challenge: 'http01' | 'dns01' | 'unknown';
