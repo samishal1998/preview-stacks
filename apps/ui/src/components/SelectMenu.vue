@@ -19,6 +19,7 @@
  * NOT shadcn-vue: it generates Tailwind-styled components, and this app has no Tailwind — adopting
  * it would mean adding a whole styling pipeline to get components we then restyle anyway.
  */
+import { computed } from 'vue';
 import {
   SelectContent,
   SelectItem,
@@ -48,10 +49,23 @@ defineProps<{
 
 /** `defineModel` rather than a prop/emit pair — Reka's root is already v-model shaped. */
 const value = defineModel<string>({ required: true });
+
+/**
+ * reka-ui refuses a SelectItem whose value is '' (it reserves it for "clear the selection"), but an
+ * option meaning "any" or "none" is exactly what a filter wants. The empty string travels as this
+ * sentinel inside the widget and is mapped back at the boundary, so callers keep using ''.
+ */
+const EMPTY = '\u0000empty';
+const inner = computed({
+  get: () => (value.value === '' ? EMPTY : value.value),
+  set: (v: string) => {
+    value.value = v === EMPTY ? '' : v;
+  },
+});
 </script>
 
 <template>
-  <SelectRoot v-model="value" :disabled="disabled">
+  <SelectRoot v-model="inner" :disabled="disabled">
     <SelectTrigger :id="id" class="selm-trigger" :aria-label="label">
       <!--
         The label is resolved here rather than with `<SelectValue>`. Reka's SelectValue reads the
@@ -76,7 +90,7 @@ const value = defineModel<string>({ required: true });
     <SelectPortal>
       <SelectContent class="selm-list" position="popper" :side-offset="6">
         <SelectViewport>
-          <SelectItem v-for="o in options" :key="o.value" :value="o.value" class="selm-opt">
+          <SelectItem v-for="o in options" :key="o.value" :value="o.value === '' ? EMPTY : o.value" class="selm-opt">
             <SelectItemText>{{ o.label }}</SelectItemText>
             <span v-if="o.hint" class="selm-hint">{{ o.hint }}</span>
             <SelectItemIndicator class="selm-tick">
