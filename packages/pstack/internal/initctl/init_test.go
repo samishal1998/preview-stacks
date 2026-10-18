@@ -165,9 +165,23 @@ func TestAdvancedUIIsOptIn(t *testing.T) {
 		}
 	})
 
+	t.Run("hearth uses the same service with its own image variable", func(t *testing.T) {
+		_, yaml := render(t, ui(initctl.Hearth))
+		for _, want := range []string{
+			"  advanced-ui:", "image: ${PSTACK_UI_HEARTH_IMAGE}", "routers.pstack-ui.service=advanced-ui",
+		} {
+			if !strings.Contains(yaml, want) {
+				t.Errorf("missing %q", want)
+			}
+		}
+		if strings.Contains(yaml, "${PSTACK_UI_IMAGE}") {
+			t.Error("hearth uses the advanced image variable")
+		}
+	})
+
 	t.Run("both modes leave no unrendered markers", func(t *testing.T) {
 		// negative control: replace the marker with itself — fails.
-		for _, u := range []initctl.UI{initctl.Basic, initctl.Advanced} {
+		for _, u := range []initctl.UI{initctl.Basic, initctl.Advanced, initctl.Hearth} {
 			_, yaml := render(t, ui(u))
 			if strings.Contains(yaml, "__CONTROL_UI_SERVICE__") || strings.Contains(yaml, "__ADVANCED_UI_SERVICE__") {
 				t.Errorf("%s: marker survived", u)

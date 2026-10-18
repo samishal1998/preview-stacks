@@ -36,7 +36,7 @@ func Completion(shell string) (string, *Exit) {
 // subcommands are the second words a command takes. Not in commandHelps because they are not
 // flags and only three commands have any.
 var subcommands = map[string][]string{
-	"ui":         {"basic", "advanced"},
+	"ui":         {"basic", "advanced", "hearth"},
 	"logging":    {"loki", "off"},
 	"swarm":      {"status", "join"},
 	"pull":       {"config"},
@@ -48,7 +48,7 @@ var subcommands = map[string][]string{
 // wrong value is a usage error the shell could have prevented.
 var enumFlags = map[string][]string{
 	"--challenge":    {"http01", "dns01"},
-	"--ui":           {"basic", "advanced"},
+	"--ui":           {"basic", "advanced", "hearth"},
 	"--orchestrator": {"swarm", "compose"},
 	"--logging":      {"none", "loki"},
 	"--distro":       {"ubuntu", "debian", "fedora", "suse", "arch", "alpine"},

@@ -213,6 +213,8 @@ pstack build-image --ui          # nginx around the published UI package, fetche
 pstack init --ui advanced        # adds the container, repoints control.<domain> at it
 ```
 
+`--ui hearth` is the same on Hearth UI (`pstack build-image --ui hearth`, `pstack ui hearth`).
+
 The API keeps serving the basic UI on `api.<domain>` either way, so a missing or broken advanced
 image degrades to a working interface rather than none.
 

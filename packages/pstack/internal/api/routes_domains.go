@@ -77,14 +77,17 @@ func (s *Server) domainsGet(w http.ResponseWriter) error {
 		// Which console `control.<d>` serves — the SPA on an advanced host, the embedded UI
 		// otherwise. Shown because "why does this hostname look different" is the question it
 		// answers.
-		"console", consoleName(s.consoleService()),
+		"console", consoleName(s.consoleService(), inspect.ControlUI(s.host)),
 		"note", domainsNote(len(extra), string(s.challenge())),
 	))
 	return nil
 }
 
-func consoleName(service string) string {
+func consoleName(service, ui string) string {
 	if service == routing.AdvancedUIService {
+		if ui == "hearth" {
+			return "hearth"
+		}
 		return "advanced"
 	}
 	return "basic"

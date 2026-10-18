@@ -1357,6 +1357,29 @@ someone loosened to `0644` is tightened back on the next run.)
 PSTACK_TOKEN=<new> pstack init --domain preview.example.com --acme-email <you>@example.com
 ```
 
+### Choosing the UI
+
+`control.<domain>` serves one of three UIs. `api.<domain>` always serves the basic one.
+
+| Mode | What | Image |
+|---|---|---|
+| `basic` | Embedded in the API. Default; no extra container. | none |
+| `advanced` | The full SPA, its own container. | `pstack-ui:local` (`PSTACK_UI_IMAGE`) |
+| `hearth` | The same product on Hearth UI, its own container. | `pstack-ui-hearth:local` (`PSTACK_UI_HEARTH_IMAGE`) |
+
+```console
+$ pstack build-image --ui hearth     # bare --ui builds advanced
+$ pstack init --ui hearth --domain preview.example.com --acme-email ops@example.com
+$ pstack ui hearth                   # switch an existing host; basic | advanced | hearth
+```
+
+`hearth` and `advanced` share the compose service name `advanced-ui`; only the image differs. Switching
+between any two modes is the same re-init that `pstack ui` already does, and `upgrade` keeps the mode
+and the existing image. The Hearth UI is not on npm yet, so `cloud-init --ui hearth` is refused and
+`upgrade` does not rebuild its image: build its image from a checkout with `--ui-dist apps/ui-hearth/dist`
+(its `nginx.conf` sits beside `dist/`), or with `docker build -f apps/ui-hearth/Dockerfile -t
+pstack-ui-hearth:local .` from the repo root.
+
 ### Upgrading a host
 
 ```console

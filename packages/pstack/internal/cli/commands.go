@@ -104,7 +104,7 @@ healthcheck. Idempotent: re-running it IS the upgrade path.
                                  routers are in place and start working the moment DNS moves, and
                                  this one is usable meanwhile. It only ADDS — remove it later from
                                  the Domains panel or PUT /api/domains
-      --ui basic|advanced        default basic (embedded, no extra container)
+      --ui basic|advanced|hearth default basic (embedded, no extra container)
       --orchestrator swarm|compose
       --logging none|loki        Loki log shipping (default none)
       --force                    proceed even though this run would change something you did
@@ -132,15 +132,15 @@ everything it read back — so nothing rotates. Over SSH, never from inside the 
 
       --to <version>   default latest
   -n, --dry-run        print the plan and change nothing
-      --ui basic|advanced          override what it detects
+      --ui basic|advanced|hearth  override what it detects
       --orchestrator swarm|compose switch — every preview must be down first`,
 		flags: []string{"--to", "--ui", "--orchestrator", "--resume", "--dry-run", "--help"},
 	},
 	"ui": {
 		summary: "switch which UI control.<domain> serves",
-		body: `pstack ui <basic|advanced>
+		body: `pstack ui <basic|advanced|hearth>
 
-Reuses the stored token and domain, and builds the SPA image when switching to advanced. No
+Reuses the stored token and domain, and builds the SPA image when switching to advanced or hearth. No
 version change — that is upgrade.`,
 		flags: globalFlags,
 	},
@@ -178,19 +178,19 @@ Full list: pstack --help.`,
 	},
 	"build-image": {
 		summary: "build the control image from the running binary",
-		body: `pstack build-image [--tag <name:tag>] [--ui]
+		body: `pstack build-image [--tag <name:tag>] [--ui [hearth]]
 
 Builds FROM THE INSTALLED BINARY — no source checkout, no registry. Retags the previous image
 <tag>-previous first, which is the rollback path.
 
       --tag <name:tag>   default pstack:local (= PSTACK_IMAGE)
-      --ui               build the advanced UI image instead
+      --ui [hearth]      build the advanced UI image instead (hearth: the Hearth UI, pstack-ui-hearth:local)
       --ui-dist <path>   use a built UI dist from a specific path`,
 		flags: []string{"--tag", "--ui", "--ui-dist", "--dry-run", "--help"},
 	},
 	"dockerfile": {
 		summary: "print the control Dockerfile instead of building it",
-		body:    "pstack dockerfile [--ui]\n\nPrints what build-image would build.\n\n      --ui   print the advanced UI Dockerfile instead",
+		body:    "pstack dockerfile [--ui [hearth]]\n\nPrints what build-image would build.\n\n      --ui [hearth]   print the advanced (or hearth) UI Dockerfile instead",
 		flags:   []string{"--ui", "--help"},
 	},
 	"cloud-init": {

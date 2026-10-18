@@ -9,5 +9,5 @@
   "cwd": "packages/pstack",
   "code": 3,
   "stdout": "",
-  "stderr": "pstack: usage: pstack ui <basic|advanced>   (basic = embedded in the API, advanced = the SPA container)\n"
+  "stderr": "pstack: usage: pstack ui <basic|advanced|hearth>   (basic = embedded in the API, advanced/hearth = the SPA container)\n"
 }

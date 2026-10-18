@@ -164,7 +164,7 @@ type Answers struct {
 	// Challenge is "http01" or "dns01".
 	Challenge   string
 	DNSProvider string
-	// UI is "basic" or "advanced".
+	// UI is "basic", "advanced" or "hearth".
 	UI string
 	// AdminUser is the first pstack account, created by the control plane on first boot. Empty (the
 	// default) renders no account at all, and the operator makes one afterwards with
@@ -254,6 +254,11 @@ func validate(a Answers) error {
 	// no cheap recovery.
 	if a.SSHKey != "" && !sshKeyRe.MatchString(a.SSHKey) {
 		return &Error{`ssh key must be an authorized_keys line, e.g. "ssh-ed25519 AAAA… you@laptop"`}
+	}
+	// ponytail: the hearth UI package is not on npm, so the image build a fresh host runs at boot
+	// would 404. Drop this when the package is published.
+	if a.UI == "hearth" {
+		return &Error{"the hearth UI is not on npm yet, so a booting host cannot build it: use --ui advanced, then build the hearth image by hand"}
 	}
 	if a.Challenge == "dns01" && a.DNSProvider == "" {
 		return &Error{"dns01 needs a provider code (see https://go-acme.github.io/lego/dns/)"}
@@ -381,7 +386,7 @@ func RenderCloudInit(a Answers) (string, error) {
 		initFlags = append(initFlags, "--extra-domain "+d)
 	}
 	if a.UI == "advanced" {
-		initFlags = append(initFlags, "--ui advanced")
+		initFlags = append(initFlags, "--ui "+a.UI)
 	}
 	if a.Orchestrator != "" {
 		initFlags = append(initFlags, "--orchestrator "+a.Orchestrator)

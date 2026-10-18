@@ -172,10 +172,10 @@ func TestBuildImage(t *testing.T) {
 		if !strings.Contains(written, "`docker compose`") { // the backticks that caused it, intact
 			t.Error("backticks lost")
 		}
-		if err := Build(BuildOptions{Tag: "pstack-ui:test", Runner: r, UI: true, Out: &out}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack-ui:test", Runner: r, UIApp: "advanced", Out: &out}); err != nil {
 			t.Fatal(err)
 		}
-		if written != UIDockerfile("") {
+		if written != UIDockerfile("advanced", "") {
 			t.Error("UI Dockerfile differs from UIDockerfile()")
 		}
 	})
@@ -262,7 +262,7 @@ func TestBuildImageUI(t *testing.T) {
 			}
 			return exec.Result{OK: true}, true
 		}
-		if err := Build(BuildOptions{Tag: "pstack-ui:test", Runner: r, UI: true, UIDist: fakeUIPackage(t, true), Out: &bytes.Buffer{}}); err != nil {
+		if err := Build(BuildOptions{Tag: "pstack-ui:test", Runner: r, UIApp: "advanced", UIDist: fakeUIPackage(t, true), Out: &bytes.Buffer{}}); err != nil {
 			t.Fatal(err)
 		}
 		_, cmd := findCmd(r.Commands(), "docker build")
@@ -278,7 +278,7 @@ func TestBuildImageUI(t *testing.T) {
 		// Without it the image would serve the SPA with no /api proxy and no deep-link fallback —
 		// a container that starts, looks healthy, and is unusable.
 		// negative control: drop the `!exists(conf)` refusal — Build returns a read error naming a different message.
-		err := Build(BuildOptions{Tag: "x", Runner: exec.NewFake(nil, ""), UI: true, UIDist: fakeUIPackage(t, false), Out: &bytes.Buffer{}})
+		err := Build(BuildOptions{Tag: "x", Runner: exec.NewFake(nil, ""), UIApp: "advanced", UIDist: fakeUIPackage(t, false), Out: &bytes.Buffer{}})
 		if err == nil || !strings.Contains(err.Error(), "no nginx.conf beside them") {
 			t.Fatalf("got %v", err)
 		}
@@ -286,7 +286,7 @@ func TestBuildImageUI(t *testing.T) {
 
 	t.Run("an explicit --ui-dist without built assets fails by name", func(t *testing.T) {
 		// negative control: drop the index.html check — the error becomes CopyFS's, without `no built UI at`.
-		err := Build(BuildOptions{Tag: "x", Runner: exec.NewFake(nil, ""), UI: true, UIDist: "/nonexistent/dist", Out: &bytes.Buffer{}})
+		err := Build(BuildOptions{Tag: "x", Runner: exec.NewFake(nil, ""), UIApp: "advanced", UIDist: "/nonexistent/dist", Out: &bytes.Buffer{}})
 		if err == nil || !strings.Contains(err.Error(), "no built UI at") {
 			t.Fatalf("got %v", err)
 		}
@@ -296,7 +296,7 @@ func TestBuildImageUI(t *testing.T) {
 func TestGeneratedDockerfiles(t *testing.T) {
 	t.Run("the control image copies the binary; the UI image fetches its package", func(t *testing.T) {
 		// negative control: drop the version pin from the UI `bun add` — the `@9.9.9` check fails.
-		if !strings.Contains(UIDockerfile("9.9.9"), "@samyx/preview-stacks-ui@9.9.9") {
+		if !strings.Contains(UIDockerfile("advanced", "9.9.9"), "@samyx/preview-stacks-ui@9.9.9") {
 			t.Error("UI image not pinned")
 		}
 		df := ControlDockerfile("9.9.9")
@@ -313,7 +313,7 @@ func TestGeneratedDockerfiles(t *testing.T) {
 
 	t.Run("the UI image takes both the assets and the nginx config from the package", func(t *testing.T) {
 		// negative control: drop the nginx.conf COPY line — the first check fails.
-		df := UIDockerfile("")
+		df := UIDockerfile("advanced", "")
 		if !strings.Contains(df, "/nginx.conf /etc/nginx/conf.d/default.conf") || !strings.Contains(df, "/dist /usr/share/nginx/html") {
 			t.Error("UI Dockerfile does not take both from the package")
 		}
@@ -322,7 +322,7 @@ func TestGeneratedDockerfiles(t *testing.T) {
 	// The conformance transcripts: `pstack dockerfile [--ui]` prints the Dockerfile plus one newline.
 	t.Run("matches the dockerfile goldens byte-for-byte", func(t *testing.T) {
 		// negative control: change any byte of ControlDockerfile — the compare fails.
-		for name, df := range map[string]string{"dockerfile": ControlDockerfile(""), "dockerfile-ui": UIDockerfile("")} {
+		for name, df := range map[string]string{"dockerfile": ControlDockerfile(""), "dockerfile-ui": UIDockerfile("advanced", "")} {
 			b, err := os.ReadFile(filepath.Join(testfacts.Golden(t), "cli", name+".json"))
 			if err != nil {
 				t.Fatal(err)
@@ -338,4 +338,23 @@ func TestGeneratedDockerfiles(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestHearthUIImage(t *testing.T) {
+	df := UIDockerfile("hearth", "9.9.9")
+	for _, want := range []string{"bun add @samyx/preview-stacks-ui-hearth@9.9.9", "node_modules/@samyx/preview-stacks-ui-hearth/nginx.conf", "pstack-ui-hearth:local"} {
+		if !strings.Contains(df, want) {
+			t.Errorf("hearth Dockerfile lacks %q", want)
+		}
+	}
+	if DefaultUITag("hearth") != "pstack-ui-hearth:local" || DefaultUITag("advanced") != "pstack-ui:local" {
+		t.Error("default UI tags")
+	}
+	var out bytes.Buffer
+	if err := Build(BuildOptions{Tag: "pstack-ui-hearth:test", Runner: exec.NewFake(nil, ""), UIApp: "hearth", Out: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "pstack init --ui hearth") {
+		t.Errorf("next-step line: %s", out.String())
+	}
 }

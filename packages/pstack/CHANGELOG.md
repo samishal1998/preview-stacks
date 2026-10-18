@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`--ui hearth`: a third control-plane UI.** `pstack init --ui hearth`, `pstack ui hearth`,
+  and `pstack upgrade` serve the Hearth UI
+  (`apps/ui-hearth`) on `control.<domain>` in its own container, like `advanced`. The image defaults to
+  `pstack-ui-hearth:local` (`PSTACK_UI_HEARTH_IMAGE`); build it with `pstack build-image --ui hearth`
+  (`--ui-dist` until the package is on npm) or `apps/ui-hearth/Dockerfile`. A bare `--ui` still builds
+  the advanced image. `upgrade` detects the mode and keeps the existing hearth image (the package is
+  not on npm, so it cannot rebuild it). `cloud-init --ui hearth` is refused for the same reason.
+  `GET /api/domains` reports `console` as `hearth`.
+
 - **`services` on `GET /api/deployments/:id/runtime`**: every service the stack has, by name. Under
   swarm a service whose tasks all failed has no entry in `containers` (swarm keeps only the tasks it
   still wants running), so its logs could not be picked in the Logs tab. The advanced UI now lists
