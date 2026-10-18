@@ -40,7 +40,7 @@ Deliberate, each with its reason. None is observable by the UI or the client SDK
 
 ## What stays TypeScript
 
-`@samyx/preview-stacks-client` (the SDK) and `@samyx/preview-stacks-ui` (the advanced SPA) — both
+`@samyx/preview-stacks-client` (the SDK), `@samyx/preview-stacks-ui` (the advanced SPA) and `@samyx/preview-stacks-ui-hearth` (the Hearth SPA) — all
 talk to the binary over HTTP only. The SDK's test drives the spawned binary in CI
 (`packages/client/test`); the SPA's proxy path (login, `/api/auth/me`, the deployments list, a job's
 SSE stream through the Vite dev proxy) was exercised against the binary before 0.29.0; a click-through

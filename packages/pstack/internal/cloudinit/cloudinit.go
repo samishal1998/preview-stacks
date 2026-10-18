@@ -255,11 +255,6 @@ func validate(a Answers) error {
 	if a.SSHKey != "" && !sshKeyRe.MatchString(a.SSHKey) {
 		return &Error{`ssh key must be an authorized_keys line, e.g. "ssh-ed25519 AAAA… you@laptop"`}
 	}
-	// ponytail: the hearth UI package is not on npm, so the image build a fresh host runs at boot
-	// would 404. Drop this when the package is published.
-	if a.UI == "hearth" {
-		return &Error{"the hearth UI is not on npm yet, so a booting host cannot build it: use --ui advanced, then build the hearth image by hand"}
-	}
 	if a.Challenge == "dns01" && a.DNSProvider == "" {
 		return &Error{"dns01 needs a provider code (see https://go-acme.github.io/lego/dns/)"}
 	}
@@ -385,7 +380,7 @@ func RenderCloudInit(a Answers) (string, error) {
 	for _, d := range a.ExtraDomains {
 		initFlags = append(initFlags, "--extra-domain "+d)
 	}
-	if a.UI == "advanced" {
+	if a.UI == "advanced" || a.UI == "hearth" {
 		initFlags = append(initFlags, "--ui "+a.UI)
 	}
 	if a.Orchestrator != "" {
@@ -413,9 +408,13 @@ func RenderCloudInit(a Answers) (string, error) {
 	// build — the UI package is a build-time input fetched INSIDE the image, so nothing is
 	// installed on the host for it.
 	uiImageStep := ""
-	if a.UI == "advanced" {
+	switch a.UI {
+	case "advanced":
 		uiImageStep = "\n  # The advanced UI is opt-in and needs its own image.\n" +
 			"  - /usr/local/bin/pstack build-image --ui"
+	case "hearth":
+		uiImageStep = "\n  # The hearth UI is opt-in and needs its own image.\n" +
+			"  - /usr/local/bin/pstack build-image --ui hearth"
 	}
 	// A caveat the operator must read BEFORE booting belongs in the artifact itself, not in the
 	// terminal output that scrolled away — this file gets saved and reused.

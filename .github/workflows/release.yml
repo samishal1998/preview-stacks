@@ -1,6 +1,6 @@
-# Release: a `v*` tag → the Go binaries on GitHub Releases (GoReleaser), then the two npm packages
-# (the UI and the client SDK) via publish-kit. The tag is the one version everything is asserted
-# against: packages/pstack/package.json, apps/ui, packages/client and the binary's own --version.
+# Release: a `v*` tag → the Go binaries on GitHub Releases (GoReleaser), then the three npm packages
+# (the two UIs and the client SDK) via publish-kit. The tag is the one version everything is asserted
+# against: packages/pstack/package.json, apps/ui, apps/ui-hearth, packages/client and the binary's own --version.
 #
 # `verify` rehearses what the release will claim: the Go suite under -race, the UI/client checks,
 # the lockstep assertion, and an image smoke test that builds the root Dockerfile and waits for the
@@ -42,7 +42,7 @@ jobs:
       - name: Lockstep — the tag is the version everywhere
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          for f in packages/pstack/package.json apps/ui/package.json packages/client/package.json; do
+          for f in packages/pstack/package.json apps/ui/package.json apps/ui-hearth/package.json packages/client/package.json; do
             v="$(jq -r .version "$f")"
             [ "$v" = "$tag" ] || { echo "$f is $v, tag is $tag"; exit 1; }
           done
@@ -52,8 +52,8 @@ jobs:
           go vet ./...
           go test -race -timeout 120s ./...
 
-      - name: UI and client — test, typecheck, build
-        run: bunx turbo run test typecheck build --filter=@samyx/preview-stacks-ui --filter=@samyx/preview-stacks-client
+      - name: UIs and client — test, typecheck, build
+        run: bunx turbo run test typecheck build --filter=@samyx/preview-stacks-ui --filter=@samyx/preview-stacks-ui-hearth --filter=@samyx/preview-stacks-client
 
       - name: Conformance — the binary passes the black-box suite
         run: |
@@ -150,5 +150,5 @@ jobs:
       # for five minutes and then failed with "does not exist in this registry" — for two packages
       # that were both sitting there. A re-publish is also exactly what a retry of a partly-failed
       # run does, which is the case this flag was named for.
-      - name: Publish the UI and the client SDK
+      - name: Publish the UIs and the client SDK
         run: bunx publish-kit publish --missing-only

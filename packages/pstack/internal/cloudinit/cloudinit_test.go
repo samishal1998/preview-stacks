@@ -196,11 +196,19 @@ func TestCloudInitGeneration(t *testing.T) {
 		}
 	})
 
-	t.Run("hearth UI is refused until the package is on npm", func(t *testing.T) {
+	t.Run("hearth UI adds its init flag and image build", func(t *testing.T) {
+		// negative control: drop the hearth case of uiImageStep — the build-image --ui hearth check fails.
 		a := base
 		a.UI = "hearth"
-		if _, err := RenderCloudInit(a); err == nil {
-			t.Error("a hearth cloud-init rendered a build that cannot run")
+		out := render(t, a)
+		if strings.Contains(initCall(t, out), "--ui advanced") {
+			t.Error("hearth rendered the advanced flag")
+		}
+		if !strings.Contains(initCall(t, out), "--ui hearth") {
+			t.Error("--ui hearth missing")
+		}
+		if !some(runcmd(t, out), func(c string) bool { return strings.Contains(c, "build-image --ui hearth") }) {
+			t.Error("no build-image --ui hearth")
 		}
 	})
 

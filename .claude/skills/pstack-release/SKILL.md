@@ -1,20 +1,20 @@
 ---
 name: pstack-release
-description: Cut a pstack release end to end. Pick patch or minor from the CHANGELOG, bump the three package.json files together, date "## Unreleased", commit and open the PR through GitButler, merge on green CI, tag through the GitHub API, watch release.yml, and check that npm actually published (a green job does not prove it). Use this whenever the owner asks to release, cut, tag, bump or version pstack ("release it", "cut 0.41.0", "a patch release", "tag main"). Also use it when they ask whether a release or npm publish went out, why the release workflow failed, or to re-run the npm half, even if they never say "release".
+description: Cut a pstack release end to end. Pick patch or minor from the CHANGELOG, bump the four package.json files together, date "## Unreleased", commit and open the PR through GitButler, merge on green CI, tag through the GitHub API, watch release.yml, and check that npm actually published (a green job does not prove it). Use this whenever the owner asks to release, cut, tag, bump or version pstack ("release it", "cut 0.41.0", "a patch release", "tag main"). Also use it when they ask whether a release or npm publish went out, why the release workflow failed, or to re-run the npm half, even if they never say "release".
 ---
 
 # Cutting a pstack release
 
 A release means one version everywhere: `packages/pstack/package.json` (the version of record,
-private, what the binary reports), `apps/ui/package.json` and `packages/client/package.json`, the
+private, what the binary reports), `apps/ui/package.json`, `apps/ui-hearth/package.json` and `packages/client/package.json`, the
 `vX.Y.Z` tag, and `pstack --version`. Pushing a `v*` tag runs `.github/workflows/release.yml`:
 
-1. `verify` checks that all three versions match the tag. It also runs Go vet and `-race`, the
+1. `verify` checks that all four versions match the tag. It also runs Go vet and `-race`, the
    UI/client test, typecheck and build, the conformance ratchet, and an image smoke test.
 2. `release` runs GoReleaser: four binaries, `checksums.txt` and `install.sh`. An installer smoke
    test follows.
-3. `npm` runs `bunx publish-kit publish --missing-only` for `@samyx/preview-stacks-client` and
-   `@samyx/preview-stacks-ui`. The Go control plane is not on npm.
+3. `npm` runs `bunx publish-kit publish --missing-only` for `@samyx/preview-stacks-client`,
+   `@samyx/preview-stacks-ui` and `@samyx/preview-stacks-ui-hearth`. The Go control plane is not on npm.
 
 Run the steps in order. Each step says why it exists, because each one either failed once or has a
 trap.
@@ -123,18 +123,18 @@ the PR as `Minor: …` or `Patch: …`.
 
 ```bash
 cd /Volumes/S1/code/preview-stacks
-bunx publish-kit bump minor --dry-run       # or patch: shows OLD -> NEW for the two npm packages
-bunx publish-kit bump minor                 # writes apps/ui + packages/client ONLY
+bunx publish-kit bump minor --dry-run       # or patch: shows OLD -> NEW for the three npm packages
+bunx publish-kit bump minor                 # writes apps/ui + apps/ui-hearth + packages/client ONLY
 OLD=$(git show origin/main:packages/pstack/package.json | jq -r .version)
 NEW=$(jq -r .version packages/client/package.json); : "${OLD:?}" "${NEW:?}"
 sed -i '' "s/\"version\": \"$OLD\"/\"version\": \"$NEW\"/" packages/pstack/package.json
 perl -0pi -e "s/^## Unreleased\$/## $NEW — $(date +%F)/m" packages/pstack/CHANGELOG.md
-jq -r .version packages/pstack/package.json apps/ui/package.json packages/client/package.json   # NEW x3
+jq -r .version packages/pstack/package.json apps/ui/package.json apps/ui-hearth/package.json packages/client/package.json   # NEW x4
 head -3 packages/pstack/CHANGELOG.md        # "## X.Y.Z — YYYY-MM-DD", with an em dash
 ```
 
-`packages/pstack/package.json` needs the hand edit. publish-kit bumps only the two packages listed
-in `publish.config.ts`, and `verify` fails the whole release if any of the three differs from the
+`packages/pstack/package.json` needs the hand edit. publish-kit bumps only the three packages listed
+in `publish.config.ts`, and `verify` fails the whole release if any of the four differs from the
 tag.
 
 Then fix the live mentions:
@@ -166,7 +166,7 @@ tag it"). Keep it terse:
 
 ```
 Release X.Y.Z (minor): <reason>.
-Files: apps/ui/package.json, packages/client/package.json, packages/pstack/package.json,
+Files: apps/ui/package.json, apps/ui-hearth/package.json, packages/client/package.json, packages/pstack/package.json,
        packages/pstack/CHANGELOG.md, <docs touched>
 bun run check: green
 Next: push claude/release-X.Y.Z, PR, merge on green CI, tag vX.Y.Z (binaries go public, then npm).
@@ -224,7 +224,7 @@ f=$(mktemp)
 cat > "$f" <<'EOF'
 chore(release): X.Y.Z
 
-Lockstep bump to X.Y.Z (`packages/pstack`, `apps/ui`, `packages/client`) and the CHANGELOG entry for <what ships> (#<PRs>).
+Lockstep bump to X.Y.Z (`packages/pstack`, `apps/ui`, `apps/ui-hearth`, `packages/client`) and the CHANGELOG entry for <what ships> (#<PRs>).
 
 Minor: <reason>.
 EOF
@@ -276,7 +276,7 @@ R=samishal1998/preview-stacks; V=<X.Y.Z>; : "${R:?}" "${V:?}"
 c=$(gh api "repos/$R/commits?sha=main&per_page=10" \
       -q ".[] | select(.commit.message | startswith(\"chore(release): $V\")) | .sha" | head -1)
 [ -n "$c" ] || { echo "release commit not on main"; exit 1; }
-for f in packages/pstack/package.json apps/ui/package.json packages/client/package.json; do
+for f in packages/pstack/package.json apps/ui/package.json apps/ui-hearth/package.json packages/client/package.json; do
   [ "$(gh api "repos/$R/contents/$f?ref=$c" -q .content | base64 -d | jq -r .version)" = "$V" ] ||
     { echo "$f != $V"; exit 1; }
 done
@@ -340,23 +340,23 @@ gh release view "v$V" --json assets -q '.assets[].name'
 ```
 
 `verify-npm.sh` reads the npm job's log (the `==> done — N package(s)` count and the failure
-strings) and runs `npm view` on both packages. Exit codes:
+strings) and runs `npm view` on all three packages. Exit codes:
 
-- **0:** CI published, and both packages are on npm.
-- **2:** both are on npm, but CI published 0. Someone published by hand and `--missing-only`
+- **0:** CI published, and all three packages are on npm.
+- **2:** all three are on npm, but CI published 0. Someone published by hand and `--missing-only`
   skipped them. Report "on npm, published by hand", not "the pipeline works".
 - **1:** a package is missing, or the run hasn't finished.
 
 Never report the npm half from the job's color. 0.39.1's job was green, and its log said
-`==> done — 0 package(s), 2 skipped published`.
+`==> done — 0 package(s), 3 skipped published`.
 
 | npm job log | Meaning | Do |
 |---|---|---|
 | `Authenticate your account at (press ENTER to open in browser):`, ~5 min later `404 Not Found: https://registry.npmjs.org/-/v1/done?authId=***`, then `'@samyx/preview-stacks-client@X.Y.Z' does not exist in this registry` | `NPM_TOKEN` is set but rejected. bun falls back to interactive web auth, which CI can't complete. This has been the standing state since at least 0.38.0, and 0.40.0 hit it. | The owner-only fix below |
-| Same lines, but `npm view` shows both packages | The upload worked and only the done-poll 404'd (the 0.33.1 and 0.34.0 shape) | Nothing to retry. It's published. |
+| Same lines, but `npm view` shows all three packages | The upload worked and only the done-poll 404'd (the 0.33.1 and 0.34.0 shape) | Nothing to retry. It's published. |
 | `##[error]NPM_TOKEN is empty or unset` | The secret is missing | The owner-only fix below |
-| `==> skip … (already on registry)` and `done — 0 package(s), 2 skipped`, job green | A hand publish got there first | Report it as a hand publish |
-| `==> done — 2 package(s) published` | CI published | Done |
+| `==> skip … (already on registry)` and `done — 0 package(s), 3 skipped`, job green | A hand publish got there first | Report it as a hand publish |
+| `==> done — 3 package(s) published` | CI published | Done |
 
 ### The owner-only fix, then the npm-only rerun
 
@@ -390,7 +390,7 @@ Report state, not explanation. The owner has corrected verbose reports repeatedl
 ```
 vX.Y.Z: PR #n merged (<sha7>), tag vX.Y.Z.
 GitHub release: 6 assets, installer smoke passed.
-npm: <CI published both | on npm, published by hand | NOT published: NPM_TOKEN rejected, needs you>.
+npm: <CI published all three | on npm, published by hand | NOT published: NPM_TOKEN rejected, needs you>.
 <Reruns or flakes, if any.>
 ```
 
