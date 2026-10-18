@@ -5,19 +5,40 @@
  *
  * A non-2xx is not an exception: `call` always resolves, and callers branch on `status`.
  */
+import { clearToken, getToken } from './lib/token';
 import type { DeploymentRow, Job, JobStub, Logs, Me, Runtime } from '@samyx/preview-stacks-client';
 
 export type Result<T> = { ok: boolean; status: number; body: T & { error?: string } };
 export type Lifecycle = 'up' | 'verify' | 'down' | 'sleep' | 'wake';
 
-async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<Result<T>> {
+/** Called on a 401 from any call but the sign-in probes themselves: the session or token is gone. */
+let unauthorized: (() => void) | undefined;
+export function onUnauthorized(fn: () => void): void {
+  unauthorized = fn;
+}
+
+/** `Authorization` for the stored bearer token, if any. */
+export function authHeaders(): Record<string, string> {
+  const t = getToken();
+  return t ? { authorization: `Bearer ${t}` } : {};
+}
+
+/** A 401 means the stored token (if any) no longer works; drop it and tell the shell. */
+export function noteStatus(path: string, status: number): void {
+  if (status !== 401 || path.startsWith('/api/auth/')) return;
+  clearToken();
+  unauthorized?.();
+}
+
+export async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<Result<T>> {
   try {
     const r = await fetch(path, {
       method,
       credentials: 'same-origin',
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      headers: { ...authHeaders(), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+    noteStatus(path, r.status);
     const parsed = (await r.json().catch(() => ({}))) as T & { error?: string };
     return { ok: r.ok, status: r.status, body: parsed };
   } catch {
@@ -25,7 +46,7 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
   }
 }
 
-const id = encodeURIComponent;
+export const id = encodeURIComponent;
 
 export const api = {
   me: () => call<Me>('GET', '/api/auth/me'),

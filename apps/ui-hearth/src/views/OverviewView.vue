@@ -1,39 +1,65 @@
 <script setup lang="ts">
-/** The host at a glance: what is running, what failed, and what just happened. */
-import { computed } from 'vue';
+/** The host at a glance: control stack, deployment counts, recent jobs. A leak outranks all of it. */
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   HAlert,
+  HBadge,
   HButton,
   HCard,
+  HDataTable,
   HEmptyState,
   HGrid,
+  HList,
+  HListItem,
   HPageHeader,
   HSkeleton,
   HSparkline,
   HStatCard,
   HStack,
   HText,
-  HTimeline,
-  type TimelineItem,
+  type TableColumn,
 } from '@hearth-ui/vue';
-import { data, summary } from '../state';
-import { ACTION_LABEL, ago, jobTone, took } from '../format';
+import { coreApi, normalizeControl, type Control } from '../api-core';
+import { summarize } from '../lib/deployments';
+import { problem } from '../lib/problem';
+import { useNow } from '../lib/now';
+import { actionLabel, ago, containerTone, jobTone, took } from '../format';
+import { data, refresh } from '../state';
 
 const router = useRouter();
+const now = useNow();
 
-const recent = computed<TimelineItem[]>(() =>
-  data.jobs.slice(0, 8).map((j) => ({
-    id: j.id,
-    title: `${ACTION_LABEL[j.action] ?? j.action} · ${j.stack}`,
-    description: `${j.state}${j.endedAt ? ` in ${took(j.startedAt, j.endedAt)}` : ''}`,
-    timestamp: ago(j.startedAt),
-    dateTime: j.startedAt ? new Date(j.startedAt).toISOString() : undefined,
-    tone: jobTone(j.state),
-  })),
-);
+const control = ref<Control | null>(null);
+const controlError = ref('');
+const controlLoaded = ref(false);
+async function loadControl(): Promise<void> {
+  const r = await coreApi.control();
+  controlLoaded.value = true;
+  if (!r.ok) {
+    controlError.value = problem(r, 'Control stack');
+    return;
+  }
+  controlError.value = '';
+  control.value = normalizeControl(r.body);
+}
+let timer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  void loadControl();
+  timer = setInterval(() => void loadControl(), 10000);
+});
+onBeforeUnmount(() => timer && clearInterval(timer));
+const reloading = ref(false);
+async function reload(): Promise<void> {
+  reloading.value = true;
+  await Promise.all([loadControl(), refresh()]);
+  reloading.value = false;
+}
 
-/** Wall-clock seconds of the finished jobs, oldest first, so the line reads left to right. */
+const sum = computed(() => summarize(data.deployments));
+const leaked = computed(() => data.jobs.filter((j) => j.state === 'leaked'));
+const attention = computed(() => data.deployments.filter((d) => d.unresolved));
+const recent = computed(() => data.jobs.slice(0, 8));
 const durations = computed(() =>
   data.jobs
     .filter((j) => j.startedAt && j.endedAt)
@@ -41,61 +67,95 @@ const durations = computed(() =>
     .reverse()
     .map((j) => Math.round((j.endedAt! - j.startedAt!) / 1000)),
 );
-const attention = computed(() => data.deployments.filter((d) => d.unresolved));
+
+const cols: TableColumn[] = [
+  { key: 'name', label: 'Service', truncate: true },
+  { key: 'state', label: 'State' },
+  { key: 'health', label: 'Health', hideBelow: 420 },
+  { key: 'image', label: 'Image', truncate: true, hideBelow: 700 },
+];
+const serviceRows = computed(() =>
+  (control.value?.services ?? []).map((s) => ({ id: s.name, name: s.name, state: s.state, health: s.health || null, image: s.image || '—' })),
+);
 </script>
 
 <template>
   <HStack direction="column" :gap="6">
-    <HPageHeader
-      variant="hero"
-      title="This host,"
-      accent="at a glance."
-      description="Previews running here, what is in flight, and what went wrong."
-    />
+    <HPageHeader title="This host," accent="at a glance." variant="hero" description="Running previews, jobs in flight, failures." actions-placement="end">
+      <template #actions>
+        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="reloading" @click="reload" />
+      </template>
+    </HPageHeader>
 
-    <HSkeleton v-if="!data.loaded" variant="rectangle" />
-    <template v-else>
-      <HGrid min-column-width="12rem" :gap="4">
-        <HStatCard label="Deployments" :value="summary.total" icon="apps" :detail="`${summary.running} running`" />
-        <HStatCard label="Busy" :value="summary.busy" icon="clock" tone="info" detail="a job is in flight" />
-        <HStatCard label="Asleep" :value="summary.asleep" icon="moon" tone="neutral" detail="wake on request" />
-        <HStatCard
-          label="Failed jobs"
-          :value="summary.failedJobs"
-          icon="health"
-          :tone="summary.failedJobs ? 'danger' : 'success'"
-          detail="of the last 50"
-        />
-      </HGrid>
+    <HAlert v-if="leaked.length" tone="danger" :title="`${leaked.length} teardown${leaked.length === 1 ? '' : 's'} left something behind`" description="Nothing else will remove it.">
+      <HStack direction="row" wrap :gap="2">
+        <HButton v-for="j in leaked.slice(0, 3)" :key="j.id" size="compact" variant="secondary" :label="j.stack" icon="right" @click="router.push(`/jobs/${encodeURIComponent(j.id)}`)" />
+        <HButton v-if="leaked.length > 3" size="compact" variant="ghost" :label="`All ${leaked.length} leaked`" @click="router.push('/jobs?state=leaked')" />
+      </HStack>
+    </HAlert>
 
-      <HAlert
-        v-for="d in attention"
-        :key="d.id"
-        tone="warning"
-        :title="`${d.id} cannot be resolved`"
-        :description="d.unresolved"
-      />
+    <HAlert v-if="!data.loaded && data.error" tone="danger" title="Could not load" :description="data.error" />
 
-      <HGrid min-column-width="22rem" :gap="4">
-        <HCard title="Recent jobs" description="Newest first.">
-          <HEmptyState v-if="!recent.length" title="No jobs yet" description="Deploy a preview and it shows up here." icon="clock" />
-          <HTimeline v-else :items="recent" compact label="Recent jobs" />
-        </HCard>
+    <HGrid min-column-width="22rem" :gap="4">
+      <HCard title="Control stack" :description="control?.managedBy ? `Managed from the host by ${control.managedBy}.` : 'Managed from the host.'">
+        <HStack direction="column" :gap="3">
+          <HStack direction="row" v-if="control?.project" :gap="2"><HBadge :label="control.project" variant="outline" /></HStack>
+          <HAlert v-if="controlError" tone="danger" :title="controlError" compact />
+          <HSkeleton v-else-if="!controlLoaded" variant="rectangle" />
+          <template v-else-if="control">
+            <HAlert v-if="!control.reachable" tone="warning" title="Docker did not answer" description="State unknown. The stack may be running." compact />
+            <HAlert v-else-if="control.parseError" tone="warning" title="Docker's answer could not be read" description="State unknown for this refresh." compact />
+            <HAlert v-else-if="!control.services.length" tone="danger" title="Nothing is running in this project" compact />
+            <HDataTable v-if="serviceRows.length" label="Control stack services" :rows="serviceRows" :columns="cols" :page-size="20">
+              <template #cell="{ row, column, value }">
+                <HBadge v-if="column.key === 'state' || column.key === 'health'" dot :label="String(value || '—')" :tone="containerTone(String(row.state), (row.health as string | null) ?? null)" />
+                <template v-else>{{ value }}</template>
+              </template>
+            </HDataTable>
+          </template>
+          <HButton variant="ghost" size="compact" icon="arrow" label="Refresh control stack" @click="loadControl" />
+        </HStack>
+      </HCard>
 
-        <HCard title="How long jobs take" description="Seconds, oldest to newest.">
-          <HSparkline
-            v-if="durations.length > 1"
-            :values="durations"
-            label="Job duration, seconds"
-            :description="`${durations.length} finished jobs`"
-            tone="accent"
-            :width="320"
-            :height="64"
+      <HStack direction="column" :gap="4">
+        <HSkeleton v-if="!data.loaded" variant="rectangle" />
+        <HGrid v-else min-column-width="8rem" :gap="3">
+          <HStatCard label="Total" :value="sum.total" icon="apps" />
+          <HStatCard label="Running" :value="sum.running" icon="check" :tone="sum.running ? 'success' : 'neutral'" />
+          <HStatCard label="Busy" :value="sum.busy" icon="clock" tone="info" />
+          <HStatCard label="Asleep" :value="sum.asleep" icon="moon" tone="neutral" />
+          <HStatCard v-if="sum.unknown" label="Unknown" :value="sum.unknown" icon="info" tone="warning" detail="Not the same as idle." />
+        </HGrid>
+        <HAlert v-for="d in attention" :key="d.id" tone="warning" :title="`${d.id} needs variables`" :description="d.unresolved" compact>
+          <HButton size="compact" variant="secondary" label="Set its variables" @click="router.push(`/deployments/${encodeURIComponent(d.id)}/config`)" />
+        </HAlert>
+      </HStack>
+    </HGrid>
+
+    <HGrid min-column-width="22rem" :gap="4">
+      <HCard title="Recent jobs" description="Newest first.">
+        <HAlert v-if="!data.loaded && data.error" tone="danger" :title="data.error" compact />
+        <HSkeleton v-else-if="!data.loaded" variant="rectangle" />
+        <HEmptyState v-else-if="!recent.length" title="No jobs yet" icon="clock" />
+        <HList v-else label="Recent jobs" divided>
+          <HListItem
+            v-for="j in recent"
+            :key="j.id"
+            interactive
+            :title="`${actionLabel(j.action)} ${j.stack}`"
+            :description="`${ago(j.startedAt, now)} · ${took(j.startedAt, j.endedAt, now)}`"
+            :badge="j.state"
+            :tone="jobTone(j.state)"
+            @activate="router.push(`/jobs/${encodeURIComponent(j.id)}`)"
           />
-          <HText v-else tone="muted">Not enough finished jobs yet.</HText>
-        </HCard>
-      </HGrid>
-      <HButton variant="ghost" icon="right" label="All jobs" @click="router.push('/jobs')" />
-    </template>
+        </HList>
+        <template #footer><HButton variant="ghost" icon="right" label="All jobs" @click="router.push('/jobs')" /></template>
+      </HCard>
+
+      <HCard title="Job duration" description="Seconds, oldest to newest.">
+        <HSparkline v-if="durations.length > 1" :values="durations" label="Job duration, seconds" :description="`${durations.length} finished jobs`" tone="accent" :width="320" :height="64" />
+        <HText v-else tone="muted">Not enough finished jobs.</HText>
+      </HCard>
+    </HGrid>
   </HStack>
 </template>

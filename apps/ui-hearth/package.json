@@ -2,17 +2,20 @@
   "name": "@samyx/preview-stacks-ui-hearth",
   "version": "0.0.0",
   "private": true,
-  "description": "An alternative web UI for preview-stacks, built on Hearth UI. Not released: a first slice, beside apps/ui.",
+  "description": "An alternative web UI for preview-stacks, built on Hearth UI. Selectable control-plane UI (pstack init --ui hearth), beside apps/ui.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --build && vite build",
     "typecheck": "vue-tsc --build",
+    "test": "bun test",
     "preview": "vite preview"
   },
   "dependencies": {
     "@hearth-ui/vue": "0.7.1",
     "@samyx/preview-stacks-client": "workspace:*",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },

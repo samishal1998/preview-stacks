@@ -10,11 +10,27 @@ export function ago(at: number | null | undefined, now = Date.now()): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export function took(start: number | null | undefined, end: number | null | undefined): string {
-  if (!start || !end) return '—';
-  const s = Math.max(0, Math.round((end - start) / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+/** "12s" or "3m 07s". A job still running gets an ellipsis so it cannot read as final. */
+export function took(start: number | null | undefined, end: number | null | undefined, now = Date.now()): string {
+  if (!start) return '—';
+  const s = Math.max(0, Math.round(((end ?? now) - start) / 1000));
+  const t = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return end ? t : `${t}…`;
 }
+
+/** "2026-07-28 05:17:00", viewer-local, sortable. */
+export function stamp(ms: number | null | undefined): string {
+  return ms ? new Date(ms).toLocaleString('sv') : '—';
+}
+
+/** "start-failed" to "Start failed". For enums only, never for ids. */
+export function sentence(v: string | null | undefined): string {
+  if (!v) return '—';
+  const w = v.replace(/[-_]+/g, ' ');
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+export const actionLabel = (a: string | undefined): string => (a ? (ACTION_LABEL[a] ?? a) : '—');
 
 export const ACTION_LABEL: Record<string, string> = {
   up: 'Deploy',
@@ -22,8 +38,12 @@ export const ACTION_LABEL: Record<string, string> = {
   down: 'Tear down',
   sleep: 'Sleep',
   wake: 'Wake',
-  'loki-apply': 'Apply logging',
+  'loki-apply': 'Loki settings',
 };
+
+export function runTone(state: string): Tone {
+  return state === 'running' ? 'success' : state === 'busy' ? 'info' : state === 'unknown' ? 'warning' : 'neutral';
+}
 
 export function jobTone(state: string): Tone {
   if (state === 'ok') return 'success';

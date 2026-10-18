@@ -96,6 +96,8 @@ export type DeploymentRow = {
   sleep?: { idle: string | null; after: string | null } | null;
   /** Why the spec could not be resolved — usually a variable this call did not supply. */
   unresolved?: string;
+  /** The request variables this deployment was last applied with. */
+  vars?: Record<string, string>;
   createdAt?: number;
   updatedAt?: number;
 };
@@ -250,6 +252,8 @@ export type RuntimeRoute = {
   target: string | null;
   /** Why `target` is null: "" when it is set, else the one reason nothing here can know the address. */
   targetReason?: '' | 'no-port' | 'not-on-ingress' | 'unknown-node';
+  /** Only on the host-wide list (`GET /api/routing/live`). */
+  project?: string | null;
 };
 
 export type Runtime = {
