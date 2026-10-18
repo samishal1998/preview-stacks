@@ -2,8 +2,8 @@
 
 An alternative web UI for pstack, built on [Hearth UI](https://hearth-ui.samyx.net/llms.txt) rather
 than ported from `apps/ui`: it uses the components Hearth ships for each job instead of rebuilding
-the advanced UI's screens. Private and unreleased; `apps/ui` stays the advanced UI until this covers
-what it does.
+the advanced UI's screens. It covers what `apps/ui` does and is selectable as a control-plane UI:
+`pstack init --ui hearth`. Not published to npm yet (`private: true`).
 
 | Job | Hearth component |
 |---|---|
@@ -15,18 +15,14 @@ what it does.
 | One job | `HResourceDetail`, `HStepper`, `HLogViewer`, `HProgress` |
 | Feedback | `HToaster`, `HConnectionState`, `HAlert`, `HEmptyState`, `HSkeleton`, `HErrorPage` |
 
-Everything the advanced UI does beyond this — editing specs, routing, registries, settings, users,
-the control stack — is still there and not yet here.
-
 ## Why a separate app, not a switch inside `apps/ui`
 
 - A runtime switch would put two implementations of every view behind one router and ship both
   component libraries in one bundle. Neither UI could change without the other.
 - The two already share what matters: the API, through `@samyx/preview-stacks-client`'s types. This
   app has its own thin `src/api.ts` and no code from `apps/ui`.
-- Choosing one is then a deployment choice, like `pstack init --ui basic|advanced`: a third value
-  that points the control stack at this app's image. Not wired yet; the Dockerfile and the init flag
-  come with the first slice that is worth running instead of `apps/ui`.
+- Choosing one is a deployment choice: `pstack init --ui basic|advanced|hearth`, or `pstack ui hearth`
+  on a running host. `hearth` runs this app's image as the same `advanced-ui` compose service.
 
 ## Run
 
@@ -37,8 +33,18 @@ cd apps/ui-hearth && bun run dev   # 127.0.0.1:5274, /api → 7878
 
 `bun run build` type-checks and builds `dist/`.
 
-## Next
+## Deploy
 
-Submit and edit specs (`HFirstRunSetup` / `HSettingsPage` / `HFileUpload`), routing and domains,
-registries, users and single sign-on, the control stack and Swarm. Take component names from the
-Hearth index, not from memory.
+```bash
+# from a checkout, at the repo root
+docker build -f apps/ui-hearth/Dockerfile -t pstack-ui-hearth:local .
+# or, with a built dist/ (nginx.conf beside it)
+pstack build-image --ui hearth --ui-dist apps/ui-hearth/dist
+
+pstack init --ui hearth --domain <preview.example.com> --acme-email <you@example.com>
+pstack ui hearth                   # switch an existing host
+```
+
+The image is `pstack-ui-hearth:local`; `PSTACK_UI_HEARTH_IMAGE` overrides it. A bare `--ui` on
+`build-image` still builds the advanced image. Without `--ui-dist`, `build-image --ui hearth` fetches
+`@samyx/preview-stacks-ui-hearth` from npm, which needs the package published.

@@ -8,9 +8,26 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type { DeploymentRow, Job } from '@samyx/preview-stacks-client';
 import type { ToastItem } from '@hearth-ui/vue';
-import { api } from './api';
+import { api, onUnauthorized } from './api';
+import { clearToken, getToken, setToken } from './lib/token';
 
-export const auth = reactive({ checked: false, authed: false, username: '', root: false });
+/** `role` is the signed-in account's role ('' for the host token); the one source controls are drawn from. */
+export const auth = reactive({ checked: false, authed: false, username: '', root: false, id: 0, role: '', viaToken: false });
+
+function signedOut(): void {
+  stopPolling();
+  auth.authed = false;
+  auth.root = false;
+  auth.id = 0;
+  auth.role = '';
+  auth.username = '';
+  auth.viaToken = false;
+}
+
+// A session or token that dies mid-use lands on the sign-in page, not on a wall of failed panels.
+onUnauthorized(() => {
+  if (auth.authed) signedOut();
+});
 export const data = reactive({
   deployments: [] as DeploymentRow[],
   jobs: [] as Job[],
@@ -42,7 +59,8 @@ watch(prefs, (p) => {
 export const toasts = ref<ToastItem[]>([]);
 let seq = 0;
 export function toast(title: string, tone: ToastItem['tone'] = 'neutral', description?: string): void {
-  toasts.value = [...toasts.value, { id: `t${++seq}`, title, tone, description, duration: tone === 'danger' ? 9000 : 5000 }];
+  // A failure stays until dismissed: the one message that says why nothing happened must not time out. At most five show.
+  toasts.value = [...toasts.value, { id: `t${++seq}`, title, tone, description, duration: tone === 'danger' ? 0 : 5000 }].slice(-5);
 }
 export function dismissToast(id: string): void {
   toasts.value = toasts.value.filter((t) => t.id !== id);
@@ -55,14 +73,13 @@ let failures = 0;
 export async function refresh(): Promise<void> {
   const [d, j] = await Promise.all([api.deployments(), api.jobs()]);
   if (d.status === 401 || j.status === 401) {
-    auth.authed = false;
-    stopPolling();
+    signedOut();
     return;
   }
   if (!d.ok || !j.ok) {
     failures++;
     data.connection = failures > 2 ? 'failed' : 'reconnecting';
-    data.error = d.body.error ?? j.body.error ?? 'could not load';
+    data.error = d.body.error ?? j.body.error ?? 'The server did not answer.';
     return;
   }
   failures = 0;
@@ -95,24 +112,65 @@ export const summary = computed(() => {
   };
 });
 
-export async function start(): Promise<void> {
+/** Reads who the server says is signed in. False when nobody is. */
+export async function loadMe(): Promise<boolean> {
   const me = await api.me();
-  if (me.status === 0) {
+  if (me.status === 0 || me.status >= 500) {
+    // No answer, or a proxy's 5xx: the server is away, which is not the same as signed out.
     data.connection = 'failed';
-    data.error = me.body.error ?? '';
-  } else if (me.ok) {
+    data.error = me.body.error ?? 'The server did not answer.';
+  } else {
+    data.connection = 'connected';
+    data.error = '';
+  }
+  if (me.ok) {
     auth.authed = true;
     auth.root = !!me.body.root;
+    auth.id = me.body.user?.id ?? 0;
+    auth.role = me.body.user?.role ?? '';
     auth.username = me.body.user?.username ?? (me.body.root ? 'root' : '');
-    startPolling();
+    auth.viaToken = getToken() !== '';
   }
+  return me.ok;
+}
+
+export async function start(): Promise<void> {
+  const up = await loadMe();
+  if (up) startPolling();
   auth.checked = true;
+  // The server was away at load: ask again until it answers, so the page recovers without a reload.
+  if (!up && data.connection === 'failed') {
+    const retry = setInterval(async () => {
+      const ok = await loadMe();
+      if (data.connection === 'failed') return;
+      clearInterval(retry);
+      if (ok) startPolling();
+    }, 4000);
+  }
+}
+
+/** Stores the token, asks the server who it is, and keeps it only if the server accepts it. Returns the error line, or null. */
+export async function signInWithToken(token: string): Promise<string | null> {
+  setToken(token);
+  if (await loadMe()) {
+    startPolling();
+    return null;
+  }
+  clearToken();
+  return data.connection === 'failed' ? 'The server did not answer.' : 'That token was not accepted.';
+}
+
+/** Drops the stored token. A cookie session, if there is one, keeps working; otherwise the next call lands on sign-in. */
+export async function forgetToken(): Promise<void> {
+  clearToken();
+  if (await loadMe()) auth.viaToken = false;
+  else signedOut();
 }
 
 export async function signOut(): Promise<void> {
   await api.logout();
-  stopPolling();
-  auth.authed = false;
+  clearToken();
+  signedOut();
   data.deployments = [];
   data.jobs = [];
   data.loaded = false;

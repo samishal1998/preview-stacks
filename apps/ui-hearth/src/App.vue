@@ -5,7 +5,7 @@
  * Everything below the frame is a view that reads `state.ts`; none of them owns navigation,
  * authentication or persistence beyond what Hearth's contract leaves to the application.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   HAuthPage,
@@ -13,6 +13,8 @@ import {
   HCommandPalette,
   HConnectionState,
   HDashboardShell,
+  HDescriptionList,
+  HDialog,
   HPopover,
   HSelect,
   HStack,
@@ -24,7 +26,13 @@ import {
   type NavItem,
 } from '@hearth-ui/vue';
 import { api } from './api';
-import { auth, data, dismissToast, prefs, refresh, signOut, start, toasts } from './state';
+import SignIn from './components/SignIn.vue';
+import { ssoApi } from './api-sso';
+import { densities, palettes } from './lib/settings';
+import { isTyping, keyStep, SHORTCUTS } from './lib/shortcuts';
+import { safeNext } from './lib/sso';
+import { can, sentence, type Role } from './lib/users';
+import { auth, data, dismissToast, prefs, refresh, signInWithToken, signOut, start, toasts } from './state';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,25 +41,49 @@ const loginError = ref('');
 const loggingIn = ref(false);
 const paletteOpen = ref(false);
 
-const items = computed<NavItem[]>(() => [
+const grafana = ref('');
+
+/** `min` is courtesy: a page the role cannot use is not listed. The server still decides. */
+const all = computed<Array<NavItem & { min?: Role }>>(() => [
   { id: 'overview', label: 'Overview', icon: 'home' },
   { id: 'deployments', label: 'Deployments', icon: 'apps', badge: data.deployments.length || undefined },
   { id: 'jobs', label: 'Jobs', icon: 'clock', badge: data.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length || undefined },
+  { id: 'specs', label: 'Specs', icon: 'code' },
+  { id: 'routing', label: 'Routing', icon: 'globe' },
+  { id: 'swarm', label: 'Swarm', icon: 'server' },
+  { id: 'control', label: 'Control', icon: 'layout', min: 'maintainer' },
+  { id: 'registries', label: 'Registries', icon: 'lock' },
+  { id: 'notifiers', label: 'Notifiers', icon: 'info' },
+  { id: 'users', label: 'Users', icon: 'providers' },
+  { id: 'sso', label: 'Single sign-on', icon: 'launch', min: 'maintainer' },
+  { id: 'variables', label: 'Variables', icon: 'star' },
+  { id: 'config', label: 'Config', icon: 'copy', min: 'admin' },
+  { id: 'settings', label: 'Settings', icon: 'settings' },
 ]);
+const items = computed<NavItem[]>(() => {
+  const rows = all.value.filter((i) => !i.min || can(i.min, auth)).map(({ min: _min, ...i }) => i);
+  // Grafana is its own site; developer and up (it reads unredacted lines).
+  return grafana.value && can('developer', auth) && !auth.viaToken ? [...rows, { id: 'grafana', label: 'Grafana', icon: 'launch' }] : rows;
+});
 const active = computed(() => {
   const n = String(route.name ?? '');
-  return n === 'deployment' ? 'deployments' : n === 'job' ? 'jobs' : n;
+  return n === 'deployment' || n === 'submit' ? 'deployments' : n === 'job' ? 'jobs' : n === 'spec' ? 'specs' : n;
 });
 const pageTitle = computed(() => items.value.find((i) => i.id === active.value)?.label ?? 'pstack');
 
 function go(id: string): void {
+  if (id === 'grafana') {
+    window.open(grafana.value, '_blank', 'noopener');
+    return;
+  }
   void router.push(id === 'overview' ? '/' : `/${id}`);
 }
 
 const commands = computed<CommandItem[]>(() => [
   { id: 'go:overview', label: 'Overview', group: 'Go to', icon: 'home' },
   { id: 'go:deployments', label: 'Deployments', group: 'Go to', icon: 'apps' },
-  { id: 'go:jobs', label: 'Jobs', group: 'Go to', icon: 'clock' },
+  ...items.value.filter((i) => !['overview', 'deployments'].includes(i.id)).map((i) => ({ id: `go:${i.id}`, label: i.label, group: 'Go to', icon: i.icon })),
+  { id: 'go:submit', label: 'Submit a spec', group: 'Actions', icon: 'plus' },
   { id: 'refresh', label: 'Refresh now', group: 'Actions', icon: 'arrow' },
   ...data.deployments.map((d) => ({
     id: `dep:${d.id}`,
@@ -80,20 +112,62 @@ async function signIn(c: { username: string; password: string }): Promise<void> 
     return;
   }
   await start();
+  // Back to where the person was going: /login carries it as ?next=, anywhere else the URL already is it.
+  if (auth.authed && route.path === '/login') leave(route.query.next);
 }
 
-const palettes = ['sunset', 'ocean', 'forest', 'dusk', 'rose'].map((v) => ({ value: v, label: v[0]!.toUpperCase() + v.slice(1) }));
-const densities = [
-  { value: 'comfortable', label: 'Comfortable' },
-  { value: 'compact', label: 'Compact' },
-];
+async function useToken(token: string): Promise<void> {
+  loggingIn.value = true;
+  loginError.value = (await signInWithToken(token)) ?? '';
+  loggingIn.value = false;
+  if (auth.authed && route.path === '/login') leave(route.query.next);
+}
 
-onMounted(start);
+/** An /api/ target (Grafana's sign-in) is a server route: full navigation, not a view. */
+function leave(next: unknown): void {
+  const to = safeNext(next);
+  if (to.startsWith('/api/')) window.location.assign(to);
+  else void router.replace(to);
+}
+
+watch(
+  () => auth.authed,
+  (on) => {
+    if (!on) {
+      grafana.value = '';
+    } else {
+      void ssoApi.health().then((h) => (grafana.value = h.ok ? (h.body.grafana ?? '') : ''));
+      if (route.path === '/login') leave(route.query.next);
+    }
+  },
+  { immediate: true },
+);
+
+
+const helpOpen = ref(false);
+let pendingAt = 0;
+function onKey(e: KeyboardEvent): void {
+  if (!auth.authed || paletteOpen.value || helpOpen.value) return;
+  const s = keyStep(pendingAt, { key: e.key, typing: isTyping(e.target), mod: e.metaKey || e.ctrlKey || e.altKey }, Date.now());
+  pendingAt = s.pendingAt;
+  if (s.go) void router.push(s.go);
+  else if (s.help) helpOpen.value = true;
+  else return;
+  e.preventDefault();
+}
+onMounted(() => {
+  void start();
+  window.addEventListener('keydown', onKey);
+});
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>
   <HTheme :theme="prefs.theme" :mode="prefs.mode" :density="prefs.density">
-    <HStack v-if="!auth.checked" style="padding: 2rem" aria-busy="true">
+    <!-- A public page (a share link) renders without the sign-in gate or the shell. -->
+    <RouterView v-if="route.meta.public" />
+
+    <HStack v-else-if="!auth.checked" style="padding: 2rem" aria-busy="true">
       <HSkeleton variant="text" />
     </HStack>
 
@@ -110,10 +184,11 @@ onMounted(start);
       story-footer="pstack"
       note="Sessions are per browser."
       :scenery="false"
-      :loading="loggingIn"
-      :error="loginError || (data.connection === 'failed' ? data.error : '')"
-      @submit="signIn"
-    />
+    >
+      <template #form>
+        <SignIn :loading="loggingIn" :error="loginError || (data.connection === 'failed' ? data.error : '')" @submit="signIn" @token="useToken" />
+      </template>
+    </HAuthPage>
 
     <HDashboardShell
       v-else
@@ -122,7 +197,7 @@ onMounted(start);
       :active="active"
       :page-title="pageTitle"
       :username="auth.username"
-      user-role="signed in"
+      :user-role="auth.role ? sentence(auth.role) : auth.root ? 'Host token' : 'Signed in'"
       :show-workspace="false"
       navigation-label="Console"
       footer-note="pstack"
@@ -139,6 +214,7 @@ onMounted(start);
           @retry="refresh"
         />
         <HButton variant="ghost" size="compact" icon="search" label="Search" @click="paletteOpen = true" />
+        <HButton variant="ghost" size="compact" icon="info" label="Shortcuts" @click="helpOpen = true" />
         <HPopover label="Appearance" icon="settings" icon-only variant="ghost" panel-label="Appearance" placement="bottom">
           <HStack direction="column" :gap="3">
             <HThemeSwitcher v-model="prefs.mode" />
@@ -152,6 +228,23 @@ onMounted(start);
     </HDashboardShell>
 
     <HCommandPalette v-model:open="paletteOpen" :items="commands" shortcut placeholder="Go to, or find a deployment…" @select="onCommand" />
+    <HDialog :open="helpOpen" title="Shortcuts" @close="helpOpen = false">
+      <HDescriptionList variant="inline" :items="SHORTCUTS.map((x) => ({ key: x.keys, label: x.keys, value: x.what }))" />
+    </HDialog>
     <HToaster :items="toasts" @dismiss="dismissToast" />
   </HTheme>
 </template>
+
+<style>
+/* HLogViewer's action row does not wrap: at 320 "Copy visible logs" runs past the card. */
+.h-log-actions {
+  flex-wrap: wrap;
+}
+/* HDialog's #footer slot sits flush under the body (its 24px gap is for the custom element only). */
+.h-dialog .h-overlay-footer:not(:empty) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+</style>
