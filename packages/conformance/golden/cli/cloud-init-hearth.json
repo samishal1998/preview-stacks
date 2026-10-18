@@ -1,0 +1,22 @@
+{
+  "name": "cloud-init-hearth",
+  "argv": [
+    "cloud-init",
+    "--domain",
+    "preview.example.com",
+    "--acme-email",
+    "ops@example.com",
+    "--ssh-key",
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoldenKeyForTheConformanceSuite0000000 golden@example",
+    "--password",
+    "golden-dashboard-password",
+    "-y",
+    "--ui",
+    "hearth"
+  ],
+  "env": {},
+  "cwd": "packages/pstack",
+  "code": 3,
+  "stdout": "",
+  "stderr": "pstack: the hearth UI is not on npm yet, so a booting host cannot build it: use --ui advanced, then build the hearth image by hand\n"
+}

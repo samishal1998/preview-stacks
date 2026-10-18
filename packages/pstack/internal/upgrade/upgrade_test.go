@@ -136,6 +136,22 @@ func TestUpgrade(t *testing.T) {
 	os.Unsetenv("PSTACK_LOKI_PASSWORD")
 	LookPath = func() string { return "" }
 
+	t.Run("detects a hearth host from a control file init actually generated", func(t *testing.T) {
+		os.Unsetenv("PSTACK_UI_HEARTH_IMAGE")
+		s := mustRead(t, realControl(t, initctl.Hearth, initctl.HTTP01))
+		if s.UI != initctl.Hearth {
+			t.Fatalf("ui = %s", s.UI)
+		}
+		steps := PlanUpgrade(PlanArgs{Phase: Resume, Target: "x", State: s})
+		// Not on npm, so the resume must not rebuild it: that 404 would strand the host.
+		if contains(cmds(steps), "pstack build-image --ui hearth") || !strings.Contains(find(steps, "pstack init").Cmd, "--ui hearth") {
+			t.Errorf("plan: %v", cmds(steps))
+		}
+		if contains(cmds(steps), "pstack build-image --ui") {
+			t.Error("a hearth host builds the advanced image")
+		}
+	})
+
 	t.Run("detects the UI mode from a control file init actually generated", func(t *testing.T) {
 		// negative control: anchor advancedSvc on `pstack-ui:` instead — reads basic, the plan lacks --ui.
 		s := mustRead(t, realControl(t, initctl.Advanced, initctl.HTTP01))

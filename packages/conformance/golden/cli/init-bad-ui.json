@@ -15,5 +15,5 @@
   "cwd": "packages/pstack",
   "code": 3,
   "stdout": "",
-  "stderr": "pstack: --ui must be basic or advanced, got \"fancy\"\n"
+  "stderr": "pstack: --ui must be basic, advanced or hearth, got \"fancy\"\n"
 }

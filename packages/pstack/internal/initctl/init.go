@@ -88,6 +88,9 @@ type Challenge string
 // UI is which web UI `control.<domain>` serves.
 type UI string
 
+// HasContainer is whether the UI runs as its own container (every mode but basic).
+func (u UI) HasContainer() bool { return u == Advanced || u == Hearth }
+
 // Logging is where preview containers' logs go. "" counts as LoggingNone.
 type Logging string
 
@@ -96,6 +99,7 @@ const (
 	DNS01       Challenge = "dns01"
 	Basic       UI        = "basic"
 	Advanced    UI        = "advanced"
+	Hearth      UI        = "hearth"
 	LoggingNone Logging   = "none"
 	Loki        Logging   = "loki"
 )
@@ -104,6 +108,10 @@ const (
 // read it off the RUNNING container, the way DetectChallenge reads Traefik's flags, so `pstack up` on
 // the host and the API always agree and there is no setting to keep in step. The one spelling of the key.
 const PushURLLabel = "pstack.logging.push-url"
+
+// UILabel is the label on a hearth `advanced-ui` container that names it. Both container UIs share
+// the service name, so the API reads this to tell them apart; advanced carries none.
+const UILabel = "pstack.ui"
 
 // GrafanaVersion is the Grafana image tag. Here, not beside swarm.LokiVersion: swarm needs Loki's tag
 // for the plugin install line, and nothing in swarm uses Grafana.
@@ -165,8 +173,10 @@ type Options struct {
 	//   advanced  The standalone SPA (@samyx/preview-stacks-ui) as its OWN container, which the
 	//             control stack gains a service for. Richer, but one more image to build and keep
 	//             current, so it is opt-in rather than the default.
+	//   hearth    The same, built on Hearth UI (@samyx/preview-stacks-ui-hearth). Same service name
+	//             and routing as advanced; only the image differs (PSTACK_UI_HEARTH_IMAGE).
 	//
-	// Either way the API keeps serving the basic UI on `api.<domain>`, so a broken advanced image
+	// Whichever is chosen, the API keeps serving the basic UI on `api.<domain>`, so a broken advanced image
 	// never leaves the host with no usable interface.
 	UI UI
 	// Orchestrator is how previews are deployed on this host.
@@ -233,7 +243,11 @@ func Init(opts Options) error {
 	challenge, ui, orchestrator, logging, dryRun, runner := opts.Challenge, opts.UI, opts.Orchestrator, opts.Logging, opts.DryRun, opts.Runner
 	image := defaultImage()
 	uiImage := "pstack-ui:local"
-	if v, ok := os.LookupEnv("PSTACK_UI_IMAGE"); ok {
+	uiImageEnv := "PSTACK_UI_IMAGE"
+	if ui == Hearth {
+		uiImage, uiImageEnv = "pstack-ui-hearth:local", "PSTACK_UI_HEARTH_IMAGE"
+	}
+	if v, ok := os.LookupEnv(uiImageEnv); ok {
 		uiImage = v
 	}
 	controlDir := filepath.Join(dataDir, "control")
@@ -314,13 +328,17 @@ func Init(opts Options) error {
 	// tries to PULL `pstack-ui:local`, gets "pull access denied", and takes the WHOLE control stack
 	// down with it — Traefik included. So an optional UI turned into a dead host. Check it here,
 	// where the message can name the command that fixes it.
-	if ui == Advanced {
+	if ui.HasContainer() {
+		build, dflt := "`pstack build-image --ui`", "pstack-ui:local"
+		if ui == Hearth {
+			build, dflt = "`pstack build-image --ui hearth`", "pstack-ui-hearth:local"
+		}
 		reqs = append(reqs, req{
-			name:   "advanced UI image",
+			name:   string(ui) + " UI image",
 			assert: "docker image inspect " + swarm.Shq(uiImage) + " >/dev/null 2>&1",
-			hint: "image " + uiImage + " not found — build it with `pstack build-image --ui`" +
-				tagFlag(uiImage, "pstack-ui:local") + ", " +
-				"or re-run without --ui advanced to use the basic UI embedded in the API.",
+			hint: "image " + uiImage + " not found — build it with " + build +
+				tagFlag(uiImage, dflt) + ", " +
+				"or re-run without --ui " + string(ui) + " to use the basic UI embedded in the API.",
 		})
 	}
 	// With --logging loki, both images by name, for the advanced UI's reason above. They come from Docker
@@ -698,8 +716,13 @@ type envValues struct {
 
 // envFile is the values every `${...}` in the compose template reads. Compose loads this from `.env`.
 func envFile(v envValues) string {
-	uiImage := v.uiImage
-	if uiImage == "" {
+	uiImage, uiVar := v.uiImage, "PSTACK_UI_IMAGE"
+	if v.ui == Hearth {
+		uiVar = "PSTACK_UI_HEARTH_IMAGE"
+		if uiImage == "" {
+			uiImage = "pstack-ui-hearth:local"
+		}
+	} else if uiImage == "" {
 		uiImage = "pstack-ui:local"
 	}
 	lines := []string{
@@ -712,7 +735,7 @@ func envFile(v envValues) string {
 		"DOMAIN=" + v.domain,
 		// Only meaningful with --ui advanced; harmless otherwise, and having it present means
 		// switching modes is a re-run of `init` rather than an .env edit.
-		"PSTACK_UI_IMAGE=" + uiImage,
+		uiVar + "=" + uiImage,
 		"ACME_EMAIL=" + v.acmeEmail,
 		"DNS_PROVIDER=" + v.dnsProvider,
 		"PSTACK_IMAGE=" + v.image,
@@ -846,9 +869,9 @@ func WakeRouterLabels(domain string) string {
 // only its target changes. Traefik happily lets a router declared on one container reference a
 // loadbalancer service declared on another, which keeps this a one-line swap.
 func ControlUIService(ui UI) string {
-	if ui == Advanced {
+	if ui.HasContainer() {
 		return strings.Join([]string{
-			"      # Advanced UI selected: control.<domain> serves the SPA container below. The API",
+			"      # " + strings.ToUpper(string(ui)[:1]) + string(ui)[1:] + " UI selected: control.<domain> serves the SPA container below. The API",
 			"      # still serves the basic UI on api.<domain>, so a broken UI image never leaves this",
 			"      # host without an interface.",
 			"      - traefik.http.routers.pstack-ui.service=advanced-ui",
@@ -859,17 +882,28 @@ func ControlUIService(ui UI) string {
 
 // AdvancedUIService is the optional advanced-UI container. Omitted entirely in basic mode — not
 // merely disabled.
+//
+// The service is named `advanced-ui` in both container modes: routing, the domains API and upgrade
+// detection all target that name, and only the image differs.
 func AdvancedUIService(ui UI) string {
-	if ui != Advanced {
+	if !ui.HasContainer() {
 		return ""
 	}
-	return strings.Join([]string{
+	image, build := "${PSTACK_UI_IMAGE}", "pstack build-image --ui"
+	if ui == Hearth {
+		image, build = "${PSTACK_UI_HEARTH_IMAGE}", "pstack build-image --ui hearth"
+	}
+	var uiLabel []string
+	if ui == Hearth {
+		uiLabel = []string{"      - " + UILabel + "=hearth"}
+	}
+	return strings.Join(append(append([]string{
 		"",
-		"  # The opt-in advanced UI (`pstack init --ui advanced`). A static SPA behind nginx, which",
+		"  # The opt-in " + string(ui) + " UI (`pstack init --ui " + string(ui) + "`). A static SPA behind nginx, which",
 		"  # proxies /api/ back to the pstack container so the browser stays same-origin and needs no",
-		"  # CORS. Build it with `pstack build-image --ui`.",
+		"  # CORS. Build it with `" + build + "`.",
 		"  advanced-ui:",
-		"    image: ${PSTACK_UI_IMAGE}",
+		"    image: " + image,
 		"    restart: unless-stopped",
 		"    mem_limit: 128m",
 		"    depends_on: [pstack]",
@@ -880,8 +914,7 @@ func AdvancedUIService(ui UI) string {
 		"      # No router here: control.<domain> is declared on the pstack container (so the TLS",
 		"      # labels stay in one place) and points at this service by name.",
 		"      - traefik.http.services.advanced-ui.loadbalancer.server.port=80",
-		"",
-	}, "\n")
+	}, uiLabel...), ""), "\n")
 }
 
 // LokiService is the opt-in Loki container, appended after the advanced UI at the same marker.

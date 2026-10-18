@@ -205,3 +205,22 @@ func TestGrafanaOn(t *testing.T) {
 		}
 	})
 }
+
+func TestControlUIReadsTheHearthLabel(t *testing.T) {
+	// negative control: return "" unconditionally — the hearth case fails.
+	for label, want := range map[string]string{`,"pstack.ui":"hearth"`: "hearth", ``: ""} {
+		f := exec.NewFake(nil, "")
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			switch {
+			case strings.HasPrefix(cmd, "docker ps -aq"):
+				return exec.Result{OK: true, Stdout: "u1\n"}, true
+			case strings.HasPrefix(cmd, "docker inspect"):
+				return exec.Result{OK: true, Stdout: `[{"Id":"u1","Name":"/pstack-control-advanced-ui-1","Config":{"Image":"x","Labels":{"com.docker.compose.service":"advanced-ui"` + label + `}},"State":{"Status":"running"}}]`}, true
+			}
+			return exec.Result{}, false
+		}
+		if got := ControlUI(f); got != want {
+			t.Errorf("label %q: got %q, want %q", label, got, want)
+		}
+	}
+}

@@ -59,7 +59,7 @@ type Parsed struct {
 	Distro        string
 	Format        string
 	Tag           string
-	UI            string // basic | advanced
+	UI            string // basic | advanced | hearth
 	UIImage       bool
 	UIDist        string
 	SSHKey        string
@@ -223,13 +223,13 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.Typed["--ui"] = true
 			if i+1 < len(argv) {
 				n := argv[i+1]
-				if n == "basic" || n == "advanced" {
+				if n == "basic" || n == "advanced" || n == "hearth" {
 					p.UI = n
 					i++
 					continue
 				}
 				if !strings.HasPrefix(n, "-") {
-					return nil, fail(fmt.Sprintf(`--ui must be basic or advanced, got "%s"`, n))
+					return nil, fail(fmt.Sprintf(`--ui must be basic, advanced or hearth, got "%s"`, n))
 				}
 			}
 			p.UIImage = true
@@ -363,15 +363,15 @@ func Usage(version string) string {
 		"      --force         down: allow tearing down a `kind: shared` deployment",
 		"",
 		"",
-		"dockerfile:  --ui                           print the advanced UI Dockerfile instead",
+		"dockerfile:  --ui [hearth]                  print the advanced (or hearth) UI Dockerfile instead",
 		"",
 		"build-image: --tag <name:tag>               (default pstack:local, = PSTACK_IMAGE)",
-		"             --ui                           build the advanced UI image instead",
+		"             --ui [hearth]                  build the advanced (or hearth) UI image instead",
 		"             --ui-dist <path>               use a built UI dist from a specific path",
 		"",
 		"init flags: --domain <preview.example.com>  --acme-email <you@example.com>",
 		"            --challenge http01|dns01        (default http01 — no DNS credential needed)",
-		"            --ui basic|advanced             (default basic — embedded, no extra container)",
+		"            --ui basic|advanced|hearth      (default basic — embedded, no extra container)",
 		"            --dns-provider <lego-code>      (dns01 only)",
 		"            --extra-domain <host>           also answer on this domain (repeatable). For a primary",
 		"                                            whose DNS still points elsewhere: its routers wait, this",
@@ -397,11 +397,11 @@ func Usage(version string) string {
 		"            it is unset and you are on a tty. There is no flag for it (see pull/push below).",
 		"",
 		"upgrade:    --to <version|latest>  (default latest)   [-n to print the plan and change nothing]",
-		"            [--ui basic|advanced to override what it detects]  [--orchestrator swarm|compose to switch — previews must be down]",
+		"            [--ui basic|advanced|hearth to override what it detects]  [--orchestrator swarm|compose to switch — previews must be down]",
 		"            Reads control/.env for the token, domain and email so NOTHING rotates, rebuilds",
 		"            the image and re-runs init. Over SSH — never from inside the control stack.",
 		"",
-		"ui:         pstack ui <basic|advanced>   switch which UI control.<domain> serves.",
+		"ui:         pstack ui <basic|advanced|hearth>   switch which UI control.<domain> serves.",
 		"            Reuses the stored token and domain; builds the SPA image when switching to",
 		"            advanced. No version change — that is `upgrade`.",
 		"",

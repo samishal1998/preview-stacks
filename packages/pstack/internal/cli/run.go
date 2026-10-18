@@ -180,8 +180,8 @@ func run(argv []string, io IO) *Exit {
 
 	case "dockerfile":
 		// For anyone who wants to build, tag, push or edit the image themselves.
-		if args.UIImage {
-			fmt.Fprintln(out, image.UIDockerfile(""))
+		if app := uiApp(args); app != "" {
+			fmt.Fprintln(out, image.UIDockerfile(app, ""))
 		} else {
 			fmt.Fprintln(out, image.ControlDockerfile(""))
 		}
@@ -193,13 +193,14 @@ func run(argv []string, io IO) *Exit {
 	case "build-image":
 		// Default the tag to whichever image is being built, so the two never collide.
 		tag := args.Tag
-		if args.UIImage && tag == image.DefaultImageTag {
-			tag = image.DefaultUIImageTag
+		app := uiApp(args)
+		if app != "" && tag == image.DefaultImageTag {
+			tag = image.DefaultUITag(app)
 		}
 		// PSTACK_BINARY: copy a local binary into the image instead of installing this version from
 		// its release — for a version that is not published yet, or a host with no network at build time.
 		binary, _ := io.Env("PSTACK_BINARY")
-		if err := image.Build(image.BuildOptions{Tag: tag, Runner: runner, DryRun: args.DryRun, UI: args.UIImage, UIDist: args.UIDist, Binary: binary, Out: out}); err != nil {
+		if err := image.Build(image.BuildOptions{Tag: tag, Runner: runner, DryRun: args.DryRun, UIApp: app, UIDist: args.UIDist, Binary: binary, Out: out}); err != nil {
 			return fail(err.Error())
 		}
 		return nil
@@ -257,7 +258,7 @@ func run(argv []string, io IO) *Exit {
 			store := routing.New(routing.DynamicDir(dataDir))
 			want := append(store.Domains(), args.ExtraDomains...)
 			console := ""
-			if args.UI == "advanced" {
+			if initctl.UI(args.UI).HasContainer() {
 				console = routing.AdvancedUIService
 			}
 			stored, err := store.SetDomains(want, routing.DomainOptions{
@@ -276,8 +277,8 @@ func run(argv []string, io IO) *Exit {
 		if mode == "" && args.Typed["--ui"] {
 			mode = args.UI
 		}
-		if mode != "basic" && mode != "advanced" {
-			return fail("usage: pstack ui <basic|advanced>   (basic = embedded in the API, advanced = the SPA container)")
+		if mode != "basic" && mode != "advanced" && mode != "hearth" {
+			return fail("usage: pstack ui <basic|advanced|hearth>   (basic = embedded in the API, advanced/hearth = the SPA container)")
 		}
 		changed, _, err := upgrade.SwitchUI(upgrade.SwitchUIOptions{DataDir: registry.DataDir(), UI: initctl.UI(mode), Runner: runner, Log: func(l string) { fmt.Fprintln(out, l) }})
 		if err != nil {
@@ -1068,4 +1069,16 @@ func andList(items []string) string {
 		return strings.Join(items, "")
 	}
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+// uiApp is which UI image build-image / dockerfile means: "" for the control image, else
+// "advanced" (a bare --ui, or --ui advanced) or "hearth" (--ui hearth).
+func uiApp(args *Parsed) string {
+	switch {
+	case args.UI == "hearth" && args.Typed["--ui"]:
+		return "hearth"
+	case args.UIImage, args.UI == "advanced" && args.Typed["--ui"]:
+		return "advanced"
+	}
+	return ""
 }

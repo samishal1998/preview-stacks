@@ -75,7 +75,17 @@ func TestFlagsAnywhereAndTheUIPeek(t *testing.T) {
 	if p.UIImage || p.UI != "advanced" || !p.Typed["--ui"] {
 		t.Errorf("--ui as a value: %+v", p)
 	}
-	if _, e := ParseArgs([]string{"init", "--ui", "fancy"}, noEnv); e == nil || e.Code != ExitUsage || e.Msg != `--ui must be basic or advanced, got "fancy"` {
+	p, _ = ParseArgs([]string{"build-image", "--ui", "hearth", "--tag", "x"}, noEnv)
+	if p.UIImage || p.UI != "hearth" || p.Tag != "x" || uiApp(p) != "hearth" {
+		t.Errorf("--ui hearth: %+v", p)
+	}
+	if p, _ = ParseArgs([]string{"build-image", "--ui"}, noEnv); uiApp(p) != "advanced" {
+		t.Error("bare --ui is advanced")
+	}
+	if p, _ = ParseArgs([]string{"build-image"}, noEnv); uiApp(p) != "" {
+		t.Error("no --ui builds the control image")
+	}
+	if _, e := ParseArgs([]string{"init", "--ui", "fancy"}, noEnv); e == nil || e.Code != ExitUsage || e.Msg != `--ui must be basic, advanced or hearth, got "fancy"` {
 		t.Errorf("bad --ui: %+v", e)
 	}
 	if _, e := ParseArgs([]string{"--bogus"}, noEnv); e == nil || e.Msg != "unknown flag --bogus" {

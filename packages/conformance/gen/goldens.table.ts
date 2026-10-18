@@ -19,12 +19,14 @@ export const DNS_TOKEN = 'golden-dns-token-0123456789';
 /** init takes it from PSTACK_LOKI_PASSWORD instead of generating one, so `.env` and the `{SHA}` label are fixed bytes. */
 export const LOKI_PASSWORD = '0123456789abcdef0123456789abcdef';
 
-export type Cell = { challenge: 'http01' | 'dns01'; ui: 'basic' | 'advanced'; orchestrator: 'compose' | 'swarm' };
+export type Cell = { challenge: 'http01' | 'dns01'; ui: 'basic' | 'advanced' | 'hearth'; orchestrator: 'compose' | 'swarm' };
 export const CELLS: Cell[] = [];
 for (const challenge of ['http01', 'dns01'] as const)
   for (const ui of ['basic', 'advanced'] as const)
     for (const orchestrator of ['compose', 'swarm'] as const) CELLS.push({ challenge, ui, orchestrator });
 export const cellName = (c: Cell) => `${c.challenge}-${c.ui}-${c.orchestrator}`;
+/** Not in CELLS: hearth is covered by one cell, not four. */
+const HEARTH_CELL: Cell = { challenge: 'http01', ui: 'hearth', orchestrator: 'swarm' };
 const initArgv = (c: Cell) => ['init', '--domain', 'preview.example.com', '--acme-email', 'ops@example.com', '--challenge', c.challenge, '--ui', c.ui, '--orchestrator', c.orchestrator, ...(c.challenge === 'dns01' ? ['--dns-provider', 'cloudflare'] : [])];
 const initEnv = (c: Cell) => ({ PSTACK_DATA: DATA_DIR, PSTACK_TOKEN: TOKEN, ...(c.challenge === 'dns01' ? { PSTACK_DNS_TOKEN: DNS_TOKEN } : {}) });
 
@@ -169,4 +171,12 @@ export const CASES: Case[] = [
   { name: 'swarm-bad-sub', argv: ['swarm', 'dance'], shim: SWARM_SHIM },
   { name: 'serve-interlock', argv: ['serve'], env: { PSTACK_HOST: '0.0.0.0', PSTACK_DATA: DATA_DIR } },
   { name: 'healthcheck-dead', argv: ['healthcheck'], env: { PSTACK_PORT: '1' } },
+  // The Hearth UI: one cell outside CELLS (no render golden), last so the host it leaves behind
+  // disturbs nothing above. Same service as advanced, its own image.
+  { name: 'dockerfile-ui-hearth', argv: ['dockerfile', '--ui', 'hearth'] },
+  { name: 'cloud-init-hearth', argv: [...CLOUD_INIT, '--ui', 'hearth'] },
+  { name: 'init-dry-http01-hearth-swarm', argv: [...initArgv(HEARTH_CELL), '-n'], env: initEnv(HEARTH_CELL), shim: INIT_SHIM, freshData: true },
+  { name: 'init-http01-hearth-swarm', argv: initArgv(HEARTH_CELL), env: initEnv(HEARTH_CELL), shim: INIT_SHIM, freshData: true },
+  { name: 'upgrade-plan-http01-hearth-swarm', argv: ['upgrade', '-n', '--to', '0.29.1'], env: { PSTACK_DATA: DATA_DIR, PSTACK_INSTALL_DIR: '/usr/local/bin' }, after: 'init-http01-hearth-swarm' },
+  { name: 'ui-switch-dry-http01-hearth-swarm', argv: ['ui', 'basic', '-n'], env: { PSTACK_DATA: DATA_DIR }, after: 'init-http01-hearth-swarm' },
 ];

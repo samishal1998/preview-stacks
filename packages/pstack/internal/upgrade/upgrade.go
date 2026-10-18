@@ -71,7 +71,7 @@ type ControlState struct {
 	// undo — under HTTP-01 each router resolves its own certificate, under DNS-01 one wildcard
 	// covers them, and flipping a live host to the wrong one burns the weekly rate limit.
 	Challenge initctl.Challenge
-	// UI is `advanced` when the control stack has the separate UI container, so it gets rebuilt too.
+	// UI is `advanced` (or `hearth`) when the control stack has the separate UI container, so it gets rebuilt too.
 	UI initctl.UI
 	// Orchestrator is `swarm` or `compose`, from `.env`. A host provisioned before 0.26.0 has no such
 	// line and IS a compose host — so absent means compose, never the new-host default. Switching is
@@ -97,6 +97,7 @@ var (
 	envLineRe    = regexp.MustCompile(`^([A-Z_][A-Z0-9_]*)=(.*)$`)
 	dnsChallenge = regexp.MustCompile(`(?i)dnschallenge`)
 	advancedSvc  = regexp.MustCompile(`(?m)^\s{2}advanced-ui:`)
+	hearthImage  = regexp.MustCompile(`\$\{PSTACK_UI_HEARTH_IMAGE\}`)
 	lokiSvc      = regexp.MustCompile(`(?m)^\s{2}loki:`)
 	semverRe     = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
 )
@@ -199,6 +200,10 @@ func ReadControlState(dataDir string) (*ControlState, error) {
 	}
 	if advancedSvc.MatchString(compose) {
 		s.UI = initctl.Advanced
+		// Same service name in both container modes; the image variable tells them apart.
+		if hearthImage.MatchString(compose) {
+			s.UI = initctl.Hearth
+		}
 	}
 	// The loki service and the `loki:` volume beside it both match, and both exist only when init
 	// ran with --logging loki: the logging-off template has no `loki` anywhere.
@@ -270,8 +275,8 @@ func initFlags(state *ControlState) string {
 	if state.Challenge == initctl.DNS01 && state.DNSProvider != "" {
 		flags = append(flags, "--dns-provider "+swarm.Shq(state.DNSProvider))
 	}
-	if state.UI == initctl.Advanced {
-		flags = append(flags, "--ui advanced")
+	if state.UI.HasContainer() {
+		flags = append(flags, "--ui "+string(state.UI))
 	}
 	flags = append(flags, "--orchestrator "+string(state.Orchestrator))
 	if state.Logging == initctl.Loki {
@@ -322,8 +327,10 @@ func PlanUpgrade(a PlanArgs) []Step {
 	}
 
 	steps := []Step{{Label: "build the control image", Cmd: "pstack build-image"}}
-	if a.State.UI == initctl.Advanced {
-		steps = append(steps, Step{Label: "build the advanced UI image", Cmd: "pstack build-image --ui"})
+	// A hearth host keeps its image: the package is not on npm, so a rebuild here would 404 and
+	// strand the host on the old version. It is rebuilt by hand with `build-image --ui hearth --ui-dist`.
+	if a.State.UI != initctl.Hearth {
+		steps = append(steps, uiBuildSteps(a.State.UI)...)
 	}
 	return append(steps, Step{
 		Label: "re-run init (same domain, same token)",
@@ -349,6 +356,17 @@ func initEnv(state *ControlState) map[string]string {
 	return env
 }
 
+// uiBuildSteps is the image build a container UI needs before init, or nothing for basic.
+func uiBuildSteps(ui initctl.UI) []Step {
+	switch ui {
+	case initctl.Advanced:
+		return []Step{{Label: "build the advanced UI image", Cmd: "pstack build-image --ui"}}
+	case initctl.Hearth:
+		return []Step{{Label: "build the hearth UI image", Cmd: "pstack build-image --ui hearth"}}
+	}
+	return nil
+}
+
 // PlanUISwitch is the steps for changing ONLY the UI mode.
 //
 // Not PlanUpgrade's resume list: that rebuilds the control image, which takes minutes and has
@@ -356,10 +374,7 @@ func initEnv(state *ControlState) map[string]string {
 // without it, by name); switching back to `basic` builds nothing, because the API already carries
 // the embedded UI.
 func PlanUISwitch(state *ControlState) []Step {
-	var steps []Step
-	if state.UI == initctl.Advanced {
-		steps = append(steps, Step{Label: "build the advanced UI image", Cmd: "pstack build-image --ui"})
-	}
+	steps := uiBuildSteps(state.UI)
 	return append(steps, Step{
 		Label: "re-run init with the " + string(state.UI) + " UI",
 		Cmd:   "pstack init " + initFlags(state),

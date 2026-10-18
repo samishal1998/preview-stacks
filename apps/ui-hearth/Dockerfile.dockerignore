@@ -1,0 +1,12 @@
+# BuildKit reads this INSTEAD of the root .dockerignore for `-f apps/ui-hearth/Dockerfile`: the root
+# one excludes apps/ and packages/client for the control-image build, which this build needs.
+.git
+.github
+.turbo
+**/node_modules
+**/dist
+**/.turbo
+docs
+skills
+*.tgz
+*.log

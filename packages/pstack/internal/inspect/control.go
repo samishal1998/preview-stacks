@@ -89,6 +89,18 @@ func ControlRuntime(r exec.Runner) ControlView {
 	return out
 }
 
+// ControlUI is "hearth" when the control stack's advanced-ui container carries the hearth label,
+// else "". Read from the running container: the service name is the same in both container modes.
+func ControlUI(r exec.Runner) string {
+	ids, _ := idsByLabel(r, "com.docker.compose.project="+ControlProject)
+	for _, raw := range inspectIDs(r, ids) {
+		if raw.Config != nil && raw.Config.Labels["com.docker.compose.service"] == "advanced-ui" {
+			return raw.Config.Labels[initctl.UILabel]
+		}
+	}
+	return ""
+}
+
 // LokiPushURL is the URL deploys put in every injected logging block. It is the
 // `pstack.logging.push-url` label that `pstack init --logging loki` renders onto the control stack's
 // loki service, read from the container the way DetectChallenge reads Traefik's flags. "" means
