@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.43.0 — 2026-10-19
 
 ### Added
 
@@ -18,6 +18,11 @@
   swarm a service whose tasks all failed has no entry in `containers` (swarm keeps only the tasks it
   still wants running), so its logs could not be picked in the Logs tab. The advanced UI now lists
   it as "No task running", and clicking it reads its logs.
+
+### Fixed
+
+- **The advanced UI's select no longer throws on an "any" option.** The Logs tab's "All services" threw
+  when opened.
 
 ## 0.42.0 — 2026-10-06
 
