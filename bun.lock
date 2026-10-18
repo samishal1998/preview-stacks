@@ -38,16 +38,16 @@
     },
     "apps/ui-hearth": {
       "name": "@samyx/preview-stacks-ui-hearth",
-      "version": "0.0.0",
+      "version": "0.42.0",
       "dependencies": {
         "@hearth-ui/vue": "0.7.1",
-        "@samyx/preview-stacks-client": "workspace:*",
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
         "vue": "^3.5.13",
         "vue-router": "^4.5.0",
       },
       "devDependencies": {
+        "@samyx/preview-stacks-client": "workspace:*",
         "@vitejs/plugin-vue": "^5.2.1",
         "typescript": "^5.9.2",
         "vite": "^6.0.7",

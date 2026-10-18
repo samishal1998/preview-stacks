@@ -4,7 +4,7 @@ Instructions for an AI agent changing **this codebase**. Using `pstack` is a dif
 about editing it.
 
 **Current version: 0.42.0.** One workspace: the Go binary (`packages/pstack`, released on GitHub),
-its black-box specification (`packages/conformance`), and two npm packages (the client SDK, the
+its black-box specification (`packages/conformance`), and three npm packages (the client SDK, the Hearth UI, the
 advanced UI). The control plane was a Bun/TypeScript package until 0.28.0; 0.29.0 is the Go port,
 byte-compatible with it (`docs/port-status.md`). 0.40.0 added Loki logging and Grafana
 (`docs/loki-logging-design.md`).
@@ -58,6 +58,7 @@ packages/pstack/       the CLI, API and embedded basic UI — one static Go bina
 packages/conformance/  the black-box specification (bun:test): goldens + tests that spawn bin/pstack.
 packages/client/       @samyx/preview-stacks-client — zero-dependency API client + verifyWebhook.
 apps/ui/               @samyx/preview-stacks-ui — the advanced UI (Vue 3 SPA).
+apps/ui-hearth/        @samyx/preview-stacks-ui-hearth — the Hearth UI (Vue 3 SPA).
 apps/docs/             the documentation site (Astro Starlight), published to GitHub Pages at
                        https://samishal1998.github.io/preview-stacks/ by .github/workflows/docs.yml.
                        Private, never on npm. Almost every page is GENERATED from the files below by
@@ -65,7 +66,7 @@ apps/docs/             the documentation site (Astro Starlight), published to Gi
 docs/                  See docs/README.md.
 skills/pstack/         a skill for USING pstack (tracked).
 .claude/skills/        project skills for agents CHANGING pstack — see *Agent workflow*.
-Dockerfile, .goreleaser.yaml, install.sh, publish.config.ts (the two npm packages), turbo.json.
+Dockerfile, .goreleaser.yaml, install.sh, publish.config.ts (the three npm packages), turbo.json.
 .superpowers/          build ledgers; ignored only via .git/info/exclude, so a fresh clone has none.
 ```
 

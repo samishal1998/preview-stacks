@@ -327,11 +327,7 @@ func PlanUpgrade(a PlanArgs) []Step {
 	}
 
 	steps := []Step{{Label: "build the control image", Cmd: "pstack build-image"}}
-	// A hearth host keeps its image: the package is not on npm, so a rebuild here would 404 and
-	// strand the host on the old version. It is rebuilt by hand with `build-image --ui hearth --ui-dist`.
-	if a.State.UI != initctl.Hearth {
-		steps = append(steps, uiBuildSteps(a.State.UI)...)
-	}
+	steps = append(steps, uiBuildSteps(a.State.UI)...)
 	return append(steps, Step{
 		Label: "re-run init (same domain, same token)",
 		Cmd:   "pstack init " + initFlags(a.State),

@@ -88,9 +88,9 @@ checkout and 404s once installed cannot occur. The version is read from the embe
 
 Until 0.28.0 pstack was a Bun/TypeScript package on npm; `@samyx/preview-stacks` is deprecated
 there and stops at that release. The one-time move for an existing host is in
-[Upgrading a host](#upgrading-a-host). The two npm packages that remain are the advanced UI
-(`@samyx/preview-stacks-ui`, fetched *inside* the image build) and the client SDK
-(`@samyx/preview-stacks-client`).
+[Upgrading a host](#upgrading-a-host). The three npm packages that remain are the advanced UI
+(`@samyx/preview-stacks-ui`) and the Hearth UI (`@samyx/preview-stacks-ui-hearth`), both fetched
+*inside* the image build, and the client SDK (`@samyx/preview-stacks-client`).
 
 ### Working from a checkout (contributors)
 
@@ -1374,11 +1374,10 @@ $ pstack ui hearth                   # switch an existing host; basic | advanced
 ```
 
 `hearth` and `advanced` share the compose service name `advanced-ui`; only the image differs. Switching
-between any two modes is the same re-init that `pstack ui` already does, and `upgrade` keeps the mode
-and the existing image. The Hearth UI is not on npm yet, so `cloud-init --ui hearth` is refused and
-`upgrade` does not rebuild its image: build its image from a checkout with `--ui-dist apps/ui-hearth/dist`
-(its `nginx.conf` sits beside `dist/`), or with `docker build -f apps/ui-hearth/Dockerfile -t
-pstack-ui-hearth:local .` from the repo root.
+between any two modes is the same re-init that `pstack ui` already does. `@samyx/preview-stacks-ui-hearth`
+is published to npm with each release, so `cloud-init --ui hearth` and `upgrade` build its image the way
+they build advanced. From a checkout, use `--ui-dist apps/ui-hearth/dist` (its `nginx.conf` sits beside
+`dist/`), or `docker build -f apps/ui-hearth/Dockerfile -t pstack-ui-hearth:local .` from the repo root.
 
 ### Upgrading a host
 

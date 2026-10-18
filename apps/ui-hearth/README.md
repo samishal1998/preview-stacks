@@ -3,7 +3,7 @@
 An alternative web UI for pstack, built on [Hearth UI](https://hearth-ui.samyx.net/llms.txt) rather
 than ported from `apps/ui`: it uses the components Hearth ships for each job instead of rebuilding
 the advanced UI's screens. It covers what `apps/ui` does and is selectable as a control-plane UI:
-`pstack init --ui hearth`. Not published to npm yet (`private: true`).
+`pstack init --ui hearth`.
 
 | Job | Hearth component |
 |---|---|
@@ -47,4 +47,4 @@ pstack ui hearth                   # switch an existing host
 
 The image is `pstack-ui-hearth:local`; `PSTACK_UI_HEARTH_IMAGE` overrides it. A bare `--ui` on
 `build-image` still builds the advanced image. Without `--ui-dist`, `build-image --ui hearth` fetches
-`@samyx/preview-stacks-ui-hearth` from npm, which needs the package published.
+`@samyx/preview-stacks-ui-hearth` from npm (published with each release).

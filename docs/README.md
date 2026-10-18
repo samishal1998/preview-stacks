@@ -158,6 +158,7 @@ to read why it was tightened.
 | [`packages/pstack`](../packages/pstack/README.md) | The CLI and the API — one static Go binary, released on GitHub (not npm since 0.29.0). |
 | [`packages/client`](../packages/client/README.md) | `@samyx/preview-stacks-client` — a zero-dependency typed API client, plus `verifyWebhook` for your receiver. |
 | `apps/ui` | The advanced UI (Vue 3 SPA), published as `@samyx/preview-stacks-ui`. Conventions in [`ui-rules.md`](ui-rules.md). |
+| `apps/ui-hearth` | The Hearth UI (Vue 3 SPA on Hearth components), published as `@samyx/preview-stacks-ui-hearth`. |
 
 ## Where the docs are NOT
 

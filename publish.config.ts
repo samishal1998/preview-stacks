@@ -1,6 +1,6 @@
 /**
- * Release config, consumed by `@samyx/publish-kit`: the two npm packages (the advanced UI and the
- * client SDK). `@samyx/preview-stacks` — the control plane — is a Go binary released on GitHub by
+ * Release config, consumed by `@samyx/publish-kit`: the three npm packages (the advanced UI, the
+ * Hearth UI and the client SDK). `@samyx/preview-stacks` — the control plane — is a Go binary released on GitHub by
  * GoReleaser (.goreleaser.yaml) and is no longer published to npm; its package.json stays as the
  * lockstep version of record (private, so publish-kit neither bumps nor publishes it; the release
  * bumps it by hand).
@@ -19,12 +19,13 @@ export default {
    * The publishable packages, selected BY NAME: the list reads as what gets published, not where
    * it happens to live.
    *
-   * The UI is a genuinely separate release: `pstack build-image --ui` fetches it from npm inside
+   * The UI is a genuinely separate release: `pstack build-image --ui` (and `--ui hearth`) fetches it from npm inside
    * the image build, so a user opting into the advanced UI never installs it on the host.
    */
   packages: {
     include: [
       '@samyx/preview-stacks-ui',
+      '@samyx/preview-stacks-ui-hearth',
       // The API client. Its own package because the people who want it — a CI script calling the
       // control plane — must not have to install a control plane to get it.
       '@samyx/preview-stacks-client',

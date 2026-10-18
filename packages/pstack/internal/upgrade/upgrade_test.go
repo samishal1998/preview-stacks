@@ -143,8 +143,7 @@ func TestUpgrade(t *testing.T) {
 			t.Fatalf("ui = %s", s.UI)
 		}
 		steps := PlanUpgrade(PlanArgs{Phase: Resume, Target: "x", State: s})
-		// Not on npm, so the resume must not rebuild it: that 404 would strand the host.
-		if contains(cmds(steps), "pstack build-image --ui hearth") || !strings.Contains(find(steps, "pstack init").Cmd, "--ui hearth") {
+		if !contains(cmds(steps), "pstack build-image --ui hearth") || !strings.Contains(find(steps, "pstack init").Cmd, "--ui hearth") {
 			t.Errorf("plan: %v", cmds(steps))
 		}
 		if contains(cmds(steps), "pstack build-image --ui") {

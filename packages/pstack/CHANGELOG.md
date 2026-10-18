@@ -8,9 +8,10 @@
   and `pstack upgrade` serve the Hearth UI
   (`apps/ui-hearth`) on `control.<domain>` in its own container, like `advanced`. The image defaults to
   `pstack-ui-hearth:local` (`PSTACK_UI_HEARTH_IMAGE`); build it with `pstack build-image --ui hearth`
-  (`--ui-dist` until the package is on npm) or `apps/ui-hearth/Dockerfile`. A bare `--ui` still builds
-  the advanced image. `upgrade` detects the mode and keeps the existing hearth image (the package is
-  not on npm, so it cannot rebuild it). `cloud-init --ui hearth` is refused for the same reason.
+  (the package is published with each release) or `apps/ui-hearth/Dockerfile`. A bare `--ui` still
+  builds the advanced image. `upgrade` detects the mode and rebuilds the hearth image;
+  `cloud-init --ui hearth` renders the init flag and the image build, as for advanced.
+  `@samyx/preview-stacks-ui-hearth` joins the lock-step npm release.
   `GET /api/domains` reports `console` as `hearth`.
 
 - **`services` on `GET /api/deployments/:id/runtime`**: every service the stack has, by name. Under

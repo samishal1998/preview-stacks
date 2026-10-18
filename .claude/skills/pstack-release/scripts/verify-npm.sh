@@ -7,7 +7,7 @@
 # and the registry.
 #
 # run-id defaults to the newest release.yml run for tag vX.Y.Z (a tag push or an npm_only dispatch).
-# Exit: 0 CI published and both packages are on npm; 2 both on npm but CI published nothing (hand
+# Exit: 0 CI published and all three packages are on npm; 2 all on npm but CI published nothing (hand
 # publish, or skipped); 1 anything else (a package missing, run unfinished, no npm job).
 set -uo pipefail
 
@@ -34,7 +34,7 @@ if [ -n "$job" ] && [ "${job#* }" != skipped ]; then
 fi
 
 missing=0
-for p in @samyx/preview-stacks-client @samyx/preview-stacks-ui; do
+for p in @samyx/preview-stacks-client @samyx/preview-stacks-ui @samyx/preview-stacks-ui-hearth; do
   if [ "$(npm view "$p@$v" version 2>/dev/null)" = "$v" ]; then
     echo "registry: $p@$v present"
   else
@@ -45,12 +45,12 @@ done
 
 [ "$rejected" = 1 ] && echo "NPM_TOKEN rejected: bun fell back to interactive web auth. The owner replaces the secret; see SKILL.md."
 if [ "$missing" -gt 0 ]; then
-  echo "verdict: NOT on npm ($missing of 2 missing)"
+  echo "verdict: NOT on npm ($missing of 3 missing)"
   exit 1
 elif [ "$published" -gt 0 ]; then
-  echo "verdict: CI published $published package(s); both on npm"
+  echo "verdict: CI published $published package(s); all three on npm"
   exit 0
 else
-  echo "verdict: both on npm, but CI published 0 (hand-published or skipped); CI's npm path is unproven"
+  echo "verdict: all three on npm, but CI published 0 (hand-published or skipped); CI's npm path is unproven"
   exit 2
 fi
