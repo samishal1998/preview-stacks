@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Grafana follows added domains.** `grafana.<added domain>` answered 404 on a host with Grafana
+  on. It now routes and signs in on the domain it was reached on.
+
 ## 0.43.0 — 2026-10-19
 
 ### Added

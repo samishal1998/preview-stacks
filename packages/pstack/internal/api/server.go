@@ -946,7 +946,10 @@ func (s *Server) reindexLoop() {
 // docker answer keeps the previous value: one flaky `docker ps` must not 404 Grafana for up to 30 s.
 func (s *Server) grafanaCheckIn() {
 	if on, ok := inspect.GrafanaOnChecked(s.host); ok {
-		s.grafana.Store(on)
+		// `pstack logging` adds or removes grafana while pstack keeps running: the added domains' routers follow.
+		if s.grafana.Swap(on) != on {
+			s.reconcileDomains()
+		}
 	}
 }
 

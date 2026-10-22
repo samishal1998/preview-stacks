@@ -44,8 +44,23 @@ func (s *Server) grafanaOn() bool {
 	return s.opts.Domain != "" && s.opts.Token != "" && s.grafana.Load()
 }
 
-// grafanaURL is G. From config, never from a request header.
-func (s *Server) grafanaURL() string { return "https://grafana." + s.opts.Domain }
+// grafanaURL is G on the primary domain. From config, never from a request header.
+func (s *Server) grafanaURL() string { return grafanaURLOn(s.opts.Domain) }
+
+func grafanaURLOn(domain string) string { return "https://grafana." + domain }
+
+// domainFor is the host's domain this request arrived on: the primary, or one of the added domains.
+// The header only SELECTS among configured domains (`prefix` is "grafana." or "control."); a host
+// that is none of them gets the primary, so no request can name a domain pstack was not given.
+func (s *Server) domainFor(r *http.Request, prefix string) string {
+	host := requestHost(r)
+	for _, d := range append([]string{s.opts.Domain}, s.routing.Domains()...) {
+		if d != "" && host == prefix+d {
+			return d
+		}
+	}
+	return s.opts.Domain
+}
 
 // __Host- names: a browser keeps one only host-only, Secure and Path=/, so a preview on *.<domain>
 // cannot plant either (cookie tossing).
@@ -109,13 +124,14 @@ func (s *Server) grafanaVerify(w http.ResponseWriter, r *http.Request) {
 		u = &url.URL{Path: "/"}
 	}
 	user := s.grafanaUser(r)
+	domain := s.domainFor(r, "grafana.")
 	if u.Path == grafanaCallbackPath {
 		code, _ := query(u.RawQuery, "code")
 		if s.grafanaCallback(w, r, code) {
 			return
 		}
 		if user != nil { // a reloaded callback: nothing to finish
-			redirect(w, s.grafanaURL()+"/")
+			redirect(w, grafanaURLOn(domain)+"/")
 			return
 		}
 		u = &url.URL{Path: "/"} // expired, replayed or not this browser's: sign in afresh
@@ -128,7 +144,7 @@ func (s *Server) grafanaVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		state := sso.RandomB64URL(32)
-		redirect(w, baseURL(s.opts.Domain, r)+"/api/auth/grafana/start?state="+state+
+		redirect(w, baseURL(domain, r)+"/api/auth/grafana/start?state="+state+
 			"&next="+js.EncodeURIComponent(sso.SafeNext(u.RequestURI())),
 			hostCookie(grafanaStateCookie, state, 900))
 		return
@@ -140,7 +156,7 @@ func (s *Server) grafanaVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// Every preview on *.<domain> is SAME-SITE with Grafana: SameSite=Lax does not stop its page
 	// posting here with the cookie attached. Traefik sets X-Forwarded-Method from the real request.
-	if m := r.Header.Get("x-forwarded-method"); m != http.MethodGet && m != http.MethodHead && r.Header.Get("origin") != s.grafanaURL() {
+	if m := r.Header.Get("x-forwarded-method"); m != http.MethodGet && m != http.MethodHead && r.Header.Get("origin") != grafanaURLOn(domain) {
 		http.Error(w, "Cross-origin request refused.", 403)
 		return
 	}
@@ -168,7 +184,7 @@ func (s *Server) grafanaCallback(w http.ResponseWriter, r *http.Request, code st
 	if err != nil || state == "" || session == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
 		return false
 	}
-	redirect(w, s.grafanaURL()+sso.SafeNext(next),
+	redirect(w, grafanaURLOn(s.domainFor(r, "grafana."))+sso.SafeNext(next),
 		hostCookie(grafanaSessionCookie, session+"."+s.grafanaMAC(session), -1),
 		hostCookie(grafanaStateCookie, "", 0))
 	return true
@@ -198,7 +214,7 @@ func (s *Server) grafanaStart(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Sign-in failed.", 500)
 				return
 			}
-			redirect(w, s.grafanaURL()+grafanaCallbackPath+"?code="+code)
+			redirect(w, grafanaURLOn(s.domainFor(r, "control."))+grafanaCallbackPath+"?code="+code)
 			return
 		}
 	}

@@ -262,3 +262,30 @@ func TestGrafanaIsAControlHostnameOnEveryDomain(t *testing.T) {
 		t.Error("grafana.<primary> must be a control hostname on a nil store")
 	}
 }
+
+func TestGrafanaFollowsAddedDomainsOnlyWhenItRuns(t *testing.T) {
+	// negative control: render the grafana router unconditionally — a host without --logging loki
+	// routes grafana.<d> to a service that does not exist (502 instead of the wake page's 404).
+	on := New(t.TempDir())
+	if _, err := on.SetDomains([]string{"preview.new.com"}, DomainOptions{Mode: "dns01", Grafana: true}); err != nil {
+		t.Fatal(err)
+	}
+	g := routersOf(t, on).GetMap("pstack-grafana-preview-new-com")
+	if g == nil {
+		t.Fatal("no grafana router for the added domain")
+	}
+	if got := g.GetString("rule"); got != "Host(`grafana.preview.new.com`)" {
+		t.Errorf("rule: %q", got)
+	}
+	if got := g.GetString("service"); got != "grafana@docker" {
+		t.Errorf("service: %q", got)
+	}
+
+	off := New(t.TempDir())
+	if _, err := off.SetDomains([]string{"preview.new.com"}, DomainOptions{Mode: "dns01"}); err != nil {
+		t.Fatal(err)
+	}
+	if routersOf(t, off).GetMap("pstack-grafana-preview-new-com") != nil {
+		t.Error("grafana router rendered on a host without Grafana")
+	}
+}

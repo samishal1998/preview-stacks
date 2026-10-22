@@ -57,6 +57,13 @@ const apiService = "pstack@docker"
 // host the console IS the API container, so it targets apiService instead.
 const AdvancedUIService = "advanced-ui@docker"
 
+// grafanaService and grafanaAuth are the compose service and the forwardAuth middleware `init` labels
+// onto the grafana container; an added domain's router reuses both.
+const (
+	grafanaService = "grafana@docker"
+	grafanaAuth    = "pstack-grafana-auth@docker"
+)
+
 // A hostname this host could plausibly answer on. Deliberately strict: it becomes a Traefik rule and
 // a regexp, and an unvalidated string reaches both.
 var domainRe = regexp.MustCompile(`(?i)^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$`)
@@ -82,6 +89,9 @@ type DomainOptions struct {
 	// served the embedded basic UI on `control.<new-domain>` while `control.<primary>` served the
 	// SPA. Same console, two different answers depending on which hostname you typed.
 	ConsoleService string
+	// Grafana adds a `grafana.<d>` router per added domain, behind the same forwardAuth middleware
+	// the primary's Grafana router uses. Off when the host runs no Grafana: a route to nothing is a 502.
+	Grafana bool
 }
 
 // consoleService is the service the console router targets, defaulting to the API container.
@@ -237,6 +247,16 @@ func renderDomains(domains []string, o DomainOptions) string {
 		b.WriteString("      entryPoints: [websecure]\n")
 		b.WriteString("      service: \"" + apiService + "\"\n")
 		b.WriteString("      tls: {}\n")
+		if o.Grafana {
+			// Priority matches the primary's, so a stack routed to grafana.<d> cannot take the cookie.
+			b.WriteString("    pstack-grafana-" + s + ":\n")
+			b.WriteString("      rule: \"Host(`grafana." + d + "`)\"\n")
+			b.WriteString("      priority: 10000\n")
+			b.WriteString("      entryPoints: [websecure]\n")
+			b.WriteString("      service: \"" + grafanaService + "\"\n")
+			b.WriteString("      middlewares: [\"" + grafanaAuth + "\"]\n")
+			b.WriteString(tlsFor(d, o.Mode, false))
+		}
 	}
 	return b.String()
 }
