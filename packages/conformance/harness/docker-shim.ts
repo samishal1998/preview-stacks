@@ -7,7 +7,7 @@
  * `recording()` appends every invocation to a log the test can read — the only way to see the argv
  * the API actually issued, since its runners are quiet.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpd } from './server.ts';
 
@@ -25,12 +25,17 @@ export function dockerShim(arms: string, o: { record?: boolean; name?: string } 
   const dir = tmpd('docker');
   mkdirSync(dir, { recursive: true });
   const log = join(dir, 'calls.log');
-  const write = (a: string) =>
+  const path = join(dir, o.name ?? 'docker');
+  // Written beside the shim and renamed over it: opening a script a running shell still executes is
+  // ETXTBSY on Linux, and a rewrite lands while the previous invocation (a `sleep`) is still going.
+  const write = (a: string) => {
     writeFileSync(
-      join(dir, o.name ?? 'docker'),
+      `${path}.tmp`,
       `#!/bin/sh\n${o.record ? `printf '%s\\n' "$*" >> ${JSON.stringify(log)}\n` : ''}case "$*" in\n${a}\n  *) exit 0 ;;\nesac\n`,
       { mode: 0o755 },
     );
+    renameSync(`${path}.tmp`, path);
+  };
   write(arms);
   return {
     dir,
