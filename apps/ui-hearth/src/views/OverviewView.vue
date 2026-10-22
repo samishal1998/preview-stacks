@@ -119,8 +119,8 @@ const serviceRows = computed(() =>
 
       <HStack direction="column" :gap="4">
         <HSkeleton v-if="!data.loaded" variant="rectangle" />
-        <HGrid v-else min-column-width="8rem" :gap="3">
-          <HStatCard label="Total" :value="sum.total" icon="apps" />
+        <HGrid v-else :columns="2" :gap="3">
+          <HStatCard label="Total" :value="sum.total" icon="apps" tone="neutral" />
           <HStatCard label="Running" :value="sum.running" icon="check" :tone="sum.running ? 'success' : 'neutral'" />
           <HStatCard label="Busy" :value="sum.busy" icon="clock" tone="info" />
           <HStatCard label="Asleep" :value="sum.asleep" icon="moon" tone="neutral" />

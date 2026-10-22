@@ -279,10 +279,10 @@ const statusTone = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'da
               <HText as="div" size="sm" tone="muted">{{ row.sub }}</HText>
             </template>
             <HBadge v-else-if="column.key === 'state'" :label="String(value)" :tone="value === 'enabled' ? 'success' : 'neutral'" />
-            <template v-else-if="column.key === 'last'">
+            <HStack v-else-if="column.key === 'last'" direction="row" :gap="2" align="center" wrap>
               <HBadge v-if="row.status" :label="String(row.status)" :tone="statusTone(String(row.status))" />
-              <HText size="sm" tone="muted"> {{ value }}</HText>
-            </template>
+              <HText size="sm" tone="muted">{{ value }}</HText>
+            </HStack>
             <template v-else>{{ value }}</template>
           </template>
         </HDataTable>

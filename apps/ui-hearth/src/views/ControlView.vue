@@ -4,7 +4,7 @@
  * loses in-flight certificate issuance while every container still reads `running`.
  */
 import { computed, ref } from 'vue';
-import { HAlert, HButton, HPageHeader, HStack, HStatCard } from '@hearth-ui/vue';
+import { HAlert, HButton, HGrid, HPageHeader, HStack, HStatCard } from '@hearth-ui/vue';
 import { controlApi, poll, why, type ControlRuntime, type DomainsStatus, type TlsStatus } from '../api-control';
 import { atLeast, daysLeft, type RoleName } from '../lib/control';
 import { auth } from '../state';
@@ -76,13 +76,13 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
 
     <HAlert v-if="forbidden" tone="warning" title="Maintainer only." />
     <template v-else>
-      <HStack direction="row" v-if="runtime?.reachable" :gap="3" wrap>
+      <HGrid v-if="runtime?.reachable" min-column-width="8rem" :gap="3">
         <HStatCard label="Restarts" :value="restarts" :tone="restarts ? 'warning' : 'neutral'" />
         <HStatCard label="OOM killed" :value="oomed" :tone="oomed ? 'danger' : 'neutral'" />
-        <HStatCard v-if="tls" label="Certificates" :value="tls.mode" />
+        <HStatCard v-if="tls" label="Certificates" :value="tls.mode" tone="neutral" />
         <HStatCard v-if="days !== null" label="Cert expires" :value="`${days}d`" :tone="days < 21 ? 'danger' : 'neutral'" />
-        <HStatCard v-if="domainCount" label="Domains" :value="domainCount" />
-      </HStack>
+        <HStatCard v-if="domainCount" label="Domains" :value="domainCount" tone="neutral" />
+      </HGrid>
 
       <ContainersCard :runtime="runtime" :loaded="loaded" :error="error" :can-restart="can('maintainer')" @reload="loadRuntime" />
       <DomainsCard v-if="domains" :domains="domains" :can-edit="can('maintainer')" @reload="reloadDomains" />

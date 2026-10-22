@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { HAlertDialog, HAlert, HBadge, HCard, HDataTable, HEmptyState, HSkeleton, type MenuAction, type TableColumn, type TableRow } from '@hearth-ui/vue';
+import { HAlertDialog, HAlert, HBadge, HCard, HDataTable, HEmptyState, HSkeleton, HStack, type MenuAction, type TableColumn, type TableRow } from '@hearth-ui/vue';
 import { controlApi, why, type ControlRuntime } from '../../api-control';
 import { ago, containerTone } from '../../format';
 import { mem } from '../../lib/control';
@@ -70,9 +70,11 @@ async function restart(): Promise<void> {
     <HDataTable v-else label="Control containers" :rows="rows" :columns="columns" :get-row-actions="rowActions" @row-action="onAction">
       <template #cell="{ row, column, value }">
         <template v-if="column.key === 'service'">
-          {{ value }}
-          <HBadge v-if="value === 'pstack'" tone="info" label="This API" size="sm" />
-          <HBadge v-if="value === 'pstack'" tone="neutral" label="Restart from the host" size="sm" />
+          <HStack direction="row" :gap="2" align="center" wrap>
+            {{ value }}
+            <HBadge v-if="value === 'pstack'" tone="info" label="This API" size="sm" />
+            <HBadge v-if="value === 'pstack'" tone="neutral" label="Restart from the host" size="sm" />
+          </HStack>
         </template>
         <HBadge
           v-else-if="column.key === 'state'"
@@ -80,8 +82,10 @@ async function restart(): Promise<void> {
           :label="find(String(row.id))?.health ? `${value} · ${find(String(row.id))?.health}` : String(value)"
         />
         <template v-else-if="column.key === 'restarts'">
-          <HBadge :tone="Number(value) > 0 ? 'warning' : 'neutral'" :label="String(value)" />
-          <HBadge v-if="find(String(row.id))?.oomKilled" tone="danger" label="OOM" />
+          <HStack direction="row" :gap="2" align="center" wrap>
+            <HBadge :tone="Number(value) > 0 ? 'warning' : 'neutral'" :label="String(value)" />
+            <HBadge v-if="find(String(row.id))?.oomKilled" tone="danger" label="OOM" />
+          </HStack>
         </template>
         <template v-else>{{ value }}</template>
       </template>
