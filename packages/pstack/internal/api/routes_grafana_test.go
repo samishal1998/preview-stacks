@@ -609,3 +609,23 @@ func TestServiceHostnamesAreNeverServedByPstack(t *testing.T) {
 		}
 	})
 }
+
+// negative control: build the start URL from s.opts.Domain alone — an added domain's sign-in lands
+// on the PRIMARY's control host, and the Grafana cookie is never set on the host the user is on.
+func TestGrafanaSignInFollowsTheDomainItArrivedOn(t *testing.T) {
+	s := grafanaServer(t)
+	s.grafana.Store(true)
+	if _, err := s.routing.SetDomains([]string{"preview.new.com"}, routing.DomainOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string]string{
+		"grafana.preview.new.com":     "https://control.preview.new.com/",
+		"grafana.evil.example.org":    "https://control.preview.example.com/", // not configured: the primary
+		"grafana.preview.example.com": "https://control.preview.example.com/",
+	} {
+		w := forwardAuth(s, "x-forwarded-host", host)
+		if loc := w.Header().Get("location"); w.Code != 302 || !strings.HasPrefix(loc, want) {
+			t.Errorf("%s: %d %q, want prefix %q", host, w.Code, loc, want)
+		}
+	}
+}

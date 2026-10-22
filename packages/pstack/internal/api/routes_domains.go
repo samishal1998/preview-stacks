@@ -47,7 +47,15 @@ func (s *Server) domainOptions() routing.DomainOptions {
 		Primary:        s.opts.Domain,
 		Mode:           string(s.challenge()),
 		ConsoleService: s.consoleService(),
+		Grafana:        s.grafanaRunning(),
 	}
+}
+
+// grafanaRunning asks docker rather than reading s.grafana: reconcileDomains runs in New, before
+// Start has filled that cache.
+func (s *Server) grafanaRunning() bool {
+	on, ok := inspect.GrafanaOnChecked(s.host)
+	return ok && on
 }
 
 // reconcileDomains rewrites the domains file from the host as it is NOW.

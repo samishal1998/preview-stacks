@@ -44,7 +44,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	// Last, and only when Grafana runs. Otherwise the key is absent (Go rule 2), so every other host's
 	// answer stays byte-identical. Unauthenticated like the rest of health: it says nothing DNS doesn't.
 	if s.grafanaOn() {
-		body = append(body, jsonx.KV{K: "grafana", V: s.grafanaURL()})
+		body = append(body, jsonx.KV{K: "grafana", V: grafanaURLOn(s.domainFor(r, "control."))})
 	}
 	writeJSON(w, 200, body)
 }
