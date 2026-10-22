@@ -600,6 +600,8 @@ func (c cell) options(dataDir string, dryRun bool, runner exec.Runner, out *byte
 	o := initctl.Options{
 		DataDir: dataDir, Domain: "preview.example.com", AcmeEmail: "ops@example.com",
 		Challenge: c.challenge, UI: c.ui, Orchestrator: c.orchestrator, DryRun: dryRun, Runner: runner, Out: out,
+		// The goldens were produced by the harness, which sets PSTACK_NO_OOM_PROTECT.
+		NoOOMProtect: true,
 	}
 	if c.challenge == initctl.DNS01 {
 		o.DNSProvider, o.Token = "cloudflare", goldenDNSToken
@@ -844,7 +846,6 @@ var grafanaServiceSpecLines = []string{
 	"  grafana:",
 	"    image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
 	"    restart: unless-stopped",
-	"    mem_limit: 768m                  # 13.x idles ~330Mi and OOMed under 400Mi (grafana#123017)",
 	"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
 	"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
 	"    networks: [logs]",
@@ -1650,6 +1651,98 @@ func TestInitLoki(t *testing.T) {
 		}
 		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
 			t.Errorf("dry-run wrote %v (%v)", entries, err)
+		}
+	})
+}
+
+// negative control: drop the PreviewsOn block from Init — no `docker node update` runs and the host
+// keeps scheduling previews on the manager it was asked to keep for the control stack.
+func TestInitPreviewsOn(t *testing.T) {
+	run := func(t *testing.T, o spec.Orchestrator, mode string) (*exec.Fake, string, error) {
+		t.Helper()
+		f := okRunner("active", "")
+		var out bytes.Buffer
+		err := initctl.Init(initctl.Options{
+			DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			UI: initctl.Basic, Orchestrator: o, Runner: f, Out: &out, PreviewsOn: mode,
+		})
+		return f, out.String(), err
+	}
+	drain := "docker node update --availability 'drain' 'self'"
+	t.Run("workers drains this node under swarm", func(t *testing.T) {
+		f, out, err := run(t, spec.Swarm, "workers")
+		if err != nil || !strings.Contains(strings.Join(f.Commands(), "\n"), drain) || !strings.Contains(out, "previews run on workers only") {
+			t.Fatalf("err %v out %q cmds %v", err, out, f.Commands())
+		}
+	})
+	t.Run("unset leaves availability alone", func(t *testing.T) {
+		f, _, err := run(t, spec.Swarm, "")
+		if err != nil || strings.Contains(strings.Join(f.Commands(), "\n"), "node update") {
+			t.Fatalf("err %v cmds %v", err, f.Commands())
+		}
+	})
+	t.Run("compose refuses it", func(t *testing.T) {
+		if _, _, err := run(t, spec.Compose, "workers"); err == nil || !strings.Contains(err.Error(), "needs swarm") {
+			t.Fatalf("err %v", err)
+		}
+	})
+}
+
+// negative control: drop the protectDaemon call from Init — no drop-in command runs and dockerd keeps
+// oom_score_adj 0, the biggest score on a host that has run out of memory.
+func TestInitProtectsTheDaemonFromTheOOMKiller(t *testing.T) {
+	run := func(t *testing.T, answer func(cmd string) (exec.Result, bool), dry bool) (string, []string) {
+		t.Helper()
+		f := okRunner("active", "")
+		base := f.Answer
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			if strings.Contains(cmd, "oom_score_adj") && answer != nil {
+				return answer(cmd)
+			}
+			return base(cmd)
+		}
+		var out bytes.Buffer
+		if err := initctl.Init(initctl.Options{
+			DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			UI: initctl.Basic, Orchestrator: spec.Compose, Runner: f, Out: &out, DryRun: dry,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), f.Commands()
+	}
+	t.Run("writes the drop-in and applies it live", func(t *testing.T) {
+		out, cmds := run(t, nil, false)
+		joined := strings.Join(cmds, "\n")
+		for _, want := range []string{"OOMScoreAdjust=-900", "/etc/systemd/system/docker.service.d", "pstack-oom.conf", "systemctl daemon-reload", "/proc/$p/oom_score_adj"} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("command lacks %q", want)
+			}
+		}
+		if strings.Contains(joined, "restart docker") {
+			t.Error("restarts the daemon")
+		}
+		if !strings.Contains(out, "docker is protected from the OOM killer") {
+			t.Errorf("out %q", out)
+		}
+	})
+	t.Run("no root or systemd is a note, never an error", func(t *testing.T) {
+		out, _ := run(t, func(string) (exec.Result, bool) { return exec.Result{OK: false, Code: 7}, true }, false)
+		if !strings.Contains(out, "needs root and systemd") {
+			t.Errorf("out %q", out)
+		}
+	})
+	t.Run("a failure names docker's reason and init carries on", func(t *testing.T) {
+		out, _ := run(t, func(string) (exec.Result, bool) {
+			return exec.Result{OK: false, Code: 1, Stderr: "read-only file system\nx"}, true
+		}, false)
+		if !strings.Contains(out, "read-only file system") {
+			t.Errorf("out %q", out)
+		}
+	})
+	t.Run("a dry run runs nothing", func(t *testing.T) {
+		out, cmds := run(t, nil, true)
+		if strings.Contains(strings.Join(cmds, "\n"), "oom_score_adj") || !strings.Contains(out, "[dry-run] would protect docker") {
+			t.Errorf("out %q cmds %v", out, cmds)
 		}
 	})
 }

@@ -246,7 +246,8 @@ func run(argv []string, io IO) *Exit {
 			DataDir: dataDir, Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
 			Challenge: initctl.Challenge(args.Challenge), UI: initctl.UI(args.UI), Orchestrator: spec.Orchestrator(args.Orchestrator),
 			Logging: initctl.Logging(args.Logging), Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
-			IngressSubnet: args.IngressSubnet, SharedSubnet: args.SharedSubnet,
+			IngressSubnet: args.IngressSubnet, SharedSubnet: args.SharedSubnet, PreviewsOn: args.PreviewsOn,
+			NoOOMProtect: envOn(io.Env, "PSTACK_NO_OOM_PROTECT"),
 		})
 		if err != nil {
 			return &Exit{Code: ExitFailed, Msg: err.Error()}
@@ -573,7 +574,7 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	}
 	yaml, err := cloudinit.RenderCloudInit(cloudinit.Answers{
 		Domain: domain, AcmeEmail: acmeEmail, SSHKey: sshKey, DashboardPassword: dashboardPassword,
-		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator, Logging: args.Logging,
+		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator, Logging: args.Logging, PreviewsOn: args.PreviewsOn,
 		AdminUser: adminUser, AdminPassword: adminPassword, Token: apiToken, DNSToken: dnsToken,
 		ExtraDomains: args.ExtraDomains,
 		ConfigRepo:   configRepo, Distro: args.Distro,
@@ -694,8 +695,25 @@ func swarmCmd(args *Parsed, runner exec.Runner, io IO) *Exit {
 		fmt.Fprintln(errOut, "  swarm. Rotate it with `docker swarm join-token --rotate worker`.")
 		fmt.Fprintln(errOut, "  Open "+swarm.PortList()+" between every pair of nodes.")
 		return nil
+	case "previews":
+		if args.Arg != swarm.PreviewsOnWorkers && args.Arg != swarm.PreviewsOnAny {
+			return fail("usage: pstack swarm previews <workers|any>")
+		}
+		note, err := swarm.SetPreviewsOn(runner, args.Arg)
+		if err != nil {
+			return &Exit{Code: ExitFailed, Msg: err.Error()}
+		}
+		if args.Arg == swarm.PreviewsOnWorkers {
+			fmt.Fprintln(out, "previews run on workers only (this manager is drained)")
+		} else {
+			fmt.Fprintln(out, "previews run on any node")
+		}
+		if note != "" {
+			fmt.Fprintln(errOut, "  "+note)
+		}
+		return nil
 	}
-	return fail("usage: pstack swarm <status|join>   (join: --format " + strings.Join(swarm.JoinFormats, "|") + " [--distro <name>] [-o <file>])")
+	return fail("usage: pstack swarm <status|join|previews>   (join: --format " + strings.Join(swarm.JoinFormats, "|") + " [--distro <name>] [-o <file>])")
 }
 
 // ── `pstack pull config` / `pstack push config` ─────────────────────────────────────────────────
@@ -1081,4 +1099,10 @@ func uiApp(args *Parsed) string {
 		return "advanced"
 	}
 	return ""
+}
+
+// envOn is an environment switch: set to anything but "" or "0".
+func envOn(env func(string) (string, bool), key string) bool {
+	v, ok := env(key)
+	return ok && v != "" && v != "0"
 }

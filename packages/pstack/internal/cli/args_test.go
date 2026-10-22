@@ -519,3 +519,28 @@ func TestNetworkRangeFlags(t *testing.T) {
 		t.Fatal("accepted an IPv6 range")
 	}
 }
+
+// negative control: drop the --previews-on check — "everywhere" parses, and init then drains nothing
+// and says nothing while the operator believes previews moved off the manager.
+func TestPreviewsOnFlag(t *testing.T) {
+	p, e := ParseArgs([]string{"init", "--previews-on", "workers"}, noEnv)
+	if e != nil || p.PreviewsOn != "workers" {
+		t.Fatalf("got %+v %v", p, e)
+	}
+	env := func(k string) (string, bool) { return "any", k == "PSTACK_PREVIEWS_ON" }
+	if p, e := ParseArgs([]string{"init"}, env); e != nil || p.PreviewsOn != "any" {
+		t.Fatalf("env: %+v %v", p, e)
+	}
+	if p, _ := ParseArgs([]string{"init"}, noEnv); p.PreviewsOn != "" {
+		t.Fatalf("unset read as a request: %+v", p)
+	}
+	if _, e := ParseArgs([]string{"init", "--previews-on", "everywhere"}, noEnv); e == nil {
+		t.Fatal("accepted everywhere")
+	}
+	if _, e := ParseArgs([]string{"init", "--orchestrator", "compose", "--previews-on", "workers"}, noEnv); e == nil || e.Code != ExitUsage {
+		t.Fatalf("compose with --previews-on: %v", e)
+	}
+	if p, _ := ParseArgs([]string{"swarm", "previews", "workers"}, noEnv); p.Sub != "previews" || p.Arg != "workers" {
+		t.Fatalf("third word: %+v", p)
+	}
+}

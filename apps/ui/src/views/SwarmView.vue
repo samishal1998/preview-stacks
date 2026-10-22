@@ -50,6 +50,26 @@ usePolling(load, 10_000);
 // Only `false` is missing; null is "not checked".
 const unplugged = computed(() => info.value?.nodes.filter((n) => n.lokiPlugin === false) ?? []);
 
+// ── where previews run ──────────────────────────────────────────────────────────────────────────
+// A drained manager keeps the control stack (plain compose, which a drain does not touch) and swarm
+// places every preview on a worker. `self` is the node this control plane runs on.
+const manager = computed(() => info.value?.nodes.find((n) => n.self && n.role === 'manager'));
+const previewsOn = computed(() => (manager.value?.availability === 'drain' ? 'workers' : 'any'));
+const hasWorker = computed(() => info.value?.nodes.some((n) => !n.self && n.status === 'ready' && n.availability === 'active') ?? false);
+const switching = ref(false);
+
+async function setPreviewsOn(v: string): Promise<void> {
+  const m = manager.value;
+  if (!m || switching.value || v === previewsOn.value) return;
+  switching.value = true;
+  const r = await api.post<unknown>(`/api/swarm/nodes/${encodeURIComponent(m.id)}/${v === 'workers' ? 'drain' : 'undrain'}`);
+  switching.value = false;
+  if (r.status === 403) toast('error', 'Maintainer only.');
+  else if (!r.ok) toast('error', problem(r, 'change where previews run'));
+  else toast('ok', v === 'workers' ? 'Previews run on workers only.' : 'Previews run on any node.');
+  void load();
+}
+
 // ── joining ─────────────────────────────────────────────────────────────────────────────────────
 type Format = 'token' | 'command' | 'script' | 'cloud-config';
 const format = ref<Format>('command');
@@ -179,6 +199,32 @@ onBeforeUnmount(() => {
           <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ info.lokiPluginInstall }}</pre>
         </div>
       </template>
+    </section>
+
+    <!-- ============================ where previews run ============================ -->
+    <section v-if="info?.active && manager" class="panel">
+      <div class="phead">
+        <h2 class="section">Previews</h2>
+      </div>
+      <div class="field inline">
+        <label for="previews-on">Run previews on</label>
+        <SelectMenu
+          id="previews-on"
+          :model-value="previewsOn"
+          label="Run previews on"
+          :disabled="switching"
+          :options="[
+            { value: 'any', label: 'Any node' },
+            { value: 'workers', label: 'Workers only' },
+          ]"
+          @update:model-value="(v) => setPreviewsOn(String(v))"
+        />
+      </div>
+      <p class="mute" style="font-size: var(--t-sm)">Workers only keeps this manager to the control stack.</p>
+      <div v-if="previewsOn === 'workers' && !hasWorker" class="banner warn">
+        <b>No worker is ready.</b>
+        <p>Previews stay pending until one joins.</p>
+      </div>
     </section>
 
     <!-- ============================ add a worker ============================ -->

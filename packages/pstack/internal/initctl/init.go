@@ -218,6 +218,12 @@ type Options struct {
 	// range differs is recreated, which needs every preview off it first.
 	IngressSubnet string
 	SharedSubnet  string
+	// PreviewsOn is `workers` (drain this manager: control stack only), `any` (undo that) or ""
+	// (nobody asked: availability is left alone, so `pstack upgrade` never changes it). Swarm only.
+	PreviewsOn string
+	// NoOOMProtect skips the dockerd oom_score_adj step (PSTACK_NO_OOM_PROTECT). For a host that
+	// manages docker.service itself, and for every test that runs init as root.
+	NoOOMProtect bool
 }
 
 // randomHex is n random bytes, hex. Hex on purpose: `$` in a `.env` value is expanded by Compose, and
@@ -394,6 +400,15 @@ func Init(opts Options) error {
 		}
 	}
 
+	// ── 1a. Protect the daemon from the OOM killer ──────────────────────────────────────────────
+	// On a host out of memory the kernel kills the process with the biggest score, and dockerd is
+	// usually the biggest process there: its death takes the swarm manager (and every preview's
+	// routing) with it. Never fatal — this is hardening, and a host without root or systemd runs fine
+	// without it.
+	if !opts.NoOOMProtect {
+		protectDaemon(runner, out, dryRun)
+	}
+
 	// ── 1b. Swarm ───────────────────────────────────────────────────────────────────────────────
 	// `swarm init` on a node that is already a manager fails, so it is guarded by the state docker
 	// reports — this is the idempotent path. Leaving a swarm is never done here: that is a decision
@@ -407,6 +422,28 @@ func Init(opts Options) error {
 					"  A host with several addresses needs --advertise-addr; run `docker swarm init --advertise-addr <ip>` " +
 					"once by hand, then re-run pstack init.")
 			}
+		}
+	}
+
+	// ── 1b'. Where previews run ─────────────────────────────────────────────────────────────────
+	// Drain is swarm's own scheduling state and survives a restart, so this is applied once and never
+	// read back. The control stack is plain compose, not swarm services: draining does not touch it.
+	if opts.PreviewsOn != "" {
+		if orchestrator != spec.Swarm {
+			return errors.New("--previews-on needs swarm: under compose there is one node and no workers")
+		}
+		note, err := swarm.SetPreviewsOn(runner, opts.PreviewsOn)
+		if err != nil {
+			return errors.New("could not set where previews run: " + err.Error())
+		}
+		where := map[string]string{"workers": "workers only (this manager is drained)", "any": "any node"}[opts.PreviewsOn]
+		if dryRun {
+			fmt.Fprintln(out, "  [dry-run] previews would run on "+where)
+		} else {
+			fmt.Fprintln(out, "  previews run on "+where)
+		}
+		if note != "" {
+			fmt.Fprintln(out, "  "+note)
 		}
 	}
 
@@ -905,7 +942,6 @@ func AdvancedUIService(ui UI) string {
 		"  advanced-ui:",
 		"    image: " + image,
 		"    restart: unless-stopped",
-		"    mem_limit: 128m",
 		"    depends_on: [pstack]",
 		"    networks: [preview-ingress]",
 		"    labels:",
@@ -938,7 +974,6 @@ func LokiService(logging Logging, challenge Challenge, password string) string {
 		"  loki:",
 		"    image: grafana/loki:" + swarm.LokiVersion,
 		"    restart: unless-stopped",
-		"    mem_limit: 2g",
 		"    # Only Traefik shares this network. Never preview-ingress: Loki has no auth, and every preview",
 		"    # container sits on preview-ingress — any of them could read every stack's logs.",
 		"    networks: [logs]",
@@ -995,7 +1030,6 @@ func GrafanaService(logging Logging, challenge Challenge) string {
 		"  grafana:",
 		"    image: grafana/grafana:" + GrafanaVersion + "    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
 		"    restart: unless-stopped",
-		"    mem_limit: 768m                  # 13.x idles ~330Mi and OOMed under 400Mi (grafana#123017)",
 		"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
 		"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
 		"    networks: [logs]",
@@ -1253,4 +1287,33 @@ func addressesIn(cidr string) int {
 		return 1 << 30
 	}
 	return 1<<(bits-ones) - 2
+}
+
+// DaemonOOMScoreAdjust is dockerd's oom_score_adj: well below every container's 0, so the kernel
+// takes a preview's process first. Not -1000, which would exempt it from the killer entirely.
+const DaemonOOMScoreAdjust = -900
+
+// protectDaemonCmd writes a systemd drop-in (so the value survives a restart) and applies it to the
+// running daemon through /proc (so no restart is needed — restarting dockerd on a loaded manager
+// takes every task with it). Idempotent: the file is rewritten with the same bytes, and exit 7 means
+// "not root, or no systemd" rather than a failure.
+var protectDaemonCmd = fmt.Sprintf(`[ "$(id -u)" = 0 ] && [ -d /run/systemd/system ] || exit 7; `+
+	`d=/etc/systemd/system/docker.service.d; `+
+	`mkdir -p "$d" && printf '[Service]\nOOMScoreAdjust=%[1]d\n' > "$d/pstack-oom.conf" && systemctl daemon-reload || exit 1; `+
+	`for p in $(pgrep -x dockerd); do echo %[1]d > /proc/$p/oom_score_adj; done; true`, DaemonOOMScoreAdjust)
+
+func protectDaemon(runner exec.Runner, out io.Writer, dryRun bool) {
+	if dryRun {
+		fmt.Fprintln(out, fmt.Sprintf("  [dry-run] would protect docker from the OOM killer (OOMScoreAdjust=%d)", DaemonOOMScoreAdjust))
+		return
+	}
+	res := runner.Run(protectDaemonCmd, exec.RunOptions{Label: "protect docker from the OOM killer"})
+	switch {
+	case res.OK:
+		fmt.Fprintf(out, "  docker is protected from the OOM killer (OOMScoreAdjust=%d)\n", DaemonOOMScoreAdjust)
+	case res.Code == 7:
+		fmt.Fprintln(out, "  docker is not protected from the OOM killer: that needs root and systemd (OOMScoreAdjust="+strconv.Itoa(DaemonOOMScoreAdjust)+" on docker.service)")
+	default:
+		fmt.Fprintln(out, "  docker is not protected from the OOM killer: "+firstOf(res.Stderr, res.Stdout))
+	}
 }

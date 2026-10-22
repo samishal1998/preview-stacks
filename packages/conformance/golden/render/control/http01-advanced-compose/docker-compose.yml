@@ -31,9 +31,13 @@ services:
     # provider then comes up empty — every route 404s while Traefik itself looks perfectly healthy.
     image: traefik:v3.6.1
     restart: unless-stopped
-    # Not lower: an OOM kill wipes Traefik's in-memory ACME challenge tokens, and every in-flight
-    # certificate validation then 404s while the failed order still bills the LE rate limit.
-    mem_limit: 512m
+    # No mem_limit, on purpose. A 512m cap was OOM-killed by a burst of proxied requests, and
+    # Traefik is the only way in: when it is down every preview is down. An OOM kill also wipes its
+    # in-memory ACME challenge tokens, so every in-flight certificate validation then 404s while the
+    # failed order still bills the LE rate limit.
+    # Uncapped, so it is also the biggest container when the host runs dry: the kernel takes the
+    # highest score first, and a preview's process (0) must be taken before this one.
+    oom_score_adj: -500
     ports:
       - "80:80"
       - "443:443"
@@ -107,7 +111,8 @@ services:
   pstack:
     image: ${PSTACK_IMAGE}
     restart: unless-stopped
-    mem_limit: 512m
+    # The OOM killer takes a preview's process (0) before the control plane's.
+    oom_score_adj: -500
     networks: [preview-ingress, preview-shared]
     # Overrides the image's non-root default, on purpose. The socket below is mounted read-write,
     # which is root-equivalent on this host no matter which uid holds it — so a non-root container
@@ -224,7 +229,6 @@ services:
   advanced-ui:
     image: ${PSTACK_UI_IMAGE}
     restart: unless-stopped
-    mem_limit: 128m
     depends_on: [pstack]
     networks: [preview-ingress]
     labels:

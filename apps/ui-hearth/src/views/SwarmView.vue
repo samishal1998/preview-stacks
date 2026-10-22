@@ -9,7 +9,7 @@ import type { SwarmInfo } from '@samyx/preview-stacks-client';
 import { swarmApi, type Signals } from '../api-swarm';
 import { poll } from '../api-control';
 import { byLabel } from '../lib/labels';
-import { DISTROS, joinPath, joinProblem, removable, type JoinFormat } from '../lib/swarm';
+import { DISTROS, hasReadyWorker, joinPath, joinProblem, removable, thisManager, workersOnly, type JoinFormat } from '../lib/swarm';
 import { ago } from '../format';
 import { can } from '../lib/users';
 import { auth, toast } from '../state';
@@ -108,6 +108,18 @@ async function act(kind: 'drain' | 'undrain' | 'remove', id: string, host: strin
   void load(true);
 }
 
+// ── where previews run ──────────────────────────────────────────────────────────────────────────
+const manager = computed(() => thisManager(info.value?.nodes ?? []));
+const previewsOn = computed(() => (workersOnly(info.value?.nodes ?? []) ? 'workers' : 'any'));
+const noWorker = computed(() => workersOnly(info.value?.nodes ?? []) && !hasReadyWorker(info.value?.nodes ?? []));
+function setPreviewsOn(v: string): void {
+  const m = manager.value;
+  if (!m || acting.value || v === previewsOn.value) return;
+  if (v === 'workers') Object.assign(confirm, { open: true, kind: 'drain', id: m.id, host: m.hostname || m.id.slice(0, 12) });
+  else void act('undrain', m.id, m.hostname);
+}
+const drainText = computed(() => (confirm.id === manager.value?.id ? 'Every preview moves to a worker.' : 'Its tasks move to other nodes.'));
+
 // ── joining ─────────────────────────────────────────────────────────────────────────────────────
 const FORMATS: Array<{ value: JoinFormat; label: string }> = [
   { value: 'command', label: 'docker swarm join' },
@@ -157,6 +169,20 @@ onBeforeUnmount(() => {
       <template v-else>
         <HAlert v-if="info?.error" tone="warning" title="Docker reported a problem." :description="info.error" />
 
+        <template v-if="manager">
+          <HHeading :level="2" size="md">Previews</HHeading>
+          <HSelect
+            :model-value="previewsOn"
+            label="Run previews on"
+            :options="[{ value: 'any', label: 'Any node' }, { value: 'workers', label: 'Workers only' }]"
+            style="max-width: 20rem"
+            :disabled="!manage || acting !== ''"
+            @update:model-value="setPreviewsOn(String($event))"
+          />
+          <HText tone="muted" size="sm">Workers only keeps this manager to the control stack.</HText>
+          <HAlert v-if="noWorker" tone="warning" title="No worker is ready." description="Previews stay pending until one joins." />
+        </template>
+
         <HHeading :level="2" size="md">Nodes</HHeading>
         <HDataTable
           label="Swarm nodes"
@@ -170,10 +196,12 @@ onBeforeUnmount(() => {
         >
           <template #cell="{ row, column, value }">
             <template v-if="column.key === 'host'">
+              <HStack direction="row" :gap="2" align="center" wrap>
               {{ value }}
               <HBadge v-if="nodeOf(row)?.self" tone="info" label="This node" />
               <HBadge v-if="nodeOf(row)?.lokiPlugin === false" tone="warning" label="No loki plugin" />
               <HBadge v-if="sig(nodeOf(row)?.id ?? '')?.emptySince" tone="neutral" :label="`empty ${ago(sig(nodeOf(row)!.id)!.emptySince)}`" />
+              </HStack>
             </template>
             <HBadge v-else-if="column.key === 'role'" :label="String(value)" :tone="value === 'manager' ? 'accent' : 'neutral'" variant="outline" />
             <HBadge v-else-if="column.key === 'status'" dot :label="String(value)" :tone="value === 'ready' ? 'success' : 'danger'" />
@@ -224,7 +252,7 @@ onBeforeUnmount(() => {
       v-model:open="confirm.open"
       danger
       :title="confirm.kind === 'drain' ? `Drain ${confirm.host}?` : `Remove ${confirm.host}?`"
-      :description="confirm.kind === 'drain' ? 'Its tasks move to other nodes.' : 'The node leaves the swarm.'"
+      :description="confirm.kind === 'drain' ? drainText : 'The node leaves the swarm.'"
       :confirm-label="confirm.kind === 'drain' ? 'Drain' : 'Remove'"
       :busy="acting !== ''"
       @confirm="act(confirm.kind, confirm.id, confirm.host)"

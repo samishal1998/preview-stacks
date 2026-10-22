@@ -1325,6 +1325,7 @@ Everything `init` reads:
 | `--logging none\|loki` | `PSTACK_LOGGING` | `none` | `loki`: a Loki service in the control stack, its log plugin on this node, and a `logging:` block on every deployed service that has none. Anything else exits 3. `upgrade` keeps whatever the host has |
 | `--ingress-subnet <cidr>` | `PSTACK_INGRESS_SUBNET` | `10.250.0.0/16` | swarm only: the address range of `preview-ingress`, which every routed preview service takes an address on. Used when the network is created; an existing network is **kept as it is** unless you set this, and then one with a different range is re-created — every preview must be asleep or down first, and `init` stops naming the ones still attached. See [the address leak](preview-ingress-address-leak.md) |
 | `--shared-subnet <cidr>` | `PSTACK_SHARED_SUBNET` | `10.251.0.0/16` | the same, for `preview-shared` |
+| `--previews-on workers\|any` | `PSTACK_PREVIEWS_ON` | *unset* | swarm only. `workers` drains this manager, so it runs only the control stack and every preview lands on a worker; `any` undoes it. Unset leaves the manager as it is, so `pstack upgrade` never changes it. With no worker yet, previews stay pending until one joins (init says so). Under compose it exits 3 |
 | — | `PSTACK_DNS_TOKEN` | *unset* | the DNS-01 credential, written to `dns.env`. Omit for the tokenless providers |
 | — | `PSTACK_TOKEN` | *generated* | the API bearer token. Supply it to keep or rotate a known one; leave it unset to be handed a fresh one **printed exactly once** |
 | — | `PSTACK_LOKI_PASSWORD` | *generated* | with `--logging loki`: the push password (32 lowercase hex), kept in `control/.env` as `LOKI_PUSH_PASSWORD`. Supply it to keep the host's |
@@ -2185,6 +2186,8 @@ pstack swarm                       # the node table, the manager address, the po
 pstack swarm join                  # → docker swarm join --token SWMTKN-1-… 203.0.113.10:2377
 pstack swarm join --format script > join.sh
 pstack swarm join --format cloud-config --distro debian -o worker.yaml
+pstack swarm previews workers      # this manager keeps only the control stack
+pstack swarm previews any          # and back
 ```
 
 `pstack swarm` exits **1** when this host is not a manager (or docker did not answer), so a script
@@ -2298,6 +2301,32 @@ a candidate: it runs pstack itself, and your axis hooks run beside it. Tasks of 
 Rather be told than ask: `signal.raised` and `signal.cleared` fire on the change and carry the same
 fields ([webhook-events.md](webhook-events.md)). `PSTACK_SIGNALS_TICK_MS` sets how often pstack
 looks (default 30000; `0` turns it off).
+
+### Keeping the manager for the control stack
+
+A manager that also runs previews shares its memory with the swarm's own bookkeeping, and a burst of
+previews starting at once can starve the manager until it stops answering. `workers` drains the
+manager: swarm moves every preview to a worker and places none there again, while the control stack
+(Traefik, pstack, the UI, Loki, Grafana) keeps running, because it is plain compose and a drain does
+not touch it.
+
+```bash
+pstack swarm previews workers          # on the manager; same as the Swarm page's "Run previews on"
+pstack init … --previews-on workers    # at install time; cloud-init takes the same flag
+```
+
+Add a worker **first**. With none ready, the previews are pending, not running; the command, init and
+the Swarm page all say so. `any` makes the manager schedulable again. It is swarm's own scheduling
+state, so it survives a restart and `pstack upgrade` leaves it alone.
+
+**The daemon is protected too.** `pstack init` (so `cloud-init` and `upgrade`) sets `dockerd`'s
+`OOMScoreAdjust` to -900 through a systemd drop-in, `/etc/systemd/system/docker.service.d/pstack-oom.conf`,
+and applies it to the running daemon through `/proc`, so there is no restart. On a host that runs out
+of memory the kernel kills the process with the biggest score, and `dockerd` is usually the biggest
+there; with the adjustment it takes a preview's process first. Traefik and pstack carry
+`oom_score_adj: -500` in the control stack for the same reason. Without root or systemd, init says so
+and carries on. It lowers who is killed first; it does not prevent running out of memory — draining
+the manager does that.
 
 **Taking a machine out of service**, in this order:
 
@@ -3362,6 +3391,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
 | `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
 | `--logging none\|loki` | `init` `cloud-init` | default **`none`** (or `PSTACK_LOGGING`). `loki` runs Loki in the control stack and ships every deployed service's logs to it; `cloud-init` passes it to `init`. Any other value exits 3. |
+| `--previews-on workers\|any` | `init` `cloud-init` | swarm only: where previews may run. Not an enum value exits 3; with `--orchestrator compose` it exits 3 too. See [Keeping the manager for the control stack](#keeping-the-manager-for-the-control-stack). |
 | `--ingress-subnet <cidr>` `--shared-subnet <cidr>` | `init` | swarm only: the two networks' ranges, `10.250.0.0/16` and `10.251.0.0/16` by default. Unset keeps an existing network; set and different re-creates it. Not an IPv4 range exits 3. |
 | `--format <shape>` | `swarm join` | `command` (default), `script`, `cloud-config` or `token`. An unknown one exits 3. |
 | `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
@@ -3408,6 +3438,8 @@ different problems with different owners.
 | `PSTACK_IMAGE` | `init` | `pstack:local` | the control-stack image |
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_LOGGING` | `init` `cloud-init` | `none` | same as `--logging` |
+| `PSTACK_NO_OOM_PROTECT` | `init` | *unset* | any value but `0` skips protecting `dockerd` from the OOM killer (below). For a host that manages `docker.service` itself |
+| `PSTACK_PREVIEWS_ON` | `init` `cloud-init` | *unset* | same as `--previews-on` |
 | `PSTACK_INGRESS_SUBNET` `PSTACK_SHARED_SUBNET` | `init` (and `upgrade`, which runs it) | *unset* | same as `--ingress-subnet` / `--shared-subnet`. Set on `pstack upgrade`, it reaches the `init` the upgrade runs — the one-command way to enlarge an existing host's network |
 | `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |

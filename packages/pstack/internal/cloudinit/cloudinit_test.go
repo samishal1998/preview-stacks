@@ -229,6 +229,22 @@ func TestCloudInitGeneration(t *testing.T) {
 		}
 	})
 
+	t.Run("--previews-on reaches the init call only when set, and not under compose", func(t *testing.T) {
+		// negative control: drop the PreviewsOn branch of initFlags — the init call has no --previews-on.
+		a := base
+		a.PreviewsOn = "workers"
+		if !strings.Contains(initCall(t, render(t, a)), "--previews-on workers") {
+			t.Errorf("missing from the init call: %q", initCall(t, render(t, a)))
+		}
+		if strings.Contains(initCall(t, render(t, base)), "--previews-on") {
+			t.Error("unset still carries --previews-on")
+		}
+		a.Orchestrator = "compose"
+		if _, err := RenderCloudInit(a); err == nil {
+			t.Error("compose with --previews-on rendered")
+		}
+	})
+
 	t.Run("--logging loki reaches the init call; none adds nothing", func(t *testing.T) {
 		// negative control: drop the Logging branch of initFlags — the init call has no --logging loki.
 		a := base

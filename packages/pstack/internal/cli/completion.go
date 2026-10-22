@@ -38,7 +38,7 @@ func Completion(shell string) (string, *Exit) {
 var subcommands = map[string][]string{
 	"ui":         {"basic", "advanced", "hearth"},
 	"logging":    {"loki", "off"},
-	"swarm":      {"status", "join"},
+	"swarm":      {"status", "join", "previews"},
 	"pull":       {"config"},
 	"push":       {"config"},
 	"completion": Shells,
@@ -51,6 +51,7 @@ var enumFlags = map[string][]string{
 	"--ui":           {"basic", "advanced", "hearth"},
 	"--orchestrator": {"swarm", "compose"},
 	"--logging":      {"none", "loki"},
+	"--previews-on":  {"workers", "any"},
 	"--distro":       {"ubuntu", "debian", "fedora", "suse", "arch", "alpine"},
 	"--format":       {"command", "script", "cloud-config", "token"},
 }
