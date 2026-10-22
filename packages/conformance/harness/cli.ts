@@ -15,6 +15,9 @@ export async function runCli(
   const env: Record<string, string | undefined> = {
     ...cleanEnv(),
     PATH: o.pathPrefix ? `${o.pathPrefix}:${process.env.PATH ?? ''}` : process.env.PATH,
+    // `init` writes a systemd drop-in for docker.service when it runs as root on a systemd host.
+    // A test run must never touch the machine it runs on.
+    PSTACK_NO_OOM_PROTECT: '1',
     ...o.env,
   };
   for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];

@@ -54,6 +54,7 @@ package swarm
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"unicode"
@@ -761,6 +762,46 @@ func MarkLokiPlugins(r exec.Runner, info *Info) {
 // The word is passed in by the caller and is never taken from a URL.
 func NodeAvailabilityCmd(id, availability string) string {
 	return "docker node update --availability " + Shq(availability) + " " + Shq(id)
+}
+
+// PreviewsOn values: where previews may run. `workers` drains this manager, so it keeps the control
+// stack (plain compose, which a drain does not touch) and swarm places every preview on a worker.
+const (
+	PreviewsOnWorkers = "workers"
+	PreviewsOnAny     = "any"
+)
+
+// SetPreviewsOn drains this manager (`workers`) or makes it schedulable again (`any`). Idempotent:
+// docker accepts the same availability twice. note is non-empty when `workers` leaves nowhere for a
+// preview to run — there is no other ready, active node — which is a state to report, not to refuse:
+// a host is set up manager-only before its first worker joins.
+func SetPreviewsOn(r exec.Runner, mode string) (note string, err error) {
+	availability := "active"
+	if mode == PreviewsOnWorkers {
+		availability = "drain"
+	} else if mode != PreviewsOnAny {
+		return "", errors.New("previews-on must be workers or any, got \"" + mode + "\"")
+	}
+	res := r.Run(NodeAvailabilityCmd("self", availability), exec.RunOptions{Label: "docker node update"})
+	if !res.OK {
+		first, _, _ := strings.Cut(strings.TrimSpace(res.Stderr), "\n")
+		if first == "" {
+			first = "docker refused the command"
+		}
+		return "", errors.New(first)
+	}
+	if mode == PreviewsOnWorkers {
+		info := SwarmInfo(r)
+		for _, n := range info.Nodes {
+			if !n.Self && n.Status == "ready" && n.Availability == "active" {
+				return "", nil
+			}
+		}
+		if len(info.Nodes) > 0 {
+			return "no worker is ready: previews stay pending until one joins (`pstack swarm join`)", nil
+		}
+	}
+	return "", nil
 }
 
 // NodeRmCmd forgets a node whose machine is gone. NEVER `--force`: forcing it on a node that is

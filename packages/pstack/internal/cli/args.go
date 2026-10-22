@@ -56,14 +56,19 @@ type Parsed struct {
 	// asked: init keeps an existing network and gives a new one the default. Normalised CIDR.
 	IngressSubnet string
 	SharedSubnet  string
-	Distro        string
-	Format        string
-	Tag           string
-	UI            string // basic | advanced | hearth
-	UIImage       bool
-	UIDist        string
-	SSHKey        string
-	Password      string
+	// PreviewsOn is where previews may run under swarm: workers | any. "" = nobody asked, and the
+	// manager's availability is left as it is.
+	PreviewsOn string
+	// Arg is the third word: `pstack swarm previews <workers|any>`.
+	Arg      string
+	Distro   string
+	Format   string
+	Tag      string
+	UI       string // basic | advanced | hearth
+	UIImage  bool
+	UIDist   string
+	SSHKey   string
+	Password string
 	// AdminUser / AdminPassword / APIToken are cloud-init's credential flags. Deliberately WITHOUT
 	// environment defaults, unlike --password (PSTACK_DASHBOARD_PASSWORD) beside them: an operator's
 	// shell has PSTACK_TOKEN set precisely because it is talking to a host that already exists, and a
@@ -146,6 +151,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		// Empty counts as unset: an exported-but-empty variable is not a request to recreate a network.
 		IngressSubnet: or("PSTACK_INGRESS_SUBNET", ""),
 		SharedSubnet:  or("PSTACK_SHARED_SUBNET", ""),
+		PreviewsOn:    or("PSTACK_PREVIEWS_ON", ""),
 		SSHKey:        get("PSTACK_SSH_KEY", ""),
 		Password:      get("PSTACK_DASHBOARD_PASSWORD", ""),
 		Distro:        get("PSTACK_DISTRO", "ubuntu"),
@@ -256,6 +262,8 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.IngressSubnet = next(&i, "")
 		case "--shared-subnet":
 			p.SharedSubnet = next(&i, "")
+		case "--previews-on":
+			p.PreviewsOn = next(&i, "")
 		case "--logging":
 			p.Typed["--logging"] = true
 			l := next(&i, "")
@@ -297,6 +305,15 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 	}
 	if len(rest) > 1 {
 		p.Sub = rest[1]
+	}
+	if len(rest) > 2 {
+		p.Arg = rest[2]
+	}
+	if p.PreviewsOn != "" && p.PreviewsOn != "workers" && p.PreviewsOn != "any" {
+		return nil, fail(fmt.Sprintf(`--previews-on must be workers or any, got "%s"`, p.PreviewsOn))
+	}
+	if p.PreviewsOn != "" && (p.Cmd == "init" || p.Cmd == "cloud-init") && p.Orchestrator == "compose" {
+		return nil, fail("--previews-on needs swarm: under compose there is one node and no workers")
 	}
 	// Checked after the walk so the environment's values get the same check as the flags'. Docker
 	// would refuse a bad range too — but only after init had already taken the control stack down.
@@ -383,8 +400,10 @@ func Usage(version string) string {
 		"            --ingress-subnet <cidr>         swarm: preview-ingress's range (default 10.250.0.0/16)",
 		"            --shared-subnet <cidr>          swarm: preview-shared's range (default 10.251.0.0/16). Given, a",
 		"                                            network with another range is re-created — previews must be off it.",
+		"            --previews-on workers|any       swarm: workers drains this manager, so it runs only the control",
+		"                                            stack and every preview lands on a worker. Unset keeps it as is.",
 		"",
-		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator] [--logging]",
+		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator] [--logging] [--previews-on]",
 		"            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)",
 		"            --admin-user <name> [--admin-password <pw>]  the first UI account, created on first boot",
 		"            --api-token <PSTACK_TOKEN>   default: `init` generates one on the host and prints it once",

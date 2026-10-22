@@ -209,6 +209,8 @@ type Answers struct {
 	// Logging is "none" or "loki"; loki adds `--logging loki` to the init call. No step of its own:
 	// init installs the plugin on the manager.
 	Logging string
+	// PreviewsOn is `workers` or `any`; passed to `pstack init --previews-on` only when set. Swarm only.
+	PreviewsOn string
 }
 
 // Error is a refused input or a template that did not render. The CLI prints its message and exits 3.
@@ -242,6 +244,9 @@ var (
 )
 
 func validate(a Answers) error {
+	if a.PreviewsOn != "" && a.Orchestrator == "compose" {
+		return &Error{"--previews-on needs swarm: under compose there is one node and no workers"}
+	}
 	if !domainRe.MatchString(a.Domain) {
 		return &Error{`domain "` + a.Domain + `" does not look like a hostname`}
 	}
@@ -388,6 +393,9 @@ func RenderCloudInit(a Answers) (string, error) {
 	}
 	if a.Logging == "loki" {
 		initFlags = append(initFlags, "--logging loki")
+	}
+	if a.PreviewsOn != "" {
+		initFlags = append(initFlags, "--previews-on "+a.PreviewsOn)
 	}
 
 	// Omit the key list entirely rather than emit an empty one: cloud-init would accept

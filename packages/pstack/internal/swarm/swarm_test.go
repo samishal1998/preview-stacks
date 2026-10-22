@@ -816,3 +816,58 @@ func TestLokiPluginInstall(t *testing.T) {
 		}
 	})
 }
+
+// negative control: drop the `!n.Self` test — the manager itself, drained, counts as the worker the
+// previews will run on, and the "no worker is ready" note never fires on a manager-only host.
+func TestSetPreviewsOn(t *testing.T) {
+	ran := func(f *exec.Fake, want string) bool {
+		for _, c := range f.Commands() {
+			if c == want {
+				return true
+			}
+		}
+		return false
+	}
+	t.Run("workers drains this node and is quiet when a worker is ready", func(t *testing.T) {
+		f := manager(t)
+		note, err := SetPreviewsOn(f, PreviewsOnWorkers)
+		if err != nil || note != "" {
+			t.Fatalf("note %q err %v", note, err)
+		}
+		if !ran(f, NodeAvailabilityCmd("self", "drain")) {
+			t.Errorf("no drain in %v", f.Commands())
+		}
+	})
+	t.Run("workers with no other ready node says previews will wait", func(t *testing.T) {
+		f := shim(map[string]string{
+			cmdInfo:   read(t, "info-active.json"),
+			cmdNodeLs: strings.SplitAfter(read(t, "node-ls.jsonl"), "\n")[0],
+		})
+		note, err := SetPreviewsOn(f, PreviewsOnWorkers)
+		if err != nil || !strings.Contains(note, "no worker is ready") {
+			t.Fatalf("note %q err %v", note, err)
+		}
+	})
+	t.Run("any makes this node schedulable and says nothing", func(t *testing.T) {
+		f := manager(t)
+		note, err := SetPreviewsOn(f, PreviewsOnAny)
+		if err != nil || note != "" || !ran(f, NodeAvailabilityCmd("self", "active")) {
+			t.Fatalf("note %q err %v %v", note, err, f.Commands())
+		}
+	})
+	t.Run("another word is refused before docker is asked", func(t *testing.T) {
+		f := manager(t)
+		if _, err := SetPreviewsOn(f, "everywhere"); err == nil || len(f.Commands()) != 0 {
+			t.Fatalf("err %v ran %v", err, f.Commands())
+		}
+	})
+	t.Run("docker's refusal is the error", func(t *testing.T) {
+		f := exec.NewFake(nil, "")
+		f.Answer = func(string) (exec.Result, bool) {
+			return exec.Result{OK: false, Stderr: "Error response from daemon: This node is not a swarm manager.\nmore"}, true
+		}
+		if _, err := SetPreviewsOn(f, PreviewsOnWorkers); err == nil || !strings.Contains(err.Error(), "not a swarm manager") || strings.Contains(err.Error(), "more") {
+			t.Fatalf("err %v", err)
+		}
+	})
+}

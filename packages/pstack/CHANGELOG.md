@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **Keep the manager for the control stack.** `pstack swarm previews workers|any`,
+  `pstack init --previews-on workers|any` (and `cloud-init`, `PSTACK_PREVIEWS_ON`), and a "Run previews
+  on" control on the Swarm page of both UIs. `workers` drains this manager, so every preview lands on
+  a worker and the manager keeps only the control stack. Unset leaves it as it is.
+
+- **`dockerd` is protected from the OOM killer.** `pstack init` (and so `cloud-init` and `upgrade`) sets
+  `OOMScoreAdjust=-900` on `docker.service` through a drop-in and applies it live, with no restart.
+  Traefik and pstack get `oom_score_adj: -500` in the control stack. `PSTACK_NO_OOM_PROTECT=1` skips the
+  daemon step; without root or systemd it is skipped with a note.
+
+### Changed
+
+- **The control stack has no memory limits.** Traefik's 512m cap was OOM-killed by a burst of proxied
+  requests, and with Traefik down every preview is down; pstack (512m), the UI (128m), Loki (2g) and
+  Grafana (768m) are uncapped with it. Run `pstack upgrade` to re-render the control stack on an
+  existing host.
+
 ### Fixed
 
 - **Grafana follows added domains.** `grafana.<added domain>` answered 404 on a host with Grafana

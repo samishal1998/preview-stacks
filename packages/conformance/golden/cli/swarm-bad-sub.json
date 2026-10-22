@@ -8,5 +8,5 @@
   "cwd": "packages/pstack",
   "code": 3,
   "stdout": "",
-  "stderr": "pstack: usage: pstack swarm <status|join>   (join: --format token|command|script|cloud-config [--distro <name>] [-o <file>])\n"
+  "stderr": "pstack: usage: pstack swarm <status|join|previews>   (join: --format token|command|script|cloud-config [--distro <name>] [-o <file>])\n"
 }
