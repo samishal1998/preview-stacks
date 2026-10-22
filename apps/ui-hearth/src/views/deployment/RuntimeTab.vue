@@ -206,13 +206,17 @@ async function runVerb(): Promise<void> {
                 <HText v-if="!(row.c as RuntimeContainer).id.startsWith('service:')" tone="muted" size="sm" :title="(row.c as RuntimeContainer).name">{{ taskOf((row.c as RuntimeContainer).name) }}</HText>
               </template>
               <template v-else-if="column.key === 'node'">
-                {{ (row.c as RuntimeContainer).node ?? '—' }}
-                <HBadge v-if="(row.c as RuntimeContainer).remote" label="Remote" title="On another node. Logs reach it; a shell and stop/start do not." />
+                <HStack direction="row" :gap="2" align="center" wrap>
+                  {{ (row.c as RuntimeContainer).node ?? '—' }}
+                  <HBadge v-if="(row.c as RuntimeContainer).remote" label="Remote" title="On another node. Logs reach it; a shell and stop/start do not." />
+                </HStack>
               </template>
               <template v-else-if="column.key === 'state'">
-                <HBadge dot :label="(row.st as ReturnType<typeof containerState>).label" :tone="(row.st as ReturnType<typeof containerState>).tone" />
-                <HBadge v-if="(row.c as RuntimeContainer).job" label="One-shot" title="No container to start, stop or shell into." />
-                <HBadge v-if="(row.c as RuntimeContainer).restartCount > 0" :label="`${(row.c as RuntimeContainer).restartCount}x restarted`" tone="warning" />
+                <HStack direction="row" :gap="2" align="center" wrap>
+                  <HBadge dot :label="(row.st as ReturnType<typeof containerState>).label" :tone="(row.st as ReturnType<typeof containerState>).tone" />
+                  <HBadge v-if="(row.c as RuntimeContainer).job" label="One-shot" title="No container to start, stop or shell into." />
+                  <HBadge v-if="(row.c as RuntimeContainer).restartCount > 0" :label="`${(row.c as RuntimeContainer).restartCount}x restarted`" tone="warning" />
+                </HStack>
               </template>
               <template v-else-if="column.key === 'ports'">
                 <div v-for="p in (row.c as RuntimeContainer).ports" :key="`${p.containerPort}/${p.protocol}`">

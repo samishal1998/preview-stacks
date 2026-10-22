@@ -102,7 +102,7 @@ const search = useSlashFocus();
     <template v-else>
       <HFilterBar label="Filters" :active-count="filtering" @clear="clear">
         <div ref="search">
-          <HInput v-model="q" label="Search" hide-label type="search" placeholder="Search by stack or action. Press /" leading-icon="search" clearable />
+          <HInput v-model="q" label="Search" hide-label type="search" placeholder="Search jobs. Press /" leading-icon="search" clearable />
         </div>
         <HChipGroup v-model="states" label="State" :options="stateOptions" />
         <HChip v-if="deployment" :label="`Deployment ${deployment}`" removable @remove="router.replace('/jobs')" />

@@ -236,9 +236,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </template>
 
 <style>
+/* The browser's 8px body margin insets the app and adds a second scrollbar. */
+body {
+  margin: 0;
+}
 /* HLogViewer's action row does not wrap: at 320 "Copy visible logs" runs past the card. */
 .h-log-actions {
   flex-wrap: wrap;
+}
+/* HResourceDetail's tab buttons sit 3px apart; the list scrolls, so no wrap. */
+.h-tabs .h-tablist[role="tablist"] {
+  gap: 8px;
+}
+/* An empty state inside a card: 56px padding and a title bigger than the card's own made "No routes" outrank "Routing". */
+.h-card .h-empty {
+  padding: 28px 16px;
+}
+.h-card .h-empty h2 {
+  font-size: 1rem;
+}
+/* The sticky action cell paints --h-raised, a lighter band on the card surface it sits in. */
+.sticky-actions td.h-table-actions.h-table-actions {
+  background: var(--h-surface);
 }
 /* HDialog's #footer slot sits flush under the body (its 24px gap is for the custom element only). */
 .h-dialog .h-overlay-footer:not(:empty) {

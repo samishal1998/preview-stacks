@@ -146,10 +146,7 @@ async function save(): Promise<void> {
 
       <HCard title="Appearance" description="Stored in this browser.">
         <HStack direction="column" :gap="3" style="max-width: 28rem">
-          <HStack direction="row" :gap="2" align="center" wrap>
-            <HText weight="medium">Mode</HText>
-            <HThemeSwitcher v-model="prefs.mode" />
-          </HStack>
+          <HThemeSwitcher v-model="prefs.mode" />
           <HSelect v-model="prefs.theme" label="Palette" :options="palettes" />
           <HSelect v-model="prefs.density" label="Density" :options="densities" />
         </HStack>
