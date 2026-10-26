@@ -129,10 +129,13 @@ func TestCustomRoutesTLSByMode(t *testing.T) {
 		// negative control: return `tls: {}` for every mode — an http01 alias host gets no
 		// certificate at all.
 		{"http01", "certResolver: le"},
+		// negative control: same `tls: {}` mutation — an unknown mode must still ask for a certificate.
 		{"", "certResolver: le"},
 		// negative control: call tlsFor with wildcardPin=true — each dns01 alias orders a SECOND
 		// wildcard certificate and burns the rate limit.
 		{"dns01", "tls: {}"},
+		// negative control: return `certResolver: le` for every mode — the stored wildcard is
+		// bypassed and each alias host orders its own certificate.
 		{"dns-persist-01", "tls: {}"},
 	} {
 		t.Run("mode="+tc.mode, func(t *testing.T) {
@@ -198,6 +201,21 @@ func TestCustomRoutesDropADuplicateRouterName(t *testing.T) {
 	}
 	if !strings.Contains(content, "# dropped pstack-route-a-b-c") {
 		t.Errorf("the drop must be visible in the file:\n%s", content)
+	}
+}
+
+func TestCustomRoutesDropAnUnknownProvider(t *testing.T) {
+	// negative control: drop the provider check — `@kube` reaches Traefik, which drops the router
+	// for a provider it does not run, and nothing says why.
+	content := render(t, "http01",
+		AliasTarget{Alias: "bad", Stack: "s1", Provider: "kube", Services: []AliasService{{Name: "web", Domain: "d.example.com"}}},
+		checkout("docker", AliasService{Name: "web", Domain: "d.example.com"}),
+	)
+	if strings.Contains(content, "@kube") || !strings.Contains(content, "# dropped route bad") {
+		t.Errorf("an unknown provider is dropped with a note:\n%s", content)
+	}
+	if renderedRouters(t, content).GetMap("pstack-route-checkout-web") == nil {
+		t.Errorf("the rest of the file still renders:\n%s", content)
 	}
 }
 
