@@ -68,12 +68,20 @@ type WildcardInfo struct {
 // would enter a mode whose own routes are admin's, or leaving it would orphan the key pair in
 // `certs/`), and the domains file's routers ARE the domain list `GET /api/domains` reports. Either
 // hand edit makes the API's answer a lie about the host. Each belongs to the route that owns it,
-// which validates what the generic routing API cannot.
-func IsReserved(name string) bool { return name == WildcardYAML || name == DomainsYAML }
+// which validates what the generic routing API cannot. The custom-routes file is the same: its
+// routers ARE the custom_routes table's assignments.
+func IsReserved(name string) bool { return reservedBy[name] != "" }
+
+// reservedBy is each reserved file's refusal: what it is, and the route that owns it.
+var reservedBy = map[string]string{
+	WildcardYAML:     "it points at the wildcard certificate pair stored beside it, and writing it here would name files that may not exist. Use PUT/DELETE /api/tls/wildcard (admin), which validates the pair and stores both halves.",
+	DomainsYAML:      "its routers are the additional domain list. Use PUT /api/domains.",
+	CustomRoutesYAML: "it is rendered from the custom_routes table. Use /api/custom-routes.",
+}
 
 func assertNotReserved(name string) error {
 	if IsReserved(name) {
-		return &Error{name + " is managed by pstack, not by hand: it points at the wildcard certificate pair stored beside it, and writing it here would name files that may not exist. Use PUT/DELETE /api/tls/wildcard (admin), which validates the pair and stores both halves."}
+		return &Error{name + " is managed by pstack, not by hand: " + reservedBy[name]}
 	}
 	return nil
 }

@@ -425,6 +425,28 @@ func TestTheWildcardPointerDoesNotTravel(t *testing.T) {
 	}
 }
 
+func TestTheCustomRoutesFileDoesNotTravel(t *testing.T) {
+	// negative control: drop the CustomRoutesYAML case in assemble's skip — the line tells an
+	// operator to store a wildcard pair to recreate a custom route (R7).
+	h := newHost(t)
+	content, err := routing.RenderCustomRoutes([]routing.AliasTarget{{Alias: "checkout", Stack: "s", Provider: "docker",
+		Services: []routing.AliasService{{Name: "web", Domain: "preview.example.com"}}}}, "http01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Routing.SetCustomRoutes(content); err != nil {
+		t.Fatal(err)
+	}
+	d := assemble(t, h)
+	if len(d.Routing) != 0 {
+		t.Fatalf("a derived file must not travel: %+v", d.Routing)
+	}
+	skipped := strings.Join(d.Skipped, "\n")
+	if !strings.Contains(skipped, "routing pstack-routes.yml") || !strings.Contains(skipped, "/api/custom-routes") || strings.Contains(skipped, "wildcard") {
+		t.Fatalf("the skip must name the custom-routes API, not the wildcard: %v", d.Skipped)
+	}
+}
+
 // negative control: delete the loki block in Assemble → a stored row goes unnamed and the second check
 // fails. (Appending the line whether or not a row exists fails the first check instead.)
 func TestAssembleSkipsTheLokiRow(t *testing.T) {

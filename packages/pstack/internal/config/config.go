@@ -241,8 +241,16 @@ func (s Sources) Assemble() (*Document, error) {
 			// dns-persist-01 mode with nothing to serve: every new deploy would drop its
 			// certresolver and Traefik would hold a path to files that do not exist. The pair is
 			// not in this document (a private key does not belong in a portable export), so the
-			// pointer must not be either.
-			d.Skipped = append(d.Skipped, "routing "+f.Name+": the wildcard pointer is host-specific and the certificate pair it names is not in an export — store one on the target with PUT /api/tls/wildcard")
+			// pointer must not be either. The other reserved files are derived from state that is
+			// not exported either, so each skip names the route that owns it on the target.
+			reason := "the wildcard pointer is host-specific and the certificate pair it names is not in an export — store one on the target with PUT /api/tls/wildcard"
+			switch f.Name {
+			case routing.DomainsYAML:
+				reason = "derived from the domain list — set it on the target with PUT /api/domains"
+			case routing.CustomRoutesYAML:
+				reason = "derived from the custom_routes table, which is not exported — create routes on the target with /api/custom-routes"
+			}
+			d.Skipped = append(d.Skipped, "routing "+f.Name+": "+reason)
 			continue
 		}
 		content, err := s.Routing.Read(f.Name)
