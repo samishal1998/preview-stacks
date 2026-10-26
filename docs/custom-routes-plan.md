@@ -7,20 +7,23 @@
 
 - The spec binds. Where this plan and the spec disagree, follow the spec and say so in the report.
 - Read AGENTS.md before touching an area. Follow its "how to add a route / event" checklists.
-- VCS writes go through `but` only. Commit with explicit file ids:
-  `but commit -b claude/custom-routes -m "<type(scope): summary>" <ids>`. One or more commits per task.
-- Never commit `.dns_token`, `hetzner_42.yaml`, `packages/conformance/golden/host/db/pstack.db-{shm,wal}`,
-  anything under `.superpowers/`, credentials or sealed files. Commits carry no attribution footers.
+- Every shell first runs `export GOROOT=/usr/lib/go-1.23`. The profile's `/usr/local/go` doesn't exist on this machine.
+- VCS writes go through `but` only. Commit with explicit file ids read from a separate `but status` call:
+  `but commit -b cl -m "<type(scope): summary>" <ids>`. `cl` is the branch's short id, because two
+  stacks are applied. One or more commits per task. Never `git add` or `git reset`.
+- Never commit `bun.lock`, `.dns_token`, `hetzner_42.yaml`, `packages/conformance/golden/host/**`
+  (including `pstack.db-{shm,wal}`), `packages/conformance/gen/host-fixture.ts`, anything under
+  `.superpowers/`, credentials or sealed files. Commits carry no attribution footers.
 - Never push, open PRs, publish, or touch the live host.
-- Go: `gofmt` clean, `go vet ./packages/pstack/...` clean, `go test ./packages/pstack/...` green.
+- Go: `gofmt` clean, `go vet ./packages/pstack/...` clean, and `go test -race -timeout 120s ./packages/pstack/...`
+  green. Every new Test/t.Run names its negative control in a `// negative control:` comment that was
+  actually tried.
 - After any change to `packages/pstack/api/openapi.yaml`, run `go generate ./packages/pstack/internal/apicli`.
 - Goldens:
   - Rebuild the binary first: `go build -o packages/pstack/bin/pstack ./packages/pstack/cmd/pstack`.
   - Then `cd packages/conformance && bun gen/goldens.ts`. Never `bun run gen`.
-  - The host db golden is regenerated only by the task that adds the migration.
-  - Before regenerating, `packages/conformance/gen/host-fixture.ts` and `golden/host/db/pstack.db`
-    already carry uncommitted owner changes. Leave those changes uncommitted. If a task must regenerate
-    them, commit only the hunks that task caused, and say so in the report.
+  - No task regenerates `golden/host`. The v6 fixture db already proves the upgrade path, since
+    `store.Open` migrates a copy.
 - Conformance: `cd packages/conformance && bun test` green.
 - UIs: `bun run --cwd apps/ui-hearth build && bun test --cwd apps/ui-hearth`; same for `apps/ui`.
 - UI copy is terse: state, not explanation (docs/ui-rules.md). No `window.confirm`.
@@ -37,12 +40,11 @@
 ### Task 1: custom_routes table and store
 
 **Files:** `packages/pstack/internal/store/migrations.go`, a new `packages/pstack/internal/store/customroutes.go`
-(+ `_test.go`), the regenerated `packages/conformance/golden/host/db/pstack.db` and
-`gen/host-fixture.ts` if the migration changes them.
+(+ `_test.go`).
 
 **Interfaces:**
-- Migration 10 creates `custom_routes(name TEXT PRIMARY KEY, deployment_id TEXT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`.
-- `type CustomRoute struct { Name string; DeploymentID string /* "" = unassigned */; CreatedAt, UpdatedAt string }`.
+- Migration 10 creates `custom_routes(name TEXT PRIMARY KEY, deployment_id TEXT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`, epoch milliseconds like every sibling table.
+- `type CustomRoute struct { Name string; DeploymentID string /* "" = unassigned */; CreatedAt, UpdatedAt int64 }`.
 - `ListCustomRoutes(q Querier) ([]CustomRoute, error)`, ordered by name.
 - `GetCustomRoute(q, name) (CustomRoute, bool, error)`.
 - `CreateCustomRoute(q, name, deploymentID string) error`, returning `ErrCustomRouteExists` on a duplicate.
@@ -200,12 +202,13 @@ goldens regenerated for the openapi/CLI help changes.
 `apps/ui-hearth/src/lib/settings.ts` if needed, and a test.
 
 **Interfaces:**
-- The default density is `compact` when stored prefs don't name one. A stored `comfortable` is kept.
+- The default density is `compact`. A one-time prefs-version bump (a `v` key in the stored prefs) resets
+  density to `compact` once, then the user's choice persists. Implement it as a pure merge in `lib/settings.ts`.
 - `HTheme :tokens` overrides the `--h-radius-*` tokens to about 60 % of the installed 0.7.1 values.
   Read them from `node_modules/@hearth-ui/vue` after `bun install`, and put the exact numbers in the
   report.
 - Check whether overlays inherit the island tokens. If they don't, set the tokens on `:root`.
-- A unit test covers the default and the kept stored value.
+- Unit tests cover fresh prefs, old prefs without `v` (reset to compact), and versioned prefs (choice kept).
 
 ### Task 11: docs, CHANGELOG, and the browser check
 
@@ -214,7 +217,7 @@ missed anything, `packages/pstack/CHANGELOG.md` (an Unreleased section with Adde
 Grafana links; Changed: compact Hearth default), and the design doc's "where the build differs" banner.
 
 **Interfaces:**
-- A real-browser check of both UIs with `.claude/skills/pstack-ui-verify/SKILL.md`:
+- A real-browser check of both UIs with `.claude/skills/pstack-ui-verify/SKILL.md`. Its scripts live at the repo-relative `.claude/skills/pstack-ui-verify/scripts/`, not `/Volumes/S1/...`:
   - the Routing page;
   - the deployment page with an assigned route;
   - the move confirm;

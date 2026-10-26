@@ -54,7 +54,8 @@ place of the stack name:
 ### Storage and routing
 
 - Source of truth: SQLite table `custom_routes` (migration 10, append-only):
-  `name TEXT PRIMARY KEY, deployment_id TEXT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL`.
+  `name TEXT PRIMARY KEY, deployment_id TEXT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL`
+  (epoch milliseconds, like every sibling table and API timestamp).
   It is operator config (invariant 10): the mapping, never runtime state.
 - Traefik reads a derived, reserved dynamic file `pstack-routes.yml`, written beside
   `pstack-domains.yml` by `routing.RoutingStore` (atomic write) and added to `routing.IsReserved`, so
@@ -138,8 +139,9 @@ Append to `events.Names` (add-only, invariant 14): `route.assigned` (`route`, `d
 
 ## 3. Compact Hearth theme **(owner)**
 
-- Hearth's existing `compact` density becomes the default for prefs that don't name one. A stored
-  `comfortable` is kept.
+- Hearth's existing `compact` density becomes the default. Stored prefs predate any real choice (the
+  whole object is saved on any change), so a one-time prefs-version bump resets density to `compact`
+  once. After that, the user's choice persists.
 - Every density gets slightly smaller corners, by overriding the `--h-radius-*` tokens through
   `HTheme`'s `tokens` prop in `App.vue`. The target is about 60 % of the library values (for example
   10/16/20 → 6/10/14 px), taken from the installed `@hearth-ui/vue` 0.7.1 tokens after `bun install`.
