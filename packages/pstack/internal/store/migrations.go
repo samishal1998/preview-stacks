@@ -256,4 +256,18 @@ var Migrations = []string{
     updated_at      INTEGER NOT NULL
   );
   `,
+	// 10 — custom routes: stable alias names an operator points at a deployment.
+	`
+  -- CONFIGURATION AN OPERATOR CHOSE (invariant 10): which deployment a name points at, never
+  -- whether anything is running. Traefik reads the derived pstack-routes.yml; this table is its
+  -- source, and the file is re-rendered from it. An EMPTY table renders no file.
+  CREATE TABLE custom_routes (
+    -- A DNS label; internal/api validates it (SQLite cannot).
+    name          TEXT PRIMARY KEY,
+    -- The registry deployment id. NULL = unassigned: the name is kept, nothing is routed.
+    deployment_id TEXT NULL,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+  `,
 }
