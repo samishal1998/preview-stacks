@@ -134,13 +134,27 @@ runs), the deploy-job completion path, `forgetAfterDown`, and their tests.
   one label under a known domain like any preview host.
 - Tests cover each hook, including a sleeping deployment woken through its alias host.
 
-### Task 6: conformance black-box tests
+### Task 6: the `pstack route` command and conformance black-box tests
 
-**Files:** a new `packages/conformance/test/api-custom-routes.test.ts`, the harness only if needed, and
-goldens regenerated for the openapi/CLI help changes.
+**Files:**
+- `packages/pstack/internal/cli/` (a new `route.go` + `_test.go`, `args.go`, `run.go`, `commands.go`,
+  `completion.go`).
+- A new `packages/conformance/test/api-custom-routes.test.ts`, the harness only if needed.
+- Goldens regenerated for the help and CLI changes (`help.json`, `help-h.json`, `no-args.json`,
+  `unknown-command.json`, and any others the change moves). Regenerate only through `bun gen/goldens.ts`.
 
 **Interfaces:**
-- Against the real binary with the fake docker:
+- `pstack route ls|create|assign|unassign|rm` exactly as spec §CLI:
+  - positional args, `--force` and `--json`;
+  - it reaches the server through the existing `apiBase` (as `pull config` does);
+  - terse one-line-per-route output;
+  - a held route exits non-zero naming the holder and `--force`;
+  - bad usage exits 3.
+- AGENTS.md "new CLI command" checklist: `ParseArgs` + `Usage()`, a `commandHelps` entry,
+  `completion.go`, and the help goldens.
+- Go tests cover each subcommand against an `httptest` server, held/forced/unassigned output, usage
+  errors, and the missing-`PSTACK_API_URL` refusal.
+- Conformance, against the real binary with the fake docker:
   - create, list, assign, 409 when held, `force` move (one call, and the file shows only the new
     target), unassign, delete;
   - a bad name, a reserved name, and a name equal to a stack;
@@ -149,8 +163,10 @@ goldens regenerated for the openapi/CLI help changes.
   - a share principal refused;
   - `pstack-routes.yml` contents after each step;
   - reserved: PUT `/api/routing/pstack-routes.yml` refused;
-  - forget unassigns.
-- One CLI case: `pstack api custom-routes assign … --force`.
+  - forget and DELETE both unassign.
+- CLI cases in the conformance suite:
+  - `pstack route assign … --force`, `pstack route ls` and the held refusal;
+  - one generated `pstack api custom-routes assign … --force`.
 - Each test names its negative control in a comment, as the suite does.
 
 ### Task 7: Hearth custom routes UI
@@ -212,7 +228,7 @@ goldens regenerated for the openapi/CLI help changes.
 
 ### Task 11: docs, CHANGELOG, and the browser check
 
-**Files:** `docs/usage.md` (custom routes section and CLI lines), `docs/webhook-events.md` if Task 4
+**Files:** `docs/usage.md` (custom routes section, and the `pstack route` command in the command list and its own section), `docs/webhook-events.md` if Task 4
 missed anything, `packages/pstack/CHANGELOG.md` (an Unreleased section with Added: custom routes,
 Grafana links; Changed: compact Hearth default), and the design doc's "where the build differs" banner.
 

@@ -94,12 +94,27 @@ All under `/api/custom-routes`, described in `packages/pstack/api/openapi.yaml`.
 - Share principals never reach these routes (invariant 16): they are not in `shareAllows`.
 - `GET /api/deployments/{id}` responses gain nothing. The UIs filter the list by deployment.
 
-### CLI
+### CLI **(owner: `pstack route` on every surface)**
 
-Generated from the openapi (`pstack api custom-routes list|create|delete|assign|unassign`). `force`
-is a boolean body field, so it surfaces as `--force` like `downDeployment`'s. No hand-written
-top-level command, to avoid four help goldens (add `pstack route` later if the generated one is too
-long to type).
+A hand-written `pstack route` command, a thin client over `/api/custom-routes` that reaches the host
+the way `pstack pull config` does (`apiBase`: `PSTACK_API_URL` plus `PSTACK_TOKEN`):
+
+```text
+pstack route ls                                  every route: name, stack, hosts
+pstack route create <name> [<deployment>] [--force]
+pstack route assign <name> <deployment> [--force]
+pstack route unassign <name>
+pstack route rm <name>
+```
+
+- Output is terse, one line per route: `checkout  myapp-pr-123  web-checkout.preview.example.com, …`,
+  or `checkout  (unassigned)`. `--json` prints the API body.
+- A held route exits non-zero with `pstack: checkout is assigned to myapp-pr-122 (--force moves it)`.
+- Bad usage exits 3 like every other command.
+- It is a full CLI command per AGENTS.md: `ParseArgs`, `Usage()`, a `commandHelps` entry,
+  `completion.go` (subcommands, plus route names and deployment ids where completion can reach
+  them), the help goldens, and `docs/usage.md`.
+- The generated `pstack api custom-routes …` stays as well, since it comes free from the openapi.
 
 ### Events
 
