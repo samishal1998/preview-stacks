@@ -28,6 +28,9 @@ function signedOut(): void {
 onUnauthorized(() => {
   if (auth.authed) signedOut();
 });
+/** `https://grafana.<domain>` from /api/health while signed in and Grafana runs, else ''. */
+export const grafana = ref('');
+
 export const data = reactive({
   deployments: [] as DeploymentRow[],
   jobs: [] as Job[],

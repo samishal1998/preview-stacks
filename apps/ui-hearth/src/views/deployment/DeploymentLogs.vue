@@ -9,6 +9,9 @@ import { HAlert, HButton, HEmptyState, HLogViewer, HSelect, HStack, HSwitch, HTe
 import type { Runtime } from '@samyx/preview-stacks-client';
 import type { DeploymentDetail } from '../../api-deployment';
 import { containersWithServices, filterLines, logFileName, logLevel, parseLogLine } from '../../lib/deployment';
+import { exploreUrl, serviceQuery, showGrafana } from '../../lib/grafana';
+import { can } from '../../lib/users';
+import { auth, grafana } from '../../state';
 import { MAX_FOLLOW_LINES, useLogs } from '../../lib/use-logs';
 
 const props = defineProps<{ id: string; dep: DeploymentDetail | null; runtime: Runtime | null }>();
@@ -26,6 +29,11 @@ const current = computed(() => containers.value.find((c) => c.name === selected.
 // Compose narrows by service, not by container.
 const service = computed(() => current.value?.service ?? '');
 const tailN = computed(() => Number(tail.value));
+
+// The chosen service in Grafana. Never on share links: PublicLogsView does not render this pane.
+const grafanaHref = computed(() =>
+  props.dep?.stack && service.value && showGrafana(grafana.value, can('developer', auth), auth.viaToken) ? exploreUrl(grafana.value, serviceQuery(props.dep.stack, service.value)) : '',
+);
 
 const logs = useLogs({ id: () => props.id, service, timestamps, tail: tailN, since });
 
@@ -116,6 +124,7 @@ function download(): void {
       <HButton :variant="logs.following.value ? 'danger' : 'secondary'" :label="logs.following.value ? 'Stop following' : 'Follow'" @click="logs.toggle" />
       <HButton :label="logs.touched.value ? 'Refresh' : 'Fetch'" icon="arrow" :loading="logs.loading.value" :disabled="logs.following.value" @click="logs.fetchOnce" />
       <HButton variant="ghost" icon="down" label="Download" :disabled="!entries.length" @click="download" />
+      <HButton v-if="grafanaHref" variant="ghost" icon="launch" label="Grafana" :href="grafanaHref" target="_blank" />
     </HStack>
 
     <HAlert v-if="logs.error.value" tone="danger" :title="logs.error.value" />

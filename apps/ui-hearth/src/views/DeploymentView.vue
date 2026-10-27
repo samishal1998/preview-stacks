@@ -10,10 +10,11 @@ import { HAlert, HBadge, HButton, HEmptyState, HErrorPage, HResourceDetail, HSke
 import type { Runtime } from '@samyx/preview-stacks-client';
 import { deploymentApi, type DeploymentDetail } from '../api-deployment';
 import { ACTION_LABEL, ago, jobTone, took } from '../format';
-import { problemText, runState, sentence } from '../lib/deployment';
+import { containersWithServices, problemText, runState, sentence } from '../lib/deployment';
+import { exploreUrl, showGrafana, stackQuery } from '../lib/grafana';
 import { useDeploymentActions } from '../lib/use-deployment-actions';
 import { can } from '../lib/users';
-import { auth, data } from '../state';
+import { auth, data, grafana } from '../state';
 import { detail as varsDetail } from '../vars/useDetail';
 import { readVars } from '../vars/store';
 import { varsQuery } from '../lib/vars';
@@ -149,6 +150,13 @@ const primary = computed(() => (dep.value?.asleep ? 'wake' : 'up'));
 const blocked = computed(() => actions.why(primary.value));
 const { pending } = actions;
 
+// The whole stack in Grafana. Down or asleep it names no services, and Loki can only be asked by name.
+const grafanaHref = computed(() => {
+  const stack = dep.value?.stack;
+  const services = runtime.value ? containersWithServices(runtime.value).flatMap((c) => (c.service ? [c.service] : [])) : [];
+  return stack && services.length && showGrafana(grafana.value, can('developer', auth), auth.viaToken) ? exploreUrl(grafana.value, stackQuery(stack, services)) : '';
+});
+
 // ── jobs ────────────────────────────────────────────────────────────────────────────────────────
 const mine = computed(() => data.jobs.filter((j) => j.deployment === props.id));
 const timeline = computed<TimelineItem[]>(() =>
@@ -180,6 +188,7 @@ const timeline = computed<TimelineItem[]>(() =>
     @navigate="router.push('/deployments')"
   >
     <template #actions>
+      <HButton v-if="grafanaHref" variant="ghost" icon="launch" label="Grafana" :href="grafanaHref" target="_blank" />
       <HButton variant="ghost" icon="arrow" label="Re-resolve" :loading="refreshing" @click="reload" />
       <HButton
         :label="primary === 'wake' ? 'Wake' : 'Deploy'"
