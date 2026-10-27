@@ -1,15 +1,18 @@
 <script setup lang="ts">
-/** Traefik: the routes it serves (container labels) and its watched dynamic-config directory. */
-import { computed, onMounted, ref } from 'vue';
+/** Traefik: the routes it serves (container labels), custom routes, and its watched dynamic-config directory. */
+import { computed, onMounted, reactive, ref } from 'vue';
 import {
-  HAlert, HAlertDialog, HBadge, HButton, HDataTable, HHeading, HInput, HPageHeader, HSheet, HStack, HText, HTextarea,
-  type TableColumn, type TableRow,
+  HAlert, HAlertDialog, HBadge, HButton, HDataTable, HDialog, HHeading, HInput, HPageHeader, HSelect, HSheet, HStack, HText, HTextarea,
+  type MenuAction, type TableColumn, type TableRow,
 } from '@hearth-ui/vue';
 import { routingApi, type RoutingFile, type RuntimeRoute } from '../api-routing';
+import CustomRouteDialogs from '../components/CustomRouteDialogs.vue';
+import { hostItems } from '../lib/customRoutes';
 import { fileNameError, isPattern, STARTER, targetOf } from '../lib/routing';
+import { useCustomRoutes } from '../lib/use-custom-routes';
 import { ago } from '../format';
 import { can } from '../lib/users';
-import { auth, toast } from '../state';
+import { auth, data, toast } from '../state';
 
 const live = ref<RuntimeRoute[]>([]);
 const reachable = ref<boolean | null>(null);
@@ -50,7 +53,7 @@ async function loadLive(): Promise<void> {
 const refreshing = ref(false);
 async function refreshAll(): Promise<void> {
   refreshing.value = true;
-  await Promise.all([loadList(), loadLive()]);
+  await Promise.all([loadList(), loadLive(), cr.load()]);
   refreshing.value = false;
 }
 onMounted(refreshAll);
@@ -66,6 +69,37 @@ const liveRows = computed<TableRow[]>(() =>
   live.value.map((r) => ({ id: `${r.container}/${r.router}`, url: r.hosts.join(' '), target: '', deployment: r.project ?? '', router: r.router })),
 );
 const routeOf = (row: TableRow) => live.value.find((r) => `${r.container}/${r.router}` === row.id);
+
+// ── custom routes ───────────────────────────────────────────────────────────────────────────────
+const cr = useCustomRoutes();
+const crColumns: TableColumn[] = [
+  { key: 'name', label: 'Route' },
+  { key: 'hosts', label: 'Hosts' },
+  { key: 'deployment', label: 'Assigned to', minWidth: '12rem' },
+];
+const crRows = computed<TableRow[]>(() => cr.routes.value.map((r) => ({ id: r.name, name: r.name, hosts: '', deployment: r.deployment ?? '' })));
+const crOf = (row: TableRow) => cr.routes.value.find((r) => r.name === row.id);
+const deploymentOptions = computed(() => [
+  { value: '', label: 'Unassigned' },
+  ...data.deployments.map((d) => ({ value: d.id, label: d.stack ?? d.id })),
+]);
+/** The cell's select: a deployment assigns (or asks to move), Unassigned asks to unassign. */
+function pick(name: string, deployment: string): void {
+  if (deployment) void cr.assign(name, deployment);
+  else cr.drop.value = { name, kind: 'unassign' };
+}
+const crActions = (row: TableRow): MenuAction[] => [
+  { id: 'unassign', label: 'Unassign', disabled: !crOf(row)?.deployment },
+  { id: 'delete', label: 'Delete', danger: true, separatorBefore: true },
+];
+function onCrAction(e: { id: string; action: string }): void {
+  cr.drop.value = { name: e.id, kind: e.action === 'delete' ? 'delete' : 'unassign' };
+}
+const draftRoute = reactive({ open: false, name: '', deployment: '', error: '' });
+async function createRoute(): Promise<void> {
+  draftRoute.error = await cr.create(draftRoute.name.trim(), draftRoute.deployment);
+  if (!draftRoute.error) Object.assign(draftRoute, { open: false, name: '', deployment: '' });
+}
 
 // ── files ───────────────────────────────────────────────────────────────────────────────────────
 const fileColumns: TableColumn[] = [
@@ -225,6 +259,48 @@ async function remove(): Promise<void> {
       </template>
     </HDataTable>
 
+    <HStack direction="row" :gap="3" wrap align="center" justify="between">
+      <HHeading :level="2" size="md">Custom routes</HHeading>
+      <HButton v-if="cr.mayWrite.value" variant="secondary" icon="plus" label="New route" @click="draftRoute.open = true" />
+    </HStack>
+    <HAlert v-if="cr.error.value" tone="danger" :description="cr.error.value" />
+    <HDataTable
+      v-else
+      label="Custom routes"
+      :rows="crRows"
+      :columns="crColumns"
+      :loading="!cr.loaded.value"
+      :page-size="10"
+      :get-row-actions="cr.mayWrite.value ? crActions : undefined"
+      empty-text="No custom routes."
+      @row-action="onCrAction"
+    >
+      <template #cell="{ row, column, value }">
+        <HStack v-if="column.key === 'hosts'" direction="column" :gap="1">
+          <template v-for="h in hostItems(crOf(row)?.hosts ?? [])" :key="h.host">
+            <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
+            <HText v-else tone="muted">{{ h.host }}</HText>
+          </template>
+          <template v-if="!crOf(row)?.hosts.length">—</template>
+        </HStack>
+        <HSelect
+          v-else-if="column.key === 'deployment' && cr.mayWrite.value"
+          :label="`Deployment for ${row.name}`"
+          hide-label
+          size="compact"
+          :model-value="String(value)"
+          :options="deploymentOptions"
+          :disabled="cr.busy.value"
+          @update:model-value="(v: string) => pick(String(row.id), v)"
+        />
+        <template v-else-if="column.key === 'deployment'">
+          <RouterLink v-if="value" :to="`/deployments/${encodeURIComponent(String(value))}`">{{ crOf(row)?.stack ?? value }}</RouterLink>
+          <HText v-else tone="muted">Unassigned</HText>
+        </template>
+        <template v-else>{{ value }}</template>
+      </template>
+    </HDataTable>
+
     <HHeading :level="2" size="md">Config files</HHeading>
     <HText v-if="dir" tone="muted">{{ dir }}</HText>
     <HAlert v-if="listError" tone="danger" :description="listError" />
@@ -274,6 +350,20 @@ async function remove(): Promise<void> {
       :busy="deleting"
       @confirm="remove"
     />
+    <HDialog :open="draftRoute.open" title="New route" @close="draftRoute.open = false">
+      <form @submit.prevent="createRoute">
+        <HStack direction="column" :gap="3">
+          <HInput v-model="draftRoute.name" label="Name" placeholder="checkout" autocomplete="off" />
+          <HSelect v-model="draftRoute.deployment" label="Assign to" :options="deploymentOptions" />
+          <HAlert v-if="draftRoute.error" tone="danger" :description="draftRoute.error" />
+        </HStack>
+      </form>
+      <template #footer>
+        <HButton variant="ghost" label="Cancel" @click="draftRoute.open = false" />
+        <HButton variant="primary" label="Create" :loading="cr.busy.value" :disabled="!draftRoute.name.trim()" @click="createRoute" />
+      </template>
+    </HDialog>
+    <CustomRouteDialogs :routes="cr" />
     <HAlertDialog
       v-model:open="askClose"
       title="Discard changes?"
