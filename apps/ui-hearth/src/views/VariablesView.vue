@@ -242,7 +242,7 @@ async function merge(): Promise<void> {
           <HText v-if="target === 'secrets'" size="sm" tone="muted">Names only. Values cannot be read back.</HText>
           <HTextarea v-if="fallback" :model-value="fallback" label="Exported text" readonly :rows="6" />
           <template v-if="manage">
-          <HHeading :level="3" size="sm">Paste</HHeading>
+          <HHeading :level="3" size="sm" class="section">Paste</HHeading>
           <HSegmentedControl v-model="fmt" label="Read as" :options="fmtOpts" />
           <HTextarea v-model="text" label="Paste" :rows="6" placeholder="PR=7&#10;REGION=eu-central" />
           <template v-if="parsed">
@@ -316,5 +316,12 @@ async function merge(): Promise<void> {
 <style scoped>
 .narrow {
   max-width: 560px;
+}
+/* Four segments at 15px side padding wrap TSV to a second row at 320. */
+.narrow :deep(.h-segmented .h-radio-option) {
+  padding-inline: calc(var(--h-space, 4px) * 3);
+}
+.section {
+  margin-top: var(--h-space-3, 0.75rem);
 }
 </style>

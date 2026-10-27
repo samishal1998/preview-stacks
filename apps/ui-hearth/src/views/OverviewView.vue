@@ -124,7 +124,7 @@ const serviceRows = computed(() =>
           <HStatCard label="Running" :value="sum.running" icon="check" :tone="sum.running ? 'success' : 'neutral'" />
           <HStatCard label="Busy" :value="sum.busy" icon="clock" tone="info" />
           <HStatCard label="Asleep" :value="sum.asleep" icon="moon" tone="neutral" />
-          <HStatCard v-if="sum.unknown" label="Unknown" :value="sum.unknown" icon="info" tone="warning" detail="Not the same as idle." />
+          <HStatCard v-if="sum.unknown" label="Unknown, not idle" :value="sum.unknown" icon="info" tone="warning" />
         </HGrid>
         <HAlert v-for="d in attention" :key="d.id" tone="warning" :title="`${d.id} needs variables`" :description="d.unresolved" compact>
           <HButton size="compact" variant="secondary" label="Set its variables" @click="router.push(`/deployments/${encodeURIComponent(d.id)}/config`)" />

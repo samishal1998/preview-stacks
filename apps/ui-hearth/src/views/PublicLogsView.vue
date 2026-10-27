@@ -162,7 +162,7 @@ onMounted(load);
         </template>
 
         <HStack v-if="views.includes('logs')" direction="column" :gap="3">
-          <HStack direction="row" :gap="4" wrap align="end">
+          <HStack direction="row" :gap="4" wrap align="end" style="--h-choice-height: var(--h-control-height)">
             <HSelect v-if="services.length" v-model="service" label="Service" :options="serviceOptions" />
             <HSwitch v-model="timestamps" label="Timestamps" />
             <HSwitch v-model="follow" label="Follow" />
