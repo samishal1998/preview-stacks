@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
@@ -262,4 +264,60 @@ func TestCustomRoutesWakeTheirDeployment(t *testing.T) {
 			t.Fatalf("Find(alias) = %q, want pr-2", got)
 		}
 	})
+}
+
+func TestCustomRouteTrafficKeepsItsDeploymentAwake(t *testing.T) {
+	s, _ := crServer(t)
+	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
+	st, err := s.resolveDep("pr-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// negative control: drop the routeRouters append from runtimeView → LastActivity is 0 and this fails.
+	view, err := s.runtimeView(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 1
+	meter := scheduler.NewTrafficMeter("http://traefik/metrics", func(string) (string, bool) {
+		return `traefik_router_requests_total{code="200",method="GET",protocol="http",router="pstack-route-checkout-web@file",service="web-myapp-pr-1@docker"} ` + strconv.Itoa(count), true
+	}, nil)
+	meter.Sample(1000)
+	count++
+	meter.Sample(2000)
+	if got := meter.LastActivity(view.Routers); got != 2000 {
+		t.Fatalf("LastActivity = %d, routers = %v", got, view.Routers)
+	}
+	other, err := s.resolveDep("pr-2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// negative control: key routeRouters by nothing (append every route's routers) → pr-2 counts it too.
+	if v, _ := s.runtimeView(other); meter.LastActivity(v.Routers) != 0 {
+		t.Fatalf("pr-2 is kept awake by a route it does not hold: %v", v.Routers)
+	}
+}
+
+func TestCustomRoutesForgetThatRollsBackAnnouncesNothing(t *testing.T) {
+	s, _ := crServer(t)
+	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
+	// The UPDATE … RETURNING succeeds and scans its names, then COMMIT fails on a deferred foreign key.
+	for _, q := range []string{
+		"CREATE TABLE crfail_parent(id INTEGER PRIMARY KEY)",
+		"CREATE TABLE crfail_child(p INTEGER REFERENCES crfail_parent(id) DEFERRABLE INITIALLY DEFERRED)",
+		"CREATE TRIGGER crfail AFTER UPDATE ON custom_routes BEGIN INSERT INTO crfail_child VALUES (42); END",
+	} {
+		if _, err := s.store.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := crEvents(t, s)
+	// negative control: drop `unassigned = nil` from removeDeployment's txErr branch → the rolled-back
+	// route is announced as unassigned and this fails.
+	// Only the events are asserted: SQLite keeps a transaction whose COMMIT failed a deferred foreign
+	// key open on its pooled connection, so the table read back here is not the committed one.
+	crExpect(t, s, "DELETE", "/api/deployments/pr-1", "", 200)
+	if slices.ContainsFunc(*seen, func(e string) bool { return strings.HasPrefix(e, "route.unassigned") }) {
+		t.Fatalf("events = %v", *seen)
+	}
 }
