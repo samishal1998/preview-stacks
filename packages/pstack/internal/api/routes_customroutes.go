@@ -110,8 +110,8 @@ func (s *Server) routeJSON(row store.CustomRoute) jsonx.Object {
 		"createdAt", row.CreatedAt, "updatedAt", row.UpdatedAt)
 }
 
-// renderCustomRoutes rewrites pstack-routes.yml from the table, then rebuilds the sleep index. It
-// takes no lock: the caller holds writeMu.
+// renderCustomRoutes rewrites pstack-routes.yml from the table, then rebuilds the sleep index. The
+// caller holds writeMu; it takes wakeMu only to swap routeWake (order writeMu → wakeMu).
 //
 // Total: a route whose deployment is gone or whose compose cannot be read renders nothing and is
 // logged; the rest of the file still renders.
