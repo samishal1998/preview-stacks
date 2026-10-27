@@ -3,12 +3,13 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import {
   HAlert, HAlertDialog, HBadge, HButton, HCodeBlock, HDataTable, HHeading, HList, HListItem, HPageHeader, HSelect, HStack, HText,
-  type MenuAction, type TableColumn, type TableRow,
+  type MenuAction, type TableRow,
 } from '@hearth-ui/vue';
 import type { SwarmInfo } from '@samyx/preview-stacks-client';
 import { swarmApi, type Signals } from '../api-swarm';
 import { poll } from '../api-control';
 import { byLabel } from '../lib/labels';
+import { useCardColumns } from '../lib/use-card-columns';
 import { DISTROS, hasReadyWorker, joinPath, joinProblem, removable, thisManager, workersOnly, type JoinFormat } from '../lib/swarm';
 import { ago } from '../format';
 import { can } from '../lib/users';
@@ -48,7 +49,7 @@ const unplugged = computed(() => info.value?.nodes.filter((n) => n.lokiPlugin ==
 const sig = (id: string) => signals.value?.nodes.find((n) => n.id === id);
 
 // ── nodes ───────────────────────────────────────────────────────────────────────────────────────
-const columns: TableColumn[] = [
+const columns = useCardColumns([
   { key: 'host', label: 'Hostname' },
   { key: 'role', label: 'Role' },
   { key: 'status', label: 'Status' },
@@ -56,7 +57,7 @@ const columns: TableColumn[] = [
   { key: 'tasks', label: 'Tasks', align: 'end', hideBelow: 640 },
   { key: 'engine', label: 'Engine', hideBelow: 820 },
   { key: 'short', label: 'Id', hideBelow: 960 },
-];
+]);
 const rows = computed<TableRow[]>(() =>
   [...named.value].map(([rid, n]) => {
     const s = sig(n.id);
