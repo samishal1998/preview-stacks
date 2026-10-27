@@ -26,8 +26,12 @@
   the deployment page of Hearth and the advanced UI.
 
 - **Grafana links on the deployment page.** With Grafana running, Hearth and the advanced UI link a
-  running deployment's header to Explore on the stack's logs, and each service's logs to that
-  service's, over the last hour. Developer and up, never with a stored token or on a share link.
+  deployment's header to Explore on the stack's logs, and each service's logs to that service's,
+  over the last hour. Developer and up, never with a stored token or on a share link. The stack link
+  names the services the compose declares as well as the running ones, so a stack that is down or
+  asleep keeps it: `GET /api/deployments/:id/runtime` gains `declaredServices`, the services the
+  compose hands the log driver, read from the file (not on a share link; the host fixture's runtime
+  goldens gain the key).
 
 ### Changed
 

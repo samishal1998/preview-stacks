@@ -42,8 +42,11 @@
 >   `grafana.ts`), its convention, not `lib/`. One form creates or assigns, and its button reads
 >   Create or Assign, in place of a separate New route control. The move question keeps the full
 >   "Move checkout from myapp-pr-122 to myapp-pr-123?": at 320 px it wraps inside the panel.
-> - **Grafana stack link (owner, 2026-10-27).** It is built from the services the deployment declares,
->   the ones that ran, so a stack that is down or asleep still has its link. See §2.
+> - **Grafana stack link (owner, 2026-10-27).** It is built from the services the compose declares
+>   (`declaredServices` on `GET …/runtime`: the ones the log driver gets, in the selected profiles)
+>   plus any running, so a stack that is down or asleep still has its link. See §2. The ceiling: a
+>   service that ran under an older compose and was dropped by a later redeploy falls out of the
+>   link; its streams stay in Loki. A share link gets no `declaredServices`.
 > - **Corners** are 6/10/14 px (control, card, panel), the example here, not a strict 60 % (6/10/12).
 >   Pill stays 999 px. Overlays use native top-layer dialogs and popovers inside the `HTheme` island,
 >   so they inherit the tokens. Nothing is set on `:root`.
