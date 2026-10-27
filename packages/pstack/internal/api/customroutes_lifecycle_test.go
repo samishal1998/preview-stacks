@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,9 +37,10 @@ func fakeDockerPath(t *testing.T) string {
 
 func TestCustomRoutesReconcileAtBoot(t *testing.T) {
 	data, dyn := t.TempDir(), t.TempDir()
+	var mu sync.Mutex // Log runs on the server's goroutines
 	logs := []string{}
 	opts := Options{DataDir: data, Token: "t0ken", RoutingDir: dyn, Bus: events.New(),
-		Env: map[string]string{"PATH": fakeDockerPath(t)}, Log: func(l string) { logs = append(logs, l) }}
+		Env: map[string]string{"PATH": fakeDockerPath(t)}, Log: func(l string) { mu.Lock(); logs = append(logs, l); mu.Unlock() }}
 	first, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -72,12 +74,16 @@ func TestCustomRoutesReconcileAtBoot(t *testing.T) {
 		}
 		bad := opts
 		bad.RoutingDir = notDir
+		mu.Lock()
 		logs = logs[:0]
+		mu.Unlock()
 		again, err := New(bad)
 		if err != nil {
 			t.Fatalf("boot must survive an unwritable routing dir: %v", err)
 		}
 		again.Stop()
+		mu.Lock()
+		defer mu.Unlock()
 		if !slices.ContainsFunc(logs, func(l string) bool { return strings.Contains(l, "could not write "+routing.CustomRoutesYAML) }) {
 			t.Fatalf("logs = %v", logs)
 		}
@@ -89,13 +95,14 @@ func TestCustomRoutesFollowADeploy(t *testing.T) {
 	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
 	// The redeploy adds a service.
 	crDeploy(t, s, "pr-1", "myapp-pr-1", crCompose+"  c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+	// negative control: call s.rerenderRoutes() after the crDeploy above → the file already names c
+	// and this fails.
 	if strings.Contains(crFile(t, s), "pstack-route-checkout-c:") {
 		t.Fatal("rendered before the deploy")
 	}
 
 	up := func(t *testing.T, id string) {
 		t.Helper()
-		s.env["PATH"] = fakeDockerPath(t)
 		dep, err := s.registry.Get(id)
 		if err != nil || dep == nil {
 			t.Fatal(dep, err)
@@ -252,7 +259,6 @@ func TestCustomRoutesWakeTheirDeployment(t *testing.T) {
 		if s.sleepIndex.Find(under) != "pr-1" {
 			t.Fatal("the alias wildcard is not in the sleep index")
 		}
-		s.env["PATH"] = fakeDockerPath(t) // the wake's `up` runs against a docker that answers ok
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Host = alias
