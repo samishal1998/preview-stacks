@@ -328,6 +328,9 @@ func run(argv []string, io IO) *Exit {
 	case "push":
 		return pushConfig(args, io)
 
+	case "route":
+		return routeCmd(args, io)
+
 	case "upgrade":
 		opts := upgrade.Options{DataDir: registry.DataDir(), Target: args.To, Phase: upgrade.Install, Runner: runner, Log: func(l string) { fmt.Fprintln(out, l) }}
 		if args.Resume {

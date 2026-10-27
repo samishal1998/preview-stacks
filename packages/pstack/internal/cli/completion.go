@@ -41,6 +41,7 @@ var subcommands = map[string][]string{
 	"swarm":      {"status", "join", "previews"},
 	"pull":       {"config"},
 	"push":       {"config"},
+	"route":      {"ls", "create", "assign", "unassign", "rm"},
 	"completion": Shells,
 }
 
