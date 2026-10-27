@@ -49,6 +49,9 @@
 - **Grafana follows added domains.** `grafana.<added domain>` answered 404 on a host with Grafana
   on. It now routes and signs in on the domain it was reached on.
 
+- **A cut step message says so.** A hook's first output line past 300 characters ended mid-word in a
+  job's steps, with nothing to show it was cut. It now ends in `…`.
+
 ## 0.43.0 — 2026-10-19
 
 ### Added
