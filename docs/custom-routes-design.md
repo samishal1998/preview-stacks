@@ -200,6 +200,8 @@ Append to `events.Names` (add-only, invariant 14): `route.assigned` (`route`, `d
 
 - **Routing page:** a "Custom routes" section listing name, hosts, assigned stack and actions, plus
   New route.
+  - In Hearth the row's stack select only stages a pick; its Assign (or Unassign) button writes it,
+    so arrowing through a closed select never assigns (owner 2026-10-27).
   - Assigning a route that another stack holds asks first: "Move checkout from myapp-pr-122 to
     myapp-pr-123?". Confirming sends one `PUT … {force: true}`.
   - Hearth uses an `HAlertDialog`. The advanced UI uses its armed `ActionButton` confirm, never
