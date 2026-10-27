@@ -34,6 +34,7 @@ import { settings } from '../composables/useSettings';
 import { stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
+import CustomRoutes from '../components/CustomRoutes.vue';
 import ErrorNote from '../components/ErrorNote.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import RefreshButton from '../components/RefreshButton.vue';
@@ -53,6 +54,7 @@ import RouteTarget from '../components/RouteTarget.vue';
  * describe the same missing address differently.
  */
 const live = ref<RuntimeRoute[]>([]);
+const customRoutes = ref<InstanceType<typeof CustomRoutes> | null>(null);
 const liveReachable = ref<boolean | null>(null);
 
 const files = ref<RoutingFile[]>([]);
@@ -90,7 +92,7 @@ const STARTER = `http:
 
 /** Both halves: the file provider's directory AND the routes Traefik actually has. */
 async function refreshAll(): Promise<void> {
-  await Promise.all([loadList(), loadLive()]);
+  await Promise.all([loadList(), loadLive(), customRoutes.value?.load()]);
 }
 
 async function loadList(): Promise<void> {
@@ -298,6 +300,9 @@ async function remove(): Promise<void> {
 
       <p v-else class="mute">No routes yet — deploy a stack.</p>
     </section>
+
+    <!-- Stable names that follow a stack: derived into pstack-routes.yml, never edited as a file. -->
+    <CustomRoutes ref="customRoutes" />
 
     <!-- ============================ config files ============================ -->
     <section class="panel">

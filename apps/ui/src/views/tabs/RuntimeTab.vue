@@ -40,6 +40,7 @@ import ErrorNote from '../../components/ErrorNote.vue';
 import FindingsModal from '../../components/FindingsModal.vue';
 import InfoHint from '../../components/InfoHint.vue';
 import RouteTarget from '../../components/RouteTarget.vue';
+import CustomRoutes from '../../components/CustomRoutes.vue';
 import { toast } from '../../composables/useToasts';
 import RefreshButton from '../../components/RefreshButton.vue';
 
@@ -427,6 +428,9 @@ function urlFor(c: RuntimeContainer): string | null {
         </section>
       </template>
     </template>
+
+    <!-- Outside the docker gate: a route is a row in pstack's own table, readable with docker down. -->
+    <CustomRoutes :deployment="dep.id" />
   </div>
 </template>
 
