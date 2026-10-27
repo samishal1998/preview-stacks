@@ -7,7 +7,7 @@
  * with no control in reach. Everything else stays unavailable until it resolves, because the
  * server cannot name the stack without the variables, and every action needs the stack name.
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api, query } from '../api/client';
 import type { RuntimeResponse } from '../api/types';
 import { authState, can } from '../composables/useAuth';
@@ -36,12 +36,22 @@ const props = defineProps<{ id: string }>();
 const router = useRouter();
 const route = useRoute();
 
-/* The tab strip scrolls sideways on a phone; a tab opened by URL must not sit off-screen. */
+/* The tab strip scrolls sideways on a phone; a tab opened by URL must not sit off-screen. Again on
+   resize: the page scrollbar can arrive after the first pass and narrow the strip under the tab.
+   Horizontal only, so a resize never scrolls the page. */
 const tabsEl = ref<HTMLElement>();
 function showActiveTab(): void {
-  tabsEl.value?.querySelector('.router-link-active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  const bar = tabsEl.value;
+  const tab = bar?.querySelector('.router-link-active');
+  if (!bar || !tab) return;
+  const b = bar.getBoundingClientRect();
+  const t = tab.getBoundingClientRect();
+  if (t.right > b.right) bar.scrollLeft += t.right - b.right;
+  else if (t.left < b.left) bar.scrollLeft -= b.left - t.left;
 }
-onMounted(showActiveTab);
+const tabsResize = new ResizeObserver(showActiveTab);
+onMounted(() => tabsEl.value && tabsResize.observe(tabsEl.value));
+onBeforeUnmount(() => tabsResize.disconnect());
 watch(() => route.path, showActiveTab, { flush: 'post' });
 
 const TABS = [
@@ -142,39 +152,41 @@ watch(
         used to be reachable only through a tab named "Danger". Teardown stays there: the header
         carries what is safe to reach for, the Danger tab carries what deserves the walk.
       -->
-      <!-- One flex unit, so on a narrow screen the pair wraps together instead of Verify being
-           orphaned onto its own line under the title. -->
-      <RefreshButton v-if="dep.detail" :run="loadDetail" label="Re-resolve" title="Read this deployment again and re-run its variable substitution" />
-      <div v-if="dep.detail" class="row" style="flex-wrap: nowrap">
-        <!-- Asleep: the primary action is to wake it — the same `up`, recorded as a wake. -->
-        <ActionButton
-          v-if="dep.detail.asleep"
-          variant="primary"
-          :pending="pending === 'wake'"
-          :disabled="!!pending || busy"
-          :title="whyDisabled('wake')"
-          @click="act('wake')"
-        >
-          Wake
-        </ActionButton>
-        <ActionButton
-          v-else
-          variant="primary"
-          :pending="pending === 'up'"
-          :disabled="!!pending || busy"
-          :title="whyDisabled('up')"
-          @click="act('up')"
-        >
-          Deploy
-        </ActionButton>
-        <ActionButton
-          :pending="pending === 'verify'"
-          :disabled="!!pending || busy"
-          :title="whyDisabled('verify')"
-          @click="act('verify')"
-        >
-          Verify
-        </ActionButton>
+      <!-- One flex unit, so the actions wrap as a group under the title; inside it Re-resolve may
+           wrap, the Deploy/Verify pair never splits. -->
+      <div v-if="dep.detail" class="row">
+        <RefreshButton :run="loadDetail" label="Re-resolve" title="Read this deployment again and re-run its variable substitution" />
+        <div class="row" style="flex-wrap: nowrap">
+          <!-- Asleep: the primary action is to wake it — the same `up`, recorded as a wake. -->
+          <ActionButton
+            v-if="dep.detail.asleep"
+            variant="primary"
+            :pending="pending === 'wake'"
+            :disabled="!!pending || busy"
+            :title="whyDisabled('wake')"
+            @click="act('wake')"
+          >
+            Wake
+          </ActionButton>
+          <ActionButton
+            v-else
+            variant="primary"
+            :pending="pending === 'up'"
+            :disabled="!!pending || busy"
+            :title="whyDisabled('up')"
+            @click="act('up')"
+          >
+            Deploy
+          </ActionButton>
+          <ActionButton
+            :pending="pending === 'verify'"
+            :disabled="!!pending || busy"
+            :title="whyDisabled('verify')"
+            @click="act('verify')"
+          >
+            Verify
+          </ActionButton>
+        </div>
       </div>
     </div>
 

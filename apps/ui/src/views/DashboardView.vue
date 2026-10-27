@@ -210,14 +210,15 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           <ul v-else class="kvlist stagger">
             <li v-for="(j, i) in recentJobs" :key="j.id" :style="{ '--i': i }">
               <!-- A badge, not a text key: it takes its own width, not the 128px label column. -->
-              <span class="k" style="width: auto"><StateBadge :state="j.state" /></span>
+              <span class="k badge-k"><StateBadge :state="j.state" /></span>
+              <!-- The space sits outside the unbreakable meta, so a short row breaks before the meta,
+                   not inside the job's name. -->
               <span class="v">
                 <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
                   {{ actionLabel(j.action) }} {{ j.stack }}
-                </RouterLink>
-                <span class="mute" style="font-size: var(--t-xs); white-space: nowrap">
-                  · {{ ago(j.startedAt) }} · {{ took(j.startedAt, j.endedAt) }}
-                </span>
+                </RouterLink>{{ ' ' }}<span class="mute" style="font-size: var(--t-xs); white-space: nowrap"
+                  >· {{ ago(j.startedAt) }} · {{ took(j.startedAt, j.endedAt) }}</span
+                >
               </span>
             </li>
             <li v-if="!recentJobs.length" class="mute">No jobs yet.</li>
