@@ -84,7 +84,11 @@ const deploymentOptions = computed(() => [
   ...data.deployments.map((d) => ({ value: d.id, label: d.stack ?? d.id })),
 ]);
 /** The cell's select: a deployment assigns (or asks to move), Unassigned asks to unassign. */
+// A native select keeps what was picked even when the model does not change (a cancelled move, a
+// refused assign), so each pick remounts the selects: they show the holder until the list moves.
+const picks = ref(0);
 function pick(name: string, deployment: string): void {
+  picks.value++;
   if (deployment) void cr.assign(name, deployment);
   else cr.drop.value = { name, kind: 'unassign' };
 }
@@ -285,6 +289,7 @@ async function remove(): Promise<void> {
         </HStack>
         <HSelect
           v-else-if="column.key === 'deployment' && cr.mayWrite.value"
+          :key="picks"
           :label="`Deployment for ${row.name}`"
           hide-label
           size="compact"
