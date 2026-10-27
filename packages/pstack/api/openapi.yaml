@@ -202,7 +202,7 @@ paths:
     get:
       tags: [deployments]
       operationId: getDeploymentRuntime
-      summary: Containers, routes, findings and the host's ACME challenge mode.
+      summary: "Containers, routes, findings, the host's ACME challenge mode, and declaredServices: the services the compose logs to Loki, read from the file. Not on a share link."
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
   /api/deployments/{id}/readiness:

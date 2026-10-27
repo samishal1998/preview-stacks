@@ -92,6 +92,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
@@ -524,6 +525,30 @@ func InjectLogging(doc *omap.Map, stack, pushURL string) (out *omap.Map, logged,
 		logged = append(logged, name)
 	}
 	return out, logged, own
+}
+
+// LoggedServices is the services of a parsed compose that a deploy hands the loki driver, in file
+// order, never nil: the ones InjectLogging labels `service_name=<stack>-<service>`, less those the
+// selected profiles leave out (Swarmify's rule, which compose's --profile shares). Pure: no docker
+// call, so it answers for a stack that is down or asleep.
+func LoggedServices(doc *omap.Map, profiles []string) []string {
+	out := []string{}
+	services := doc.GetMap("services")
+	for _, name := range services.Keys() {
+		svc := services.GetMap(name)
+		if svc == nil || svc.Has("logging") {
+			continue
+		}
+		mine := svc.GetSlice("profiles")
+		selected := len(mine) == 0
+		for _, p := range mine {
+			selected = selected || slices.Contains(profiles, swarm.JSString(p))
+		}
+		if selected {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // MaterializeArgs is what MaterializeCompose takes.

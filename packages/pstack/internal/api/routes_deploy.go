@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/autolabel"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/compose"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
@@ -821,8 +822,11 @@ func nodeOf(c *inspect.ContainerInfo) string {
 	return *c.Node
 }
 
-// deploymentRuntime is GET …/runtime: containers, routes and findings, read live.
-func (s *Server) deploymentRuntime(w http.ResponseWriter, dep *registry.Deployment, vars map[string]string) error {
+// deploymentRuntime is GET …/runtime: containers, routes and findings, read live, and the services
+// the compose hands the log driver (declaredServices), read from the file, so a stack that is down
+// or asleep still names its Loki streams. A share link does not get them: they come from the compose
+// source it is refused. An unreadable compose names none.
+func (s *Server) deploymentRuntime(w http.ResponseWriter, dep *registry.Deployment, vars map[string]string, who *auth.Principal) error {
 	st, err := s.resolveDep(dep.ID, vars)
 	if err != nil {
 		return err
@@ -835,7 +839,17 @@ func (s *Server) deploymentRuntime(w http.ResponseWriter, dep *registry.Deployme
 		asleep = dep.Sleep
 	}
 	out := jsonx.O("id", dep.ID, "orchestrator", nullable(string(orchestratorOf(st))), "asleep", asleep)
-	writeJSON(w, 200, append(out, spread(rt)...))
+	out = append(out, spread(rt)...)
+	if who.Kind != auth.KindShare {
+		declared := []string{}
+		if st.Compose != nil {
+			if doc, err := composeDoc(st, dep.Dir); err == nil {
+				declared = autolabel.LoggedServices(doc, st.Compose.Profiles)
+			}
+		}
+		out = append(out, jsonx.KV{K: "declaredServices", V: declared})
+	}
+	writeJSON(w, 200, out)
 	return nil
 }
 

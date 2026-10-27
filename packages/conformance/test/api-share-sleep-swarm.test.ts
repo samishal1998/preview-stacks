@@ -13,7 +13,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Booted, bootServer, until, waitJob } from '../harness/server.ts';
-import { dockerShim } from '../harness/docker-shim.ts';
+import { ALWAYS_OK, dockerShim } from '../harness/docker-shim.ts';
 import { eventTap } from '../harness/receiver.ts';
 import { SWARM_SHIM, LOKI_SHIM, NODE_PLUGINS } from '../gen/goldens.table.ts';
 
@@ -87,6 +87,32 @@ describe('API: share links', () => {
       await s.stop();
     }
   }, 20_000);
+
+  test('runtime names a down deployment\'s declared services from its compose; a share link does not get them', async () => {
+    // negative control: in routes_deploy.go deploymentRuntime, drop the declaredServices KV — the
+    // token body has no declaredServices and the first toEqual fails.
+    const docker = dockerShim(ALWAYS_OK);
+    const s = await bootServer({ tag: 'declared', pathPrefix: docker.dir });
+    try {
+      const spec = 'version: 1\nstack: shop\ncompose:\n  file: compose.yml\n  profiles: [web]\naxes: []\n';
+      const compose =
+        'services:\n  web: {image: nginx}\n  db:\n    image: postgres\n    logging: {driver: json-file}\n' +
+        '  worker: {image: w, profiles: [jobs]}\n  api: {image: a, profiles: [web]}\n';
+      const put = await fetch(`${s.base}/api/deployments/shop`, { method: 'PUT', headers: s.H, body: JSON.stringify({ spec, compose }) });
+      expect(put.status).toBe(201);
+      const rt = (await (await fetch(`${s.base}/api/deployments/shop/runtime`, { headers: s.H })).json()) as Record<string, unknown>;
+      expect({ containers: rt.containers, declaredServices: rt.declaredServices }).toEqual({ containers: [], declaredServices: ['web', 'api'] });
+
+      const mint = await fetch(`${s.base}/api/deployments/shop/share`, { method: 'POST', headers: s.H, body: JSON.stringify({ views: ['details'], ttl: '2h' }) });
+      const { token } = (await mint.json()) as { token: string };
+      const shared = await fetch(`${s.base}/api/deployments/shop/runtime?token=${token}`);
+      expect(shared.status).toBe(200);
+      expect('declaredServices' in ((await shared.json()) as object)).toBe(false);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  });
 
   test('a share token holder cannot mint another link, and a token-less server cannot mint at all', async () => {
     const s = await bootServer({ tag: 'share' });

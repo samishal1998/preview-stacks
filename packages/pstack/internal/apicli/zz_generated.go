@@ -861,7 +861,7 @@ func NewDeploymentsRuntimeGetCommand(exec oascmd.ExecOptions) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "get",
-		Short: "Containers, routes, findings and the host's ACME challenge mode.",
+		Short: "Containers, routes, findings, the host's ACME challenge mode, and declaredServices: the services the compose logs to Loki, read from the file. Not on a share link.",
 	}
 	cmd.Flags().StringVar(&flagID, "id", "", "The registry id, e.g. `pr-123`.")
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
