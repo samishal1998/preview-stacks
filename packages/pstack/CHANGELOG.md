@@ -20,7 +20,8 @@
   no redeploy: pstack rewrites the reserved Traefik file `pstack-routes.yml` from the new
   `custom_routes` table (migration 10). Assigning a route another deployment holds is a 409 naming
   it; `force` moves it in one call. Forgetting a deployment unassigns its routes; a route host wakes a
-  sleeping stack. `/api/custom-routes` (five routes, viewer to read, developer to write),
+  sleeping stack. A later deploy that claims a route host wins it, and the route lists it under
+  `blocked` (`GET /api/custom-routes`, `pstack route ls`). `/api/custom-routes` (five routes, viewer to read, developer to write),
   `pstack route ls|create|assign|unassign|rm`, the generated `pstack api custom-routes …`, the
   `route.assigned` and `route.unassigned` events, and a Custom routes section on the Routing page and
   the deployment page of Hearth and the advanced UI.
@@ -30,8 +31,7 @@
   over the last hour. Developer and up, never with a stored token or on a share link. The stack link
   names the services the compose declares as well as the running ones, so a stack that is down or
   asleep keeps it: `GET /api/deployments/:id/runtime` gains `declaredServices`, the services the
-  compose hands the log driver, read from the file (not on a share link; the host fixture's runtime
-  goldens gain the key).
+  compose hands the log driver, read from the file (not on a share link).
 
 ### Changed
 
