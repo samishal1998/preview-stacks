@@ -75,8 +75,10 @@ const destructive: BulkAction[] = ['down', 'down-forget'];
         </div>
       </div>
       <span class="grow" />
-      <RefreshButton :run="loadDeployments" />
-      <RouterLink to="/submit" class="btn">+ Submit</RouterLink>
+      <div class="row">
+        <RefreshButton :run="loadDeployments" />
+        <RouterLink to="/submit" class="btn">+ Submit</RouterLink>
+      </div>
     </div>
 
     <section class="panel">
@@ -166,73 +168,77 @@ const destructive: BulkAction[] = ['down', 'down-forget'];
           </ul>
         </div>
 
-        <table role="table" class="cards">
-          <thead role="rowgroup">
-            <tr role="row">
-              <th role="columnheader" class="pick">
-                <input
-                  type="checkbox"
-                  aria-label="Select all shown"
-                  :checked="allShown"
-                  :indeterminate="chosen.length > 0 && !allShown"
-                  @change="toggleAll"
-                />
-              </th>
-              <th role="columnheader">ID</th>
-              <th role="columnheader">Kind</th>
-              <th role="columnheader">Stack</th>
-              <th role="columnheader">State</th>
-              <th role="columnheader">Updated</th>
-            </tr>
-          </thead>
-          <tbody role="rowgroup" class="stagger">
-            <tr v-for="(d, i) in rows" :key="d.id" role="row" :style="{ '--i': i }">
-              <td role="cell" class="pick" data-label="select">
-                <input
-                  type="checkbox"
-                  :aria-label="`Select ${d.id}`"
-                  :checked="selected.has(d.id)"
-                  @change="selected.has(d.id) ? selected.delete(d.id) : selected.add(d.id)"
-                />
-              </td>
-              <td role="cell" data-label="id">
-                <RouterLink :to="`/deployments/${encodeURIComponent(d.id)}`">
-                  {{ d.id }}
-                </RouterLink>
-                <div v-if="d.specName" class="mute" style="font-size: var(--t-xs)">
-                  spec: {{ d.specName }}
-                </div>
-              </td>
-              <td role="cell" data-label="kind"><span class="badge" :class="d.kind">{{ sentence(d.kind) }}</span></td>
-              <td role="cell" class="name dim" data-label="stack">
-                <span v-if="d.stack">{{ d.stack }}</span>
-                <!--
-                  No stack name means the spec could not be resolved with the variables this
-                  listing had. It is not an error state for the deployment — it is a missing input.
-                -->
-                <span v-else class="badge warn" title="the spec could not be resolved without variables">
-                  Needs variables
-                </span>
-              </td>
-              <td role="cell" data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" :asleep="d.asleep" /></td>
-              <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="d.updatedAt" /></td>
-            </tr>
-            <tr v-if="!rows.length" role="row">
-              <td role="cell" colspan="6" class="mute">
-                <template v-if="state.deployments.length">
-                  Nothing matches this filter.
-                  <button class="ghost sm" @click="q = ''; kind = 'all'; onlyLive = false">
-                    Clear filters
-                  </button>
-                </template>
-                <template v-else>
-                  Nothing submitted yet — <RouterLink to="/submit">submit a spec</RouterLink> to
-                  put a deployment in the registry.
-                </template>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader" class="pick">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all shown"
+                    :checked="allShown"
+                    :indeterminate="chosen.length > 0 && !allShown"
+                    @change="toggleAll"
+                  />
+                </th>
+                <th role="columnheader">ID</th>
+                <th role="columnheader">Kind</th>
+                <th role="columnheader">Stack</th>
+                <th role="columnheader">State</th>
+                <th role="columnheader">Updated</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup" class="stagger">
+              <tr v-for="(d, i) in rows" :key="d.id" role="row" :style="{ '--i': i }">
+                <td role="cell" class="pick" data-label="select">
+                  <input
+                    type="checkbox"
+                    :aria-label="`Select ${d.id}`"
+                    :checked="selected.has(d.id)"
+                    @change="selected.has(d.id) ? selected.delete(d.id) : selected.add(d.id)"
+                  />
+                </td>
+                <td role="cell" data-label="id">
+                  <div>
+                    <RouterLink :to="`/deployments/${encodeURIComponent(d.id)}`">
+                      {{ d.id }}
+                    </RouterLink>
+                    <div v-if="d.specName" class="mute" style="font-size: var(--t-xs)">
+                      spec: {{ d.specName }}
+                    </div>
+                  </div>
+                </td>
+                <td role="cell" data-label="kind"><span class="badge" :class="d.kind">{{ sentence(d.kind) }}</span></td>
+                <td role="cell" class="name dim" data-label="stack">
+                  <span v-if="d.stack">{{ d.stack }}</span>
+                  <!--
+                    No stack name means the spec could not be resolved with the variables this
+                    listing had. It is not an error state for the deployment — it is a missing input.
+                  -->
+                  <span v-else class="badge warn" title="the spec could not be resolved without variables">
+                    Needs variables
+                  </span>
+                </td>
+                <td role="cell" data-label="state"><RunStateBadge :busy="d.busy" :running="d.running" :asleep="d.asleep" /></td>
+                <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="d.updatedAt" /></td>
+              </tr>
+              <tr v-if="!rows.length" role="row">
+                <td role="cell" colspan="6" class="mute">
+                  <template v-if="state.deployments.length">
+                    Nothing matches this filter.
+                    <button class="ghost sm" @click="q = ''; kind = 'all'; onlyLive = false">
+                      Clear filters
+                    </button>
+                  </template>
+                  <template v-else>
+                    Nothing submitted yet — <RouterLink to="/submit">submit a spec</RouterLink> to
+                    put a deployment in the registry.
+                  </template>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <!-- One message per unresolved row, verbatim: it names the missing variable. -->
         <div v-for="d in unresolvedRows" :key="`u-${d.id}`" class="banner warn">

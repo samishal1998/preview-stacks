@@ -162,41 +162,47 @@ onBeforeUnmount(() => {
           <b>Docker reported a problem.</b>
           <p class="mono">{{ info.error }}</p>
         </div>
-        <table v-if="info.nodes.length" role="table" class="cards">
-          <thead role="rowgroup">
-            <tr role="row">
-              <th role="columnheader">Hostname</th>
-              <th role="columnheader">Role</th>
-              <th role="columnheader">Status</th>
-              <th role="columnheader">Availability</th>
-              <th role="columnheader">Engine</th>
-              <th role="columnheader">Id</th>
-            </tr>
-          </thead>
-          <tbody role="rowgroup" class="stagger">
-            <tr v-for="(n, i) in info.nodes" :key="n.id" role="row" :style="{ '--i': i }">
-              <td role="cell" class="name" data-label="hostname">
-                {{ n.hostname || '—' }}
-                <span v-if="n.self" class="badge info" title="the node this control plane runs on">This node</span>
-                <span v-if="n.lokiPlugin === false" class="badge warn">No loki plugin</span>
-              </td>
-              <td role="cell" data-label="role">
-                <span class="badge" :class="n.role === 'manager' ? 'isolated' : ''">{{ sentence(n.role) }}</span>
-                <span v-if="n.managerStatus" class="mute" style="font-size: var(--t-sm)"> {{ n.managerStatus }}</span>
-              </td>
-              <td role="cell" data-label="status">
-                <span :class="n.status === 'ready' ? 's-ok' : 's-failed'">{{ sentence(n.status) }}</span>
-              </td>
-              <td role="cell" data-label="availability">{{ sentence(n.availability || 'unknown') }}</td>
-              <td role="cell" data-label="engine" class="mono">{{ n.engineVersion || '—' }}</td>
-              <td role="cell" data-label="id" class="mono mute">{{ n.id.slice(0, 12) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-if="info.nodes.length" class="table-scroll">
+          <table role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Hostname</th>
+                <th role="columnheader">Role</th>
+                <th role="columnheader">Status</th>
+                <th role="columnheader">Availability</th>
+                <th role="columnheader">Engine</th>
+                <th role="columnheader">Id</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup" class="stagger">
+              <tr v-for="(n, i) in info.nodes" :key="n.id" role="row" :style="{ '--i': i }">
+                <td role="cell" class="name" data-label="hostname">
+                  {{ n.hostname || '—' }}
+                  <span v-if="n.self" class="badge info" title="the node this control plane runs on">This node</span>
+                  <span v-if="n.lokiPlugin === false" class="badge warn">No loki plugin</span>
+                </td>
+                <td role="cell" data-label="role">
+                  <span
+                    ><span class="badge" :class="n.role === 'manager' ? 'isolated' : ''">{{ sentence(n.role) }}</span
+                    ><span v-if="n.managerStatus" class="mute" style="font-size: var(--t-sm); margin-inline-start: var(--s1)">{{
+                      n.managerStatus
+                    }}</span></span
+                  >
+                </td>
+                <td role="cell" data-label="status">
+                  <span :class="n.status === 'ready' ? 's-ok' : 's-failed'">{{ sentence(n.status) }}</span>
+                </td>
+                <td role="cell" data-label="availability">{{ sentence(n.availability || 'unknown') }}</td>
+                <td role="cell" data-label="engine" class="mono">{{ n.engineVersion || '—' }}</td>
+                <td role="cell" data-label="id" class="mono mute">{{ n.id.slice(0, 12) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p v-else class="mute">Docker lists no nodes.</p>
         <div v-if="unplugged.length" class="banner warn">
           <b>No loki plugin on {{ unplugged.map((n) => n.hostname || n.id.slice(0, 12)).join(', ') }}.</b>
-          <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ info.lokiPluginInstall }}</pre>
+          <pre class="code" style="white-space: pre-wrap; overflow-wrap: anywhere">{{ info.lokiPluginInstall }}</pre>
         </div>
       </template>
     </section>
@@ -275,7 +281,7 @@ onBeforeUnmount(() => {
           If it leaks, rotate it on the manager:
           <code>docker swarm join-token --rotate worker</code>
         </p>
-        <pre class="code" style="white-space: pre-wrap; word-break: break-all; max-height: 50vh; overflow: auto">{{ revealed }}</pre>
+        <pre class="code" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto">{{ revealed }}</pre>
         <div class="row">
           <button @click="copy">Copy</button>
           <button @click="revealed = ''">Hide</button>

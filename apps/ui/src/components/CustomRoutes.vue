@@ -140,57 +140,71 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
 
     <ErrorNote v-if="listError" :text="listError" />
     <SkeletonList v-else-if="!loaded" :rows="2" />
-    <table v-else-if="shown.length" role="table" class="cards">
-      <thead role="rowgroup">
-        <tr role="row">
-          <th role="columnheader">Name</th>
-          <th role="columnheader">Hosts</th>
-          <th v-if="!deployment" role="columnheader">Deployment</th>
-          <th v-if="mayWrite" role="columnheader" aria-label="Actions" />
-        </tr>
-      </thead>
-      <tbody role="rowgroup">
-        <tr v-for="r in shown" :key="r.name" role="row">
-          <td role="cell" class="mono" data-label="name">{{ r.name }}</td>
-          <td role="cell" class="cell-wrap" data-label="hosts">
-            <!-- One value column: a card row's cell is a flex row, and each host would be its own column. -->
-            <div>
-              <div v-for="h in hostItems(r.hosts, r.blocked)" :key="h.host">
-                <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
-                <span v-else class="mono mute">{{ h.host }}<template v-if="h.takenBy"> · taken by {{ h.takenBy }}</template></span>
+    <div v-else-if="shown.length" class="table-scroll">
+      <table role="table" class="cards tbl-fixed t-custom">
+        <!--
+          Fixed, not auto: under auto layout `.cell-wrap` lets Hosts shrink to one character, so the
+          column with the longest values got the least room. Each `<col>` carries its `<th>`'s `v-if`.
+          Deployment takes what is left; actions is a fixed width because it holds buttons. The floor in
+          `app.css` is derived from these; change one and change the other.
+        -->
+        <colgroup>
+          <col style="width: 20%" />
+          <col style="width: 36%" />
+          <col v-if="!deployment" />
+          <col v-if="mayWrite" style="width: 11rem" />
+        </colgroup>
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">Name</th>
+            <th role="columnheader">Hosts</th>
+            <th v-if="!deployment" role="columnheader">Deployment</th>
+            <th v-if="mayWrite" role="columnheader" aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          <tr v-for="r in shown" :key="r.name" role="row">
+            <td role="cell" class="mono cell-wrap" data-label="name">{{ r.name }}</td>
+            <td role="cell" class="cell-wrap" data-label="hosts">
+              <!-- One value column: a card row's cell is a flex row, and each host would be its own column. -->
+              <div>
+                <div v-for="h in hostItems(r.hosts, r.blocked)" :key="h.host">
+                  <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
+                  <span v-else class="mono mute">{{ h.host }}<template v-if="h.takenBy"> · taken by {{ h.takenBy }}</template></span>
+                </div>
+                <span v-if="!r.hosts.length && !r.blocked?.length" class="mute">—</span>
               </div>
-              <span v-if="!r.hosts.length && !r.blocked?.length" class="mute">—</span>
-            </div>
-          </td>
-          <td v-if="!deployment" role="cell" data-label="deployment">
-            <RouterLink v-if="r.deployment" :to="`/deployments/${encodeURIComponent(r.deployment)}/runtime`">
-              {{ r.stack ?? r.deployment }}
-            </RouterLink>
-            <span v-else class="mute">Unassigned</span>
-          </td>
-          <td v-if="mayWrite" role="cell" class="row-actions" data-label="">
-            <ActionButton
-              v-if="r.deployment"
-              class="ghost sm"
-              :pending="busy === r.name"
-              :disabled="!!busy"
-              :confirm="`Unassign ${r.name}?`"
-              @run="drop(r, 'unassign')"
-              >Unassign</ActionButton
-            >
-            <ActionButton
-              v-if="!deployment"
-              class="danger sm"
-              :pending="busy === r.name"
-              :disabled="!!busy"
-              :confirm="`Delete ${r.name}?`"
-              @run="drop(r, 'delete')"
-              >Delete</ActionButton
-            >
-          </td>
-        </tr>
-      </tbody>
-    </table>
+            </td>
+            <td v-if="!deployment" role="cell" class="cell-wrap" data-label="deployment">
+              <RouterLink v-if="r.deployment" :to="`/deployments/${encodeURIComponent(r.deployment)}/runtime`">
+                {{ r.stack ?? r.deployment }}
+              </RouterLink>
+              <span v-else class="mute">Unassigned</span>
+            </td>
+            <td v-if="mayWrite" role="cell" class="row-actions" data-label="">
+              <ActionButton
+                v-if="r.deployment"
+                class="ghost sm"
+                :pending="busy === r.name"
+                :disabled="!!busy"
+                confirm="Unassign it?"
+                @run="drop(r, 'unassign')"
+                >Unassign</ActionButton
+              >
+              <ActionButton
+                v-if="!deployment"
+                class="danger sm"
+                :pending="busy === r.name"
+                :disabled="!!busy"
+                confirm="Delete it?"
+                @run="drop(r, 'delete')"
+                >Delete</ActionButton
+              >
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <p v-else class="mute">{{ deployment ? 'No routes assigned.' : 'No custom routes.' }}</p>
 
     <div v-if="mayWrite && loaded" class="cr-form">

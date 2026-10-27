@@ -258,11 +258,14 @@ async function redeliver(d: DeliveryRow): Promise<void> {
             <template v-for="(n, i) in notifiers" :key="n.id">
               <tr role="row" :style="{ '--i': i }">
                 <td role="cell" class="name" data-label="name">
-                  {{ n.name }}
-                  <div class="mute" style="font-size: var(--t-sm)">
-                    <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
-                         the credential) — so this shows dots for those rows, which is correct. -->
-                    {{ sentence(n.type) }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
+                  <!-- One value item: in card mode the name and its URL line are not two columns. -->
+                  <div>
+                    {{ n.name }}
+                    <div class="mute" style="font-size: var(--t-sm)">
+                      <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
+                           the credential) — so this shows dots for those rows, which is correct. -->
+                      {{ sentence(n.type) }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
+                    </div>
                   </div>
                 </td>
                 <td role="cell" data-label="events">
@@ -274,7 +277,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                   <span v-else :class="n.lastStatus === 'ok' ? 's-ok' : 's-failed'">
                     {{ n.lastStatus }}
                   </span>
-                  <div v-if="n.lastAt" class="mute" style="font-size: var(--t-sm)">
+                  <div v-if="n.lastAt" class="mute nowrap" style="font-size: var(--t-sm)">
                     <RelativeTime :at="n.lastAt" />
                   </div>
                 </td>
@@ -288,7 +291,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                     <button class="ghost sm" @click="setEnabled(n, !n.enabled)">
                       {{ n.enabled ? 'Disable' : 'Enable' }}
                     </button>
-                    <ActionButton variant="danger" :confirm="`Remove ${n.name}?`" @run="remove(n)">Remove</ActionButton>
+                    <ActionButton class="sm" variant="danger" :confirm="`Remove ${n.name}?`" @run="remove(n)">Remove</ActionButton>
                   </div>
                 </td>
               </tr>

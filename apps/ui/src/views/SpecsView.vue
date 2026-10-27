@@ -100,50 +100,55 @@ const shown = computed(() => {
           <input id="q" v-model="needle" type="search" placeholder="name or description" />
         </div>
 
-        <table role="table" class="cards" data-testid="specs.list">
-          <thead role="rowgroup">
-            <tr role="row">
-              <th role="columnheader">Name</th>
-              <th role="columnheader">Kind</th>
-              <th role="columnheader">
-                needs
-                <InfoHint label="what needs means">
-                  Variables the spec uses but does not set.
-                </InfoHint>
-              </th>
-              <th role="columnheader">Used by</th>
-              <th role="columnheader">Updated</th>
-            </tr>
-          </thead>
-          <tbody role="rowgroup" class="stagger">
-            <tr v-for="(s, i) in shown" :key="s.name" role="row" :style="{ '--i': i }">
-              <td role="cell" class="name" data-label="name">
-                <RouterLink :to="`/specs/${encodeURIComponent(s.name)}`">{{ s.name }}</RouterLink>
-                <div v-if="s.description" class="mute" style="font-size: var(--t-sm)">
-                  {{ s.description }}
-                </div>
-              </td>
-              <td role="cell" data-label="kind">
-                <span class="badge" :class="s.kind">{{ sentence(s.kind) }}</span>
-              </td>
-              <td role="cell" data-label="needs">
-                <span v-if="s.requiredVars.length">{{ s.requiredVars.join(', ') }}</span>
-                <span v-else class="mute">none</span>
-              </td>
-              <td role="cell" data-label="used by">
-                <span v-if="users.get(s.name)?.length">{{ users.get(s.name)!.length }}</span>
-                <span v-else class="mute">none</span>
-              </td>
-              <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="s.updatedAt" /></td>
-            </tr>
-            <tr v-if="!shown.length" role="row">
-              <td role="cell" colspan="5" class="mute">
-                No spec matches “{{ needle }}”.
-                <button class="ghost sm" @click="needle = ''">Clear search</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table role="table" class="cards" data-testid="specs.list">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Name</th>
+                <th role="columnheader">Kind</th>
+                <th role="columnheader">
+                  needs
+                  <InfoHint label="what needs means">
+                    Variables the spec uses but does not set.
+                  </InfoHint>
+                </th>
+                <th role="columnheader">Used by</th>
+                <th role="columnheader">Updated</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup" class="stagger">
+              <tr v-for="(s, i) in shown" :key="s.name" role="row" :style="{ '--i': i }">
+                <td role="cell" class="name" data-label="name">
+                  <!-- One value item: in card mode the name and description stack, not share a row. -->
+                  <div>
+                    <RouterLink :to="`/specs/${encodeURIComponent(s.name)}`">{{ s.name }}</RouterLink>
+                    <div v-if="s.description" class="mute" style="font-size: var(--t-sm)">
+                      {{ s.description }}
+                    </div>
+                  </div>
+                </td>
+                <td role="cell" data-label="kind">
+                  <span class="badge" :class="s.kind">{{ sentence(s.kind) }}</span>
+                </td>
+                <td role="cell" data-label="needs">
+                  <span v-if="s.requiredVars.length">{{ s.requiredVars.join(', ') }}</span>
+                  <span v-else class="mute">none</span>
+                </td>
+                <td role="cell" data-label="used by">
+                  <span v-if="users.get(s.name)?.length">{{ users.get(s.name)!.length }}</span>
+                  <span v-else class="mute">none</span>
+                </td>
+                <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="s.updatedAt" /></td>
+              </tr>
+              <tr v-if="!shown.length" role="row">
+                <td role="cell" colspan="5" class="mute">
+                  No spec matches “{{ needle }}”.
+                  <button class="ghost sm" @click="needle = ''">Clear search</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </template>
 
       <!--

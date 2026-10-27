@@ -208,25 +208,32 @@ function urlFor(c: RuntimeContainer): string | null {
               <tbody role="rowgroup" class="stagger">
                 <tr v-for="(r, i) in rt.routes" :key="r.router" role="row" :style="{ '--i': i }">
                   <td role="cell" class="cell-wrap" data-label="url">
-                    <div v-for="h in r.hosts" :key="h">
-                      <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
-                        {{ h }}
-                      </a>
-                      <span v-else class="mono mute">{{ h }}</span>
+                    <!-- One value item: a card row is a flex row, and each child would be its own column. -->
+                    <div style="min-width: 0">
+                      <div v-for="h in r.hosts" :key="h">
+                        <a v-if="!h.startsWith('(pattern)')" :href="`https://${h}`" target="_blank" rel="noreferrer">
+                          {{ h }}
+                        </a>
+                        <span v-else class="mono mute">{{ h }}</span>
+                      </div>
+                      <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
                     </div>
-                    <span v-if="!r.hosts.length" class="mute">no host in the rule</span>
                   </td>
                   <td role="cell" data-label="forwards to">
-                    <RouteTarget :route="r" />
-                    <!-- Under swarm this is the SERVICE name; either way it is matched, not read. -->
-                    <div class="mute cell-clip" style="font-size: var(--t-sm)" :title="r.container">
-                      {{ r.container }}
+                    <div style="min-width: 0">
+                      <RouteTarget :route="r" />
+                      <!-- Under swarm this is the SERVICE name; either way it is matched, not read. -->
+                      <div class="mute cell-clip" style="font-size: var(--t-sm)" :title="r.container">
+                        {{ r.container }}
+                      </div>
                     </div>
                   </td>
                   <td role="cell" data-label="router">
-                    <div class="cell-clip" :title="r.router">{{ r.router }}</div>
-                    <div v-if="r.priority" class="mute" style="font-size: var(--t-sm)">
-                      priority {{ r.priority }}
+                    <div style="min-width: 0">
+                      <div class="cell-clip" :title="r.router">{{ r.router }}</div>
+                      <div v-if="r.priority" class="mute" style="font-size: var(--t-sm)">
+                        priority {{ r.priority }}
+                      </div>
                     </div>
                   </td>
                   <td role="cell" data-label="tls">
@@ -297,43 +304,53 @@ function urlFor(c: RuntimeContainer): string | null {
               <tbody role="rowgroup" class="stagger">
                 <tr v-for="(c, i) in rt.containers" :key="c.id" role="row" :style="{ '--i': i }">
                   <td role="cell" class="name" data-label="service">
-                    <div class="cell-clip" :title="c.service ?? c.name">{{ c.service ?? c.name }}</div>
-                    <div class="mute task cell-clip" :title="c.name">{{ taskOf(c.name) }}</div>
+                    <div style="min-width: 0">
+                      <div class="cell-clip" :title="c.service ?? c.name">{{ c.service ?? c.name }}</div>
+                      <div class="mute task cell-clip" :title="c.name">{{ taskOf(c.name) }}</div>
+                    </div>
                   </td>
                   <td v-if="hasNode" role="cell" data-label="node">
-                    <div class="cell-clip" :title="c.node ?? undefined">{{ c.node ?? '—' }}</div>
-                    <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
-                    <span v-if="c.remote" class="badge" title="on another node — logs reach it, a shell and stop/start do not">Remote</span>
+                    <div style="min-width: 0">
+                      <div class="cell-clip" :title="c.node ?? undefined">{{ c.node ?? '—' }}</div>
+                      <!-- A task on another node: listed from the manager, out of reach of exec/stop. -->
+                      <span v-if="c.remote" class="badge" title="on another node — logs reach it, a shell and stop/start do not">Remote</span>
+                    </div>
                   </td>
                   <td role="cell" data-label="state">
-                    <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
-                    <!--
-                      Health is only reported while it is RUNNING. Docker keeps the last probe result on
-                      a stopped container, so an exited one rendered "Exited / Healthy" — a stale reading
-                      presented beside the fact that contradicts it.
-                    -->
-                    <div
-                      v-if="c.health && c.state === 'running'"
-                      class="mute"
-                      style="font-size: var(--t-sm)"
-                      :class="c.health === 'healthy' ? 's-ok' : 's-failed'"
-                    >
-                      {{ sentence(c.health) }}
+                    <div style="min-width: 0">
+                      <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
+                      <!--
+                        Health is only reported while it is RUNNING. Docker keeps the last probe result on
+                        a stopped container, so an exited one rendered "Exited / Healthy" — a stale reading
+                        presented beside the fact that contradicts it.
+                      -->
+                      <div
+                        v-if="c.health && c.state === 'running'"
+                        class="mute"
+                        style="font-size: var(--t-sm)"
+                        :class="c.health === 'healthy' ? 's-ok' : 's-failed'"
+                      >
+                        {{ sentence(c.health) }}
+                      </div>
                     </div>
                   </td>
                   <td role="cell" data-label="ports">
-                    <div v-for="p in c.ports" :key="`${p.containerPort}/${p.protocol}`">
-                      <span class="mono">{{ p.containerPort }}</span>
-                      <span v-if="p.hostPort" class="mute"> ← host {{ p.hostPort }}</span>
+                    <div style="min-width: 0">
+                      <div v-for="p in c.ports" :key="`${p.containerPort}/${p.protocol}`">
+                        <span class="mono">{{ p.containerPort }}</span>
+                        <span v-if="p.hostPort" class="mute"> ← host {{ p.hostPort }}</span>
+                      </div>
+                      <span v-if="!c.ports.length" class="mute">none exposed</span>
                     </div>
-                    <span v-if="!c.ports.length" class="mute">none exposed</span>
                   </td>
                   <td role="cell" data-label="networks">
-                    <div v-for="n in c.networks" :key="n" class="cell-clip" :title="n">
-                      <span :class="n === 'preview-ingress' ? 's-ok' : ''">{{ n }}</span>
-                    </div>
-                    <div v-if="c.ingressIp" class="mute mono cell-clip" style="font-size: var(--t-sm)" :title="c.ingressIp">
-                      {{ c.ingressIp }}
+                    <div style="min-width: 0">
+                      <div v-for="n in c.networks" :key="n" class="cell-clip" :title="n">
+                        <span :class="n === 'preview-ingress' ? 's-ok' : ''">{{ n }}</span>
+                      </div>
+                      <div v-if="c.ingressIp" class="mute mono cell-clip" style="font-size: var(--t-sm)" :title="c.ingressIp">
+                        {{ c.ingressIp }}
+                      </div>
                     </div>
                   </td>
                   <!-- Clipped, not wrapped: an image reference is matched against one you know, and
