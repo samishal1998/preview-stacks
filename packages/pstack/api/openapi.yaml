@@ -57,6 +57,8 @@ tags:
     description: 'Named specs, stored on the host and referenced by a deployment.'
   - name: routing
     description: 'Traefik''s dynamic-config files, and what it is actually serving.'
+  - name: custom-routes
+    description: 'Stable aliases for a stack: route `checkout` makes `web-<stack>.<domain>` also answer on `web-checkout.<domain>`.'
   - name: tls
     description: 'The host''s certificate mode, and the bring-your-own wildcard (dns-persist-01).'
   - name: logging
@@ -345,6 +347,74 @@ paths:
       operationId: deleteRoutingFile
       x-cli-name: delete
       responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── custom routes ───────────────────────────────────────────────────────────────────────────────
+  /api/custom-routes:
+    get:
+      tags: [custom-routes]
+      operationId: listCustomRoutes
+      x-cli-name: list
+      summary: 'Every route: name, deployment, stack and the alias hosts it serves now. `deployment` and `stack` are null when unassigned. Viewer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    post:
+      tags: [custom-routes]
+      operationId: createCustomRoute
+      x-cli-name: create
+      summary: 'Create a route, unassigned or assigned to a deployment. Never moves one: an existing name is 409, and `force` is accepted and ignored. Developer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, description: 'A DNS label, at most 40 characters. Not control, api, loki, grafana or a stack name.' }
+                deployment: { type: string, description: The deployment id to assign it to. }
+                force: { type: boolean, description: Ignored. A new route is never held. }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/custom-routes/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string }, description: The route name. }]
+    delete:
+      tags: [custom-routes]
+      operationId: deleteCustomRoute
+      x-cli-name: delete
+      summary: 'Delete a route; it stops serving at once. Developer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+
+  /api/custom-routes/{name}/assignment:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string }, description: The route name. }]
+    put:
+      tags: [custom-routes]
+      operationId: assignCustomRoute
+      x-cli-name: assign
+      summary: 'Point a route at a deployment. Held by another one is 409 with `assignedTo`, unless `force`, which moves it in one step. A host something else serves is 409. No redeploy. Developer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deployment]
+              properties:
+                deployment: { type: string, description: The deployment id. }
+                force: { type: boolean, description: Move the route from the deployment that holds it. }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [custom-routes]
+      operationId: unassignCustomRoute
+      x-cli-name: unassign
+      summary: 'Unassign a route. It is kept, serving nothing. Developer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
 
   # ── registries ──────────────────────────────────────────────────────────────────────────────────
   /api/registries:

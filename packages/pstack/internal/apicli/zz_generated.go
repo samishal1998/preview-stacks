@@ -40,6 +40,11 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("host").AddCommand(NewHostControlCommand(exec))
 	group("host").AddCommand(NewHostControlRestartCommand(exec))
 	group("host").AddCommand(NewHostControlRuntimeCommand(exec))
+	group("custom-routes").AddCommand(NewCustomRoutesListCommand(exec))
+	group("custom-routes").AddCommand(NewCustomRoutesCreateCommand(exec))
+	group("custom-routes").AddCommand(NewCustomRoutesDeleteCommand(exec))
+	group("custom-routes").AddCommand(NewCustomRoutesUnassignCommand(exec))
+	group("custom-routes").AddCommand(NewCustomRoutesAssignCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsListCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsDeleteCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsGetCommand(exec))
@@ -315,6 +320,192 @@ func NewHostControlRuntimeCommand(exec oascmd.ExecOptions) *cobra.Command {
 		req := oascmd.Request{
 			Method: "GET",
 			Path:   "/api/control/runtime",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewCustomRoutesListCommand returns the "custom-routes list" command
+// (GET /api/custom-routes).
+func NewCustomRoutesListCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "Every route: name, deployment, stack and the alias hosts it serves now. `deployment` and `stack` are null when unassigned. Viewer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/custom-routes",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewCustomRoutesCreateCommand returns the "custom-routes create" command
+// (POST /api/custom-routes).
+func NewCustomRoutesCreateCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyName       string
+		bodyDeployment string
+		bodyForce      bool
+		flagData       string
+	)
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a route, unassigned or assigned to a deployment. Never moves one: an existing name is 409, and `force` is accepted and ignored. Developer.",
+	}
+	cmd.Flags().StringVar(&bodyName, "name", "", "A DNS label, at most 40 characters. Not control, api, loki, grafana or a stack name.")
+	cmd.Flags().StringVar(&bodyDeployment, "deployment", "", "The deployment id to assign it to.")
+	cmd.Flags().BoolVar(&bodyForce, "force", false, "Ignored. A new route is never held.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "POST",
+			Path:   "/api/custom-routes",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("name") {
+			body["name"] = bodyName
+		}
+		if cmd.Flags().Changed("deployment") {
+			body["deployment"] = bodyDeployment
+		}
+		if cmd.Flags().Changed("force") {
+			body["force"] = bodyForce
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewCustomRoutesDeleteCommand returns the "custom-routes delete" command
+// (DELETE /api/custom-routes/{name}).
+func NewCustomRoutesDeleteCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName string
+	)
+	cmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete a route; it stops serving at once. Developer.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "The route name.")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "DELETE",
+			Path:       "/api/custom-routes/{name}",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewCustomRoutesUnassignCommand returns the "custom-routes unassign"
+// command (DELETE /api/custom-routes/{name}/assignment).
+func NewCustomRoutesUnassignCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName string
+	)
+	cmd := &cobra.Command{
+		Use:   "unassign",
+		Short: "Unassign a route. It is kept, serving nothing. Developer.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "The route name.")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "DELETE",
+			Path:       "/api/custom-routes/{name}/assignment",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewCustomRoutesAssignCommand returns the "custom-routes assign" command
+// (PUT /api/custom-routes/{name}/assignment).
+func NewCustomRoutesAssignCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName       string
+		bodyDeployment string
+		bodyForce      bool
+		flagData       string
+	)
+	cmd := &cobra.Command{
+		Use:   "assign",
+		Short: "Point a route at a deployment. Held by another one is 409 with `assignedTo`, unless `force`, which moves it in one step. A host something else serves is 409. No redeploy. Developer.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "The route name.")
+	cmd.Flags().StringVar(&bodyDeployment, "deployment", "", "The deployment id.")
+	cmd.Flags().BoolVar(&bodyForce, "force", false, "Move the route from the deployment that holds it.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "PUT",
+			Path:       "/api/custom-routes/{name}/assignment",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		body := map[string]any{}
+		if cmd.Flags().Changed("deployment") {
+			body["deployment"] = bodyDeployment
+		}
+		if cmd.Flags().Changed("force") {
+			body["force"] = bodyForce
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
 		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")

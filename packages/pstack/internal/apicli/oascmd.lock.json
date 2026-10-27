@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "5f4c34230059d7afac00414f2e308f4f16604bc5956e0a03363b72541c9098d6",
+  "specDigest": "2f0ba3b075735f9935d06fe9e317cb9dfb444773a23dbe9d7d9c25acfbca10d5",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -42,6 +42,44 @@
       },
       "digest": "93c540410ad651f6"
     },
+    "assignCustomRoute": {
+      "operationId": "assignCustomRoute",
+      "method": "PUT",
+      "path": "/api/custom-routes/{name}/assignment",
+      "command": "custom-routes assign",
+      "funcName": "NewCustomRoutesAssignCommand",
+      "summary": "Point a route at a deployment. Held by another one is 409 with `assignedTo`, unless `force`, which moves it in one step. A host something else serves is 409. No redeploy. Developer.",
+      "flags": [
+        {
+          "name": "deployment",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "The deployment id."
+        },
+        {
+          "name": "force",
+          "source": "body",
+          "type": "bool",
+          "description": "Move the route from the deployment that holds it."
+        },
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The route name."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "assign"
+      },
+      "digest": "42fd519b2b8c58d7"
+    },
     "cancelDeploymentJobs": {
       "operationId": "cancelDeploymentJobs",
       "method": "POST",
@@ -81,6 +119,43 @@
       ],
       "ext": {},
       "digest": "d1508b43c0a18de8"
+    },
+    "createCustomRoute": {
+      "operationId": "createCustomRoute",
+      "method": "POST",
+      "path": "/api/custom-routes",
+      "command": "custom-routes create",
+      "funcName": "NewCustomRoutesCreateCommand",
+      "summary": "Create a route, unassigned or assigned to a deployment. Never moves one: an existing name is 409, and `force` is accepted and ignored. Developer.",
+      "flags": [
+        {
+          "name": "deployment",
+          "source": "body",
+          "type": "string",
+          "description": "The deployment id to assign it to."
+        },
+        {
+          "name": "force",
+          "source": "body",
+          "type": "bool",
+          "description": "Ignored. A new route is never held."
+        },
+        {
+          "name": "name",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "A DNS label, at most 40 characters. Not control, api, loki, grafana or a stack name."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "create"
+      },
+      "digest": "cf5163103864611b"
     },
     "createNotifier": {
       "operationId": "createNotifier",
@@ -204,6 +279,27 @@
       },
       "ext": {},
       "digest": "5634509d5decfdee"
+    },
+    "deleteCustomRoute": {
+      "operationId": "deleteCustomRoute",
+      "method": "DELETE",
+      "path": "/api/custom-routes/{name}",
+      "command": "custom-routes delete",
+      "funcName": "NewCustomRoutesDeleteCommand",
+      "summary": "Delete a route; it stops serving at once. Developer.",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The route name."
+        }
+      ],
+      "ext": {
+        "name": "delete"
+      },
+      "digest": "e23786d7023c9189"
     },
     "deleteDeployment": {
       "operationId": "deleteDeployment",
@@ -885,6 +981,18 @@
         "name": "import-sealed"
       },
       "digest": "e8c94023155ae424"
+    },
+    "listCustomRoutes": {
+      "operationId": "listCustomRoutes",
+      "method": "GET",
+      "path": "/api/custom-routes",
+      "command": "custom-routes list",
+      "funcName": "NewCustomRoutesListCommand",
+      "summary": "Every route: name, deployment, stack and the alias hosts it serves now. `deployment` and `stack` are null when unassigned. Viewer.",
+      "ext": {
+        "name": "list"
+      },
+      "digest": "a007d275ab030777"
     },
     "listDeployments": {
       "operationId": "listDeployments",
@@ -1598,6 +1706,27 @@
       ],
       "ext": {},
       "digest": "5ea2e551f4c4c591"
+    },
+    "unassignCustomRoute": {
+      "operationId": "unassignCustomRoute",
+      "method": "DELETE",
+      "path": "/api/custom-routes/{name}/assignment",
+      "command": "custom-routes unassign",
+      "funcName": "NewCustomRoutesUnassignCommand",
+      "summary": "Unassign a route. It is kept, serving nothing. Developer.",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The route name."
+        }
+      ],
+      "ext": {
+        "name": "unassign"
+      },
+      "digest": "4504c3d6fb4a1160"
     },
     "undrainSwarmNode": {
       "operationId": "undrainSwarmNode",

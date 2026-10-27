@@ -79,7 +79,10 @@ func TestEnvelopeAndSign(t *testing.T) {
 // negative control: change "Teardown LEAKED" → the job.leaked line differs.
 // negative control: delete `case "loki-apply"` in actionWord → got "loki-apply started on pstack-control.".
 // negative control: delete `case "logging.changed"` in Summarize → got "logging.changed on this host.";
-// delete `case "signal.raised", "signal.cleared"` → got "signal.raised on this host.".
+// delete `case "signal.raised", "signal.cleared"` → got "signal.raised on this host.";
+// delete `case "route.assigned", "route.unassigned"` → got "route.assigned on myapp-pr-2."; drop the
+// `previous` clause → the move line loses "(moved from pr-1)"; drop the deployment fallback → got
+// "Route cart now points at .".
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	cases := map[string]string{
@@ -100,8 +103,12 @@ func TestSummarize(t *testing.T) {
 		"custom.event on this host.":                                                                 Summarize(ev("custom.event", `{}`)),
 		"Wake started on sleepy.":                                                                    Summarize(ev("job.started", `{"stack":"sleepy","action":"wake"}`)),
 		"Loki settings started on pstack-control.":                                                   Summarize(ev("job.started", `{"stack":"pstack-control","action":"loki-apply"}`)),
-		"pr-42_api cannot be placed: no suitable node (insufficient resources on 2 nodes).": Summarize(ev("signal.raised", `{"id":"stuck/pr-42_api","type":"stuck","service":"pr-42_api","reason":"no suitable node (insufficient resources on 2 nodes)"}`)),
-		"Resolved — worker-3 is empty.":                                                      Summarize(ev("signal.cleared", `{"id":"empty/xk3f","type":"empty","hostname":"worker-3"}`)),
+		"pr-42_api cannot be placed: no suitable node (insufficient resources on 2 nodes).":          Summarize(ev("signal.raised", `{"id":"stuck/pr-42_api","type":"stuck","service":"pr-42_api","reason":"no suitable node (insufficient resources on 2 nodes)"}`)),
+		"Resolved — worker-3 is empty.":                                                              Summarize(ev("signal.cleared", `{"id":"empty/xk3f","type":"empty","hostname":"worker-3"}`)),
+		"Route checkout now points at myapp-pr-2 (moved from pr-1).":                                 Summarize(ev("route.assigned", `{"route":"checkout","deployment":"pr-2","stack":"myapp-pr-2","previous":"pr-1"}`)),
+		"Route checkout now points at myapp-pr-2.":                                                   Summarize(ev("route.assigned", `{"route":"checkout","deployment":"pr-2","stack":"myapp-pr-2"}`)),
+		"Route checkout no longer points at myapp-pr-1 (forgotten).":                                 Summarize(ev("route.unassigned", `{"route":"checkout","deployment":"pr-1","stack":"myapp-pr-1","reason":"forgotten"}`)),
+		"Route cart now points at pr-3.":                                                             Summarize(ev("route.assigned", `{"route":"cart","deployment":"pr-3","stack":null}`)),
 		"Loki settings changed by alice: retention, storage.":                                        Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
 	}
 	for want, got := range cases {

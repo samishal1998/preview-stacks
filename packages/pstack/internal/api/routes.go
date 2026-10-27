@@ -38,6 +38,8 @@ var (
 	// The optional trailing action group has to be spelled exactly like this: openapi_coverage_test
 	// expands this shape into three paths (/nodes/{id}, …/drain, …/undrain) and collapses any other.
 	swarmNodeRe = regexp.MustCompile(`^/api/swarm/nodes/([^/]+)(?:/(drain|undrain))?$`)
+	// Spelled like swarmNodeRe, so openapi_coverage_test expands it into /{name} and /{name}/assignment.
+	customRouteRe = regexp.MustCompile(`^/api/custom-routes/([^/]+)(?:/(assignment))?$`)
 )
 
 // routes is the gated route table, in api.ts order. An ordered if-chain over precompiled
@@ -406,6 +408,21 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		all := inspect.AllTraefikRouters(s.host)
 		writeJSON(w, 200, jsonx.O("reachable", all.Reachable, "routes", all.Routes))
 		return nil
+	}
+
+	// ---- custom routes: a stable alias for a stack ----
+	if path == "/api/custom-routes" && r.Method == http.MethodGet {
+		return s.customRoutesList(w)
+	}
+	if path == "/api/custom-routes" && r.Method == http.MethodPost {
+		return s.customRouteCreate(w, r)
+	}
+	if m := customRouteRe.FindStringSubmatch(path); m != nil {
+		name, err := segment(m[1])
+		if err != nil {
+			return err
+		}
+		return s.customRoutesRoutes(w, r, name, m[2] != "")
 	}
 
 	// ---- Traefik dynamic configuration ----

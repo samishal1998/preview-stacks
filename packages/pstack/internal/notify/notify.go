@@ -475,6 +475,18 @@ func Summarize(e events.Event) string {
 			return "Resolved — " + what + "."
 		}
 		return what + "."
+	case "route.assigned", "route.unassigned":
+		if stack == "" {
+			stack = field(d, "deployment") // its spec did not resolve
+		}
+		if e.Event == "route.unassigned" {
+			return "Route " + field(d, "route") + " no longer points at " + stack + " (" + field(d, "reason") + ")."
+		}
+		s := "Route " + field(d, "route") + " now points at " + stack
+		if p, ok := d["previous"].(string); ok {
+			s += " (moved from " + p + ")"
+		}
+		return s + "."
 	default:
 		if stack == "" {
 			stack = "this host"
