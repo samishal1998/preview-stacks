@@ -35,6 +35,9 @@ import { safeNext } from './lib/sso';
 import { can, sentence, type Role } from './lib/users';
 import { auth, data, dismissToast, grafana, prefs, refresh, signInWithToken, signOut, start, toasts } from './state';
 
+// About 60 % of the library's 10/16/20px corners. Overlays are native dialogs and popovers inside the island, so they inherit these.
+const RADIUS = { '--h-radius-control': '6px', '--h-radius-card': '10px', '--h-radius-panel': '14px' };
+
 const route = useRoute();
 const router = useRouter();
 
@@ -162,7 +165,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>
-  <HTheme :theme="prefs.theme" :mode="prefs.mode" :density="prefs.density">
+  <HTheme :theme="prefs.theme" :mode="prefs.mode" :density="prefs.density" :tokens="RADIUS">
     <!-- A public page (a share link) renders without the sign-in gate or the shell. -->
     <RouterView v-if="route.meta.public" />
 

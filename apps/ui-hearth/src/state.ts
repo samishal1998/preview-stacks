@@ -9,6 +9,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import type { DeploymentRow, Job } from '@samyx/preview-stacks-client';
 import type { ToastItem } from '@hearth-ui/vue';
 import { api, onUnauthorized } from './api';
+import { mergePrefs, type Prefs } from './lib/settings';
 import { clearToken, getToken, setToken } from './lib/token';
 
 /** `role` is the signed-in account's role ('' for the host token); the one source controls are drawn from. */
@@ -41,12 +42,11 @@ export const data = reactive({
 
 // ── theme, remembered per browser ───────────────────────────────────────────────────────────────
 const KEY = 'pstack.hearth.prefs';
-type Prefs = { theme: string; mode: 'dark' | 'light' | 'system'; density: 'comfortable' | 'compact' };
 function load(): Prefs {
   try {
-    return { theme: 'sunset', mode: 'system', density: 'comfortable', ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    return mergePrefs(JSON.parse(localStorage.getItem(KEY) ?? '{}'));
   } catch {
-    return { theme: 'sunset', mode: 'system', density: 'comfortable' };
+    return mergePrefs({});
   }
 }
 export const prefs = reactive<Prefs>(load());
