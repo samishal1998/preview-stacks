@@ -76,7 +76,7 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
 
     <HAlert v-if="forbidden" tone="warning" title="Maintainer only." />
     <template v-else>
-      <HGrid v-if="runtime?.reachable" min-column-width="8rem" :gap="3">
+      <HGrid v-if="runtime?.reachable" min-column-width="11rem" :gap="3">
         <HStatCard label="Restarts" :value="restarts" :tone="restarts ? 'warning' : 'neutral'" />
         <HStatCard label="OOM killed" :value="oomed" :tone="oomed ? 'danger' : 'neutral'" />
         <HStatCard v-if="tls" label="Certificates" :value="tls.mode" tone="neutral" />

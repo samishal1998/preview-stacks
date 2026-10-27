@@ -199,7 +199,7 @@ const userActions = (row: TableRow): MenuAction[] => {
   if (!u) return [];
   const out: MenuAction[] = [];
   if (isYou(u) || isAdmin.value) out.push({ id: 'password', label: 'Change password', icon: 'lock' });
-  if (isAdmin.value) out.push({ id: 'delete', label: 'Delete', danger: true, disabled: isLastAdmin(u, users.value), separatorBefore: out.length > 0 });
+  if (isAdmin.value) out.push({ id: 'delete', label: 'Delete', icon: 'close', danger: true, disabled: isLastAdmin(u, users.value), separatorBefore: out.length > 0 });
   return out;
 };
 function onUserAction(e: { id: string; action: string }): void {
@@ -249,7 +249,7 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
         >
           <template #cell="{ row, column, value }">
             <HStack direction="row" v-if="column.key === 'username'" :gap="2" align="center" wrap>
-              <HText weight="medium">{{ value }}</HText>
+              <HText weight="medium" style="min-width: 0; overflow: hidden; text-overflow: ellipsis">{{ value }}</HText>
               <HBadge v-if="userById(row) && isYou(userById(row)!)" label="you" tone="info" size="sm" />
             </HStack>
             <span v-else-if="column.key === 'role' && isAdmin && userById(row)" :title="isLastAdmin(userById(row)!, users) ? LAST_ADMIN_WHY : undefined">
@@ -272,11 +272,12 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
           <HStack direction="column" :gap="3">
             <HHeading :level="3" size="sm">Add an account</HHeading>
             <HStack direction="row" :gap="3" wrap align="end">
-              <HInput v-model="newUser.username" label="Username" autocomplete="off" />
-              <HInput v-model="newUser.password" label="Password" type="password" autocomplete="new-password" :placeholder="`${MIN_PASSWORD}+ characters`" />
-              <HSelect v-model="newUser.role" label="Role" :options="roleOptions" />
+              <div class="field"><HInput v-model="newUser.username" label="Username" autocomplete="off" /></div>
+              <div class="field"><HInput v-model="newUser.password" label="Password" type="password" autocomplete="new-password" :placeholder="`${MIN_PASSWORD}+ characters`" /></div>
+              <div class="field"><HSelect v-model="newUser.role" label="Role" :options="roleOptions" /></div>
               <HButton type="submit" variant="primary" label="Add account" :loading="busy" :disabled="!canCreateUser(newUser)" />
             </HStack>
+            <HText v-if="newUser.password && newUser.password.length < MIN_PASSWORD" tone="muted" size="sm">The password needs at least {{ MIN_PASSWORD }} characters.</HText>
             <HAlert v-if="userError" tone="danger" :description="userError" />
           </HStack>
         </form>
@@ -299,7 +300,7 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
 
         <form v-if="!auth.root" @submit.prevent="createToken">
           <HStack direction="row" :gap="3" wrap align="end">
-            <HInput v-model="newToken" label="Token name" placeholder="ci-deploy" autocomplete="off" />
+            <div class="field"><HInput v-model="newToken" label="Token name" placeholder="ci-deploy" autocomplete="off" /></div>
             <HButton type="submit" variant="primary" label="Create token" :loading="busy" :disabled="!newToken.trim()" />
           </HStack>
           <HAlert v-if="tokenError" tone="danger" :description="tokenError" />
@@ -315,7 +316,7 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
     >
       <form @submit.prevent="changePassword">
         <HStack direction="column" :gap="3">
-          <HInput v-model="pw.value" label="New password" type="password" autocomplete="new-password" :placeholder="`${MIN_PASSWORD}+ characters`" />
+          <HInput v-model="pw.value" label="New password" type="password" autocomplete="new-password" :hint="`At least ${MIN_PASSWORD} characters.`" />
           <HAlert v-if="pw.error" tone="danger" :description="pw.error" />
         </HStack>
       </form>
@@ -344,3 +345,12 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
     <HAlertDialog v-model:open="tokOpen" danger :title="`Revoke ${del.token?.name ?? ''}?`" description="Anything using it stops working." confirm-label="Revoke" @confirm="removeToken" />
   </HStack>
 </template>
+
+<style scoped>
+/* A wrapper is the flex item: HInput and HSelect pass style to their inner control. Fields fill the row
+   evenly, and a wrapped one fills the card. */
+.field {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+</style>

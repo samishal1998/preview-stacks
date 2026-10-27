@@ -50,9 +50,9 @@ const sig = (id: string) => signals.value?.nodes.find((n) => n.id === id);
 // ── nodes ───────────────────────────────────────────────────────────────────────────────────────
 const columns: TableColumn[] = [
   { key: 'host', label: 'Hostname' },
-  { key: 'role', label: 'Role', hideBelow: 480 },
+  { key: 'role', label: 'Role' },
   { key: 'status', label: 'Status' },
-  { key: 'availability', label: 'Availability', hideBelow: 560 },
+  { key: 'availability', label: 'Availability' },
   { key: 'tasks', label: 'Tasks', align: 'end', hideBelow: 640 },
   { key: 'engine', label: 'Engine', hideBelow: 820 },
   { key: 'short', label: 'Id', hideBelow: 960 },
@@ -171,14 +171,16 @@ onBeforeUnmount(() => {
 
         <template v-if="manager">
           <HHeading :level="2" size="md">Previews</HHeading>
-          <HSelect
-            :model-value="previewsOn"
-            label="Run previews on"
-            :options="[{ value: 'any', label: 'Any node' }, { value: 'workers', label: 'Workers only' }]"
-            style="max-width: 20rem"
-            :disabled="!manage || acting !== ''"
-            @update:model-value="setPreviewsOn(String($event))"
-          />
+          <!-- The width goes on a wrapper: HSelect passes style to its inner <select>, leaving the chevron at the column edge. -->
+          <div style="max-width: 20rem">
+            <HSelect
+              :model-value="previewsOn"
+              label="Run previews on"
+              :options="[{ value: 'any', label: 'Any node' }, { value: 'workers', label: 'Workers only' }]"
+              :disabled="!manage || acting !== ''"
+              @update:model-value="setPreviewsOn(String($event))"
+            />
+          </div>
           <HText tone="muted" size="sm">Workers only keeps this manager to the control stack.</HText>
           <HAlert v-if="noWorker" tone="warning" title="No worker is ready." description="Previews stay pending until one joins." />
         </template>
@@ -206,7 +208,7 @@ onBeforeUnmount(() => {
             <HBadge v-else-if="column.key === 'role'" :label="String(value)" :tone="value === 'manager' ? 'accent' : 'neutral'" variant="outline" />
             <HBadge v-else-if="column.key === 'status'" dot :label="String(value)" :tone="value === 'ready' ? 'success' : 'danger'" />
             <HBadge v-else-if="column.key === 'availability'" :label="String(value)" :tone="value === 'active' ? 'neutral' : 'warning'" />
-            <code v-else-if="column.key === 'engine' || column.key === 'short'">{{ value }}</code>
+            <code v-else-if="column.key === 'engine' || column.key === 'short'" style="white-space: nowrap">{{ value }}</code>
             <template v-else>{{ value }}</template>
           </template>
         </HDataTable>
