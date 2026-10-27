@@ -3,6 +3,7 @@
     "test/api-auth.test.ts": 11,
     "test/api-config.test.ts": 7,
     "test/api-control.test.ts": 3,
+    "test/api-custom-routes.test.ts": 7,
     "test/api-domains.test.ts": 3,
     "test/api-grafana.test.ts": 4,
     "test/api-host-vars.test.ts": 2,
@@ -24,7 +25,7 @@
     "test/api-webhooks-delivery.test.ts": 19,
     "test/api-webhooks-registration.test.ts": 6,
     "test/cli-api.test.ts": 6,
-    "test/cli-goldens.test.ts": 94,
+    "test/cli-goldens.test.ts": 100,
     "test/cli-surface.test.ts": 5,
     "test/harness.test.ts": 3,
     "test/host-fixture.test.ts": 34
