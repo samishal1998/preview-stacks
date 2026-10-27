@@ -199,3 +199,14 @@ func TestOutcomeOutputsKeepAccumulationOrder(t *testing.T) {
 		t.Fatalf("%s %v", b, err)
 	}
 }
+
+// negative control: return js.Truncate(line, 300) bare → a cut step message ends mid-word, unmarked.
+func TestFirstLineMarksACut(t *testing.T) {
+	long := strings.Repeat("é", 301)
+	if got := firstLine(long + "\nnext"); got != strings.Repeat("é", 300)+"…" {
+		t.Errorf("cut: %q", got)
+	}
+	if got := firstLine("  short\nnext"); got != "short" {
+		t.Errorf("short: %q", got)
+	}
+}

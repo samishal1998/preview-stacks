@@ -106,13 +106,17 @@ func allOK(steps []StepResult) bool {
 
 func msg(s string) *string { return &s }
 
-// firstLine is the first line of a hook's output, capped at 300 characters.
+// firstLine is the first line of a hook's output, capped at 300 characters. A cut line ends in "…",
+// so a reader can tell it was cut.
 func firstLine(s string) string {
 	line := strings.TrimSpace(s)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
-	return js.Truncate(line, 300)
+	if t := js.Truncate(line, 300); t != line {
+		return t + "…"
+	}
+	return line
 }
 
 func hookEnv(st *spec.Stack, outputs map[string]string) map[string]string {
