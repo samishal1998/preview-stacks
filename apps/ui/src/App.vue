@@ -16,6 +16,7 @@ import { usePolling } from './composables/usePolling';
 import { loadDeployments, loadHealth, loadJobs, state } from './composables/useControlPlane';
 import { settings } from './composables/useSettings';
 import { authState, can, logout } from './composables/useAuth';
+import { showGrafana } from './composables/grafana';
 import { useRoute, useRouter } from 'vue-router';
 import { sentence } from './composables/useFormat';
 import InfoHint from './components/InfoHint.vue';
@@ -148,7 +149,7 @@ const runningJobs = computed(() => state.jobs.filter((j) => j.state === 'running
         <!-- Developer and up: verify refuses viewers (Grafana reads unredacted lines). Hidden with a
              stored token: no pstack_session, so Grafana's sign-in would end on / (router.ts guard). -->
         <a
-          v-if="authState.grafana && !settings.token && can('developer')"
+          v-if="showGrafana(authState.grafana, can('developer'), !!settings.token)"
           :href="authState.grafana"
           class="navlink"
           target="_blank"
