@@ -79,41 +79,43 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
 
       <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
       <template v-else>
-        <table role="table" class="cards">
-          <thead role="rowgroup">
-            <tr role="row">
-              <th role="columnheader">Key</th>
-              <th role="columnheader">Value</th>
-              <th role="columnheader">Visibility</th>
-              <th role="columnheader">Length</th>
-            </tr>
-          </thead>
-          <tbody role="rowgroup">
-            <tr v-for="e in dep.detail.env" :key="e.key" role="row">
-              <td role="cell" class="name" data-label="key">{{ e.key }}</td>
-              <td role="cell" class="name" :class="{ masked: e.visibility === 'masked' }" data-label="value">
-                {{ e.value }}
-              </td>
-              <td role="cell" data-label="visibility">
-                <span class="badge" :class="e.visibility === 'masked' ? 'warn' : ''">
-                  {{ sentence(e.visibility) }}
-                </span>
-              </td>
-              <!--
-                `length` answers "did it get set at all?" without the value. length 0 on a masked
-                var is the interesting case: declared, never set — usually a hook about to fail on
-                an empty credential.
-              -->
-              <td role="cell" class="dim" data-label="length">
-                {{ e.length }} chars
-                <span v-if="e.length === 0" class="badge warn" style="margin-left: 6px">never set</span>
-              </td>
-            </tr>
-            <tr v-if="!dep.detail.env.length" role="row">
-              <td role="cell" colspan="4" class="mute">This spec declares no <code>env:</code> block.</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Key</th>
+                <th role="columnheader">Value</th>
+                <th role="columnheader">Visibility</th>
+                <th role="columnheader">Length</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup">
+              <tr v-for="e in dep.detail.env" :key="e.key" role="row">
+                <td role="cell" class="name" data-label="key">{{ e.key }}</td>
+                <td role="cell" class="name" :class="{ masked: e.visibility === 'masked' }" data-label="value">
+                  {{ e.value }}
+                </td>
+                <td role="cell" data-label="visibility">
+                  <span class="badge" :class="e.visibility === 'masked' ? 'warn' : ''">
+                    {{ sentence(e.visibility) }}
+                  </span>
+                </td>
+                <!--
+                  `length` answers "did it get set at all?" without the value. length 0 on a masked
+                  var is the interesting case: declared, never set — usually a hook about to fail on
+                  an empty credential.
+                -->
+                <td role="cell" class="dim" data-label="length">
+                  {{ e.length }} chars
+                  <span v-if="e.length === 0" class="badge warn" style="margin-left: 6px">never set</span>
+                </td>
+              </tr>
+              <tr v-if="!dep.detail.env.length" role="row">
+                <td role="cell" colspan="4" class="mute">This spec declares no <code>env:</code> block.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <!--
           Masked is NOT "hidden pending a click". The plaintext was never in the response, so there

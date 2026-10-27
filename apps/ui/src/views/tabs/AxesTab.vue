@@ -17,52 +17,58 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
 
 <template>
   <section class="panel">
-    <h2 class="section" style="margin-bottom: var(--s3)">Axes</h2>
+    <!-- The hint lives in the heading: card mode hides the table header it used to sit in. -->
+    <h2 class="section" style="margin-bottom: var(--s3)">
+      Axes
+      <InfoHint label="what the four hooks do">
+        <code>up</code> provisions · <code>assert_live</code> checks it exists ·
+        <code>down</code> destroys · <code>assert_gone</code> proves it is gone.
+      </InfoHint>
+    </h2>
 
     <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
     <template v-else>
-      <table role="table" class="cards">
-        <thead role="rowgroup">
-          <tr role="row">
-            <th role="columnheader">Axis</th>
-            <th role="columnheader">
-              hooks
-              <InfoHint label="what the four hooks do">
-                <code>up</code> provisions · <code>assert_live</code> checks it exists ·
-                <code>down</code> destroys · <code>assert_gone</code> proves it is gone.
-              </InfoHint>
-            </th>
-            <th role="columnheader">Teardown provable?</th>
-          </tr>
-        </thead>
-        <tbody role="rowgroup" class="stagger">
-          <tr v-for="(a, i) in dep.detail.axes" :key="a.name" role="row" :style="{ '--i': i }">
-            <td role="cell" class="name" data-label="axis">{{ a.name }}</td>
-            <td role="cell" data-label="hooks">
-              <span
-                v-for="h in HOOKS"
-                :key="h"
-                class="badge"
-                :class="{ off: !a.hooks.includes(h) }"
-                style="margin-right: 4px"
-                >{{ h }}</span
-              >
-            </td>
-            <td role="cell" data-label="provable">
-              <span v-if="a.verifiable" class="badge ok">assert_gone</span>
-              <span
-                v-else
-                class="badge warn"
-                title="verify cannot prove this axis was cleaned up — this is not a pass"
-                >unverifiable</span
-              >
-            </td>
-          </tr>
-          <tr v-if="!dep.detail.axes.length" role="row">
-            <td role="cell" colspan="3" class="mute">No axes.</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Axis</th>
+              <th role="columnheader">hooks</th>
+              <th role="columnheader">Teardown provable?</th>
+            </tr>
+          </thead>
+          <tbody role="rowgroup" class="stagger">
+            <tr v-for="(a, i) in dep.detail.axes" :key="a.name" role="row" :style="{ '--i': i }">
+              <td role="cell" class="name" data-label="axis">{{ a.name }}</td>
+              <td role="cell" data-label="hooks">
+                <!-- One value item, so the badges wrap inside it instead of each being a flex item. -->
+                <span
+                  ><span
+                    v-for="h in HOOKS"
+                    :key="h"
+                    class="badge"
+                    :class="{ off: !a.hooks.includes(h) }"
+                    style="margin-right: 4px"
+                    >{{ h }}</span
+                  ></span
+                >
+              </td>
+              <td role="cell" data-label="provable">
+                <span v-if="a.verifiable" class="badge ok">assert_gone</span>
+                <span
+                  v-else
+                  class="badge warn"
+                  title="verify cannot prove this axis was cleaned up — this is not a pass"
+                  >unverifiable</span
+                >
+              </td>
+            </tr>
+            <tr v-if="!dep.detail.axes.length" role="row">
+              <td role="cell" colspan="3" class="mute">No axes.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- The third state, stated once: a green `verify` is silence about these axes, never a pass.
            Colouring them green is the false confidence this tool exists to remove. -->

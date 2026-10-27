@@ -109,56 +109,58 @@ const rows = computed(() => {
       <p v-if="state.jobsError" class="s-failed">{{ state.jobsError }}</p>
       <SkeletonList v-else-if="!state.jobsLoaded" :rows="5" tall />
 
-      <table v-else role="table" class="cards">
-        <thead role="rowgroup">
-          <tr role="row">
-            <th role="columnheader">State</th>
-            <th role="columnheader">Action</th>
-            <th role="columnheader">Stack</th>
-            <th role="columnheader">Started</th>
-            <th role="columnheader">Took</th>
-            <th role="columnheader">Steps</th>
-          </tr>
-        </thead>
-        <tbody role="rowgroup" class="stagger">
-          <tr v-for="(j, i) in rows" :key="j.id" role="row" :style="{ '--i': i }">
-            <td role="cell" data-label="state">
-              <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
-                <StateBadge :state="j.state" />
-              </RouterLink>
-              <!-- A badge says "queued"; it cannot say WHY, and why is the whole question when a
-                   deploy looks stuck. Same for superseded: the useful fact is which job won. -->
-              <div v-if="j.state === 'queued'" class="mute nowrap wait-why">{{ waitText(j) }}</div>
-              <div v-else-if="j.state === 'superseded'" class="mute nowrap wait-why">
-                <template v-if="replacement(j)">
-                  replaced by
-                  <RouterLink :to="`/jobs/${encodeURIComponent(replacement(j)!.id)}`">
-                    a newer {{ actionLabel(replacement(j)!.action).toLowerCase() }}
-                  </RouterLink>
+      <div v-else class="table-scroll">
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">State</th>
+              <th role="columnheader">Action</th>
+              <th role="columnheader">Stack</th>
+              <th role="columnheader">Started</th>
+              <th role="columnheader">Took</th>
+              <th role="columnheader">Steps</th>
+            </tr>
+          </thead>
+          <tbody role="rowgroup" class="stagger">
+            <tr v-for="(j, i) in rows" :key="j.id" role="row" :style="{ '--i': i }">
+              <td role="cell" data-label="state">
+                <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
+                  <StateBadge :state="j.state" />
+                </RouterLink>
+                <!-- A badge says "queued"; it cannot say WHY, and why is the whole question when a
+                     deploy looks stuck. Same for superseded: the useful fact is which job won. -->
+                <div v-if="j.state === 'queued'" class="mute nowrap wait-why">{{ waitText(j) }}</div>
+                <div v-else-if="j.state === 'superseded'" class="mute nowrap wait-why">
+                  <template v-if="replacement(j)">
+                    replaced by
+                    <RouterLink :to="`/jobs/${encodeURIComponent(replacement(j)!.id)}`">
+                      a newer {{ actionLabel(replacement(j)!.action).toLowerCase() }}
+                    </RouterLink>
+                  </template>
+                  <template v-else>never ran</template>
+                </div>
+              </td>
+              <td role="cell" data-label="action">{{ actionLabel(j.action) }}</td>
+              <td role="cell" class="name" data-label="stack">
+                <RouterLink v-if="jobTarget(j)" :to="jobTarget(j)!">{{ j.stack }}</RouterLink>
+                <span v-else>{{ j.stack }}</span>
+              </td>
+              <td role="cell" class="dim nowrap" data-label="started"><RelativeTime :at="j.startedAt" /></td>
+              <td role="cell" class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
+              <td role="cell" class="dim" data-label="steps">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
+            </tr>
+            <tr v-if="!rows.length" role="row">
+              <td role="cell" colspan="6" class="mute">
+                <template v-if="state.jobs.length">
+                  Nothing matches this filter.
+                  <button class="ghost sm" @click="q = ''; only = 'all'; deployment && $router.replace('/jobs')">Clear filters</button>
                 </template>
-                <template v-else>never ran</template>
-              </div>
-            </td>
-            <td role="cell" data-label="action">{{ actionLabel(j.action) }}</td>
-            <td role="cell" class="name" data-label="stack">
-              <RouterLink v-if="jobTarget(j)" :to="jobTarget(j)!">{{ j.stack }}</RouterLink>
-              <span v-else>{{ j.stack }}</span>
-            </td>
-            <td role="cell" class="dim nowrap" data-label="started"><RelativeTime :at="j.startedAt" /></td>
-            <td role="cell" class="dim nowrap" data-label="took">{{ took(j.startedAt, j.endedAt) }}</td>
-            <td role="cell" class="dim" data-label="steps">{{ j.outcome ? j.outcome.steps.length : '—' }}</td>
-          </tr>
-          <tr v-if="!rows.length" role="row">
-            <td role="cell" colspan="6" class="mute">
-              <template v-if="state.jobs.length">
-                Nothing matches this filter.
-                <button class="ghost sm" @click="q = ''; only = 'all'; deployment && $router.replace('/jobs')">Clear filters</button>
-              </template>
-              <template v-else>No jobs recorded.</template>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                <template v-else>No jobs recorded.</template>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>

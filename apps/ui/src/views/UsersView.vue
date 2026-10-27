@@ -224,7 +224,7 @@ async function removeToken(t: Token): Promise<void> {
       <!-- The one-line interlock: there is no read path on the server, so this really is the only
            time the value exists anywhere but the clipboard. -->
       <p>{{ revealed.note }}</p>
-      <pre class="code">{{ revealed.value }}</pre>
+      <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ revealed.value }}</pre>
       <div class="row">
         <button @click="revealed = null">Dismiss</button>
       </div>
@@ -253,8 +253,9 @@ async function removeToken(t: Token): Promise<void> {
           <tbody role="rowgroup">
             <tr v-for="u in users" :key="u.id" role="row">
               <td role="cell" class="name" data-label="user">
-                <b>{{ u.username }}</b>
-                <span v-if="u.id === authState.user?.id" class="badge info">you</span>
+                <span
+                  ><b>{{ u.username }}</b> <span v-if="u.id === authState.user?.id" class="badge info">you</span></span
+                >
               </td>
               <!-- An admin gets the picker in place: promotion is a one-step decision about one
                    person, and a dialog for a four-option choice is a page-blocking ceremony. Anyone
@@ -413,7 +414,7 @@ async function removeToken(t: Token): Promise<void> {
             <span>New password</span>
             <input v-model="pwValue" type="password" autocomplete="new-password" />
           </label>
-          <div class="row">
+          <div class="row" style="margin-top: var(--s4)">
             <button class="primary" :disabled="pwValue.length < 8" @click="changePassword">
               Change password
             </button>
