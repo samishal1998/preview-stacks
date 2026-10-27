@@ -104,11 +104,13 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
 <template>
   <div class="page">
     <header class="page-head">
-      <h1>Apply a configuration</h1>
-      <p class="dim">A sealed export from another host. Creates what is missing, never overwrites.</p>
+      <div>
+        <h1>Apply a configuration</h1>
+        <div class="sub">A sealed export from another host. Creates what is missing, never overwrites.</div>
+      </div>
     </header>
 
-    <section class="card">
+    <section class="panel">
       <label class="field">
         <span>Sealed export</span>
         <input type="file" accept=".sealed,.yaml,.yml,.json,application/json" @change="pick" />
@@ -127,20 +129,20 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
         <small class="dim">Sent to this host to open the file.</small>
       </label>
 
-      <div class="row">
+      <div class="row" style="margin-top: var(--s4)">
         <ActionButton
-          label="Preview"
           :pending="busy === 'preview'"
           :disabled="!sealed || !passphrase || !!busy"
           @click="run('preview')"
-        />
+          >Preview</ActionButton
+        >
         <ActionButton
-          label="Apply"
           variant="danger"
           :pending="busy === 'apply'"
           :disabled="!preview || !!busy"
           @click="run('apply')"
-        />
+          >Apply</ActionButton
+        >
         <small class="dim" v-if="!preview && !applied">Preview before applying.</small>
       </div>
     </section>
@@ -150,7 +152,7 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
       tokens, the sign-on provider and every registry and notifier URL — the things a file from
       somewhere else could use to take this host over.
     -->
-    <section v-if="preview" class="card banner warn">
+    <section v-if="preview" class="panel banner warn">
       <b>This file will make this host trust:</b>
       <ul>
         <li v-for="t in preview.trusts" :key="t">{{ t }}</li>
@@ -164,7 +166,7 @@ async function run(mode: 'preview' | 'apply'): Promise<void> {
       <p>Nothing has been written yet.</p>
     </section>
 
-    <section v-if="applied" class="card">
+    <section v-if="applied" class="panel">
       <b>Applied.</b>
       <p class="dim" v-if="applied.created.length">Created:</p>
       <ul>

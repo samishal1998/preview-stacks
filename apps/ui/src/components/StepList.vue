@@ -22,10 +22,13 @@ defineProps<{ steps: StepResult[] }>();
       >
         <span class="mark" :class="`s-${stepState(s)}`" aria-hidden="true">{{ stepMark(s) }}</span>
         <span>
-          <span class="who">{{ s.axis }}</span>
-          <span class="dim" style="font-size: var(--t-sm)"> · {{ s.phase }}</span>
-          <span class="badge" :class="stepState(s)" style="margin-left: var(--s2)">
-            {{ stepState(s) }}
+          <!-- A gap, not a margin: a badge that wraps starts on the text column. -->
+          <span style="display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--s2)">
+            <span class="who">{{ s.axis }}</span>
+            <span class="dim" style="font-size: var(--t-sm)">· {{ s.phase }}</span>
+            <span class="badge" :class="stepState(s)">
+              {{ stepState(s) }}
+            </span>
           </span>
           <div class="msg" :class="`s-${stepState(s)}`">{{ stepText(s) }}</div>
         </span>
@@ -37,7 +40,7 @@ defineProps<{ steps: StepResult[] }>();
       <span class="s-failed">✗ failed</span> ·
       <span class="s-leaked">! leaked — survived teardown</span> ·
       <span class="s-unverifiable">? unverifiable — nothing to check, not a pass</span>.
-      A <code>down</code> step marked ok may still carry a <code>non-fatal:</code> note: teardown is
+      A <code>down</code> step marked ok may still carry a <code class="nowrap">non-fatal:</code> note: teardown is
       best-effort by design, so aborting halfway would leave more behind than continuing.
     </p>
   </div>

@@ -263,14 +263,14 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
           data-bwignore
           data-form-type="other"
           spellcheck="false"
-          placeholder="paste the token from pstack init"
+          placeholder="token from pstack init"
         />
-        <div class="row" style="margin-top: var(--s2)">
-          <button v-if="settings.token" class="ghost sm" @click="reveal = !reveal">
+        <!-- Not rendered when empty: an empty grid item in `.field` still takes a gap. -->
+        <div v-if="settings.token" class="row" style="margin-top: var(--s2)">
+          <button class="ghost sm" @click="reveal = !reveal">
             {{ reveal ? 'Hide' : 'Show' }}
           </button>
           <ActionButton
-            v-if="settings.token"
             variant="ghost"
             class="sm"
             confirm="Clear it?"
@@ -278,7 +278,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
           >
             Clear
           </ActionButton>
-          <span v-if="settings.token" class="mute" style="font-size: var(--t-xs)">
+          <span class="mute" style="font-size: var(--t-xs)">
             {{ tokenShape }}
           </span>
         </div>

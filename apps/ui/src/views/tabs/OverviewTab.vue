@@ -10,13 +10,12 @@ import SkeletonList from '../../components/SkeletonList.vue';
     <div class="phead">
       <h2 class="section">Resolved spec</h2>
       <span class="grow" />
-      <RouterLink v-if="dep.detail" :to="`/submit?from=${encodeURIComponent(dep.id)}`">
-        Duplicate
-      </RouterLink>
-      <span v-if="dep.detail" class="mute">·</span>
-      <RouterLink v-if="dep.detail" :to="`/submit/${encodeURIComponent(dep.id)}`">
-        Edit spec &amp; compose →
-      </RouterLink>
+      <!-- One flex item, so the separator never ends a line on its own. -->
+      <span v-if="dep.detail">
+        <RouterLink :to="`/submit?from=${encodeURIComponent(dep.id)}`">Duplicate</RouterLink>
+        <span class="mute">·</span>
+        <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Edit spec &amp; compose →</RouterLink>
+      </span>
     </div>
 
     <SkeletonList v-if="!dep.detail && !dep.error" :rows="5" />
@@ -83,8 +82,8 @@ import SkeletonList from '../../components/SkeletonList.vue';
             <span class="mute">({{ dep.detail.asleep.reason }})</span>
             <div v-if="dep.detail.asleep.hosts.length || dep.detail.asleep.rules.length" class="mute" style="font-size: var(--t-sm)">
               wakes on a request to
-              <span v-for="h in dep.detail.asleep.hosts" :key="h" class="mono" style="margin-right: 8px">{{ h }}</span>
-              <span v-for="r in dep.detail.asleep.rules" :key="r" class="mono" style="margin-right: 8px">/{{ r }}/</span>
+              <span v-for="h in dep.detail.asleep.hosts" :key="h" class="mono" style="display: inline-block; margin-right: 8px">{{ h }}</span>
+              <span v-for="r in dep.detail.asleep.rules" :key="r" class="mono" style="display: inline-block; margin-right: 8px">/{{ r }}/</span>
             </div>
             <div v-else class="mute" style="font-size: var(--t-sm)">
               no hostnames — only Wake brings it back

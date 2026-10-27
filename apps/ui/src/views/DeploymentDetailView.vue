@@ -7,14 +7,14 @@
  * with no control in reach. Everything else stays unavailable until it resolves, because the
  * server cannot name the stack without the variables, and every action needs the stack name.
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { api, query } from '../api/client';
 import type { RuntimeResponse } from '../api/types';
 import { authState, can } from '../composables/useAuth';
 import { exploreUrl, showGrafana, stackQuery, stackServices } from '../composables/grafana';
 import { settings } from '../composables/useSettings';
 import { sentence } from '../composables/useFormat';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { dep, isShared, loadDetail, openDeployment } from '../composables/useDeployment';
 import {
   act,
@@ -34,6 +34,15 @@ import RefreshButton from '../components/RefreshButton.vue';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
+const route = useRoute();
+
+/* The tab strip scrolls sideways on a phone; a tab opened by URL must not sit off-screen. */
+const tabsEl = ref<HTMLElement>();
+function showActiveTab(): void {
+  tabsEl.value?.querySelector('.router-link-active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}
+onMounted(showActiveTab);
+watch(() => route.path, showActiveTab, { flush: 'post' });
 
 const TABS = [
   { to: 'overview', label: 'Overview' },
@@ -100,7 +109,9 @@ watch(
 <template>
   <div>
     <div class="page-head">
-      <div>
+      <!-- The title takes the free space, not a spacer: a spacer that wrapped with the badges pushed
+           them right on some widths and left them left on others. -->
+      <div style="flex: 1 1 auto">
         <div class="mute" style="font-size: var(--t-sm)">
           <RouterLink to="/deployments">← Deployments</RouterLink>
         </div>
@@ -117,7 +128,6 @@ watch(
           </template>
         </div>
       </div>
-      <span class="grow" />
       <span v-if="dep.detail" class="badge" :class="dep.detail.kind">{{ sentence(dep.detail.kind) }}</span>
       <span v-if="dep.detail?.busy === true" class="badge busy"><span class="dot pulse" />Busy</span>
       <span
@@ -134,8 +144,8 @@ watch(
       -->
       <!-- One flex unit, so on a narrow screen the pair wraps together instead of Verify being
            orphaned onto its own line under the title. -->
+      <RefreshButton v-if="dep.detail" :run="loadDetail" label="Re-resolve" title="Read this deployment again and re-run its variable substitution" />
       <div v-if="dep.detail" class="row" style="flex-wrap: nowrap">
-        <RefreshButton :run="loadDetail" label="Re-resolve" title="Read this deployment again and re-run its variable substitution" />
         <!-- Asleep: the primary action is to wake it — the same `up`, recorded as a wake. -->
         <ActionButton
           v-if="dep.detail.asleep"
@@ -176,7 +186,7 @@ watch(
       style="margin-bottom: var(--s4)"
     />
 
-    <nav class="tabs" aria-label="Deployment sections">
+    <nav ref="tabsEl" class="tabs" aria-label="Deployment sections">
       <RouterLink
         v-for="t in TABS"
         :key="t.to"
