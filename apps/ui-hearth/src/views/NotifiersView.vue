@@ -231,8 +231,9 @@ function onRowAction(e: { id: string; action: string }): void {
 const dColumns: TableColumn[] = [
   { key: 'status', label: 'Status' },
   { key: 'event', label: 'Event', truncate: true },
-  { key: 'when', label: 'When', hideBelow: 420, minWidth: '11rem' },
-  { key: 'detail', label: 'Detail', hideBelow: 520, truncate: true },
+  { key: 'when', label: 'When', hideBelow: 420 },
+  // A 10rem cap keeps the table inside the 42rem sheet, so the sticky actions never cover Detail.
+  { key: 'detail', label: 'Detail', hideBelow: 520, truncate: true, width: '10rem' },
 ];
 const dNamed = computed(() => byLabel(deliveries.value, (d) => `${d.event}, ${stamp(d.createdAt)}`, (d) => String(d.id)));
 const dRows = computed<TableRow[]>(() =>
@@ -351,6 +352,8 @@ const statusTone = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'da
         >
           <template #cell="{ column, value }">
             <HBadge v-if="column.key === 'status'" :label="String(value)" :tone="statusTone(String(value))" />
+            <!-- The time drops under the date; the date itself never breaks. -->
+            <div v-else-if="column.key === 'when'" style="overflow-wrap: normal">{{ value }}</div>
             <template v-else>{{ value }}</template>
           </template>
         </HDataTable>

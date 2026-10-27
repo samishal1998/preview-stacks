@@ -221,7 +221,7 @@ async function runVerb(): Promise<void> {
                 <div v-for="p in (row.c as RuntimeContainer).ports" :key="`${p.containerPort}/${p.protocol}`">
                   {{ p.containerPort }}<HText v-if="p.hostPort" tone="muted"> ← host {{ p.hostPort }}</HText>
                 </div>
-                <HText v-if="!(row.c as RuntimeContainer).ports.length" tone="muted">None</HText>
+                <HText v-if="!(row.c as RuntimeContainer).ports.length" tone="muted" style="white-space: nowrap">None</HText>
               </template>
               <template v-else-if="column.key === 'networks'">
                 <div v-for="n in (row.c as RuntimeContainer).networks" :key="n">{{ n }}</div>
