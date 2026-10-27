@@ -237,6 +237,7 @@ func (s *Server) deploymentOr404(w http.ResponseWriter, id string) (resolved, bo
 	return resolved{st, dep.Dir}, true, nil
 }
 
+// customRoutesList is GET: a bare array, as the spec gives it.
 func (s *Server) customRoutesList(w http.ResponseWriter) error {
 	rows, err := store.ListCustomRoutes(s.store.DB)
 	if err != nil {
@@ -246,7 +247,7 @@ func (s *Server) customRoutesList(w http.ResponseWriter) error {
 	for _, row := range rows {
 		out = append(out, s.routeJSON(row))
 	}
-	writeJSON(w, 200, jsonx.O("routes", out))
+	writeJSON(w, 200, out)
 	return nil
 }
 
@@ -270,13 +271,13 @@ func (s *Server) underWriteMu(fn func() (*routeEvent, error)) error {
 	return err
 }
 
-// customRouteCreate is POST { name, deployment?, force? }. It never moves a route: a new one is
+// customRouteCreate is POST { name, deployment?, force? }; a null optional field is an absent one. It never moves a route: a new one is
 // never held, and an existing name is 409. `force` is accepted and ignored.
 func (s *Server) customRouteCreate(w http.ResponseWriter, r *http.Request) error {
 	body := bodyObject(r)
 	name, ok := getStr(body, "name")
 	depID, depOK := getStr(body, "deployment")
-	if _, present := bodyGet(body, "deployment"); present && !depOK {
+	if v, present := bodyGet(body, "deployment"); present && v != nil && !depOK {
 		ok = false
 	}
 	if body == nil || !ok {
@@ -347,7 +348,7 @@ func (s *Server) customRouteAssign(w http.ResponseWriter, r *http.Request, name 
 	body := bodyObject(r)
 	depID, ok := getStr(body, "deployment")
 	force, forceOK := getBool(body, "force")
-	if _, present := bodyGet(body, "force"); present && !forceOK {
+	if v, present := bodyGet(body, "force"); present && v != nil && !forceOK {
 		ok = false
 	}
 	if body == nil || !ok || depID == "" {

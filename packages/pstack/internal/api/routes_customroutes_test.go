@@ -57,6 +57,20 @@ func crCall(t *testing.T, s *Server, method, path, body string) (int, map[string
 	return rec.Code, out
 }
 
+// crList is GET /api/custom-routes, a bare array.
+func crList(t *testing.T, s *Server) []map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/custom-routes", nil)
+	req.Header.Set("authorization", "Bearer t0ken")
+	s.handle(rec, req)
+	var out []map[string]any
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+		t.Fatalf("GET /api/custom-routes = %d: %s", rec.Code, rec.Body.String())
+	}
+	return out
+}
+
 func crExpect(t *testing.T, s *Server, method, path, body string, want int) map[string]any {
 	t.Helper()
 	code, out := crCall(t, s, method, path, body)
@@ -137,10 +151,10 @@ func TestCustomRouteCreateListAssign(t *testing.T) {
 	}
 
 	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"alpha"}`, 201)
-	list := crExpect(t, s, "GET", "/api/custom-routes", "", 200)
-	rows := list["routes"].([]any)
-	if len(rows) != 2 || rows[0].(map[string]any)["name"] != "alpha" || rows[1].(map[string]any)["stack"] != "myapp-pr-1" {
-		t.Fatalf("list = %v", list)
+	// negative control: wrap the list in { routes } → crList cannot decode it and this fails.
+	rows := crList(t, s)
+	if len(rows) != 2 || rows[0]["name"] != "alpha" || rows[1]["stack"] != "myapp-pr-1" {
+		t.Fatalf("list = %v", rows)
 	}
 }
 
@@ -149,6 +163,11 @@ func TestCustomRouteCreateAssigned(t *testing.T) {
 	seen := crEvents(t, s)
 	// negative control: ignore `deployment` on POST → deployment is null and this fails.
 	got := crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-2","force":true}`, 201)
+	// A null optional field is an absent one.
+	// negative control: drop the `v != nil` guard on deployment → 400 and this fails.
+	if n := crExpect(t, s, "POST", "/api/custom-routes", `{"name":"cart","deployment":null,"force":null}`, 201); n["deployment"] != nil {
+		t.Fatalf("null deployment = %v", n)
+	}
 	if got["deployment"] != "pr-2" || got["stack"] != "myapp-pr-2" {
 		t.Fatalf("route = %v", got)
 	}
@@ -247,6 +266,7 @@ func TestCustomRouteUnknownsAndBadBodies(t *testing.T) {
 		{"DELETE", "/api/custom-routes/nope", "", 404},
 		{"PUT", "/api/custom-routes/checkout/assignment", `{}`, 400},
 		{"PUT", "/api/custom-routes/checkout/assignment", `{"deployment":"pr-1","force":"yes"}`, 400},
+		{"PUT", "/api/custom-routes/checkout/assignment", `{"deployment":null}`, 400},
 		{"GET", "/api/custom-routes/checkout", "", 405},
 		{"POST", "/api/custom-routes/checkout/assignment", "", 405},
 	}
@@ -288,8 +308,8 @@ func TestCustomRouteUnassignAndDelete(t *testing.T) {
 	if !slices.Equal(*seen, want) {
 		t.Fatalf("events:\n got %v\nwant %v", *seen, want)
 	}
-	if list := crExpect(t, s, "GET", "/api/custom-routes", "", 200); len(list["routes"].([]any)) != 0 {
-		t.Fatalf("list = %v", list)
+	if rows := crList(t, s); len(rows) != 0 {
+		t.Fatalf("list = %v", rows)
 	}
 }
 
@@ -365,8 +385,7 @@ func TestCustomRouteRenderIsTotal(t *testing.T) {
 		t.Fatalf("file:\n%s", file)
 	}
 	// The unreadable one still lists, with no hosts.
-	list := crExpect(t, s, "GET", "/api/custom-routes", "", 200)
-	row := list["routes"].([]any)[1].(map[string]any)
+	row := crList(t, s)[1]
 	if row["name"] != "checkout" || row["deployment"] != "pr-1" || len(crHosts(row["hosts"])) != 0 {
 		t.Fatalf("row = %v", row)
 	}
