@@ -110,7 +110,7 @@ onBeforeUnmount(disarm);
     @blur="disarm"
     @keydown.esc="disarm"
   >
-    <span v-if="armed">{{ confirm }}</span>
+    <span v-if="armed" class="ab-q">{{ confirm }}</span>
     <slot v-else />
     <span v-if="pending" class="progress" aria-hidden="true" />
     <!-- Teleported, not a second root node: a fragment root would stop the calling view's scoped
@@ -123,6 +123,14 @@ onBeforeUnmount(disarm);
 </template>
 
 <style scoped>
+/* A long question wraps inside the button rather than being clipped by its overflow: hidden —
+   the clipped part is the name of what is about to go. */
+.ab-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+}
 /* app.css paints `button:disabled`; a blocked button is aria-disabled instead, so it repaints the
    same look here — minus the focus ring, which a now-focusable button needs. */
 button[aria-disabled='true'] {

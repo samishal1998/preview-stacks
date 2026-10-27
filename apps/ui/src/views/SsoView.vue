@@ -693,6 +693,8 @@ function rulesLine(c: SsoConfig): string {
 .sso-copy {
   align-items: center;
   gap: var(--s3);
+  /* A grid item in `.field`: without this its nowrap URL sets the track, and the page scrolls. */
+  min-width: 0;
 }
 .sso-url {
   flex: 1;

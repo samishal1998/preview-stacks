@@ -129,16 +129,17 @@ a:focus-visible {
  */
 .shell.no-rail .view {
   max-width: none;
-  min-height: 100dvh;
+  /* The shell pads the view; a full 100dvh on top of that padding scrolled a lone card. */
+  min-height: calc(100dvh - var(--gap-shell) * 2);
   display: grid;
   place-items: center;
   padding: var(--s5);
 }
 /* The public share page: no rail either, but a full-width reading column, not a centred card. */
 .shell.public .view {
+  /* No cap or auto margins here: on a grid item they shrink it to its content. `.public-page`
+     caps and centres the page. */
   display: block;
-  max-width: 1400px;
-  margin: 0 auto;
 }
 
 /*
@@ -326,6 +327,10 @@ a:focus-visible {
 .grow {
   flex: 1;
 }
+/* Whether the spacer wraps with the actions depends on the title's width; this keeps them right. */
+.page-head > .grow + * {
+  margin-inline-start: auto;
+}
 
 h2.section {
   font-size: var(--t-xs);
@@ -383,6 +388,10 @@ h3 {
   flex-wrap: wrap;
   margin-bottom: var(--s3);
 }
+/* A panel's intro line is not the first field's label. */
+.panel > p.dim:not(:last-child) {
+  margin-bottom: var(--s3);
+}
 .panel.flush > .phead {
   padding: var(--s4) var(--s4) 0;
 }
@@ -390,7 +399,8 @@ h3 {
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-  gap: var(--s4);
+  /* Columns only: stacked, a panel's own margin-bottom is the row gap, as it is inside a column. */
+  gap: 0 var(--s4);
   align-items: start;
 }
 
@@ -484,7 +494,8 @@ button.sm,
  * A button that is ARMED for confirmation (see ActionButton.vue). Deliberately loud: the next click
  * is the destructive one, and the only thing standing between the two is that this looks different.
  */
-button.armed {
+button.armed,
+button.armed:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--fail-soft);
   border-color: color-mix(in srgb, var(--fail) 70%, transparent);
   color: var(--fail);
@@ -714,6 +725,10 @@ label {
   .kv {
     grid-template-columns: minmax(0, 1fr) auto;
   }
+  /* The stack: name on its own row, value and remove under it. */
+  .kv > input:first-child {
+    grid-column: 1 / -1;
+  }
   .kv.head {
     display: none;
   }
@@ -803,6 +818,14 @@ label {
   margin-top: var(--s2);
   color: var(--fg-dim);
 }
+/* The margin spaces a paragraph under a title; a lone paragraph sits centred. */
+.banner > p:first-child {
+  margin-top: 0;
+}
+.banner > pre:not(:first-child),
+.banner > .row:not(:first-child) {
+  margin-top: var(--s2);
+}
 .banner.ok {
   background: var(--ok-soft);
 }
@@ -883,7 +906,8 @@ tbody tr:last-child td {
 }
 td.name {
   font-weight: 600;
-  word-break: break-all;
+  /* Breaks at hyphens first; splits a word only when one piece cannot fit. */
+  overflow-wrap: anywhere;
 }
 
 /*
@@ -941,18 +965,30 @@ td.name {
     text-align: left;
     flex: none;
   }
+  /* A full-width cell is prose or a block of its own, not a label/value pair: no flex row. */
   table.cards td[colspan] {
+    display: block;
     text-align: left;
   }
-  table.cards td[colspan]::before,
-  /* An actions cell has no label to print, and an empty `::before` still takes a row's worth of
-     baseline alignment with it. */
-  table.cards td[data-label='']::before {
+  table.cards td[colspan]::before {
     content: '';
+  }
+  /* An actions cell has no label to print; even an empty `::before` is a flex item and a gap. */
+  table.cards td[data-label='']::before {
+    content: none;
   }
   table.cards td[data-label=''] {
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+}
+/* On the narrowest cards a label beside its value leaves the value half a card: stack them. */
+@container (max-width: 300px) {
+  table.cards td:not([data-label='']) {
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    gap: 0;
   }
 }
 
@@ -1046,6 +1082,13 @@ td.name {
   .t-routes,
   .t-live {
     min-width: 82ch;
+  }
+  /*
+   * Name 20% + Hosts 36% leave 44% for Deployment and the 11rem actions column (Unassign it? and
+   * Delete side by side). Deployment needs ~16ch: (16ch + 11rem) / 0.44 ≈ 36ch + 25rem.
+   */
+  .t-custom {
+    min-width: calc(36ch + 25rem);
   }
   /*
    * The declared columns summed — 22 + 12 + 13 + 20 = 67ch — plus a 20ch floor for Image, the one
@@ -1226,6 +1269,15 @@ td.name {
     width: 100%;
   }
 }
+/* A key that is a value (a hostname, a registry) grows past the label column instead of breaking. */
+@media (min-width: 481px) {
+  .kvlist > li > .k.fit {
+    width: auto;
+    min-width: 128px;
+    max-width: 45%;
+    overflow-wrap: anywhere;
+  }
+}
 
 /* ------------------------------------------------------------------ preformatted output */
 
@@ -1315,7 +1367,7 @@ pre.log mark {
  * "SHARED", "RUNNING" and "UNKNOWN" all elided — the exact failure the comment above rejects.
  * 2x3 gives ~85px, which fits every label this panel has.
  */
-@container (max-width: 340px) {
+@container (max-width: 300px) {
   .stats {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -1416,7 +1468,7 @@ pre.log mark {
 }
 .step .who {
   font-weight: 550;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 .step .msg {
   font-size: var(--t-sm);
@@ -1548,11 +1600,16 @@ pre.log mark {
   z-index: 50;
   display: grid;
   gap: var(--s2);
-  width: min(360px, calc(100vw - var(--s5)));
+  /* 100%, not 100vw: the viewport box leaves out the scrollbar. */
+  width: min(360px, calc(100% - 2 * var(--s4)));
 }
 @media (max-width: 800px) {
+  /* The rail's insets, so the toast lines up with the bar under it. */
   .toasts {
     bottom: calc(84px + env(safe-area-inset-bottom));
+    left: var(--s2);
+    right: var(--s2);
+    width: auto;
   }
 }
 /*
@@ -1793,7 +1850,8 @@ kbd {
   padding-top: 12vh;
 }
 .palette {
-  width: min(620px, calc(100vw - var(--s5)));
+  /* Against the scrim's content box, which excludes its padding and the scrollbar. */
+  width: min(620px, 100%);
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--r3);
@@ -1823,7 +1881,7 @@ kbd {
   letter-spacing: var(--track-title);
   color: var(--fg);
 }
-.palette-q input:focus:not(:focus-visible) {
+.palette-q input:focus {
   outline: none;
   border: none;
   box-shadow: none;
@@ -1984,11 +2042,13 @@ kbd {
   background: none;
   padding: 0;
   min-height: 0;
+  text-overflow: ellipsis;
 }
 .searchbox input:not(:focus-visible) {
   box-shadow: none;
 }
-.searchbox input:focus:not(:focus-visible) {
+/* A focused text input always matches :focus-visible; the box's :focus-within ring is the cue. */
+.searchbox input:focus {
   outline: none;
   border: none;
   box-shadow: none;
@@ -2020,6 +2080,11 @@ select.compact {
 .selm-trigger {
   max-width: 340px;
   width: 100%;
+}
+/* Beside a button it shrinks to share the line rather than taking it. */
+.row > .selm-trigger {
+  width: auto;
+  flex: 1 1 10rem;
 }
 .selm-trigger {
   display: inline-flex;
@@ -2073,6 +2138,7 @@ select.compact {
   box-shadow: var(--hairline-strong), var(--elev-4);
   /* Reka measures the trigger and exposes it — so the list never opens narrower than what it opened from. */
   min-width: var(--reka-select-trigger-width);
+  max-width: var(--reka-select-content-available-width);
   animation: palette-in var(--dur) var(--ease-spring);
 }
 .selm-opt {
@@ -2092,9 +2158,11 @@ select.compact {
  * pointer and the keyboard, so hover and arrow keys can never light two rows at once. That was a
  * bug I had to avoid by hand in the command palette; here it comes for free.
  */
+/* No ring: the list viewport clips an outer one, and the background already marks the row. */
 .selm-opt[data-highlighted] {
   background: var(--accent-soft);
   outline: none;
+  box-shadow: none;
 }
 .selm-opt[data-disabled] {
   opacity: 0.45;
@@ -2104,6 +2172,9 @@ select.compact {
   color: var(--fg-mute);
   font-size: var(--t-xs);
   margin-inline-start: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .selm-tick {
   margin-inline-start: auto;
@@ -2378,7 +2449,7 @@ input[type='radio']:disabled {
 .lv-sep::after {
   content: '';
   flex: 1;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--line);
 }
 
 /* ------------------------------------------------------------------ refresh */
@@ -2388,6 +2459,9 @@ input[type='radio']:disabled {
  * need a compositor layer, and reduced-motion callers get a static arrow rather than nothing (the
  * button still says "Refreshing…", so the state survives the animation being off).
  */
+.refresh {
+  white-space: nowrap;
+}
 .refresh-icon {
   display: inline-block;
   line-height: 1;
