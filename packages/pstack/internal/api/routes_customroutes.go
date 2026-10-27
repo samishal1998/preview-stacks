@@ -14,6 +14,7 @@
 package api
 
 import (
+	"cmp"
 	"errors"
 	"net/http"
 	"regexp"
@@ -91,27 +92,90 @@ func (s *Server) stackOf(id string) any {
 	return nil
 }
 
-// routeJSON is the API's route: `{ name, deployment, stack, hosts[], createdAt, updatedAt }`, with
-// deployment and stack null when unassigned. hosts is what it serves now; empty when its
-// deployment's compose cannot be read.
+// routeOwner is who serves a host or renders a router: kind "deployment" (Name is its stack, or the
+// compose project or router of a live router no deployment explains) or "route".
+type routeOwner struct{ Kind, Name string }
+
+// routeBlock is a host a route does not serve because Owner does.
+type routeBlock struct {
+	Host  string
+	Owner routeOwner
+}
+
+// routeServes is what the last render settled for one route: the hosts it serves and those it lost.
+type routeServes struct {
+	hosts   []string
+	blocked []routeBlock
+}
+
+// routeJSON is the API's route: `{ name, deployment, stack, hosts[], blocked[], createdAt, updatedAt }`,
+// with deployment and stack null when unassigned. hosts and blocked are what the last render settled
+// (routeView), so a GET parses no compose and asks no docker; both empty when it renders nothing.
 func (s *Server) routeJSON(row store.CustomRoute) jsonx.Object {
 	var dep, stack any
-	hosts := []string{}
+	hosts, blocked := []string{}, []jsonx.Object{}
 	if row.DeploymentID != "" {
 		dep = row.DeploymentID
-		if d, err := s.resolveForRoute(row.DeploymentID); err == nil {
-			stack = d.st.Stack
-			if t, _, err := aliasTarget(d.st, d.dir, row.Name); err == nil {
-				hosts = routing.AliasHosts(t)
+		stack = s.stackOf(row.DeploymentID)
+		s.wakeMu.Lock()
+		v, ok := s.routeView[row.Name]
+		s.wakeMu.Unlock()
+		if ok {
+			hosts = v.hosts
+			for _, b := range v.blocked {
+				blocked = append(blocked, jsonx.O("host", b.Host, "by", jsonx.O("kind", b.Owner.Kind, "name", b.Owner.Name)))
 			}
 		}
 	}
-	return jsonx.O("name", row.Name, "deployment", dep, "stack", stack, "hosts", hosts,
+	return jsonx.O("name", row.Name, "deployment", dep, "stack", stack, "hosts", hosts, "blocked", blocked,
 		"createdAt", row.CreatedAt, "updatedAt", row.UpdatedAt)
 }
 
+// deploymentHosts is every host a deployment serves, for the collision rules: each resolvable
+// deployment's routed hosts from the deploy's own computation (explicit ones included, `*.<host>` per
+// wildcard), then the live label routers when docker answers (hand-labelled hosts). The registry wins
+// over live. Unresolvable deployments are skipped.
+func (s *Server) deploymentHosts() (map[string]routeOwner, error) {
+	taken := map[string]routeOwner{}
+	metas, err := s.registry.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range metas {
+		o, err := s.resolveForRoute(m.ID)
+		if err != nil {
+			continue
+		}
+		// The second return does not depend on the alias.
+		if _, hosts, err := aliasTarget(o.st, o.dir, ""); err == nil {
+			for _, h := range hosts {
+				taken[h] = routeOwner{"deployment", o.st.Stack}
+			}
+		}
+	}
+	if live := inspect.AllTraefikRouters(s.host); live.Reachable {
+		for _, rt := range live.Routes {
+			who := rt.Router
+			if rt.Project != nil {
+				who = *rt.Project
+			}
+			for _, h := range rt.Hosts {
+				if _, ok := taken[h]; !ok {
+					taken[h] = routeOwner{"deployment", who}
+				}
+			}
+		}
+	}
+	return taken, nil
+}
+
 // renderCustomRoutes rewrites pstack-routes.yml from the table, then rebuilds the sleep index. The
-// caller holds writeMu; it takes wakeMu only to swap routeWake and routeRouters (order writeMu → wakeMu).
+// caller holds writeMu; it takes wakeMu only to swap routeWake, routeRouters and routeView (order
+// writeMu → wakeMu).
+//
+// It settles every collision (spec §"Later collisions"): a host any deployment serves is never the
+// route's, and between routes the earlier claim (updated_at, then name) keeps a host or router name.
+// A route keeps serving its other hosts; each one it loses is logged and listed as blocked.
 //
 // Total: a route whose deployment is gone or whose compose cannot be read renders nothing and is
 // logged; the rest of the file still renders.
@@ -120,9 +184,10 @@ func (s *Server) renderCustomRoutes() error {
 	if err != nil {
 		return err
 	}
-	targets := []routing.AliasTarget{}
-	wake := map[string]scheduler.SleepEntry{}
-	routers := map[string][]string{}
+	// Name order from the table; the stable sort makes it the tie-break.
+	slices.SortStableFunc(rows, func(a, b store.CustomRoute) int { return cmp.Compare(a.UpdatedAt, b.UpdatedAt) })
+	raw := []routing.AliasTarget{}
+	owners := []store.CustomRoute{}
 	for _, row := range rows {
 		if row.DeploymentID == "" {
 			continue
@@ -132,7 +197,47 @@ func (s *Server) renderCustomRoutes() error {
 			s.opts.Log("custom routes: " + row.Name + " renders nothing: " + err.Error())
 			continue
 		}
+		raw, owners = append(raw, t), append(owners, row)
+	}
+	hosts := map[string]routeOwner{}
+	if len(raw) > 0 {
+		// It asks docker, so only when there is something to render.
+		if hosts, err = s.deploymentHosts(); err != nil {
+			return err
+		}
+	}
+	routerOf := map[string]string{} // router → the route that claimed it
+	targets := []routing.AliasTarget{}
+	wake := map[string]scheduler.SleepEntry{}
+	routers := map[string][]string{}
+	view := map[string]routeServes{}
+	for i, t := range raw {
+		row := owners[i]
+		var blocked []routeBlock
+		// claim is true when host and router are free, and takes them; else it records the block.
+		claim := func(host, router string) bool {
+			owner, taken := hosts[host]
+			if other, named := routerOf[router]; !taken && named {
+				owner, taken = routeOwner{"route", other}, true
+			}
+			if taken {
+				blocked = append(blocked, routeBlock{host, owner})
+				s.opts.Log("custom routes: " + row.Name + " does not serve " + host + ": served by " + owner.Kind + " " + owner.Name)
+				return false
+			}
+			hosts[host], routerOf[router] = routeOwner{"route", row.Name}, row.Name
+			return true
+		}
+		t.Services = slices.Clone(t.Services)
+		for j, svc := range t.Services {
+			host := t.Host(svc)
+			t.Services[j].NoHost = !claim(host, t.Router(svc))
+			if svc.Depth != "" && !claim("*."+host, t.Router(svc)+"-wild") {
+				t.Services[j].Depth = ""
+			}
+		}
 		targets = append(targets, t)
+		view[row.Name] = routeServes{routing.AliasHosts(t), blocked}
 		e := wake[row.DeploymentID]
 		e.Hosts, e.Rules = appendWake(e.Hosts, e.Rules, t)
 		wake[row.DeploymentID] = e
@@ -141,6 +246,7 @@ func (s *Server) renderCustomRoutes() error {
 	s.wakeMu.Lock()
 	s.routeWake = wake
 	s.routeRouters = routers
+	s.routeView = view
 	s.wakeMu.Unlock()
 	content := ""
 	if len(targets) > 0 {
@@ -171,35 +277,33 @@ func appendWake(hosts, rules []string, t routing.AliasTarget) ([]string, []strin
 	return append(hosts, h...), append(rules, r...)
 }
 
-// reconcileCustomRoutes re-renders at boot, so the table and the file heal. Nothing assigned returns
-// before any docker call or file write. Total: a failure is logged.
-func (s *Server) reconcileCustomRoutes() {
+// reconcileCustomRoutes re-renders when any route is assigned: at boot, so the table and the file
+// heal, and after anything that changes what a deployment serves (a registration, a deploy, a
+// removal), since that can settle a collision either way. Nothing assigned returns before any docker
+// call or file write. The caller holds writeMu (boot needs none). Total: a failure is logged.
+// true = it rendered, which reindexes.
+func (s *Server) reconcileCustomRoutes() bool {
 	if s.store == nil {
-		return
+		return false
 	}
 	rows, err := store.ListCustomRoutes(s.store.DB)
 	if err != nil {
 		s.opts.Log("custom routes: could not read the table: " + err.Error())
-		return
+		return false
 	}
-	if slices.ContainsFunc(rows, func(r store.CustomRoute) bool { return r.DeploymentID != "" }) {
-		s.rendered()
+	if !slices.ContainsFunc(rows, func(r store.CustomRoute) bool { return r.DeploymentID != "" }) {
+		return false
 	}
+	s.rendered()
+	return true
 }
 
-// rerenderRoutesOf re-renders after deployment id deployed, when a route is assigned to it: its
-// services may have changed. Nothing assigned to it is nothing to do.
-func (s *Server) rerenderRoutesOf(id string) {
+// rerenderRoutes is reconcileCustomRoutes under writeMu, for a deploy: its services may have changed,
+// and with them what any route serves.
+func (s *Server) rerenderRoutes() {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := store.ListCustomRoutes(s.store.DB)
-	if err != nil {
-		s.opts.Log("custom routes: could not read the table: " + err.Error())
-		return
-	}
-	if slices.ContainsFunc(rows, func(r store.CustomRoute) bool { return r.DeploymentID == id }) {
-		s.rendered()
-	}
+	s.reconcileCustomRoutes()
 }
 
 // rendered re-renders after a committed write. A failure is logged, not answered: the table holds
@@ -212,29 +316,16 @@ func (s *Server) rendered() {
 
 // assignConflict answers 409 when route name on deployment d would serve a host something else
 // serves, or render a router name another route renders. Plain hosts and `*.` wildcards compare as
-// separate strings. Taken: every resolvable deployment's routed hosts (explicit ones included),
-// every other assigned route's alias hosts and routers, and the live label routers when docker
-// answers (hand-labelled hosts). true = answered.
+// separate strings. Taken: deploymentHosts, then every other assigned route's alias hosts and
+// routers. true = answered.
 func (s *Server) assignConflict(w http.ResponseWriter, name string, d resolved) (bool, error) {
 	t, _, err := aliasTarget(d.st, d.dir, name)
 	if err != nil {
 		return false, nil // stores the intent; the render logs why it serves nothing
 	}
-	taken := map[string]string{} // host → who serves it
-	metas, err := s.registry.List()
+	taken, err := s.deploymentHosts()
 	if err != nil {
 		return false, err
-	}
-	for _, m := range metas {
-		o, err := s.resolveForRoute(m.ID)
-		if err != nil {
-			continue
-		}
-		if _, hosts, err := aliasTarget(o.st, o.dir, name); err == nil {
-			for _, h := range hosts {
-				taken[h] = o.st.Stack
-			}
-		}
 	}
 	rows, err := store.ListCustomRoutes(s.store.DB)
 	if err != nil {
@@ -250,24 +341,19 @@ func (s *Server) assignConflict(w http.ResponseWriter, name string, d resolved) 
 			continue
 		}
 		for _, h := range routing.AliasHosts(ot) {
-			taken[h] = "route " + row.Name
+			taken[h] = routeOwner{"route", row.Name}
 		}
 		for _, rt := range routing.AliasRouters(ot) {
 			routers[rt] = row.Name
 		}
 	}
-	if live := inspect.AllTraefikRouters(s.host); live.Reachable {
-		for _, rt := range live.Routes {
-			for _, h := range rt.Hosts {
-				if _, ok := taken[h]; !ok {
-					taken[h] = "router " + rt.Router
-				}
-			}
-		}
-	}
 	for _, h := range routing.AliasHosts(t) {
 		if who, ok := taken[h]; ok {
-			writeJSON(w, 409, jsonx.O("error", h+" is served by "+who, "host", h))
+			by := who.Name
+			if who.Kind == "route" {
+				by = "route " + who.Name
+			}
+			writeJSON(w, 409, jsonx.O("error", h+" is served by "+by, "host", h))
 			return true, nil
 		}
 	}

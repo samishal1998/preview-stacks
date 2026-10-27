@@ -85,7 +85,7 @@ func TestCustomRoutesReconcileAtBoot(t *testing.T) {
 }
 
 func TestCustomRoutesFollowADeploy(t *testing.T) {
-	s, f := crServer(t)
+	s, _ := crServer(t)
 	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
 	// The redeploy adds a service.
 	crDeploy(t, s, "pr-1", "myapp-pr-1", crCompose+"  c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
@@ -93,19 +93,18 @@ func TestCustomRoutesFollowADeploy(t *testing.T) {
 		t.Fatal("rendered before the deploy")
 	}
 
-	t.Run("an up of a deployment with routes re-renders", func(t *testing.T) {
-		// negative control: drop the `s.rerenderRoutesOf(id)` call from startLifecycle → the new
-		// service never reaches the file and this fails.
+	up := func(t *testing.T, id string) {
+		t.Helper()
 		s.env["PATH"] = fakeDockerPath(t)
-		dep, err := s.registry.Get("pr-1")
+		dep, err := s.registry.Get(id)
 		if err != nil || dep == nil {
 			t.Fatal(dep, err)
 		}
-		st, err := s.resolveDep("pr-1", nil)
+		st, err := s.resolveDep(id, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		job, ok := s.startLifecycle("pr-1", dep, st, jobs.Up, lifecycleOptions{By: "test"})
+		job, ok := s.startLifecycle(id, dep, st, jobs.Up, lifecycleOptions{By: "test"})
 		if !ok {
 			t.Fatal("up refused")
 		}
@@ -123,18 +122,51 @@ func TestCustomRoutesFollowADeploy(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 		s.readiness.Cancel(st.Stack)
+	}
+
+	t.Run("an up of a deployment with routes re-renders", func(t *testing.T) {
+		// negative control: drop the `s.rerenderRoutes()` call from startLifecycle → the new
+		// service never reaches the file and this fails.
+		up(t, "pr-1")
 		if file := crFile(t, s); !strings.Contains(file, "pstack-route-checkout-c:") {
 			t.Fatalf("file after the deploy:\n%s", file)
 		}
 	})
 
-	t.Run("a deployment with no routes renders nothing", func(t *testing.T) {
-		// negative control: drop the DeploymentID == id filter in rerenderRoutesOf → it renders, asks
-		// docker for the challenge, and the fake's log grows.
+	t.Run("an up of another deployment re-renders too", func(t *testing.T) {
+		// pr-2's redeploy claims checkout's c host, so checkout loses it.
+		// negative control: have reconcileCustomRoutes render only for routes the deployed id holds →
+		// checkout keeps c-checkout and this fails.
+		s.writeMu.Lock()
+		s.rendered()
+		s.writeMu.Unlock()
+		if !strings.Contains(crFile(t, s), "pstack-route-checkout-c:") {
+			t.Fatalf("before pr-2's deploy:\n%s", crFile(t, s))
+		}
+		crDeploy(t, s, "pr-2", "myapp-pr-2", crCompose+"  shop:\n    image: nginx\n    labels: {pstack.routing.port: \"80\", pstack.routing.host: c-checkout.preview.example.com}\n")
+		up(t, "pr-2")
+		if file := crFile(t, s); strings.Contains(file, "pstack-route-checkout-c:") || !strings.Contains(file, "pstack-route-checkout-web:") {
+			t.Fatalf("file after pr-2's deploy:\n%s", file)
+		}
+	})
+
+	t.Run("no assigned route on the host renders nothing", func(t *testing.T) {
+		// negative control: drop both the any-assigned check in reconcileCustomRoutes and the
+		// `len(raw) > 0` guard on deploymentHosts → docker is asked for the live routers and this fails.
+		s, f := crServer(t)
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"spare"}`, 201)
 		before := len(f.Log)
-		s.rerenderRoutesOf("pr-2")
-		if len(f.Log) != before {
-			t.Fatalf("docker was asked: %v", f.Log[before:])
+		s.rerenderRoutes()
+		crPut(t, s, "pr-2", "myapp-pr-2", crTwo)
+		crExpect(t, s, "DELETE", "/api/deployments/pr-2", "", 200)
+		// DELETE asks docker for the containers it would orphan; nothing else may.
+		for _, l := range f.Log[before:] {
+			if !strings.Contains(l, "docker ps") || strings.Contains(l, "traefik") {
+				t.Fatalf("docker was asked: %v", f.Log[before:])
+			}
+		}
+		if crFile(t, s) != "" {
+			t.Fatalf("file:\n%s", crFile(t, s))
 		}
 	})
 }

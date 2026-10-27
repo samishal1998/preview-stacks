@@ -354,7 +354,7 @@ paths:
       tags: [custom-routes]
       operationId: listCustomRoutes
       x-cli-name: list
-      summary: 'Every route: name, deployment, stack and the alias hosts it serves now. `deployment` and `stack` are null when unassigned. Viewer.'
+      summary: 'Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `deployment` and `stack` are null when unassigned. Viewer.'
       responses: { '200': { $ref: '#/components/responses/Ok' } }
     post:
       tags: [custom-routes]

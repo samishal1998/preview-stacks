@@ -58,8 +58,8 @@ func runRoute(t *testing.T, base string, argv ...string) (int, string, string) {
 }
 
 const (
-	assignedRow   = `{"name":"checkout","deployment":"pr-123","stack":"myapp-pr-123","hosts":["web-checkout.preview.example.com","api-checkout.preview.example.com"],"createdAt":1,"updatedAt":2}`
-	unassignedRow = `{"name":"spare","deployment":null,"stack":null,"hosts":[],"createdAt":1,"updatedAt":1}`
+	assignedRow   = `{"name":"checkout","deployment":"pr-123","stack":"myapp-pr-123","hosts":["web-checkout.preview.example.com","api-checkout.preview.example.com"],"blocked":[],"createdAt":1,"updatedAt":2}`
+	unassignedRow = `{"name":"spare","deployment":null,"stack":null,"hosts":[],"blocked":[],"createdAt":1,"updatedAt":1}`
 )
 
 func TestRouteLsPrintsOneLinePerRoute(t *testing.T) {
@@ -76,6 +76,23 @@ func TestRouteLsPrintsOneLinePerRoute(t *testing.T) {
 	}
 	if c := calls(); len(c) != 1 || c[0].auth != "Bearer tok" {
 		t.Fatalf("calls: %+v", c)
+	}
+}
+
+func TestRouteLsPrintsEachBlockedHost(t *testing.T) {
+	// negative control: drop the blocked loop from line() → only the route line prints and this fails.
+	row := `{"name":"checkout","deployment":"pr-123","stack":"myapp-pr-123","hosts":["api-checkout.preview.example.com"],` +
+		`"blocked":[{"host":"web-checkout.preview.example.com","by":{"kind":"deployment","name":"checkout"}},{"host":"*.web-checkout.preview.example.com","by":{"kind":"route","name":"cart"}}],"createdAt":1,"updatedAt":2}`
+	srv, _ := routeAPI(t, map[string]answer{"GET /api/custom-routes": {200, "[" + row + "]"}})
+	code, out, errOut := runRoute(t, srv.URL, "route", "ls")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	want := "checkout  myapp-pr-123  api-checkout.preview.example.com\n" +
+		"  blocked: web-checkout.preview.example.com (deployment checkout)\n" +
+		"  blocked: *.web-checkout.preview.example.com (route cart)\n"
+	if out != want {
+		t.Fatalf("got:\n%q\nwant:\n%q", out, want)
 	}
 }
 

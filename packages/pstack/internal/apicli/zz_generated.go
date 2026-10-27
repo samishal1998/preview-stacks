@@ -337,7 +337,7 @@ func NewHostControlRuntimeCommand(exec oascmd.ExecOptions) *cobra.Command {
 func NewCustomRoutesListCommand(exec oascmd.ExecOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "Every route: name, deployment, stack and the alias hosts it serves now. `deployment` and `stack` are null when unassigned. Viewer.",
+		Short: "Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `deployment` and `stack` are null when unassigned. Viewer.",
 	}
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {

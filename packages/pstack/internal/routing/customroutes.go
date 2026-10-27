@@ -39,20 +39,27 @@ type AliasService struct {
 	// Depth is the wildcard subdomain depth when the stack has a derived `-wild` router for this
 	// service; "" means none. Autolabel renders at most one per service.
 	Depth spec.Depth
+	// NoHost leaves the plain router out while the `-wild` one still renders: the server blocked
+	// that host because something else serves it. The zero value serves it.
+	NoHost bool
 }
 
-func (t AliasTarget) host(s AliasService) string { return s.Name + "-" + t.Alias + "." + s.Domain }
+// Host is the alias host of service s: `<Name>-<Alias>.<Domain>`.
+func (t AliasTarget) Host(s AliasService) string { return s.Name + "-" + t.Alias + "." + s.Domain }
 
-func (t AliasTarget) router(s AliasService) string { return "pstack-route-" + t.Alias + "-" + s.Name }
+// Router is the name of service s's plain router; its wildcard twin adds `-wild`.
+func (t AliasTarget) Router(s AliasService) string { return "pstack-route-" + t.Alias + "-" + s.Name }
 
 // AliasRouters is every router name the route renders (`…-wild` included), for the assign-time
 // check that two routes never render the same name.
 func AliasRouters(t AliasTarget) []string {
 	out := []string{}
 	for _, s := range t.Services {
-		out = append(out, t.router(s))
+		if !s.NoHost {
+			out = append(out, t.Router(s))
+		}
 		if s.Depth != "" {
-			out = append(out, t.router(s)+"-wild")
+			out = append(out, t.Router(s)+"-wild")
 		}
 	}
 	return out
@@ -63,9 +70,11 @@ func AliasRouters(t AliasTarget) []string {
 func AliasHosts(t AliasTarget) []string {
 	out, wild := []string{}, []string{}
 	for _, s := range t.Services {
-		out = append(out, t.host(s))
+		if !s.NoHost {
+			out = append(out, t.Host(s))
+		}
 		if s.Depth != "" {
-			wild = append(wild, "*."+t.host(s))
+			wild = append(wild, "*."+t.Host(s))
 		}
 	}
 	return append(out, wild...)
@@ -77,7 +86,7 @@ func AliasWildcardRules(t AliasTarget) []string {
 	out := []string{}
 	for _, s := range t.Services {
 		if s.Depth != "" {
-			out = append(out, spec.WildcardRule(t.host(s), s.Depth))
+			out = append(out, spec.WildcardRule(t.Host(s), s.Depth))
 		}
 	}
 	return out
@@ -92,7 +101,8 @@ const customRoutesHeader = "# Written by pstack (/api/custom-routes) from the cu
 // Total: a router whose name is already taken (alias `a-b` + service `c` and alias `a` + service
 // `b-c` both give `pstack-route-a-b-c`) or whose provider is unknown is left out with a comment
 // naming it, and the rest of the file still renders. Targets and services are sorted first, so which
-// one wins never depends on the caller's order.
+// one wins never depends on the caller's order. The server settles collisions before this (the
+// earlier claim wins, deployments first), so the name drop is a safety net that never fires there.
 //
 // TLS is never the dns01 wildcard pin: the stack's own certificate story covers the alias host the
 // same way it covers the stack host, and a pin per alias would order a wildcard certificate each.
@@ -124,10 +134,12 @@ func RenderCustomRoutes(targets []AliasTarget, mode string) (string, error) {
 		services := slices.Clone(t.Services)
 		slices.SortFunc(services, func(a, b AliasService) int { return strings.Compare(a.Name, b.Name) })
 		for _, s := range services {
-			name := t.router(s)
-			host := t.host(s)
+			name := t.Router(s)
+			host := t.Host(s)
 			service := s.Name + "-" + t.Stack + "@" + t.Provider
-			router(name, "Host(`"+host+"`)", "", service, host)
+			if !s.NoHost {
+				router(name, "Host(`"+host+"`)", "", service, host)
+			}
 			if s.Depth != "" {
 				// Priority 2, like autolabel's -wild: any exact host still wins.
 				router(name+"-wild", spec.WildcardRule(host, s.Depth), "2", service, host)

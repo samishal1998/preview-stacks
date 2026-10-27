@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "2f0ba3b075735f9935d06fe9e317cb9dfb444773a23dbe9d7d9c25acfbca10d5",
+  "specDigest": "878cab9a01d936e0d6d9eae14759b2d0426ad68616a0542cdeabcdb9e5fe35ef",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -988,11 +988,11 @@
       "path": "/api/custom-routes",
       "command": "custom-routes list",
       "funcName": "NewCustomRoutesListCommand",
-      "summary": "Every route: name, deployment, stack and the alias hosts it serves now. `deployment` and `stack` are null when unassigned. Viewer.",
+      "summary": "Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `deployment` and `stack` are null when unassigned. Viewer.",
       "ext": {
         "name": "list"
       },
-      "digest": "a007d275ab030777"
+      "digest": "479b425b482a4daf"
     },
     "listDeployments": {
       "operationId": "listDeployments",
