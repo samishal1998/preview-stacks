@@ -42,6 +42,7 @@ func required(method, path string) auth.Role {
 // /api/settings/default_role the same maintainer tier as /api/settings/max_jobs → the default_role
 // case fails, which is the per-key half of the settings contract. All four were run. Also: give the
 // /api/logging/storage row auth.Maintainer → the storage case fails.
+// Also: give the customRouteRe row auth.Viewer → the three custom-route write cases fail. Run.
 func TestPermissionTableIsTheSpecification(t *testing.T) {
 	cases := []struct {
 		method, path string
@@ -136,6 +137,13 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		{"GET", "/api/terminal-sessions", auth.Viewer},
 		{"GET", "/api/deployments/pr-1/runtime", auth.Viewer},
 		{"GET", "/api/deployments/pr-1/readiness", auth.Viewer},
+
+		// custom routes: read with the deployments, written by whoever may deploy
+		{"GET", "/api/custom-routes", auth.Viewer},
+		{"POST", "/api/custom-routes", auth.Developer},
+		{"DELETE", "/api/custom-routes/checkout", auth.Developer},
+		{"PUT", "/api/custom-routes/checkout/assignment", auth.Developer},
+		{"DELETE", "/api/custom-routes/checkout/assignment", auth.Developer},
 
 		// routing
 		{"GET", "/api/routing/live", auth.Viewer},
@@ -242,6 +250,7 @@ var matchers = map[string]*regexp.Regexp{
 	"userRe":         userRe,
 	"tokenRe":        tokenRe,
 	"ssoProviderRe":  ssoProviderRe,
+	"customRouteRe":  customRouteRe,
 }
 
 var (
@@ -333,6 +342,8 @@ func TestGateBoundaries(t *testing.T) {
 		{dev, "POST", "/api/deployments/pr-1/up"},
 		{dev, "GET", "/api/deployments/pr-1/terminal"},
 		{dev, "PUT", "/api/specs/web"},
+		{viewer, "GET", "/api/custom-routes"},
+		{dev, "PUT", "/api/custom-routes/checkout/assignment"},
 		{maint, "POST", "/api/deployments/pr-1/up"},
 		{maint, "PUT", "/api/host-vars/DB_URL"},
 		{maint, "GET", "/api/swarm/join"},
@@ -364,6 +375,9 @@ func TestGateBoundaries(t *testing.T) {
 		{viewer, "GET", "/api/deployments/pr-1/terminal"},
 		{viewer, "PUT", "/api/specs/web"},
 		{viewer, "POST", "/api/jobs/j1/cancel"},
+		{viewer, "POST", "/api/custom-routes"},
+		{viewer, "PUT", "/api/custom-routes/checkout/assignment"},
+		{viewer, "DELETE", "/api/custom-routes/checkout"},
 		// the developer/maintainer boundary
 		{dev, "PUT", "/api/host-vars/DB_URL"},
 		{dev, "PUT", "/api/routing/extra.yml"},

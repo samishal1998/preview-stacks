@@ -106,6 +106,11 @@ var Names = []string{
 	// stays true, since `GET /api/signals` is there for the current picture.
 	"signal.raised",
 	"signal.cleared",
+	// A custom route (a stable alias for a stack, /api/custom-routes) was pointed at a deployment,
+	// or stopped pointing at one. Appended, like the ones above. A move is ONE route.assigned
+	// carrying `previous`; route.unassigned carries why (`unassigned`, `deleted`, `forgotten`).
+	"route.assigned",
+	"route.unassigned",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a

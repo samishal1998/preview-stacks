@@ -489,6 +489,31 @@ Three things a receiver needs to know:
 - **Read `reason` before buying a machine.** `insufficient resources` means the cluster is full;
   `scheduling constraints not satisfied` usually means a spec asks for a machine nobody has.
 
+### `route.assigned` / `route.unassigned`
+
+A custom route (`/api/custom-routes`, `pstack route`) started or stopped pointing at a deployment.
+No redeploy runs: the alias hosts answer, or stop answering, in about two seconds.
+
+`route.assigned` fires on an assign, a create with a `deployment`, and a forced move. A move is
+**one** `route.assigned` carrying `previous`, never an unassign plus an assign. Assigning a route to
+the deployment that already holds it fires nothing.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `route` | string | The route name, e.g. `checkout`. |
+| `deployment` | string | The deployment id it now points at. |
+| `stack` | string \| null | That deployment's stack, or `null` when its spec does not resolve. |
+| `previous` | string | Moves only: the deployment id it pointed at before. |
+
+`route.unassigned` fires only when the route was assigned.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `route` | string | The route name. |
+| `deployment` | string | The deployment id it pointed at. |
+| `stack` | string \| null | That deployment's stack, or `null` when its spec does not resolve. |
+| `reason` | `"unassigned"` \| `"deleted"` \| `"forgotten"` | Unassigned through the API, the route deleted, or its deployment forgotten. The route is kept in the first and last cases. |
+
 ---
 
 ## Test deliveries

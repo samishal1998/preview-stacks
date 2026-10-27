@@ -43,6 +43,21 @@ type AliasService struct {
 
 func (t AliasTarget) host(s AliasService) string { return s.Name + "-" + t.Alias + "." + s.Domain }
 
+func (t AliasTarget) router(s AliasService) string { return "pstack-route-" + t.Alias + "-" + s.Name }
+
+// AliasRouters is every router name the route renders (`…-wild` included), for the assign-time
+// check that two routes never render the same name.
+func AliasRouters(t AliasTarget) []string {
+	out := []string{}
+	for _, s := range t.Services {
+		out = append(out, t.router(s))
+		if s.Depth != "" {
+			out = append(out, t.router(s)+"-wild")
+		}
+	}
+	return out
+}
+
 // AliasHosts is every host the route serves: the plain hosts in service order, then each mirrored
 // wildcard as `*.<host>`.
 func AliasHosts(t AliasTarget) []string {
@@ -97,7 +112,7 @@ func RenderCustomRoutes(targets []AliasTarget, mode string) (string, error) {
 		services := slices.Clone(t.Services)
 		slices.SortFunc(services, func(a, b AliasService) int { return strings.Compare(a.Name, b.Name) })
 		for _, s := range services {
-			name := "pstack-route-" + t.Alias + "-" + s.Name
+			name := t.router(s)
 			host := t.host(s)
 			service := s.Name + "-" + t.Stack + "@" + t.Provider
 			router(name, "Host(`"+host+"`)", "", service, host)

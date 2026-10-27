@@ -215,6 +215,13 @@ var permissions = []perm{
 	{re: runtimeRe, methods: mGet, min: auth.Viewer},
 	{re: readinessRe, methods: mGet, min: auth.Viewer},
 
+	// ── custom routes ───────────────────────────────────────────────────────────────────────────
+	// Pointing an alias at a deployment is the developer's tier, like deploying it. Not in
+	// shareAllows.
+	{path: "/api/custom-routes", methods: mGet, min: auth.Viewer},
+	{path: "/api/custom-routes", methods: mPost, min: auth.Developer},
+	{re: customRouteRe, methods: mPutDelete, min: auth.Developer},
+
 	// ── routing ─────────────────────────────────────────────────────────────────────────────────
 	// /api/routing/live is above routingFileRe, which would otherwise swallow it.
 	{path: "/api/routing/live", methods: mGet, min: auth.Viewer},
