@@ -108,12 +108,19 @@ Never reuse one as the other.
 | `grafana.<domain>` | Grafana (`--logging loki`), signed in with pstack accounts |
 | `<service-name>.<domain>` | the convention for a shared service's own hostname |
 | `<surface>-pr-<n>.<domain>` | a per-PR surface, e.g. `backend-pr-123.<domain>` |
+| `<surface>-<route>.<domain>` | the same surface through a custom route, e.g. `backend-checkout.<domain>` |
 
 `control` and `api` are two routers on **one** container — the API process serves the UI, and the UI
 calls the API with **relative** `/api/…` paths, so it is same-origin from `control.<domain>` and needs
 no CORS. `api.<domain>` exists to give external callers an honest name. `loki.` and `grafana.` are
 reserved even with logging off: a `pstack.routing.host` naming `control.`, `api.`, `loki.` or
 `grafana.` is refused at deploy.
+
+**A custom route is a stable alias for a stack.** PR numbers change (a `gh-stack` head moves), so
+point a route at the current deployment: `pstack route create checkout <deployment>`, then
+`pstack route assign checkout <next-deployment> --force` to move it. Every `<surface>-<stack>` host
+answers as `<surface>-checkout` too, with no redeploy. A held route is refused without `--force`.
+`pstack route ls|unassign|rm` do the rest (the API is `/api/custom-routes`).
 
 **Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
 `backend-pr-1.<domain>` is covered by `*.<domain>`; `backend.pr-1.<domain>` is **not**.

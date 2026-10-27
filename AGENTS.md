@@ -210,9 +210,10 @@ unpersisted. Restarting the server loses history, not correctness.
 
 *Amended in 0.10.0.* There **is** a SQLite database, and the line it holds is precise: accounts,
 sessions, tokens, notifier registrations and deliveries, terminal audit, host variables, SSO
-(`sso_config`, `sso_links`, `sso_state`, `sso_providers`), runtime `settings`, and `loki_config`
+(`sso_config`, `sso_links`, `sso_state`, `sso_providers`), runtime `settings`, `loki_config`
 (one row: what an operator SAVED, not what Loki runs, plus a `previous_*` undo record for one
-apply). Every table is justified in its migration as configuration an operator chose, with no
+apply), and `custom_routes` (which deployment each custom route points at: the operator's mapping,
+not what Traefik serves). Every table is justified in its migration as configuration an operator chose, with no
 source of truth in Docker to contradict. The deployment registry stayed a directory of YAML an
 operator can read and repair over SSH. **If you find yourself adding a table whose rows describe
 what is running, you are about to be wrong.** Whether Loki or Grafana runs is read from docker for

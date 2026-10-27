@@ -116,7 +116,8 @@ A host runs previews one of two ways:
   it makes.
 
 On either, a preview can **sleep** after a period without traffic: its containers are taken down,
-its volumes and axes stay, and the next request to its hostname brings it back.
+its volumes and axes stay, and the next request to its hostname, or to a custom route pointed at
+it, brings it back. Traffic through a custom route keeps it awake too.
 
 ## Read on
 
