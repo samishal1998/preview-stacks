@@ -9,6 +9,7 @@ import { routingApi, type RoutingFile, type RuntimeRoute } from '../api-routing'
 import CustomRouteDialogs from '../components/CustomRouteDialogs.vue';
 import { hostItems } from '../lib/customRoutes';
 import { fileNameError, isPattern, STARTER, targetOf } from '../lib/routing';
+import { useCardColumns } from '../lib/use-card-columns';
 import { useCustomRoutes } from '../lib/use-custom-routes';
 import { ago } from '../format';
 import { can } from '../lib/users';
@@ -59,12 +60,12 @@ async function refreshAll(): Promise<void> {
 onMounted(refreshAll);
 
 // ── live routes ─────────────────────────────────────────────────────────────────────────────────
-const liveColumns: TableColumn[] = [
+const liveColumns = useCardColumns([
   { key: 'url', label: 'URL' },
-  { key: 'target', label: 'Forwards to' },
-  { key: 'deployment', label: 'Deployment' },
+  { key: 'target', label: 'Forwards to', hideBelow: 560 },
+  { key: 'deployment', label: 'Deployment', hideBelow: 720 },
   { key: 'router', label: 'Router', truncate: true, hideBelow: 900 },
-];
+]);
 const liveRows = computed<TableRow[]>(() =>
   live.value.map((r) => ({ id: `${r.container}/${r.router}`, url: r.hosts.join(' '), target: '', deployment: r.project ?? '', router: r.router })),
 );
