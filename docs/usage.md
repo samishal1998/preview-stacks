@@ -1621,7 +1621,13 @@ page you opened. A browser already signed in to pstack goes straight through.
 - **A username deleted and created again** inherits the old Grafana user: its preferences, stars and
   the dashboards it owns.
 - **Grafana down.** `grafana.<domain>` shows `Grafana is not running.`
-- **Nav link.** The advanced UI links to Grafana for developer and above; hidden with a stored token.
+- **Nav link.** Hearth and the advanced UI link to Grafana for developer and above; hidden with a
+  stored token.
+- **Logs links.** In Hearth and the advanced UI, a running deployment's header links to Explore on the
+  stack's logs (`{service_name=~"<stack>-(web|api)"}`), and each service's logs link to that
+  service's (`{service_name="<stack>-<service>"}`), over the last hour. Same gate as the nav link;
+  never on a share link. Swarm replicas share one stream, so the link is per service, not per
+  container.
 
 ### Why `init` is CLI-only, and always will be
 
@@ -1672,6 +1678,7 @@ reason [`init` is CLI-only](#why-init-is-cli-only-and-always-will-be). From the 
 | `grafana.<domain>` | Grafana (`--logging loki`), signed in with pstack accounts; reserved even with logging off |
 | `<service-name>.<domain>` | the convention for a shared service's own hostname |
 | `<surface>-pr-<n>.<domain>` | a per-PR surface, e.g. `backend-pr-123.<domain>` |
+| `<surface>-<route>.<domain>` | the same surface through a [custom route](#custom-routes-a-stable-name-for-a-moving-stack), e.g. `backend-checkout.<domain>` |
 
 `control` and `api` are **two routers pointing at one container** — the API process serves the UI. The
 UI calls the API with relative `/api/…` paths, so it is same-origin from `control.<domain>` and needs
@@ -1682,6 +1689,101 @@ answers on is refused at deploy.
 
 **Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
 `backend-pr-1.<domain>` is covered by `*.<domain>`, `backend.pr-1.<domain>` is not.
+
+### Custom routes: a stable name for a moving stack
+
+A preview's hostname carries its stack name, so it changes with every PR: `web-myapp-pr-123.<domain>`
+today, `web-myapp-pr-124.<domain>` tomorrow, and every link you shared breaks. A **custom route** is a
+name you point at a deployment. Route `checkout` assigned to the deployment whose stack is
+`myapp-pr-123` makes every host that stack serves answer on a twin with the route in place of the
+stack name:
+
+| Stack host | Route host |
+|---|---|
+| `web-myapp-pr-123.preview.example.com` | `web-checkout.preview.example.com` |
+| `api-myapp-pr-123.preview.example.com` | `api-checkout.preview.example.com` |
+| wildcard `*.web-myapp-pr-123.preview.example.com` | `*.web-checkout.preview.example.com` |
+
+Point it at the next PR and the same links follow. **No redeploy:** pstack rewrites one Traefik file,
+`pstack-routes.yml`, and Traefik picks it up in about two seconds.
+
+- **Which hosts get a twin.** Every service autolabel routes as `<service>-<stack>.<domain>`, and
+  each wildcard subdomain derived from one. A service with an explicit `pstack.routing.host`, an
+  explicit `subdomains` host, or its own `traefik.*` labels has a host that does not carry the stack
+  name, so it already is stable and gets no twin.
+- **Names.** A DNS label of at most 40 characters (`a-z`, `0-9`, `-`): anything else is a 400.
+  `control`, `api`, `loki` and `grafana` are reserved (400). The stack name of a registered
+  deployment, or a route that exists, is a 409.
+- **One owner at a time.** Assigning a route that another deployment holds is a 409 naming it,
+  `checkout is assigned to myapp-pr-122`, with `assignedTo: { deployment, stack }` in the body. Send
+  `force: true` (`--force`) to move it: one call, one rewrite, one `route.assigned` event carrying
+  `previous`. Assigning it to the deployment that already holds it is a 200 that changes nothing.
+- **No two routers for one host.** An assign is refused (409, naming the host or the router) when a
+  route host is already served by another deployment or route. That is checked at create and assign
+  only: a deploy that later claims a route host is not refused.
+- **Asleep is fine.** A route may point at a sleeping or not-yet-deployed deployment: it stores the
+  intent. A request to a route host wakes a sleeping stack exactly like its own host does.
+- **Forgetting a deployment unassigns its routes** (`DELETE /api/deployments/:id`, or `down` with
+  `forget`). The routes stay, unassigned, and serve nothing until you point them somewhere.
+- **`pstack-routes.yml` is pstack's file.** It is rendered from the `custom_routes` table, so the
+  routing API refuses to write or delete it, and a `config export` carries neither the table nor the
+  file.
+
+In the UI (Hearth and the advanced one; the basic UI has none): **Routing** lists every route with
+its hosts and stack, and creates, assigns, unassigns and deletes them; a deployment's page shows the
+routes pointing at it, with their hosts as links. Moving a held route asks first: "Move checkout from
+myapp-pr-122 to myapp-pr-123?". Reading takes `viewer`; every write takes `developer`
+([7e](#7e-who-can-do-what-the-four-roles-0320)).
+
+The API:
+
+```bash
+curl -s -X POST "$PSTACK_API_URL/api/custom-routes" -H "authorization: Bearer $PSTACK_TOKEN" \
+  -d '{"name":"checkout","deployment":"pr-123"}'
+# → 201 { name: "checkout", deployment: "pr-123", stack: "myapp-pr-123",
+#         hosts: ["web-checkout.preview.example.com"], createdAt, updatedAt }
+curl -s -X PUT "$PSTACK_API_URL/api/custom-routes/checkout/assignment" -H "authorization: Bearer $PSTACK_TOKEN" \
+  -d '{"deployment":"pr-124","force":true}'
+```
+
+`hosts` lists what the route serves now: the plain hosts, then each wildcard as `*.<host>`.
+`deployment` and `stack` are `null` while it is unassigned. The generated
+`pstack api custom-routes list|create|delete|assign|unassign` reaches the same five routes
+(`pstack api custom-routes assign --name checkout --deployment pr-124 --force`).
+
+### `pstack route`
+
+The same thing from a terminal. It talks to `PSTACK_API_URL` as `PSTACK_TOKEN` (the host's token, or
+a personal one at `developer` to write), like `pstack api`:
+
+```console
+$ pstack route create checkout pr-123
+checkout  myapp-pr-123  web-checkout.preview.example.com
+$ pstack route assign checkout pr-124
+pstack: checkout is assigned to myapp-pr-123 (--force moves it)
+$ pstack route assign checkout pr-124 --force
+checkout  myapp-pr-124  web-checkout.preview.example.com
+$ pstack route create staging
+staging  (unassigned)
+$ pstack route ls
+checkout  myapp-pr-124  web-checkout.preview.example.com
+staging  (unassigned)
+$ pstack route unassign checkout
+checkout  (unassigned)
+$ pstack route rm staging
+staging  deleted
+```
+
+| Command | Does |
+|---|---|
+| `pstack route ls` | every route: name, stack, hosts |
+| `pstack route create <name> [<deployment>]` | a new route, assigned when a deployment is given |
+| `pstack route assign <name> <deployment> [--force]` | point it at a deployment; `--force` moves it from another |
+| `pstack route unassign <name>` | stop serving it; the route is kept |
+| `pstack route rm <name>` | delete it |
+
+`--json` prints the API's body instead. A refusal exits 1 with the server's sentence; bad usage
+exits 3.
 
 ### Choose a TLS mode
 
@@ -1867,7 +1969,8 @@ once more. Asleep stacks are skipped — their labels regenerate on wake.
 refuses to write or delete that one name (whoever asks), because its presence *is* the mode and the
 certificate pair it names lives beside it. It also does not travel in a `config export` — the pair
 cannot, so the pointer must not either, or the target host would enter the mode with nothing to
-serve.
+serve. `pstack-domains.yml` and `pstack-routes.yml` are pstack's too, and refused the same way: they
+are rendered from the domain list and from the custom routes.
 
 What this mode does **not** do yet: renew. The certificate is a static file; the UI shows a red
 badge under 21 days and renewing is `PUT` again with the fresh pair. `GET /api/tls` reports the
@@ -2354,7 +2457,8 @@ Two things to know before you wire this to anything that spends money:
 
 Most previews are deployed to be looked at once, then sit there until the PR merges. **Sleep** takes
 the compose project down and **keeps its volumes and every axis** — the database branch, the seeded
-data, the images. The next request to any of its hostnames brings it back: the visitor sees *"Your
+data, the images. The next request to any of its hostnames, or to a
+[custom route](#custom-routes-a-stable-name-for-a-moving-stack) host pointing at it, brings it back: the visitor sees *"Your
 preview is spinning up…"* for the length of a deploy, and then the app.
 
 Declare it in the spec:
@@ -2935,8 +3039,8 @@ that. There are four, they are **ordered**, and each one includes everything bel
 
 | Role | What it adds |
 |---|---|
-| `viewer` | **Reads.** Deployments, runtime, logs and log streams, source, readiness, jobs, specs, routing, registries, host variables (never a secret's *value*), notifiers and their deliveries, the control stack, the swarm, terminal-session history, and the list of accounts |
-| `developer` | **Stacks.** Submit and delete deployments, `up` / `down` / `verify` / `sleep` / `wake`, start / stop / restart a container, cancel a job, mint a share link, open a container shell, write and delete named specs |
+| `viewer` | **Reads.** Deployments, runtime, logs and log streams, source, readiness, jobs, specs, routing, custom routes, registries, host variables (never a secret's *value*), notifiers and their deliveries, the control stack, the swarm, terminal-session history, and the list of accounts |
+| `developer` | **Stacks.** Submit and delete deployments, `up` / `down` / `verify` / `sleep` / `wake`, start / stop / restart a container, cancel a job, mint a share link, open a container shell, write and delete named specs, create, assign and delete custom routes |
 | `maintainer` | **The host's configuration.** Host variables and secrets, private-registry logins, Traefik dynamic files, notifiers (create, edit, test, redeliver), the swarm join token, and *reading* the SSO configuration |
 | `admin` | **People.** Create, delete and re-role accounts, set someone else's password, *write* the SSO configuration, and apply a sealed config |
 
@@ -2970,6 +3074,7 @@ every account until someone puts it in the table.
 | `POST /api/deployments/:id/share` · `POST /api/jobs/:id/cancel` | `developer` |
 | `WS /api/deployments/:id/terminal` | `developer` |
 | `PUT`/`DELETE /api/specs/:name` | `developer` |
+| `POST /api/custom-routes` · `DELETE /api/custom-routes/:name` · `PUT`/`DELETE /api/custom-routes/:name/assignment` | `developer` |
 | `PUT`/`DELETE /api/host-vars/:name` · `/api/registries/:host` · `/api/routing/:file` | `maintainer` |
 | `POST`/`PATCH`/`DELETE /api/notifiers`… (incl. `/test`, `/redeliver`) | `maintainer` |
 | `GET /api/swarm/join` | `maintainer` |
@@ -3364,10 +3469,11 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `swarm [status]` | the swarm's nodes, the manager address and the ports a worker needs. Read-only; reads docker every time. **Exit 1 when this host is not a manager**, so a script need not parse it. | 0 · 1 |
 | `swarm join` | what a new worker runs — `--format command` (default), `script`, `cloud-config` (+`--distro`) or `token`. **The output is a secret**: every shape embeds the join token. To stdout, or `-o <file>`. | 0 · 1 · 3 |
 | `api <group> <command>` | call any API route. Generated from `api/openapi.yaml`; `--help` at any level lists what is under it. Needs `PSTACK_API_URL` and `PSTACK_TOKEN`. Non-2xx exits non-zero | 0 · 1 |
+| `route ls\|create\|assign\|unassign\|rm` | list and point [custom routes](#pstack-route): a stable name for whichever stack it is assigned to. Talks to `PSTACK_API_URL`; a held route exits 1 naming its holder and `--force`. | 0 · 1 · 3 |
 | `pull config` | seal this host's whole portable configuration — accounts, tokens, host secrets, notifiers, SSO, registry logins, routing files, named specs — into one `0600` file (`-o`, never stdout). Talks to `PSTACK_API_URL` as the **root token**. | 0 · 1 · 3 |
 | `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
 
-`init`, `serve`, `swarm` and `pull`/`push` are **spec-free**: they act on the host and on the registry, so none of
+`init`, `serve`, `swarm`, `route` and `pull`/`push` are **spec-free**: they act on the host and on the registry, so none of
 them loads `preview.yml` or fails because it is absent.
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
@@ -3573,6 +3679,11 @@ anything it does not list is the root token's alone.
 | POST | `/api/control/restart` | `{ service }` | **maintainer and up** — restart one control service; `pstack` itself is always 400 (it is the container answering); 404 unknown service; 503 docker down |
 | GET | `/api/domains` | — | **maintainer and up** — `{ primary, domains[], mode, note }`; the list is derived from the routers it wrote |
 | PUT | `/api/domains` | `{ domains }` | **maintainer and up** — replace the additional domains; each gets control./api./wake routers. The primary is refused (400) |
+| GET | `/api/custom-routes` | — | `[{ name, deployment, stack, hosts[], createdAt, updatedAt }]`, by name; `deployment` and `stack` are `null` when unassigned ([custom routes](#custom-routes-a-stable-name-for-a-moving-stack)) |
+| POST | `/api/custom-routes` | `{ name, deployment?, force? }` | **developer and up** — **201** the route · 400 a bad or reserved name · 409 the name exists or is a stack's, or a host or router another serves · 404 unknown deployment. `force` is accepted and ignored: a new route is never held |
+| DELETE | `/api/custom-routes/:name` | — | **developer and up** — `{ deleted }`; its routers go · 404 |
+| PUT | `/api/custom-routes/:name/assignment` | `{ deployment, force? }` | **developer and up** — the route; the same deployment is a no-op 200 · **409** `{ error, assignedTo: { deployment, stack } }` when another holds it, unless `force` (one move) · 409 a host or router another serves · 404 unknown route or deployment |
+| DELETE | `/api/custom-routes/:name/assignment` | — | **developer and up** — the route, unassigned; always allowed · 404 |
 | GET | `/api/tls` | — | **maintainer and up** — `{ mode, traefik, wildcard, note }`; the mode is derived from the artifacts, never stored |
 | PUT | `/api/tls/wildcard` | `{ cert, key }` | **admin** — store a wildcard pair, enter `dns-persist-01`; 400 names what is wrong with the pair. The key has no read path |
 | DELETE | `/api/tls/wildcard` | — | **admin** — back to Traefik-native resolution; 404 when none is stored |

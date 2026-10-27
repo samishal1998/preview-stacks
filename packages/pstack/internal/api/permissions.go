@@ -36,7 +36,7 @@
 //
 // ── WHERE A ROW IS A DECISION, NOT A DEDUCTION ──────────────────────────────────────────────────
 //
-// Three rows below are worth stating out loud, because each looks wrong at a glance:
+// Four rows below are worth stating out loud, because each looks wrong at a glance:
 //
 //   - `WS /api/deployments/:id/terminal` is DEVELOPER, not admin. A developer can already run
 //     arbitrary compose through `up` — including a service that mounts the docker socket — so
@@ -50,6 +50,10 @@
 //     maintainer able to point SSO at an identity provider they control could sign in through it as
 //     an admin — that is a promotion path, so it belongs with people, not with configuration.
 //     The matching READ stays maintainer: it returns a mask, never the client secret.
+//   - The custom-route writes are DEVELOPER, though they rewrite a Traefik dynamic file
+//     (`pstack-routes.yml`) and every hand-written one (`/api/routing/:file`) is maintainer. The file
+//     is rendered, never typed: a route can only point a twin host at a deployment's own generated
+//     services, which is what deploying that deployment already does.
 package api
 
 import (

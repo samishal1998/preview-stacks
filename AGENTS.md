@@ -104,8 +104,8 @@ One package per responsibility (42 of them), named as the reference's files were
 
 | File | Responsibility |
 |---|---|
-| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, deploy, domains, grafana, logging, openapi, probe, settings, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). `server.go`'s header has no route list and still names the deleted `api.ts` — fix it when you next touch that file. Owns the `:id` → spec-variable binding. |
-| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (82) is a constant a test checks against the lock file. |
+| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, customroutes, deploy, domains, grafana, logging, openapi, probe, settings, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). `server.go`'s header has no route list and still names the deleted `api.ts` — fix it when you next touch that file. Owns the `:id` → spec-variable binding. |
+| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (91) is a constant a test checks against the lock file. |
 | `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), per-command help and completion (`commands.go`, `completion.go`), the init silent-revert guard (`initguard.go`), **exit codes**, the `serve` loopback interlock, `healthcheck`. `main.go` is one call. Logic belongs in the package, not here. |
 | `jobs` | In-memory job registry: one RUNNING job per key plus a queue one deep where the newest supersedes the queued one, a global concurrency cap (`PSTACK_MAX_JOBS`, 4), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation per job and per stack. `loki-apply` is its one non-deployment action. |
 | `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
@@ -135,12 +135,12 @@ One package per responsibility (42 of them), named as the reference's files were
 
 | File | Responsibility |
 |---|---|
-| `store` | SQLite (`<dataDir>/db/pstack.db`) + 9 migrations, 13 tables. Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
+| `store` | SQLite (`<dataDir>/db/pstack.db`) + 10 migrations, 13 tables (migration 7 replaced `sso_config`). Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
 | `auth` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `SsoSignIn`. Argon2id with a PHC codec that PARSES m/t/p (`phc.go`); sessions and tokens stored as SHA-256. `SessionHashUser` serves the Grafana cookie. |
 | `sso` | The OIDC/OAuth2 protocol, and only that: presets, discovery (cached per `Client`), PKCE, the token exchange, ID-token verification (RS256/ES256, stdlib), claim mapping, the `TransientStore`. Touches no accounts. |
 | `hostvars` | Host-level `${vars.*}` / `${secrets.*}`. |
 | `registries` | Private-registry credentials for image pulls. |
-| `events` | The domain event bus. `Names` (30) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
+| `events` | The domain event bus. `Names` (34) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
 | `webhooks` | Notifier registrations + the delivery log. |
 | `notify` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
 

@@ -1,5 +1,6 @@
 // Package store is the persistent state that is not the registry: users, sessions, API tokens,
-// webhook registrations and delivery logs, the terminal audit, host variables, SSO.
+// webhook registrations and delivery logs, the terminal audit, host variables, SSO, host settings,
+// Loki's settings, and the custom routes (an alias name -> the deployment it points at).
 //
 // ── WHY SQLITE, AND WHY THE REGISTRY STAYS FILES ─────────────────────────────────────────────────
 //

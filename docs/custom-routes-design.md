@@ -1,5 +1,46 @@
 # Custom routes, Grafana links and the compact Hearth theme
 
+> **Built, unreleased.** Using it: [usage.md](usage.md#custom-routes-a-stable-name-for-a-moving-stack),
+> `pstack route`. The build plan is [custom-routes-plan.md](custom-routes-plan.md). The spec below is
+> kept as approved on 2026-10-26. Where the build differs from it:
+>
+> - **Status codes.** A reserved name (`control`, `api`, `loki`, `grafana`) is a 400, a bad name.
+>   A stack's name or an existing route is a 409. An unknown route or deployment is a 404. POST
+>   accepts `force` and ignores it: a new route is never held. DELETE answers `{ deleted }`.
+> - **Router names can collide.** `a-b` with service `c` and `a` with service `b-c` both give
+>   `pstack-route-a-b-c`. Create and assign refuse that with a 409 naming the router. The renderer
+>   drops a duplicate with a `# dropped` note rather than writing a duplicate key.
+> - **Collisions are checked at create and assign only.** A later deploy of a stack named like a
+>   route, or one that claims a route host, is not refused. Until someone unassigns, Traefik has two
+>   routers for one rule and no defined winner.
+> - **`hosts[]` lists wildcards** as `*.<host>` after the plain hosts. The UIs show them as text,
+>   not links.
+> - **No routes, no file.** With nothing to render, `pstack-routes.yml` is removed, not written
+>   empty. Boot with an empty table touches nothing. Boot also skips when rows exist but none is
+>   assigned, so a stale file left by a crash mid-unassign waits for the next write.
+> - **Writes that change nothing do not re-render:** an unassigned create, a no-op assign, and an
+>   unassign of an unassigned route. A deploy re-renders only when the deployment has routes.
+> - **`DELETE /api/deployments/:id` unassigns too,** not only a forget, both with reason `forgotten`.
+> - **Waking, not only sleeping.** Alias hosts join a stack's waking entry as well as its sleep
+>   entry, so a visitor between `up` and readiness gets the waking page. They come from a map the
+>   render fills, so the request path parses no compose. `previewHostname` is unchanged: an alias
+>   host is already one label under a known domain.
+> - **Explicit `subdomains` hosts** get no twin, like an explicit `pstack.routing.host`. A service
+>   with `pstack.routing.service_name` is mirrored under that name.
+> - **CLI.** The generated commands are `pstack api custom-routes list|create|delete|assign|unassign`
+>   with flags (`--name`, `--deployment`, `--force`). Completion offers the `pstack route`
+>   subcommands only, with no route names or deployment ids, because completion makes no
+>   authenticated calls.
+> - **Advanced UI.** Its pure helpers live in `apps/ui/src/composables/` (`customRoutes.ts`,
+>   `grafana.ts`), its convention, not `lib/`. One form creates or assigns, and its button reads
+>   Create or Assign, in place of a separate New route control. The move question keeps the full
+>   "Move checkout from myapp-pr-122 to myapp-pr-123?": at 320 px it wraps inside the panel.
+> - **Grafana stack link.** It is built from the running services, so a stack that is down or asleep
+>   has no header link.
+> - **Corners** are 6/10/14 px (control, card, panel), the example here, not a strict 60 % (6/10/12).
+>   Pill stays 999 px. Overlays use native top-layer dialogs and popovers inside the `HTheme` island,
+>   so they inherit the tokens. Nothing is set on `:root`.
+
 Status: design, 2026-10-26. Owner decisions are marked **(owner)** and bind. Everything else is a
 controller default the owner may overrule.
 
