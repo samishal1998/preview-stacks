@@ -1623,9 +1623,11 @@ page you opened. A browser already signed in to pstack goes straight through.
 - **Grafana down.** `grafana.<domain>` shows `Grafana is not running.`
 - **Nav link.** Hearth and the advanced UI link to Grafana for developer and above; hidden with a
   stored token.
-- **Logs links.** In Hearth and the advanced UI, a running deployment's header links to Explore on the
-  stack's logs (`{service_name=~"<stack>-(web|api)"}`), and each service's logs link to that
-  service's (`{service_name="<stack>-<service>"}`), over the last hour. Same gate as the nav link;
+- **Logs links.** In Hearth and the advanced UI, a deployment's header links to Explore on the
+  stack's logs (`{service_name=~"<stack>-(web|api)"}`), down or asleep included: the services are
+  the ones its compose declares (`declaredServices` on `/runtime`) plus any running. A service a
+  later redeploy removed drops out of that link; its streams stay in Loki. Each service's logs link
+  to that service's (`{service_name="<stack>-<service>"}`). Both cover the last hour. Same gate as the nav link;
   never on a share link. Swarm replicas share one stream, so the link is per service, not per
   container.
 
