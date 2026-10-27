@@ -218,27 +218,36 @@ func TestCustomRoutesWakeTheirDeployment(t *testing.T) {
 		if s.sleepIndex.Find(under) != "pr-1" {
 			t.Fatal("the alias wildcard is not in the sleep index")
 		}
-		// Held, so the wake answers busy instead of running a real `up`: the request still reached it.
-		release, ok := s.jobs.Hold("myapp-pr-1")
-		if !ok {
-			t.Fatal("hold refused")
-		}
-		defer release()
+		s.env["PATH"] = fakeDockerPath(t) // the wake's `up` runs against a docker that answers ok
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Host = alias
 		s.handle(rec, req)
-		if rec.Code != 503 || rec.Header().Get("x-pstack-wake") != "1" || !strings.Contains(rec.Body.String(), "myapp-pr-1") {
+		if rec.Code != 503 || rec.Header().Get("x-pstack-wake") != "1" || !strings.Contains(rec.Body.String(), "Waking your preview") {
 			t.Fatalf("%d %v\n%s", rec.Code, rec.Header(), rec.Body.String())
 		}
-	})
-
-	t.Run("waking, the alias keeps the waking page", func(t *testing.T) {
+		var wake jobs.Job
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			i := slices.IndexFunc(s.jobs.List(), func(j jobs.Job) bool { return j.Stack == "myapp-pr-1" && j.Action == jobs.Wake })
+			if i >= 0 {
+				if wake = s.jobs.List()[i]; wake.State != jobs.Queued && wake.State != jobs.Running {
+					break
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("no wake finished")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		s.readiness.Cancel("myapp-pr-1")
+		if wake.State != jobs.OK {
+			t.Fatalf("wake ended %s: %+v", wake.State, wake.Outcome)
+		}
+		// Woken: the record is gone, and the alias keeps the waking page until readiness settles.
 		// negative control: apply routeWake to the sleeping entries only (before the waking ones are
 		// appended) → this fails.
-		s.clearSleep("pr-1", "myapp-pr-1", true)
-		if s.sleepIndex.Find(alias) != "pr-1" {
-			t.Fatal("the alias host left the index while waking")
+		if _, ok := s.wakingOf("pr-1"); !ok || s.sleepIndex.Find(alias) != "pr-1" {
+			t.Fatalf("waking=%v Find(alias)=%q", ok, s.sleepIndex.Find(alias))
 		}
 		s.forgetWaking("pr-1")
 	})
