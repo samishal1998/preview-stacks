@@ -6,11 +6,13 @@ defineProps<{ label: string }>();
 </script>
 
 <template>
-  <HTextarea class="mono" :label="label" />
+  <!-- wrap="off": a soft-wrapped YAML line continues at column 0 and reads as a wrongly indented one. -->
+  <HTextarea class="mono" :label="label" wrap="off" />
 </template>
 
 <style scoped>
-.mono :deep(textarea) {
+/* HTextarea puts the class on the <textarea> itself, not on an ancestor. */
+:deep(textarea.mono) {
   font-family: var(--h-font-mono, monospace);
 }
 </style>
