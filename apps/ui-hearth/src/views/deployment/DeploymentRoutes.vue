@@ -67,7 +67,7 @@ watch([() => cr.move.value, () => cr.drop.value, target], async ([m, d]) => {
           <HStack v-if="column.key === 'hosts'" direction="column" :gap="1">
             <template v-for="h in hostsOf(row)" :key="h.host">
               <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
-              <HText v-else tone="muted">{{ h.takenBy ? `${h.host} · taken by ${h.takenBy}` : h.host }}</HText>
+              <HText v-else tone="muted" size="sm">{{ h.takenBy ? `${h.host} · taken by ${h.takenBy}` : h.host }}</HText>
             </template>
             <template v-if="!hostsOf(row).length">—</template>
           </HStack>
