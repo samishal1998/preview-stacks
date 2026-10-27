@@ -2037,6 +2037,10 @@ select.compact {
   color: var(--fg);
   cursor: pointer;
 }
+/* The inset above outranks the global `:focus-visible` ring by coming later: put the ring back. */
+.selm-trigger:focus-visible {
+  box-shadow: var(--ring);
+}
 .selm-trigger:hover:not(:disabled):not([aria-disabled='true']) {
   border-color: color-mix(in srgb, var(--fg-mute) 55%, var(--line));
 }
