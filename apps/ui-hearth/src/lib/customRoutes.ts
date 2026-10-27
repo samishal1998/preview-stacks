@@ -19,5 +19,8 @@ export const moveQuestion = (name: string, from: Holder, toStack: string): strin
 export const hostItems = (hosts: string[]): Array<{ host: string; href: string | null }> =>
   hosts.map((host) => ({ host, href: host.startsWith('*.') ? null : `https://${host}` }));
 
-/** Focus a write dropped: on <body>, on an element it removed, or on a control it disabled. */
-export const focusLost = (a: Element | null, body: Element | null): boolean => !a || a === body || !a.isConnected || a.matches(':disabled');
+/**
+ * Focus a write dropped: on <body>, on a control it disabled, or on an element with no box: removed,
+ * or a closed dialog's button, where Firefox leaves focus for a frame before it falls to <body>.
+ */
+export const focusLost = (a: Element | null, body: Element | null): boolean => !a || a === body || a.matches(':disabled') || !a.getClientRects().length;
