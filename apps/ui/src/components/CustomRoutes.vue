@@ -155,11 +155,11 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
           <td role="cell" class="cell-wrap" data-label="hosts">
             <!-- One value column: a card row's cell is a flex row, and each host would be its own column. -->
             <div>
-              <div v-for="h in hostItems(r.hosts)" :key="h.host">
+              <div v-for="h in hostItems(r.hosts, r.blocked)" :key="h.host">
                 <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
-                <span v-else class="mono mute">{{ h.host }}</span>
+                <span v-else class="mono mute">{{ h.host }}<template v-if="h.takenBy"> · taken by {{ h.takenBy }}</template></span>
               </div>
-              <span v-if="!r.hosts.length" class="mute">—</span>
+              <span v-if="!r.hosts.length && !r.blocked?.length" class="mute">—</span>
             </div>
           </td>
           <td v-if="!deployment" role="cell" data-label="deployment">

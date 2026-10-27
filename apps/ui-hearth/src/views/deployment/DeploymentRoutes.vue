@@ -16,7 +16,10 @@ const columns: TableColumn[] = [
   { key: 'hosts', label: 'Hosts' },
 ];
 const rows = computed<TableRow[]>(() => mine.value.map((r) => ({ id: r.name, name: r.name, hosts: '' })));
-const hostsOf = (row: TableRow) => hostItems(mine.value.find((r) => r.name === row.id)?.hosts ?? []);
+const hostsOf = (row: TableRow) => {
+  const r = mine.value.find((r) => r.name === row.id);
+  return hostItems(r?.hosts ?? [], r?.blocked);
+};
 const actions = (): MenuAction[] => [{ id: 'unassign', label: 'Unassign' }];
 
 const NEW = '+new'; // not a DNS label, so never a route name
@@ -64,7 +67,7 @@ watch([() => cr.move.value, () => cr.drop.value, target], async ([m, d]) => {
           <HStack v-if="column.key === 'hosts'" direction="column" :gap="1">
             <template v-for="h in hostsOf(row)" :key="h.host">
               <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
-              <HText v-else tone="muted">{{ h.host }}</HText>
+              <HText v-else tone="muted">{{ h.takenBy ? `${h.host} · taken by ${h.takenBy}` : h.host }}</HText>
             </template>
             <template v-if="!hostsOf(row).length">—</template>
           </HStack>

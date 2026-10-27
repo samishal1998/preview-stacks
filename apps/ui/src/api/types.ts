@@ -450,6 +450,8 @@ export type CustomRoute = {
   stack: string | null;
   /** The alias hosts it serves now; a `*.` entry is a wildcard rule, not an address. */
   hosts: string[];
+  /** Hosts a deployment (by its stack) or an earlier route serves instead: text, never a link. */
+  blocked: Array<{ host: string; by: { kind: 'deployment' | 'route'; name: string } }>;
   createdAt: number;
   updatedAt: number;
 };

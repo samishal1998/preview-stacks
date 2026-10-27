@@ -17,7 +17,16 @@ export const routingApi = {
 };
 
 /** `/api/custom-routes`: a stable alias for a stack. `deployment` and `stack` are null when unassigned. */
-export type CustomRoute = { name: string; deployment: string | null; stack: string | null; hosts: string[]; createdAt: number; updatedAt: number };
+export type CustomRoute = {
+  name: string;
+  deployment: string | null;
+  stack: string | null;
+  hosts: string[];
+  /** Hosts a deployment or an earlier route serves instead. */
+  blocked: Array<{ host: string; by: { kind: 'deployment' | 'route'; name: string } }>;
+  createdAt: number;
+  updatedAt: number;
+};
 /** A non-force PUT on a route another deployment holds. */
 export type RouteHeld = { assignedTo?: { deployment: string; stack: string | null } };
 

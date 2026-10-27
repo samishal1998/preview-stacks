@@ -29,9 +29,17 @@ export function needsMove(
 export const moveQuestion = (name: string, from: Holder, toStack: string): string =>
   `Move ${name} from ${from.stack ?? from.deployment} to ${toStack}?`;
 
-/** A `*.` wildcard host does not resolve on its own: text, not a link. */
-export const hostItems = (hosts: string[]): Array<{ host: string; href: string | null }> =>
-  hosts.map((host) => ({ host, href: host.startsWith('*.') ? null : `https://${host}` }));
+/** A host something else serves instead of the route: a deployment (its stack) or an earlier route. */
+export type Blocked = { host: string; by: { kind: 'deployment' | 'route'; name: string } };
+
+/**
+ * The hosts a route serves, then the ones it lost. A `*.` wildcard host does not resolve on its own,
+ * and a blocked host is another stack's: text, not a link.
+ */
+export const hostItems = (hosts: string[], blocked: Blocked[] = []): Array<{ host: string; href: string | null; takenBy?: string }> => [
+  ...hosts.map((host) => ({ host, href: host.startsWith('*.') ? null : `https://${host}` })),
+  ...blocked.map((b) => ({ host: b.host, href: null, takenBy: b.by.name })),
+];
 
 /**
  * Focus a write dropped: on <body>, on a control it disabled, or on an element with no box: removed,
