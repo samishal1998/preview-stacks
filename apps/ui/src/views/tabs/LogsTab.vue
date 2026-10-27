@@ -342,22 +342,25 @@ const stateTone = (c: RuntimeContainer): string =>
         Timestamps
       </label>
       <a v-if="grafanaHref" :href="grafanaHref" target="_blank" rel="noopener">Grafana ↗</a>
-      <button
-        :disabled="!dep.detail?.compose"
-        :title="following ? 'Stop streaming' : 'Stream new lines as they arrive'"
-        @click="toggleFollow"
-      >
-        {{ following ? 'Stop following' : 'Follow' }}
-      </button>
-      <button
-        class="primary"
-        :disabled="loading || following || !dep.detail?.compose"
-        :title="following ? 'Already streaming.' : undefined"
-        @click="fetchLogs"
-      >
-        {{ loading ? 'Reading…' : logs ? 'Refresh' : 'Fetch' }}
-        <span v-if="loading" class="progress" aria-hidden="true" />
-      </button>
+      <!-- One flex unit, so the pair wraps together. -->
+      <div class="row" style="flex-wrap: nowrap">
+        <button
+          :disabled="!dep.detail?.compose"
+          :title="following ? 'Stop streaming' : 'Stream new lines as they arrive'"
+          @click="toggleFollow"
+        >
+          {{ following ? 'Stop following' : 'Follow' }}
+        </button>
+        <button
+          class="primary"
+          :disabled="loading || following || !dep.detail?.compose"
+          :title="following ? 'Already streaming.' : undefined"
+          @click="fetchLogs"
+        >
+          {{ loading ? 'Reading…' : logs ? 'Refresh' : 'Fetch' }}
+          <span v-if="loading" class="progress" aria-hidden="true" />
+        </button>
+      </div>
     </div>
 
     <p v-if="!dep.detail" class="mute">Unavailable until the spec resolves.</p>
@@ -420,7 +423,8 @@ const stateTone = (c: RuntimeContainer): string =>
                 spellcheck="false"
               />
             </div>
-            <label class="check">
+            <!-- Level with the input, not the label-plus-input block beside it. -->
+            <label class="check" style="align-self: flex-end; min-height: var(--control-h)">
               <input v-model="raw" type="checkbox" />
               Raw output
             </label>

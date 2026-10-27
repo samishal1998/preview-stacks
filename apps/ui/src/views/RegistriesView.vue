@@ -134,7 +134,7 @@ async function forget(registry: string): Promise<void> {
       <SkeletonList v-if="!loaded" :rows="2" />
       <ul v-else-if="entries.length" class="kvlist">
         <li v-for="e in entries" :key="e.registry">
-          <span class="k break"><b>{{ e.registry }}</b></span>
+          <span class="k fit"><b>{{ e.registry }}</b></span>
           <span class="v row">
             <span>{{ e.username ?? 'unknown user' }}</span>
             <span v-if="e.viaHelper" class="badge warn">Via helper</span>

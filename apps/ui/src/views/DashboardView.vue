@@ -91,8 +91,8 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
         <div class="phead">
           <h2 class="section">Control stack</h2>
           <InfoHint label="why there are no actions here">
-            pstack runs in this stack, so it is managed from the
-            host<template v-if="control?.managedBy"> by {{ control.managedBy }}</template>.
+            pstack runs in this stack, so it is managed<template v-if="control?.managedBy">
+              by {{ control.managedBy }}</template><template v-else> from the host</template>.
           </InfoHint>
           <span v-if="control?.project" class="badge">{{ control.project }}</span>
           <span class="grow" />
@@ -209,12 +209,13 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           <SkeletonList v-else-if="!state.jobsLoaded" :rows="4" />
           <ul v-else class="kvlist stagger">
             <li v-for="(j, i) in recentJobs" :key="j.id" :style="{ '--i': i }">
-              <span class="k"><StateBadge :state="j.state" /></span>
+              <!-- A badge, not a text key: it takes its own width, not the 128px label column. -->
+              <span class="k" style="width: auto"><StateBadge :state="j.state" /></span>
               <span class="v">
                 <RouterLink :to="`/jobs/${encodeURIComponent(j.id)}`">
                   {{ actionLabel(j.action) }} {{ j.stack }}
                 </RouterLink>
-                <span class="mute" style="font-size: var(--t-xs)">
+                <span class="mute" style="font-size: var(--t-xs); white-space: nowrap">
                   · {{ ago(j.startedAt) }} · {{ took(j.startedAt, j.endedAt) }}
                 </span>
               </span>

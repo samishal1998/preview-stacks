@@ -407,11 +407,11 @@ async function saveStorage(): Promise<void> {
 
       <ul class="kvlist" style="margin: var(--s3) 0">
         <li>
-          <span class="k mono">{{ domains.primary || 'not set' }}</span>
+          <span class="k fit mono">{{ domains.primary || 'not set' }}</span>
           <span class="v mute">primary</span>
         </li>
         <li v-for="d in domains.domains" :key="d">
-          <span class="k mono">{{ d }}</span>
+          <span class="k fit mono">{{ d }}</span>
           <span class="v">
             <span class="mute">control.{{ d }} · api.{{ d }} · wakes sleeping previews</span>
             <button v-if="can('maintainer')" class="sm ghost" :disabled="savingDomains" @click="removeDomain(d)">Remove</button>
@@ -491,9 +491,11 @@ async function saveStorage(): Promise<void> {
           <label for="tls-key">Private key (PEM)</label>
           <textarea id="tls-key" v-model="keyDraft" rows="4" class="mono" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
         </div>
-        <ActionButton variant="primary" :pending="storing" :disabled="storing || !certDraft || !keyDraft" @click="storeWildcard">
-          {{ tls.wildcard ? 'Replace wildcard' : 'Store wildcard' }}
-        </ActionButton>
+        <div class="row" style="margin-top: var(--s4)">
+          <ActionButton variant="primary" :pending="storing" :disabled="storing || !certDraft || !keyDraft" @click="storeWildcard">
+            {{ tls.wildcard ? 'Replace wildcard' : 'Store wildcard' }}
+          </ActionButton>
+        </div>
       </template>
       <p v-else-if="!tls.wildcard" class="mute">Admin only.</p>
 
@@ -616,7 +618,7 @@ async function saveStorage(): Promise<void> {
         <p v-if="storageLocked" class="hint">{{ can('admin') ? 'Fixed once saved.' : 'Admin only.' }}</p>
 
         <template v-if="storageType === 's3'">
-          <div class="field">
+          <div class="field" style="margin-top: var(--s4)">
             <label for="loki-endpoint">Endpoint</label>
             <input id="loki-endpoint" v-model="s3Draft.endpoint" type="url" class="mono" spellcheck="false" :disabled="storageLocked" />
           </div>

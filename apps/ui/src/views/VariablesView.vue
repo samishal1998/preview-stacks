@@ -186,7 +186,14 @@ async function remove(e: Entry): Promise<void> {
             </thead>
             <tbody role="rowgroup">
               <tr v-for="e in vars" :key="e.name" role="row">
-                <td role="cell" class="name" data-label="name"><code>{{ e.name }}</code></td>
+                <td role="cell" class="name" data-label="name">
+                  <!-- A break chance after each `_`, so a long name splits at a word, not one letter from the end. -->
+                  <code
+                    ><template v-for="(part, pi) in e.name.split('_')" :key="pi"
+                      ><template v-if="pi">_<wbr /></template>{{ part }}</template
+                    ></code
+                  >
+                </td>
                 <td role="cell" class="break" data-label="value">{{ e.value }}</td>
                 <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
                 <td role="cell" class="right nowrap" data-label="">
@@ -223,7 +230,14 @@ async function remove(e: Entry): Promise<void> {
             </thead>
             <tbody role="rowgroup">
               <tr v-for="e in secrets" :key="e.name" role="row">
-                <td role="cell" class="name" data-label="name"><code>{{ e.name }}</code></td>
+                <td role="cell" class="name" data-label="name">
+                  <!-- A break chance after each `_`, so a long name splits at a word, not one letter from the end. -->
+                  <code
+                    ><template v-for="(part, pi) in e.name.split('_')" :key="pi"
+                      ><template v-if="pi">_<wbr /></template>{{ part }}</template
+                    ></code
+                  >
+                </td>
                 <td role="cell" class="dim nowrap" data-label="updated"><RelativeTime :at="e.updatedAt" /></td>
                 <td role="cell" class="right nowrap" data-label="">
                   <button class="ghost sm" @click="startEdit(e)">Replace</button>
@@ -315,6 +329,7 @@ async function remove(e: Entry): Promise<void> {
             </span>
           </div>
           <EquivalentCommand
+            style="margin-top: var(--s3)"
             what="storing this value"
             method="PUT"
             :path="`/api/host-vars/${form.name || 'NAME'}`"

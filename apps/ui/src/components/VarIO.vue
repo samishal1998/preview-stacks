@@ -102,18 +102,21 @@ function selectAll(e: FocusEvent): void {
 <template>
   <div class="vario">
     <div class="row">
-      <span class="mute vario-lbl">Copy as</span>
-      <button
-        v-for="f in VAR_FORMATS"
-        :key="f"
-        type="button"
-        class="sm ghost"
-        :disabled="!exportable"
-        :title="exportable ? `Copy all ${exportable} as ${FORMAT_LABEL[f]}` : 'There is nothing to copy yet'"
-        @click="copy(f)"
-      >
-        {{ FORMAT_LABEL[f] }}
-      </button>
+      <!-- One group, so a wrapping row can break only between the copy group and Paste. -->
+      <span class="row">
+        <span class="mute vario-lbl">Copy as</span>
+        <button
+          v-for="f in VAR_FORMATS"
+          :key="f"
+          type="button"
+          class="sm ghost"
+          :disabled="!exportable"
+          :title="exportable ? `Copy all ${exportable} as ${FORMAT_LABEL[f]}` : 'There is nothing to copy yet'"
+          @click="copy(f)"
+        >
+          {{ FORMAT_LABEL[f] }}
+        </button>
+      </span>
       <span class="sep" aria-hidden="true" />
       <button type="button" class="sm" :aria-expanded="open" @click="open = !open">
         {{ open ? 'Close' : 'Paste to fill' }}
@@ -238,6 +241,12 @@ function selectAll(e: FocusEvent): void {
   height: 18px;
   background: var(--line);
   margin-inline: var(--s1);
+}
+/* In a narrow panel the row wraps, and the line break already separates the two groups. */
+@container (max-width: 460px) {
+  .sep {
+    display: none;
+  }
 }
 .vario-box {
   margin-top: var(--s3);
