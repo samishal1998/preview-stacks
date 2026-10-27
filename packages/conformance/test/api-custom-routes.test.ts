@@ -229,6 +229,7 @@ describe('custom routes over HTTP', () => {
         ['GET', '/api/custom-routes'],
         ['POST', '/api/custom-routes'],
         ['PUT', '/api/custom-routes/checkout/assignment'],
+        ['DELETE', '/api/custom-routes/checkout/assignment'],
         ['DELETE', '/api/custom-routes/checkout'],
       ] as [string, string][]) {
         expect(`${method} ${path} → ${(await fetch(`${s.base}${path}${q}`, { method })).status}`).toBe(`${method} ${path} → 403`);
