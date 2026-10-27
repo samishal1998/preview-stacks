@@ -71,6 +71,18 @@ func AliasHosts(t AliasTarget) []string {
 	return append(out, wild...)
 }
 
+// AliasWildcardRules is the HostRegexp rule of every `-wild` router the route renders, for the
+// sleep index.
+func AliasWildcardRules(t AliasTarget) []string {
+	out := []string{}
+	for _, s := range t.Services {
+		if s.Depth != "" {
+			out = append(out, spec.WildcardRule(t.host(s), s.Depth))
+		}
+	}
+	return out
+}
+
 const customRoutesHeader = "# Written by pstack (/api/custom-routes) from the custom_routes table.\n" +
 	"# Derived state: the routing API refuses this filename, and every assign rewrites it.\n"
 

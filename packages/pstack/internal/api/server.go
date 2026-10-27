@@ -195,6 +195,10 @@ type Server struct {
 	// Lock order where both are held: writeMu, then wakeMu, never the reverse.
 	wakeMu sync.Mutex
 	waking map[string]wakingUp
+	// routeWake is deployment id → the hosts and HostRegexp patterns its assigned routes serve, which
+	// reindex adds to that deployment's sleeping or waking entry. renderCustomRoutes fills it, so the
+	// request path never parses a compose file. Under wakeMu.
+	routeWake map[string]scheduler.SleepEntry
 
 	// followers are the live `compose logs --follow` children, so stopping the server stops them.
 	followMu  sync.Mutex
@@ -364,6 +368,8 @@ func New(o Options) (*Server, error) {
 	// serving the old console after a UI switch. Idempotent: it rewrites the same bytes when nothing
 	// changed, and does nothing at all when no domain has been added.
 	s.reconcileDomains()
+	// pstack-routes.yml from the custom_routes table, so the two heal.
+	s.reconcileCustomRoutes()
 	// Finish or undo a Loki apply this process died in, and apply a saved row the files do not match.
 	// No docker command here: a job runs them, on its own goroutine.
 	s.reconcileLoki()
@@ -515,6 +521,14 @@ func (s *Server) reindex() {
 	for _, w := range s.waking {
 		entries = append(entries, w.entry)
 	}
+	// A route's hosts wake its deployment like the stack's own. Added here, not captured at sleep
+	// time, so a move while asleep follows the assignment.
+	for i, e := range entries {
+		if r, ok := s.routeWake[e.ID]; ok {
+			entries[i].Hosts = slices.Concat(e.Hosts, r.Hosts)
+			entries[i].Rules = slices.Concat(e.Rules, r.Rules)
+		}
+	}
 	s.wakeMu.Unlock()
 	s.sleepIndex.Rebuild(entries)
 }
@@ -628,6 +642,10 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 				// in neither state: wakeFor reads the sleep record, then the waking entry, then that
 				// watch, and each hand-off is already in place when the next request asks.
 				s.clearSleep(id, st.Stack, true)
+				// A deploy can change the services a route mirrors. A wake changes nothing.
+				if action == jobs.Up {
+					s.rerenderRoutesOf(id)
+				}
 			}
 			return outcome, nil
 		case jobs.Verify:

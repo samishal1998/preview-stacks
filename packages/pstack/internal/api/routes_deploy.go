@@ -24,6 +24,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/share"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/specs"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/terminal"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
@@ -423,8 +424,21 @@ func (s *Server) removeDeployment(dep *registry.Deployment, st *spec.Stack) erro
 	s.readiness.Cancel(st.Stack)
 	s.writeMu.Lock()
 	err := s.registry.Remove(dep.ID)
+	var unassigned []string
 	if err == nil {
-		s.reindex()
+		// Its routes are kept, unassigned: a deployment re-created under this id must not inherit them.
+		if txErr := s.store.Tx(func(q store.Querier) error {
+			var e error
+			unassigned, e = store.UnassignDeploymentRoutes(q, dep.ID)
+			return e
+		}); txErr != nil {
+			s.opts.Log("custom routes: could not unassign the routes of " + dep.ID + ": " + txErr.Error())
+		}
+		if len(unassigned) > 0 {
+			s.rendered() // reindexes
+		} else {
+			s.reindex()
+		}
 	}
 	s.writeMu.Unlock()
 	if err != nil {
@@ -432,6 +446,9 @@ func (s *Server) removeDeployment(dep *registry.Deployment, st *spec.Stack) erro
 	}
 	// Outside writeMu: Emit calls its listeners there and then, and one of them writes to the store.
 	s.bus.Emit("deployment.deleted", jsonx.O("id", dep.ID, "stack", st.Stack, "kind", dep.Kind))
+	for _, name := range unassigned {
+		s.bus.Emit("route.unassigned", jsonx.O("route", name, "deployment", dep.ID, "stack", st.Stack, "reason", "forgotten"))
+	}
 	return nil
 }
 

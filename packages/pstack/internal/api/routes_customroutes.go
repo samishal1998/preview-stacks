@@ -17,11 +17,14 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
@@ -118,6 +121,7 @@ func (s *Server) renderCustomRoutes() error {
 		return err
 	}
 	targets := []routing.AliasTarget{}
+	wake := map[string]scheduler.SleepEntry{}
 	for _, row := range rows {
 		if row.DeploymentID == "" {
 			continue
@@ -128,17 +132,71 @@ func (s *Server) renderCustomRoutes() error {
 			continue
 		}
 		targets = append(targets, t)
+		e := wake[row.DeploymentID]
+		e.Hosts, e.Rules = appendWake(e.Hosts, e.Rules, t)
+		wake[row.DeploymentID] = e
 	}
+	s.wakeMu.Lock()
+	s.routeWake = wake
+	s.wakeMu.Unlock()
 	content := ""
 	if len(targets) > 0 {
 		// challenge() asks docker, so only when there is something to render.
 		if content, err = routing.RenderCustomRoutes(targets, string(s.challenge())); err != nil {
+			s.reindex()
 			return err
 		}
 	}
 	err = s.routing.SetCustomRoutes(content)
 	s.reindex()
 	return err
+}
+
+// appendWake adds what route t serves to a sleep entry's hosts and rules, in the shape a sleep
+// record keeps them: plain hosts, and each `-wild` router's HostRegexp pattern.
+func appendWake(hosts, rules []string, t routing.AliasTarget) ([]string, []string) {
+	all := []string{}
+	for _, h := range routing.AliasHosts(t) {
+		if !strings.HasPrefix(h, "*.") {
+			all = append(all, h)
+		}
+	}
+	for _, rule := range routing.AliasWildcardRules(t) {
+		all = append(all, inspect.HostsFromRule(rule)...)
+	}
+	h, r := scheduler.SplitHosts(all)
+	return append(hosts, h...), append(rules, r...)
+}
+
+// reconcileCustomRoutes re-renders at boot, so the table and the file heal. Nothing assigned returns
+// before any docker call or file write. Total: a failure is logged.
+func (s *Server) reconcileCustomRoutes() {
+	if s.store == nil {
+		return
+	}
+	rows, err := store.ListCustomRoutes(s.store.DB)
+	if err != nil {
+		s.opts.Log("custom routes: could not read the table: " + err.Error())
+		return
+	}
+	if slices.ContainsFunc(rows, func(r store.CustomRoute) bool { return r.DeploymentID != "" }) {
+		s.rendered()
+	}
+}
+
+// rerenderRoutesOf re-renders after deployment id deployed, when a route is assigned to it: its
+// services may have changed. Nothing assigned to it is nothing to do.
+func (s *Server) rerenderRoutesOf(id string) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := store.ListCustomRoutes(s.store.DB)
+	if err != nil {
+		s.opts.Log("custom routes: could not read the table: " + err.Error())
+		return
+	}
+	if slices.ContainsFunc(rows, func(r store.CustomRoute) bool { return r.DeploymentID == id }) {
+		s.rendered()
+	}
 }
 
 // rendered re-renders after a committed write. A failure is logged, not answered: the table holds
