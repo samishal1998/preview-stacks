@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -388,5 +389,155 @@ func TestCustomRouteRenderIsTotal(t *testing.T) {
 	row := crList(t, s)[1]
 	if row["name"] != "checkout" || row["deployment"] != "pr-1" || len(crHosts(row["hosts"])) != 0 {
 		t.Fatalf("row = %v", row)
+	}
+}
+
+// crPut registers a deployment through PUT /api/deployments/:id, the path an operator takes.
+func crPut(t *testing.T, s *Server, id, stack, compose string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"spec": crSpec(stack), "compose": compose})
+	if code, out := crCall(t, s, "PUT", "/api/deployments/"+id, string(body)); code != 200 && code != 201 {
+		t.Fatalf("PUT %s = %d: %v", id, code, out)
+	}
+}
+
+// crRoute is GET's row for route name.
+func crRoute(t *testing.T, s *Server, name string) map[string]any {
+	t.Helper()
+	for _, r := range crList(t, s) {
+		if r["name"] == name {
+			return r
+		}
+	}
+	t.Fatalf("no route %s", name)
+	return nil
+}
+
+// crServes is `hosts | blocked` of route name, as JSON.
+func crServes(t *testing.T, s *Server, name string) string {
+	t.Helper()
+	r := crRoute(t, s, name)
+	b, _ := json.Marshal([]any{r["hosts"], r["blocked"]})
+	return string(b)
+}
+
+const crTwo = crCompose + "  c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n"
+
+func TestCustomRouteLaterCollisions(t *testing.T) {
+	const dom = ".preview.example.com"
+	t.Run("a deploy that adds a colliding service", func(t *testing.T) {
+		// negative control: seed the render's claims with nothing from the deployments → the route
+		// still serves web-checkout and this fails.
+		s, _ := crServer(t)
+		crPut(t, s, "pr-1", "myapp-pr-1", crTwo)
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
+		crPut(t, s, "pr-2", "myapp-pr-2", crCompose+"  shop:\n    image: nginx\n    labels: {pstack.routing.port: \"80\", pstack.routing.host: web-checkout"+dom+"}\n")
+		want := `[["c-checkout` + dom + `"],[{"by":{"kind":"deployment","name":"myapp-pr-2"},"host":"web-checkout` + dom + `"}]]`
+		if got := crServes(t, s, "checkout"); got != want {
+			t.Fatalf("got  %s\nwant %s", got, want)
+		}
+		file := crFile(t, s)
+		if strings.Contains(file, "pstack-route-checkout-web:") || !strings.Contains(file, "pstack-route-checkout-c:") {
+			t.Fatalf("file:\n%s", file)
+		}
+	})
+
+	t.Run("a stack later named like a route, until it is deleted", func(t *testing.T) {
+		// negative control: drop the render from putDeployment → the route keeps web-checkout and this fails.
+		s, _ := crServer(t)
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
+		crPut(t, s, "pr-3", "checkout", crCompose)
+		want := `[[],[{"by":{"kind":"deployment","name":"checkout"},"host":"web-checkout` + dom + `"}]]`
+		if got := crServes(t, s, "checkout"); got != want {
+			t.Fatalf("got  %s\nwant %s", got, want)
+		}
+		// Its only host is blocked: nothing to render, so no file.
+		if file := crFile(t, s); file != "" {
+			t.Fatalf("file:\n%s", file)
+		}
+		// negative control: drop the any-assigned render from removeDeployment → still blocked and this fails.
+		crExpect(t, s, "DELETE", "/api/deployments/pr-3", "", 200)
+		if got := crServes(t, s, "checkout"); got != `[["web-checkout`+dom+`"],[]]` {
+			t.Fatalf("after the stack went: %s", got)
+		}
+		if !strings.Contains(crFile(t, s), "pstack-route-checkout-web:") {
+			t.Fatalf("file:\n%s", crFile(t, s))
+		}
+	})
+
+	t.Run("two routes after a redeploy: the earlier wins, until it is unassigned", func(t *testing.T) {
+		// Route a-b on service c and route a on service b-c both name pstack-route-a-b-c. `a` sorts
+		// first by name; a-b was assigned first.
+		// negative control: drop the updated_at sort → the walk goes by name, a wins and this fails.
+		s, _ := crServer(t)
+		crDeploy(t, s, "pr-c", "stack-c", "services:\n  c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"a-b","deployment":"pr-c"}`, 201)
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"a","deployment":"pr-1"}`, 201)
+		// Distinct milliseconds, so the order is the claim order and not the name tie-break.
+		if _, err := s.store.DB.Exec("UPDATE custom_routes SET updated_at = CASE name WHEN 'a-b' THEN 1000 ELSE 2000 END"); err != nil {
+			t.Fatal(err)
+		}
+		crPut(t, s, "pr-1", "myapp-pr-1", crCompose+"  b-c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+		want := `[["web-a` + dom + `"],[{"by":{"kind":"route","name":"a-b"},"host":"b-c-a` + dom + `"}]]`
+		if got := crServes(t, s, "a"); got != want {
+			t.Fatalf("got  %s\nwant %s", got, want)
+		}
+		if got := crServes(t, s, "a-b"); got != `[["c-a-b`+dom+`"],[]]` {
+			t.Fatalf("the winner: %s", got)
+		}
+		file := crFile(t, s)
+		if !strings.Contains(file, "Host(`c-a-b"+dom+"`)") || strings.Contains(file, "b-c-a"+dom) || strings.Contains(file, "# dropped") {
+			t.Fatalf("file:\n%s", file)
+		}
+		// negative control: skip the render on unassign → a-b still holds the name and this fails.
+		crExpect(t, s, "DELETE", "/api/custom-routes/a-b/assignment", "", 200)
+		if got := crServes(t, s, "a"); got != `[["web-a`+dom+`","b-c-a`+dom+`"],[]]` {
+			t.Fatalf("after the winner went: %s", got)
+		}
+		if !strings.Contains(crFile(t, s), "Host(`b-c-a"+dom+"`)") {
+			t.Fatalf("file:\n%s", crFile(t, s))
+		}
+	})
+
+	t.Run("a blocked host never wakes the loser", func(t *testing.T) {
+		// Stack checkout (a-win) serves web-checkout itself; route checkout on pr-1 is blocked there.
+		// negative control: pass the unfiltered target to appendWake → Find answers pr-1 and this fails.
+		s, _ := crServer(t)
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
+		crPut(t, s, "a-win", "checkout", crCompose)
+		for _, id := range []string{"a-win", "pr-1"} {
+			host := "web-" + map[string]string{"a-win": "checkout", "pr-1": "myapp-pr-1"}[id] + dom
+			if err := s.registry.SetSleep(id, &registry.SleepRecord{Since: 1, Reason: "test", Hosts: []string{host}, Rules: []string{}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s.reindex()
+		if got := s.sleepIndex.Find("web-checkout" + dom); got != "a-win" {
+			t.Fatalf("Find = %q, want a-win", got)
+		}
+	})
+}
+
+func TestCustomRouteListShape(t *testing.T) {
+	// negative control: leave blocked out of routeJSON → the key is missing and this fails.
+	s, _ := crServer(t)
+	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"spare"}`, 201)
+	crExpect(t, s, "POST", "/api/custom-routes", `{"name":"checkout","deployment":"pr-1"}`, 201)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/custom-routes", nil)
+	req.Header.Set("authorization", "Bearer t0ken")
+	s.handle(rec, req)
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, rec.Body.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	body := compact.String()
+	for _, want := range []string{
+		`"name":"checkout","deployment":"pr-1","stack":"myapp-pr-1","hosts":["web-checkout.preview.example.com"],"blocked":[],"createdAt":`,
+		`"name":"spare","deployment":null,"stack":null,"hosts":[],"blocked":[],"createdAt":`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("want %s in\n%s", want, body)
+		}
 	}
 }

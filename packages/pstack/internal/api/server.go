@@ -202,6 +202,9 @@ type Server struct {
 	// routeRouters is stack → the routers its assigned routes render, so `sleep.idle` counts a
 	// request through a route like one to the stack's own host. renderCustomRoutes fills it. Under wakeMu.
 	routeRouters map[string][]string
+	// routeView is route name → the hosts its last render served and the ones it lost, which
+	// GET /api/custom-routes reports. renderCustomRoutes fills it. Under wakeMu.
+	routeView map[string]routeServes
 
 	// followers are the live `compose logs --follow` children, so stopping the server stops them.
 	followMu  sync.Mutex
@@ -652,9 +655,10 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 				// in neither state: wakeFor reads the sleep record, then the waking entry, then that
 				// watch, and each hand-off is already in place when the next request asks.
 				s.clearSleep(id, st.Stack, true)
-				// A deploy can change the services a route mirrors. A wake changes nothing.
+				// A deploy can change the services a route mirrors, or claim a host a route serves.
+				// A wake changes nothing.
 				if action == jobs.Up {
-					s.rerenderRoutesOf(id)
+					s.rerenderRoutes()
 				}
 			}
 			return outcome, nil

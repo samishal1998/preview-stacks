@@ -24,9 +24,18 @@ type routeRow struct {
 	Deployment *string  `json:"deployment"`
 	Stack      *string  `json:"stack"`
 	Hosts      []string `json:"hosts"`
+	// Blocked is each host something else serves; nil from a server older than it.
+	Blocked []struct {
+		Host string `json:"host"`
+		By   struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"by"`
+	} `json:"blocked"`
 }
 
-// line is `checkout  myapp-pr-123  web-checkout.<domain>, …` or `checkout  (unassigned)`.
+// line is `checkout  myapp-pr-123  web-checkout.<domain>, …` or `checkout  (unassigned)`, then one
+// `  blocked: <host> (<kind> <name>)` line per host it does not serve.
 func (r routeRow) line() string {
 	if r.Deployment == nil {
 		return r.Name + "  (unassigned)"
@@ -35,10 +44,14 @@ func (r routeRow) line() string {
 	if r.Stack != nil {
 		who = *r.Stack
 	}
-	if len(r.Hosts) == 0 {
-		return r.Name + "  " + who
+	out := r.Name + "  " + who
+	if len(r.Hosts) > 0 {
+		out += "  " + strings.Join(r.Hosts, ", ")
 	}
-	return r.Name + "  " + who + "  " + strings.Join(r.Hosts, ", ")
+	for _, b := range r.Blocked {
+		out += "\n  blocked: " + b.Host + " (" + b.By.Kind + " " + b.By.Name + ")"
+	}
+	return out
 }
 
 func routeCmd(args *Parsed, ios IO) *Exit {

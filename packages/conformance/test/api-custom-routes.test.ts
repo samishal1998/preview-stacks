@@ -45,6 +45,7 @@ const route = (name: string, n: string | null) => ({
   deployment: n === null ? null : `pr-${n}`,
   stack: n === null ? null : `myapp-pr-${n}`,
   hosts: n === null ? [] : [`web-${name}.${DOMAIN}`],
+  blocked: [],
   createdAt: expect.any(Number),
   updatedAt: expect.any(Number),
 });
@@ -115,6 +116,40 @@ describe('custom routes over HTTP', () => {
       // Created assigned, in one call.
       expect(await call(s, 'POST', '/api/custom-routes', { name: 'cart', deployment: 'pr-2' })).toEqual({ status: 201, body: route('cart', '2') });
       expect(await routesFile(s)).toContain('Host(`web-cart.preview.example.com`)');
+    } finally {
+      await stop();
+    }
+  }, 60_000);
+
+  test('a deployment that later claims an alias host wins it; the route keeps its other hosts', async () => {
+    // negative control: in routes_deploy.go putDeployment, drop the reconcileCustomRoutes call —
+    // the route still serves web-checkout and the file keeps a second router for that rule.
+    const { s, stop } = await boot('cr-later');
+    try {
+      const two = `${COMPOSE}  api:\n    image: nginx\n    labels: {pstack.routing.port: "80"}\n`;
+      expect((await j(s, 'PUT', '/api/deployments/pr-1', { spec: spec('myapp-pr-1'), compose: two })).status).toBe(200);
+      expect((await call(s, 'POST', '/api/custom-routes', { name: 'checkout', deployment: 'pr-1' })).status).toBe(201);
+      expect(await routesFile(s)).toContain('Host(`web-checkout.preview.example.com`)');
+
+      const claim = `services:\n  shop:\n    image: nginx\n    labels: {pstack.routing.port: "80", pstack.routing.host: web-checkout.${DOMAIN}}\n`;
+      expect((await j(s, 'PUT', '/api/deployments/pr-3', { spec: spec('other'), compose: claim })).status).toBe(201);
+      const blocked = { host: `web-checkout.${DOMAIN}`, by: { kind: 'deployment', name: 'other' } };
+      expect(await call(s, 'GET', '/api/custom-routes')).toEqual({
+        status: 200,
+        body: [{ ...route('checkout', '1'), hosts: [`api-checkout.${DOMAIN}`], blocked: [blocked] }],
+      });
+      // The deployment's own label router is the only one for that rule: none in the file.
+      const file = await routesFile(s);
+      expect(file).not.toContain(`web-checkout.${DOMAIN}`);
+      expect(file).toContain('Host(`api-checkout.preview.example.com`)');
+
+      // The winner goes, the host comes back.
+      expect((await j(s, 'DELETE', '/api/deployments/pr-3')).status).toBe(200);
+      expect(await call(s, 'GET', '/api/custom-routes')).toEqual({
+        status: 200,
+        body: [{ ...route('checkout', '1'), hosts: [`web-checkout.${DOMAIN}`, `api-checkout.${DOMAIN}`] }],
+      });
+      expect(await routesFile(s)).toContain('Host(`web-checkout.preview.example.com`)');
     } finally {
       await stop();
     }

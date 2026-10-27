@@ -292,6 +292,9 @@ func (s *Server) putDeployment(w http.ResponseWriter, r *http.Request, id string
 	if err != nil {
 		return err
 	}
+	// What it serves may now collide with a route (a stack named like one, a new explicit host):
+	// settled before its `up` creates the label router.
+	s.reconcileCustomRoutes()
 	// Identity only: the sources routinely carry inline credentials, and a webhook URL is
 	// outside the auth gate that protects every other reader of them.
 	name := "deployment.created"
@@ -435,9 +438,10 @@ func (s *Server) removeDeployment(dep *registry.Deployment, st *spec.Stack) erro
 			unassigned = nil // rolled back: nothing was unassigned, so nothing to re-render or announce
 			s.opts.Log("custom routes: could not unassign the routes of " + dep.ID + ": " + txErr.Error())
 		}
+		// A gone deployment frees every host it won from a route, so any assignment re-renders.
 		if len(unassigned) > 0 {
 			s.rendered() // reindexes
-		} else {
+		} else if !s.reconcileCustomRoutes() {
 			s.reindex()
 		}
 	}

@@ -232,6 +232,35 @@ func TestAliasHosts(t *testing.T) {
 	}
 }
 
+func TestCustomRoutesServeOneHalfOfABlockedService(t *testing.T) {
+	t.Run("NoHost serves the wildcard only", func(t *testing.T) {
+		// negative control: ignore NoHost in RenderCustomRoutes → the plain router renders and this fails.
+		svc := AliasService{Name: "web", Domain: "preview.example.com", Depth: spec.DepthOne, NoHost: true}
+		tg := checkout("docker", svc)
+		routers := renderedRouters(t, render(t, "http01", tg))
+		if routers.Len() != 1 || routers.GetMap("pstack-route-checkout-web-wild") == nil {
+			t.Fatalf("routers = %v", routers.Keys())
+		}
+		// negative control: ignore NoHost in AliasHosts or AliasRouters → the plain entry is listed and this fails.
+		if h, r := strings.Join(AliasHosts(tg), ","), strings.Join(AliasRouters(tg), ","); h != "*.web-checkout.preview.example.com" || r != "pstack-route-checkout-web-wild" {
+			t.Fatalf("hosts %s routers %s", h, r)
+		}
+	})
+	t.Run("a cleared Depth serves the plain host only", func(t *testing.T) {
+		// negative control: render -wild whatever Depth says → two routers and this fails.
+		routers := renderedRouters(t, render(t, "http01", checkout("docker", AliasService{Name: "web", Domain: "preview.example.com"})))
+		if routers.Len() != 1 || routers.GetMap("pstack-route-checkout-web") == nil {
+			t.Fatalf("routers = %v", routers.Keys())
+		}
+	})
+	t.Run("nothing served is no file", func(t *testing.T) {
+		// negative control: ignore NoHost in RenderCustomRoutes → a router renders and this fails.
+		if got := render(t, "http01", checkout("docker", AliasService{Name: "web", Domain: "preview.example.com", NoHost: true})); got != "" {
+			t.Fatalf("got:\n%s", got)
+		}
+	})
+}
+
 func TestReservedFilesNameTheirOwningRoute(t *testing.T) {
 	s := New(t.TempDir())
 	for _, tc := range []struct{ name, route string }{
