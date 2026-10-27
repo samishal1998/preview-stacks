@@ -15,3 +15,17 @@ export const routingApi = {
   write: (name: string, content: string) => call<RoutingWrite>('PUT', `/api/routing/${id(name)}`, { content }),
   remove: (name: string) => call<RoutingWrite>('DELETE', `/api/routing/${id(name)}`),
 };
+
+/** `/api/custom-routes`: a stable alias for a stack. `deployment` and `stack` are null when unassigned. */
+export type CustomRoute = { name: string; deployment: string | null; stack: string | null; hosts: string[]; createdAt: number; updatedAt: number };
+/** A non-force PUT on a route another deployment holds. */
+export type RouteHeld = { assignedTo?: { deployment: string; stack: string | null } };
+
+export const customRoutesApi = {
+  list: () => call<CustomRoute[]>('GET', '/api/custom-routes'),
+  create: (name: string, deployment?: string) => call<CustomRoute>('POST', '/api/custom-routes', deployment ? { name, deployment } : { name }),
+  remove: (name: string) => call<{ deleted: string }>('DELETE', `/api/custom-routes/${id(name)}`),
+  assign: (name: string, deployment: string, force = false) =>
+    call<CustomRoute & RouteHeld>('PUT', `/api/custom-routes/${id(name)}/assignment`, force ? { deployment, force } : { deployment }),
+  unassign: (name: string) => call<CustomRoute>('DELETE', `/api/custom-routes/${id(name)}/assignment`),
+};

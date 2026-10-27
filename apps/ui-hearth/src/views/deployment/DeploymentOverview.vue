@@ -1,10 +1,11 @@
 <script setup lang="ts">
-/** The resolved spec, summarised, plus an on-demand readiness check. Read-only: actions live in the header and Danger. */
+/** The resolved spec, summarised, an on-demand readiness check, and its custom routes. Lifecycle actions live in the header and Danger. */
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { HAlert, HBadge, HButton, HCard, HDataTable, HDescriptionList, HSkeleton, HStack, HText, type DescriptionItem, type TableColumn } from '@hearth-ui/vue';
 import type { Readiness, Runtime } from '@samyx/preview-stacks-client';
 import { deploymentApi, type DeploymentDetail } from '../../api-deployment';
+import DeploymentRoutes from './DeploymentRoutes.vue';
 
 import { problemText, sentence } from '../../lib/deployment';
 import { can } from '../../lib/users';
@@ -118,6 +119,8 @@ const rdTone = computed(() => (rd.value?.state === 'ready' ? 'success' : rd.valu
       <HText v-else-if="!dep" tone="muted">Spec not resolved.</HText>
       <HDescriptionList v-else :items="items" columns="auto" min-column-width="14rem" />
     </HCard>
+
+    <DeploymentRoutes :id="id" />
 
     <HCard>
       <template #header>
