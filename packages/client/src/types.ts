@@ -267,6 +267,11 @@ export type Runtime = {
    * `containers`, so this is where its name survives. Absent on a server older than 0.43.0.
    */
   services?: string[];
+  /**
+   * The services the compose hands the log driver, read from the file, so a stopped stack has them
+   * too. Absent on a share link and on an older server.
+   */
+  declaredServices?: string[];
   routes: RuntimeRoute[];
   findings: Array<{ level: 'error' | 'warn' | 'info'; message: string }>;
   challenge: 'http01' | 'dns01' | 'unknown';

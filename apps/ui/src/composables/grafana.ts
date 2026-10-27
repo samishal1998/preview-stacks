@@ -14,6 +14,15 @@ const quote = (s: string): string => `"${s.replace(/[\\"]/g, '\\$&')}"`;
 export const stackQuery = (stack: string, services: string[]): string =>
   `{service_name=~${quote(`${regex(stack)}-(${[...new Set(services)].map(regex).join('|')})`)}}`;
 
+/**
+ * The services a stack link asks Loki for: the running ones, the swarm ones with no task, and the ones
+ * the compose declares (`declaredServices`), each once. The declared ones keep a down or asleep stack
+ * linked. A service a later redeploy removed drops out; its streams stay in Loki.
+ */
+export const stackServices = (r: { containers: { service?: string | null }[]; services?: string[]; declaredServices?: string[] }): string[] => [
+  ...new Set([...r.containers.flatMap((c) => (c.service ? [c.service] : [])), ...(r.services ?? []), ...(r.declaredServices ?? [])]),
+];
+
 export const serviceQuery = (stack: string, service: string): string => `{service_name=${quote(`${stack}-${service}`)}}`;
 
 /** Explore on the provisioned Loki datasource (uid `loki`), from `from` to now. */

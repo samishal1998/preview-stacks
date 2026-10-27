@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { exploreUrl, serviceQuery, showGrafana, stackQuery } from '../src/composables/grafana';
+import { exploreUrl, serviceQuery, showGrafana, stackQuery, stackServices } from '../src/composables/grafana';
 
 /** What Loki does with a `=~` value: unquote the LogQL string, then match the whole label. */
 const matches = (query: string, label: string): boolean => {
@@ -58,4 +58,15 @@ test('the gate: Grafana present, developer and up, not a token-only session', ()
   expect(showGrafana('https://grafana.example.com', true, true)).toBe(false);
   expect(showGrafana('', true, false)).toBe(false);
   expect(showGrafana(null, true, false)).toBe(false);
+});
+
+test('a stack names its running, taskless and declared services, each once', () => {
+  // negative control: dropping declaredServices from stackServices left a down stack with [], so no link.
+  const down = { containers: [], declaredServices: ['web', 'api'] };
+  expect(stackServices(down)).toEqual(['web', 'api']);
+  // negative control: dropping the running containers lost `extra`, a service the compose doesn't declare.
+  const up = { containers: [{ service: 'web' }, { service: 'web' }, { service: 'extra' }, { service: null }], services: ['web', 'idle'], declaredServices: ['web', 'api'] };
+  expect(stackServices(up)).toEqual(['web', 'extra', 'idle', 'api']);
+  // An older server sends neither list.
+  expect(stackServices({ containers: [{ service: 'web' }] })).toEqual(['web']);
 });
