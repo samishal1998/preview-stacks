@@ -54,7 +54,7 @@ const rows = computed(() => (detail.data?.env ?? []).map((e) => ({ ...e, id: e.k
         <HDataTable :rows="rows" :columns="columns" label="Declared env" empty-text="No env block." :page-size="25">
           <template #cell="{ row, column, value }">
             <HBadge v-if="column.key === 'visibility'" :tone="value === 'masked' ? 'warning' : 'neutral'" :label="String(value)" />
-            <HStack v-else-if="column.key === 'length'" direction="row" :gap="2" align="center" wrap>
+            <HStack v-else-if="column.key === 'length'" direction="row" :gap="2" align="center" justify="end" wrap>
               {{ value }}
               <HBadge v-if="value === 0" tone="warning" label="Never set" />
             </HStack>

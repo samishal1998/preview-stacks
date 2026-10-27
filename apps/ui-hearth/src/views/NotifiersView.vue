@@ -215,7 +215,7 @@ const rowActions = (row: TableRow): MenuAction[] => {
   return [
     { id: 'deliveries', label: 'Deliveries', icon: 'clock' },
     { id: 'test', label: 'Send test', icon: 'launch', disabled: testing.value !== null },
-    { id: 'toggle', label: n?.enabled ? 'Disable' : 'Enable' },
+    { id: 'toggle', label: n?.enabled ? 'Disable' : 'Enable', icon: n?.enabled ? 'minus' : 'plus' },
     { id: 'remove', label: 'Remove', danger: true, separatorBefore: true, icon: 'close' },
   ];
 };
@@ -231,7 +231,7 @@ function onRowAction(e: { id: string; action: string }): void {
 const dColumns: TableColumn[] = [
   { key: 'status', label: 'Status' },
   { key: 'event', label: 'Event', truncate: true },
-  { key: 'when', label: 'When', hideBelow: 420 },
+  { key: 'when', label: 'When', hideBelow: 420, minWidth: '11rem' },
   { key: 'detail', label: 'Detail', hideBelow: 520, truncate: true },
 ];
 const dNamed = computed(() => byLabel(deliveries.value, (d) => `${d.event}, ${stamp(d.createdAt)}`, (d) => String(d.id)));
@@ -276,7 +276,7 @@ const statusTone = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'da
           <template #cell="{ row, column, value }">
             <template v-if="column.key === 'name'">
               <HText weight="medium">{{ value }}</HText>
-              <HText as="div" size="sm" tone="muted">{{ row.sub }}</HText>
+              <HText as="div" size="sm" tone="muted" :title="String(row.sub)" style="overflow: hidden; text-overflow: ellipsis; font-weight: 400">{{ row.sub }}</HText>
             </template>
             <HBadge v-else-if="column.key === 'state'" :label="String(value)" :tone="value === 'enabled' ? 'success' : 'neutral'" />
             <HStack v-else-if="column.key === 'last'" direction="row" :gap="2" align="center" wrap>

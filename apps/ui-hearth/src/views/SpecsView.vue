@@ -135,7 +135,7 @@ async function create(): Promise<void> {
         :sort="sort"
         :page-size="15"
         row-activatable
-        :empty-text="specs.length ? 'No spec matches.' : can('developer', auth) ? 'No specs yet. Use New spec.' : 'No specs yet.'"
+        :empty-text="specs.length ? 'No spec matches.' : can('developer', auth) ? 'No specs yet. Use New\u00a0spec.' : 'No specs yet.'"
         @sort-change="sort = $event"
         @row-activate="router.push(`/specs/${encodeURIComponent(String($event.id))}`)"
       >

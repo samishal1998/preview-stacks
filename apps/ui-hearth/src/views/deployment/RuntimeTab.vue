@@ -197,7 +197,6 @@ async function runVerb(): Promise<void> {
             :rows="containerRows"
             :columns="containerColumns"
             :get-row-actions="actionsFor"
-            action-display="label"
             @row-action="onRowAction"
           >
             <template #cell="{ row, column }">

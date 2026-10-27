@@ -61,8 +61,8 @@ onMounted(refreshAll);
 // ── live routes ─────────────────────────────────────────────────────────────────────────────────
 const liveColumns: TableColumn[] = [
   { key: 'url', label: 'URL' },
-  { key: 'target', label: 'Forwards to', hideBelow: 560 },
-  { key: 'deployment', label: 'Deployment', hideBelow: 720 },
+  { key: 'target', label: 'Forwards to' },
+  { key: 'deployment', label: 'Deployment' },
   { key: 'router', label: 'Router', truncate: true, hideBelow: 900 },
 ];
 const liveRows = computed<TableRow[]>(() =>
@@ -114,8 +114,8 @@ async function createRoute(): Promise<void> {
 // ── files ───────────────────────────────────────────────────────────────────────────────────────
 const fileColumns: TableColumn[] = [
   { key: 'name', label: 'File' },
-  { key: 'size', label: 'Size', align: 'end', hideBelow: 420 },
-  { key: 'updated', label: 'Updated', align: 'end', hideBelow: 560 },
+  { key: 'size', label: 'Size', align: 'end' },
+  { key: 'updated', label: 'Updated', align: 'end' },
 ];
 const fileRows = computed<TableRow[]>(() => files.value.map((f) => ({ id: f.name, name: f.name, size: `${f.size} B`, updated: ago(f.updatedAt) })));
 
