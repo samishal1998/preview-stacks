@@ -102,10 +102,11 @@ type routeBlock struct {
 	Owner routeOwner
 }
 
-// routeServes is what the last render settled for one route: the hosts it serves and those it lost.
+// routeServes is what the last render settled for one route: the hosts and routers it serves, and
+// the hosts it lost.
 type routeServes struct {
-	hosts   []string
-	blocked []routeBlock
+	hosts, routers []string
+	blocked        []routeBlock
 }
 
 // routeJSON is the API's route: `{ name, deployment, stack, hosts[], blocked[], createdAt, updatedAt }`,
@@ -237,7 +238,7 @@ func (s *Server) renderCustomRoutes() error {
 			}
 		}
 		targets = append(targets, t)
-		view[row.Name] = routeServes{routing.AliasHosts(t), blocked}
+		view[row.Name] = routeServes{routing.AliasHosts(t), routing.AliasRouters(t), blocked}
 		e := wake[row.DeploymentID]
 		e.Hosts, e.Rules = appendWake(e.Hosts, e.Rules, t)
 		wake[row.DeploymentID] = e
@@ -316,8 +317,8 @@ func (s *Server) rendered() {
 
 // assignConflict answers 409 when route name on deployment d would serve a host something else
 // serves, or render a router name another route renders. Plain hosts and `*.` wildcards compare as
-// separate strings. Taken: deploymentHosts, then every other assigned route's alias hosts and
-// routers. true = answered.
+// separate strings. Taken: deploymentHosts, then the hosts and routers every other assigned route
+// served at the last render (routeView), so assign and render agree (S2-R5). true = answered.
 func (s *Server) assignConflict(w http.ResponseWriter, name string, d resolved) (bool, error) {
 	t, _, err := aliasTarget(d.st, d.dir, name)
 	if err != nil {
@@ -336,14 +337,16 @@ func (s *Server) assignConflict(w http.ResponseWriter, name string, d resolved) 
 		if row.Name == name || row.DeploymentID == "" {
 			continue
 		}
-		ot, err := s.routeTarget(row)
-		if err != nil {
+		s.wakeMu.Lock()
+		v, ok := s.routeView[row.Name]
+		s.wakeMu.Unlock()
+		if !ok {
 			continue
 		}
-		for _, h := range routing.AliasHosts(ot) {
+		for _, h := range v.hosts {
 			taken[h] = routeOwner{"route", row.Name}
 		}
-		for _, rt := range routing.AliasRouters(ot) {
+		for _, rt := range v.routers {
 			routers[rt] = row.Name
 		}
 	}
