@@ -28,6 +28,9 @@ import { useRoute, useRouter } from 'vue-router';
 import { api, problem, query } from '../../api/client';
 import type { LogsResponse, RuntimeContainer, RuntimeResponse } from '../../api/types';
 import { dep } from '../../composables/useDeployment';
+import { authState, can } from '../../composables/useAuth';
+import { exploreUrl, serviceQuery, showGrafana } from '../../composables/grafana';
+import { settings } from '../../composables/useSettings';
 import { sentence } from '../../composables/useFormat';
 import SelectMenu from '../../components/SelectMenu.vue';
 import LogViewer from '../../components/LogViewer.vue';
@@ -49,6 +52,13 @@ const running = computed(() => containers.value.filter((c) => !c.id.startsWith('
 const current = computed(() => containers.value.find((c) => c.name === selected.value) ?? null);
 /** What the server is asked to narrow to — compose narrows by service, not by container. */
 const service = computed(() => current.value?.service ?? '');
+
+// The chosen service in Grafana. Here, not in LogViewer: PublicLogsView renders that for share links.
+const grafanaHref = computed(() =>
+  dep.detail?.stack && service.value && showGrafana(authState.grafana, can('developer'), !!settings.token)
+    ? exploreUrl(authState.grafana, serviceQuery(dep.detail.stack, service.value))
+    : '',
+);
 
 async function loadContainers(): Promise<void> {
   const r = await api.get<RuntimeResponse>(
@@ -331,6 +341,7 @@ const stateTone = (c: RuntimeContainer): string =>
         <input v-model="timestamps" type="checkbox" />
         Timestamps
       </label>
+      <a v-if="grafanaHref" :href="grafanaHref" target="_blank" rel="noopener">Grafana ↗</a>
       <button
         :disabled="!dep.detail?.compose"
         :title="following ? 'Stop streaming' : 'Stream new lines as they arrive'"

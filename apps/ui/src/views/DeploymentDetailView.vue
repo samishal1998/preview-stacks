@@ -7,7 +7,12 @@
  * with no control in reach. Everything else stays unavailable until it resolves, because the
  * server cannot name the stack without the variables, and every action needs the stack name.
  */
-import { watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { api, query } from '../api/client';
+import type { RuntimeResponse } from '../api/types';
+import { authState, can } from '../composables/useAuth';
+import { exploreUrl, showGrafana, stackQuery } from '../composables/grafana';
+import { settings } from '../composables/useSettings';
 import { sentence } from '../composables/useFormat';
 import { useRouter } from 'vue-router';
 import { dep, isShared, loadDetail, openDeployment } from '../composables/useDeployment';
@@ -54,6 +59,31 @@ watch(
   { immediate: true },
 );
 
+/**
+ * The whole stack in Grafana. Loki can only be asked by service name, and only /runtime knows them,
+ * so it is read once per resolve. Down or asleep it names no services, and there is no link.
+ */
+const grafanaOn = computed(() => showGrafana(authState.grafana, can('developer'), !!settings.token));
+const services = ref<string[]>([]);
+watch(
+  () => [dep.detail, grafanaOn.value] as const,
+  async ([detail, on]) => {
+    // Kept across a re-resolve of the same deployment, so the link does not blink.
+    if (!detail?.stack || !on) {
+      services.value = [];
+      return;
+    }
+    const id = dep.id;
+    const r = await api.get<RuntimeResponse>(`/api/deployments/${encodeURIComponent(id)}/runtime${query(dep.vars)}`);
+    if (!r.ok || dep.id !== id) return;
+    services.value = [...r.body.containers.flatMap((c) => (c.service ? [c.service] : [])), ...(r.body.services ?? [])];
+  },
+  { immediate: true },
+);
+const grafanaHref = computed(() =>
+  grafanaOn.value && dep.detail?.stack && services.value.length ? exploreUrl(authState.grafana!, stackQuery(dep.detail.stack, services.value)) : '',
+);
+
 // Land the operator on the editor when the spec will not resolve — but only from the tab that has
 // nothing to show. Sending them away from Logs or Danger mid-read would be its own annoyance.
 watch(
@@ -81,6 +111,9 @@ watch(
           <span v-else-if="dep.error">unresolved</span>
           <span v-else>loading…</span>
           · <RouterLink :to="{ path: '/jobs', query: { deployment: id } }">Jobs</RouterLink>
+          <template v-if="grafanaHref">
+            · <a :href="grafanaHref" target="_blank" rel="noopener">Grafana ↗</a>
+          </template>
         </div>
       </div>
       <span class="grow" />
