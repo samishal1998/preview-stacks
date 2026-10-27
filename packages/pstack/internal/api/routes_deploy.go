@@ -432,6 +432,7 @@ func (s *Server) removeDeployment(dep *registry.Deployment, st *spec.Stack) erro
 			unassigned, e = store.UnassignDeploymentRoutes(q, dep.ID)
 			return e
 		}); txErr != nil {
+			unassigned = nil // rolled back: nothing was unassigned, so nothing to re-render or announce
 			s.opts.Log("custom routes: could not unassign the routes of " + dep.ID + ": " + txErr.Error())
 		}
 		if len(unassigned) > 0 {

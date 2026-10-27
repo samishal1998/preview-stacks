@@ -199,6 +199,9 @@ type Server struct {
 	// reindex adds to that deployment's sleeping or waking entry. renderCustomRoutes fills it, so the
 	// request path never parses a compose file. Under wakeMu.
 	routeWake map[string]scheduler.SleepEntry
+	// routeRouters is stack → the routers its assigned routes render, so `sleep.idle` counts a
+	// request through a route like one to the stack's own host. renderCustomRoutes fills it. Under wakeMu.
+	routeRouters map[string][]string
 
 	// followers are the live `compose logs --follow` children, so stopping the server stops them.
 	followMu  sync.Mutex
@@ -340,18 +343,8 @@ func New(o Options) (*Server, error) {
 			return out, nil
 		},
 		Resolve: func(id string) (*spec.Stack, error) { return s.resolveDep(id, nil) },
-		Runtime: func(st *spec.Stack) (scheduler.RuntimeView, error) {
-			rt := inspect.DeploymentRuntime(inspect.RuntimeArgs{Stack: st.Stack, Runner: s.host, Challenge: inspect.Unknown, Orchestrator: orchestratorOf(st)})
-			view := scheduler.RuntimeView{Reachable: rt.Reachable, StartedAt: []*int64{}, Routers: []string{}}
-			for _, c := range rt.Containers {
-				view.StartedAt = append(view.StartedAt, c.StartedAt)
-			}
-			for _, r := range rt.Routes {
-				view.Routers = append(view.Routers, r.Router)
-			}
-			return view, nil
-		},
-		IsBusy: s.jobs.IsBusy,
+		Runtime: s.runtimeView,
+		IsBusy:  s.jobs.IsBusy,
 		Sleep: func(id string, st *spec.Stack, reason string) {
 			dep, err := s.registry.Get(id)
 			if err == nil && dep != nil {
@@ -531,6 +524,23 @@ func (s *Server) reindex() {
 	}
 	s.wakeMu.Unlock()
 	s.sleepIndex.Rebuild(entries)
+}
+
+// runtimeView is what the scheduler's tick reads of a deployment: its containers' start times and
+// every router whose traffic keeps it awake, its own and its routes'.
+func (s *Server) runtimeView(st *spec.Stack) (scheduler.RuntimeView, error) {
+	rt := inspect.DeploymentRuntime(inspect.RuntimeArgs{Stack: st.Stack, Runner: s.host, Challenge: inspect.Unknown, Orchestrator: orchestratorOf(st)})
+	view := scheduler.RuntimeView{Reachable: rt.Reachable, StartedAt: []*int64{}, Routers: []string{}}
+	for _, c := range rt.Containers {
+		view.StartedAt = append(view.StartedAt, c.StartedAt)
+	}
+	for _, r := range rt.Routes {
+		view.Routers = append(view.Routers, r.Router)
+	}
+	s.wakeMu.Lock()
+	view.Routers = append(view.Routers, s.routeRouters[st.Stack]...)
+	s.wakeMu.Unlock()
+	return view, nil
 }
 
 // wakingUp is a deployment whose sleep record is gone but which is not answering yet.

@@ -111,7 +111,7 @@ func (s *Server) routeJSON(row store.CustomRoute) jsonx.Object {
 }
 
 // renderCustomRoutes rewrites pstack-routes.yml from the table, then rebuilds the sleep index. The
-// caller holds writeMu; it takes wakeMu only to swap routeWake (order writeMu → wakeMu).
+// caller holds writeMu; it takes wakeMu only to swap routeWake and routeRouters (order writeMu → wakeMu).
 //
 // Total: a route whose deployment is gone or whose compose cannot be read renders nothing and is
 // logged; the rest of the file still renders.
@@ -122,6 +122,7 @@ func (s *Server) renderCustomRoutes() error {
 	}
 	targets := []routing.AliasTarget{}
 	wake := map[string]scheduler.SleepEntry{}
+	routers := map[string][]string{}
 	for _, row := range rows {
 		if row.DeploymentID == "" {
 			continue
@@ -135,9 +136,11 @@ func (s *Server) renderCustomRoutes() error {
 		e := wake[row.DeploymentID]
 		e.Hosts, e.Rules = appendWake(e.Hosts, e.Rules, t)
 		wake[row.DeploymentID] = e
+		routers[t.Stack] = append(routers[t.Stack], routing.AliasRouters(t)...)
 	}
 	s.wakeMu.Lock()
 	s.routeWake = wake
+	s.routeRouters = routers
 	s.wakeMu.Unlock()
 	content := ""
 	if len(targets) > 0 {
