@@ -32,14 +32,14 @@ test('plain hosts are links, wildcards are text', () => {
   expect(hostItems([])).toEqual([]);
 });
 
-// negative control: dropping the `!a.isConnected` clause fails the removed-row expect; dropping the
-// `:disabled` clause fails the disabled-button expect.
-test('focus is lost on body, on a removed element, or on a disabled control', () => {
-  const el = (isConnected: boolean, disabled = false) => ({ isConnected, matches: () => disabled }) as unknown as Element;
-  const body = el(true);
+// negative control: dropping the `getClientRects` clause fails the removed-row and closed-dialog
+// expects; dropping the `:disabled` clause fails the disabled-button expect.
+test('focus is lost on body, on a disabled control, or on an element with no box', () => {
+  const el = (boxes: number, disabled = false) => ({ getClientRects: () => ({ length: boxes }), matches: () => disabled }) as unknown as Element;
+  const body = el(1);
   expect(focusLost(null, body)).toBe(true);
   expect(focusLost(body, body)).toBe(true);
-  expect(focusLost(el(false), body)).toBe(true); // the unassigned row's button
-  expect(focusLost(el(true, true), body)).toBe(true); // Assign, once the pick clears
-  expect(focusLost(el(true), body)).toBe(false);
+  expect(focusLost(el(0), body)).toBe(true); // the unassigned row's button, or the closed dialog's
+  expect(focusLost(el(1, true), body)).toBe(true); // Assign, once the pick clears
+  expect(focusLost(el(1), body)).toBe(false);
 });
