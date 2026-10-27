@@ -257,9 +257,32 @@ body {
 .h-card .h-empty h2 {
   font-size: 1rem;
 }
-/* The sticky action cell paints --h-raised, a lighter band on the card surface it sits in. */
-.sticky-actions td.h-table-actions.h-table-actions {
+/* The sticky action cell paints --h-raised, a lighter band on the card surface it sits in. Not in
+   card layout: there the cell has no fill, and this one paints a band across the card. */
+.sticky-actions:not(.cards) td.h-table-actions.h-table-actions {
   background: var(--h-surface);
+}
+/* HCard's #footer slot sits flush under the body (its 20px gap is for the custom element only). */
+.h-card > .h-card-body + * {
+  margin-top: 20px;
+}
+/* HAlert's title is inline, so slot text runs straight into it ("Replacing pr-12345Anything…") and a
+   slot button shares its line, pushing the text below the icon. */
+.h-alert-content > strong[part="title"] {
+  display: block;
+}
+/* Overlay headers top-align the title with the Close button: one line sits off-centre (5px high in a
+   dialog, 8-12px low beside the 44px mobile button). A title block as tall as the button centres one
+   line and still starts a wrapped title at the top. */
+.h-dialog-head > :first-child,
+.h-mobile-overlay.h-mobile .h-overlay-header:has(> .h-button) > :first-child {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: var(--h-control-height);
+}
+.h-dialog .h-dialog-head.h-overlay-header > .h-button {
+  margin-top: 0;
 }
 /* HDialog's #footer slot sits flush under the body (its 24px gap is for the custom element only). */
 .h-dialog .h-overlay-footer:not(:empty) {
