@@ -28,7 +28,13 @@ func crSpec(stack string) string {
 // each with one generated `web` host. docker is a fake that answers every command empty.
 func crServer(t *testing.T) (*Server, *exec.Fake) {
 	t.Helper()
-	s := signalsServer(t)
+	// Jobs run a docker that answers ok: PATH goes in before New, never onto a live server.
+	s, err := New(Options{DataDir: t.TempDir(), Token: "t0ken", RoutingDir: t.TempDir(), Bus: events.New(), Log: func(string) {},
+		Env: exec.Merge(exec.Environ(), map[string]string{"PATH": fakeDockerPath(t)})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
 	f := exec.NewFake(nil, "")
 	s.host = f
 	crDeploy(t, s, "pr-1", "myapp-pr-1", crCompose)
@@ -362,6 +368,41 @@ func TestCustomRouteCollisions(t *testing.T) {
 		out := crExpect(t, s, "PUT", "/api/custom-routes/checkout/assignment", `{"deployment":"pr-1"}`, 409)
 		if out["host"] != "web-checkout.preview.example.com" {
 			t.Fatalf("409 = %v", out)
+		}
+	})
+
+	// Assign takes the other routes' hosts and routers from what the last render served (S2-R5).
+	t.Run("a host another route lost names its winner", func(t *testing.T) {
+		// Route b-c on service a and route c on service a-b both give a-b-c.<domain>.
+		// negative control (applied): take the other routes from the unfiltered routeTarget(row) → the
+		// 409 says "served by route b-c" and this fails.
+		s, _ := crServer(t)
+		crDeploy(t, s, "pr-a", "stack-a", "services:\n  a:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+		crDeploy(t, s, "pr-ab", "stack-ab", "services:\n  a-b:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"b-c","deployment":"pr-a"}`, 201)
+		crPut(t, s, "pr-3", "holder", "services:\n  web:\n    image: nginx\n    labels: {pstack.routing.port: \"80\", pstack.routing.host: a-b-c.preview.example.com}\n")
+		out := crExpect(t, s, "POST", "/api/custom-routes", `{"name":"c","deployment":"pr-ab"}`, 409)
+		if out["error"] != "a-b-c.preview.example.com is served by holder" {
+			t.Fatalf("409 = %v", out)
+		}
+	})
+
+	t.Run("a router another route does not render is free", func(t *testing.T) {
+		// Route a-b on service c and route a on service b-c both name pstack-route-a-b-c; a-b lost
+		// its only host, so it renders no router.
+		// negative control (applied): take the other routes from the unfiltered routeTarget(row) → 409
+		// "router pstack-route-a-b-c is taken by route a-b" and this fails.
+		s, _ := crServer(t)
+		crDeploy(t, s, "pr-c", "stack-c", "services:\n  c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+		crDeploy(t, s, "pr-bc", "stack-bc", "services:\n  b-c:\n    image: nginx\n    labels: {pstack.routing.port: \"80\"}\n")
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"a-b","deployment":"pr-c"}`, 201)
+		crPut(t, s, "pr-3", "holder", "services:\n  web:\n    image: nginx\n    labels: {pstack.routing.port: \"80\", pstack.routing.host: c-a-b.preview.example.com}\n")
+		crExpect(t, s, "POST", "/api/custom-routes", `{"name":"a","deployment":"pr-bc"}`, 201)
+		if got := crServes(t, s, "a"); got != `[["b-c-a.preview.example.com"],[]]` {
+			t.Fatalf("a serves %s", got)
+		}
+		if file := crFile(t, s); !strings.Contains(file, "Host(`b-c-a.preview.example.com`)") {
+			t.Fatalf("file:\n%s", file)
 		}
 	})
 
