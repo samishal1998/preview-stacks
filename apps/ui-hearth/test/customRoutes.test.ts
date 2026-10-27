@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { hostItems, moveQuestion, needsMove } from '../src/lib/customRoutes';
+import { focusLost, hostItems, moveQuestion, needsMove } from '../src/lib/customRoutes';
 
 const held = { deployment: 'myapp-pr-122', stack: 'myapp-pr-122' };
 
@@ -30,4 +30,16 @@ test('plain hosts are links, wildcards are text', () => {
     { host: '*.web-checkout.example.com', href: null },
   ]);
   expect(hostItems([])).toEqual([]);
+});
+
+// negative control: dropping the `!a.isConnected` clause fails the removed-row expect; dropping the
+// `:disabled` clause fails the disabled-button expect.
+test('focus is lost on body, on a removed element, or on a disabled control', () => {
+  const el = (isConnected: boolean, disabled = false) => ({ isConnected, matches: () => disabled }) as unknown as Element;
+  const body = el(true);
+  expect(focusLost(null, body)).toBe(true);
+  expect(focusLost(body, body)).toBe(true);
+  expect(focusLost(el(false), body)).toBe(true); // the unassigned row's button
+  expect(focusLost(el(true, true), body)).toBe(true); // Assign, once the pick clears
+  expect(focusLost(el(true), body)).toBe(false);
 });
