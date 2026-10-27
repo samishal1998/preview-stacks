@@ -111,7 +111,7 @@ async function save(): Promise<void> {
     @save="save"
     @reset="reset"
   >
-    <HStack direction="column" :gap="4">
+    <HStack direction="column" :gap="6">
       <HEmptyState v-if="forbidden" icon="lock" title="Not allowed" description="Your account cannot read host settings." />
       <HCard v-else title="This host" description="Stored on the server.">
         <HSkeleton v-if="!loaded" variant="text" :lines="3" label="Loading settings" />

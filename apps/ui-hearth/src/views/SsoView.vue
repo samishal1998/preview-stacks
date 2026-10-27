@@ -190,8 +190,10 @@ const claimKeys = ['subject', 'username', 'email', 'name', 'avatar'] as const;
             <HLink v-if="editing.preset" :href="editing.preset.setupUrl" target="_blank">Create the app in {{ editing.preset.label }}</HLink>
           </HStack>
 
-          <HCopyField label="Redirect URI" :value="callbackUrl" />
-          <HText tone="muted" size="sm">Must match the provider's registered callback exactly.</HText>
+          <HStack direction="column" :gap="1">
+            <HCopyField label="Redirect URI" :value="callbackUrl" />
+            <HText tone="muted" size="sm" class="wrap">The provider's callback must be <code>{{ callbackUrl }}</code> exactly.</HText>
+          </HStack>
 
           <HInput v-if="!editing.originalKey" v-model="editing.key" label="Key" hint="Lowercase letters, digits, dashes." />
           <HInput v-model="editing.form.label" label="Button text" :placeholder="editing.preset?.label || 'Acme SSO'" :hint="`Continue with ${editing.form.label || editing.preset?.label || '...'}`" />
@@ -306,6 +308,11 @@ const claimKeys = ['subject', 'username', 'email', 'name', 'avatar'] as const;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
   gap: var(--h-space-3, 0.75rem);
+}
+/* HButton does not wrap: a long provider name ran past its tile. */
+.tiles :deep(.h-button) {
+  white-space: normal;
+  text-align: center;
 }
 .stage {
   display: flex;

@@ -116,7 +116,7 @@ function download(): void {
   <HEmptyState v-else-if="!hasCompose" title="No compose section" description="Nothing to read logs from." icon="info" />
 
   <HStack v-else direction="column" :gap="3">
-    <HStack direction="row" :gap="3" wrap align="end">
+    <HStack direction="row" :gap="3" wrap align="end" style="--h-choice-height: var(--h-control-height)">
       <HSelect :model-value="selected" label="Container" :options="containerOptions" @change="select" />
       <HSelect v-model="tail" label="Lines" :options="TAILS" />
       <HSelect v-model="since" label="Since" :options="SINCES" />
