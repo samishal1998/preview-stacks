@@ -10,9 +10,10 @@
 > - **Router names can collide.** `a-b` with service `c` and `a` with service `b-c` both give
 >   `pstack-route-a-b-c`. Create and assign refuse that with a 409 naming the router. The renderer
 >   drops a duplicate with a `# dropped` note rather than writing a duplicate key.
-> - **Collisions are checked at create and assign only.** A later deploy of a stack named like a
->   route, or one that claims a route host, is not refused. Until someone unassigns, Traefik has two
->   routers for one rule and no defined winner.
+> - **Collisions are never ambiguous (owner, 2026-10-27).** Create and assign refuse a collision up
+>   front (409). Anything that arises later, such as a deploy that claims a route host or a stack
+>   named like a route, is settled at render: the deployment's own host wins and the route's claim
+>   on that host is rejected. See §"Later collisions".
 > - **`hosts[]` lists wildcards** as `*.<host>` after the plain hosts. The UIs show them as text,
 >   not links.
 > - **No routes, no file.** With nothing to render, `pstack-routes.yml` is removed, not written
@@ -35,8 +36,8 @@
 >   `grafana.ts`), its convention, not `lib/`. One form creates or assigns, and its button reads
 >   Create or Assign, in place of a separate New route control. The move question keeps the full
 >   "Move checkout from myapp-pr-122 to myapp-pr-123?": at 320 px it wraps inside the panel.
-> - **Grafana stack link.** It is built from the running services, so a stack that is down or asleep
->   has no header link.
+> - **Grafana stack link (owner, 2026-10-27).** It is built from the services the deployment declares,
+>   the ones that ran, so a stack that is down or asleep still has its link. See §2.
 > - **Corners** are 6/10/14 px (control, card, panel), the example here, not a strict 60 % (6/10/12).
 >   Pill stays 999 px. Overlays use native top-layer dialogs and popovers inside the `HTheme` island,
 >   so they inherit the tokens. Nothing is set on `:root`.
@@ -118,6 +119,28 @@ place of the stack name:
   request to `web-checkout.<domain>` wakes that stack. Because the hosts are added at reindex time,
   not captured at sleep time, a move while asleep follows the assignment.
 
+### Later collisions **(owner, 2026-10-27: never ambiguous)**
+
+Create and assign check collisions, but a later change can still make one, for example a deploy that
+adds a service, or a new stack named like a route. Traefik must never get two routers for one rule,
+so every render settles them deterministically:
+
+1. **A deployment's own hosts always win.** An alias host is not rendered if it equals a host any
+   deployment serves: its generated hosts, explicit `pstack.routing.host` and `subdomains` hosts,
+   and live Traefik routers when they are reachable. This includes a deployment that has since been
+   named like the route.
+2. **Between two routes, the earlier claim wins.** That is the route assigned first (`updated_at`,
+   then name). The later route's colliding host is rejected.
+3. A rejected host is **not served by the route**. The route keeps serving its other hosts. The same
+   applies to a router-name collision.
+4. The route reports it. The API row gains `blocked: [{ host, by: { kind: "deployment"|"route", name } }]`.
+   `hosts[]` lists only what is served. `pstack route ls` prints `blocked: <host> (<kind> <name>)`.
+   Both UIs show a blocked host as muted text with "taken by <name>".
+5. **Nothing silently disappears.** The render logs every rejected host. When a render newly blocks
+   a host, `route.assigned` is not re-emitted. No new event name (add-only contract); a later
+   release can add one.
+6. Unassigning, deleting or redeploying the winner frees the host: the next render serves it again.
+
 ### API
 
 All under `/api/custom-routes`, described in `packages/pstack/api/openapi.yaml`. The generated
@@ -184,8 +207,11 @@ Append to `events.Names` (add-only, invariant 14): `route.assigned` (`route`, `d
 - Loki streams carry only `service_name=<stack>-<service>`. A per-container link is therefore per
   service: swarm replicas share one stream. Adding a container label would break invariant 23.
 - **Stack link:** Explore, datasource uid `loki`, query
-  `{service_name=~"<stack>-(<svc1>|<svc2>…)"}`. It is built from the stack's service list, with
-  regex metacharacters escaped, so stack `a` never matches `a-b`. Range `now-1h`.
+  `{service_name=~"<stack>-(<svc1>|<svc2>…)"}`. It is built from the stack's **declared** services
+  (owner, 2026-10-27): the service names the deployment's compose gives the log driver. A stack that
+  is down or asleep still gets the link to its past logs. Running services that the compose doesn't
+  declare are added as well. Regex metacharacters are escaped, so stack `a` never matches `a-b`.
+  Range `now-1h`.
 - **Service link:** `{service_name="<stack>-<svc>"}`, same range.
 - Shown on the deployment page header (stack) and beside each service's logs (service), in Hearth and
   the advanced UI.

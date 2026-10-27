@@ -241,3 +241,49 @@ Grafana links; Changed: compact Hearth default), and the design doc's "where the
   - Hearth compact at 1280 and 320, in light and dark.
 - Durable screenshot paths go in the report.
 - Final `bun run check` from the repo root.
+
+### Task 12: later collisions are settled at render, never ambiguous
+
+**Files:** `packages/pstack/internal/api/routes_customroutes.go` (render path and list), the render
+input in `internal/routing/customroutes.go` if it needs a blocked list, `internal/cli/route.go`,
+`packages/pstack/api/openapi.yaml` (+ `go generate ./packages/pstack/internal/apicli`), the Go tests,
+`packages/conformance/test/api-custom-routes.test.ts`, the Hearth and advanced custom-routes UI
+(`lib/customRoutes.ts`, `composables/customRoutes.ts`, the views), `docs/usage.md`, and the design
+doc banner.
+
+**Interfaces:**
+- Implement spec §"Later collisions" exactly. Every render computes the set of hosts and router
+  names each deployment serves, using the same registry computation the assign check uses (plus live
+  Traefik routers when reachable). It drops any alias router that collides, with deployment over
+  route, then the earlier route over the later one (`updated_at`, then name), and logs each drop.
+- `GET /api/custom-routes` rows gain `blocked: [{host, by: {kind, name}}]`, `[]` when none.
+  `hosts[]` lists only served hosts. The openapi schema is updated.
+- `pstack route ls` and the single-route outputs print `blocked: <host> (<kind> <name>)` lines.
+  `--json` carries `blocked`.
+- UIs: a blocked host is muted text with "taken by <name>", never a link.
+- Tests:
+  - Go: a deploy that adds a colliding service; a stack later named like a route; two routes
+    colliding after a redeploy (earlier wins); unassigning the winner frees the host. Each with a
+    negative control.
+  - Conformance: one black-box case where a second deployment claims an alias host and the route
+    reports it blocked, and the file has one router for that rule.
+
+### Task 13: Grafana stack link from declared services
+
+**Files:** the server source of a deployment's declared service names (prefer an existing endpoint;
+otherwise add `declaredServices: string[]` to the deployment runtime response in
+`internal/api/routes_deploy.go`, plus openapi, apicli regen and conformance), the Hearth
+`DeploymentView.vue`, the advanced `DeploymentDetailView.vue`, and their tests.
+
+**Interfaces:**
+- Declared services are the names the log driver puts in `service_name=<stack>-<service>`, so they
+  must use the same naming the deploy uses (`pstack.routing.service_name` does not apply to logs:
+  check `internal/loki` / the logging driver options for the exact name). They are computed from the
+  deployment's compose without docker calls.
+- The stack link uses the declared services plus any running services the compose doesn't declare,
+  deduplicated. A stack that is down or asleep keeps its header link. A deployment whose compose
+  can't be read falls back to the running services.
+- The gating is unchanged.
+- Tests: the union and dedupe in each UI's helper (lib/composable). A server test covers the field
+  for a stopped deployment. A conformance case shows a down deployment's runtime carrying its
+  declared services.
