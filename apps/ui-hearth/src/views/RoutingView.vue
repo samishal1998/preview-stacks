@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /** Traefik: the routes it serves (container labels), custom routes, and its watched dynamic-config directory. */
-import { computed, nextTick, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import {
   HAlert, HAlertDialog, HBadge, HButton, HDataTable, HDialog, HHeading, HInput, HPageHeader, HSelect, HSheet, HStack, HText, HTextarea,
   type MenuAction, type TableColumn, type TableRow,
 } from '@hearth-ui/vue';
 import { routingApi, type RoutingFile, type RuntimeRoute } from '../api-routing';
 import CustomRouteDialogs from '../components/CustomRouteDialogs.vue';
-import { hostItems } from '../lib/customRoutes';
+import { focusLost, hostItems } from '../lib/customRoutes';
 import { fileNameError, isPattern, STARTER, targetOf } from '../lib/routing';
 import { useCardColumns } from '../lib/use-card-columns';
 import { useCustomRoutes } from '../lib/use-custom-routes';
@@ -85,20 +85,33 @@ const deploymentOptions = computed(() => [
   { value: '', label: 'Unassigned' },
   ...data.deployments.map((d) => ({ value: d.id, label: d.stack ?? d.id })),
 ]);
-/** The cell's select: a deployment assigns (or asks to move), Unassigned asks to unassign. */
-// A native select keeps what was picked even when the model does not change (a cancelled move, a
-// refused assign). HSelect resyncs only when its model changes, so a pick sets the model to the pick
-// for one tick and then back: the select shows the holder until the list moves, and keeps focus.
-// Never disabled while a write runs (that drops keyboard focus): a pick then is ignored instead.
-const override = reactive<Record<string, string>>({});
-async function pick(name: string, deployment: string): Promise<void> {
-  override[name] = deployment;
-  if (cr.busy.value) { /* a write is in flight: snap back */ }
-  else if (deployment) void cr.assign(name, deployment);
+/**
+ * The cell's select only stages a pick; its Assign (or Unassign) button writes it. Arrowing through a
+ * closed select changes it on every keystroke, so a write per change would assign on the first one.
+ * A deployment assigns (or asks to move), Unassigned asks to unassign.
+ */
+const staged = reactive<Record<string, string>>({});
+const stagedOf = (row: TableRow): string | undefined => (staged[String(row.id)] === String(row.deployment) ? undefined : staged[String(row.id)]);
+// Never disabled while a write runs (that drops keyboard focus): a press then is ignored instead.
+function commit(name: string): void {
+  const to = staged[name];
+  if (cr.busy.value || to === undefined) return;
+  lastCommit.value = name;
+  if (to) void cr.assign(name, to);
   else cr.drop.value = { name, kind: 'unassign' };
-  await nextTick();
-  delete override[name];
 }
+// The pick is done once the list shows it: a cancelled move or a refused assign keeps it.
+watch(cr.routes, (rs) => {
+  for (const r of rs) if (staged[r.name] === (r.deployment ?? '')) delete staged[r.name];
+});
+// The button goes when its pick lands, and a closed confirm returns focus to it: land on the row's
+// select, not <body>. After the tick: the dialog closes in the post-flush.
+const lastCommit = ref('');
+watch([() => cr.move.value, () => cr.drop.value, () => ({ ...staged })], async ([m, d]) => {
+  if (m || d) return;
+  await nextTick();
+  if (lastCommit.value && focusLost(document.activeElement, document.body)) document.querySelector<HTMLElement>(`[data-route="${CSS.escape(lastCommit.value)}"] select`)?.focus();
+});
 const crActions = (row: TableRow): MenuAction[] => [
   { id: 'unassign', label: 'Unassign', disabled: !crOf(row)?.deployment },
   { id: 'delete', label: 'Delete', danger: true, separatorBefore: true },
@@ -294,15 +307,25 @@ async function remove(): Promise<void> {
           </template>
           <template v-if="!crHosts(row).length">—</template>
         </HStack>
-        <HSelect
-          v-else-if="column.key === 'deployment' && cr.mayWrite.value"
-          :label="`Deployment for ${row.name}`"
-          hide-label
-          size="compact"
-          :model-value="override[String(row.id)] ?? String(value)"
-          :options="deploymentOptions"
-          @update:model-value="(v: string) => pick(String(row.id), v)"
-        />
+        <HStack v-else-if="column.key === 'deployment' && cr.mayWrite.value" direction="row" :gap="2" wrap align="center" :data-route="row.id">
+          <HSelect
+            :label="`Deployment for ${row.name}`"
+            hide-label
+            size="compact"
+            :model-value="staged[String(row.id)] ?? String(value)"
+            :options="deploymentOptions"
+            @update:model-value="(v: string) => (staged[String(row.id)] = v)"
+          />
+          <HButton
+            v-if="stagedOf(row) !== undefined"
+            variant="secondary"
+            size="compact"
+            :label="stagedOf(row) ? 'Assign' : 'Unassign'"
+            :aria-label="`${stagedOf(row) ? 'Assign' : 'Unassign'} ${row.name}`"
+            :loading="cr.busy.value && lastCommit === row.id"
+            @click="commit(String(row.id))"
+          />
+        </HStack>
         <template v-else-if="column.key === 'deployment'">
           <RouterLink v-if="value" :to="`/deployments/${encodeURIComponent(String(value))}`">{{ crOf(row)?.stack ?? value }}</RouterLink>
           <HText v-else tone="muted">Unassigned</HText>
