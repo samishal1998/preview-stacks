@@ -393,7 +393,7 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		if err != nil || dep == nil {
 			return err
 		}
-		return s.deploymentRuntime(w, dep, vars)
+		return s.deploymentRuntime(w, dep, vars, who)
 	}
 	if m := readinessRe.FindStringSubmatch(path); m != nil && r.Method == http.MethodGet {
 		dep, err := s.depOr404(w, m[1])

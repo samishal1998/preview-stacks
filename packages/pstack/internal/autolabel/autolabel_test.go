@@ -814,3 +814,27 @@ func TestAPreviewCannotClaimAControlHostname(t *testing.T) {
 		refused(t, "loki.preview.example.com")
 	})
 }
+
+func TestLoggedServices(t *testing.T) {
+	compose := `services:
+  web: {image: nginx}
+  db:
+    image: postgres
+    logging: {driver: json-file}
+  worker: {image: w, profiles: [jobs]}
+  api: {image: a, profiles: [jobs, web]}
+  open: {image: o, profiles: []}
+  scalar: nginx
+`
+	// negative control: drop the svc.Has("logging") check — db joins the list.
+	// negative control: drop the profile check — worker joins the list.
+	// negative control: drop the `len(mine) > 0` guard — open (an empty profiles list) drops out.
+	got := LoggedServices(doc(t, compose), []string{"web"})
+	if !reflect.DeepEqual(got, []string{"web", "api", "open"}) {
+		t.Errorf("LoggedServices = %v", got)
+	}
+	// negative control: start from `var out []string` — the empty result is nil.
+	if got := LoggedServices(doc(t, "version: '3'\n"), nil); got == nil || len(got) != 0 {
+		t.Errorf("no services = %#v, want []", got)
+	}
+}

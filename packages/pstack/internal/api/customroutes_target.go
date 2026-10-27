@@ -12,6 +12,23 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
 )
 
+// composeDoc is the submitted compose file of a resolved deployment with a compose block, parsed.
+func composeDoc(st *spec.Stack, dir string) (*omap.Map, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, st.Compose.File))
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := yamlx.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	doc, ok := parsed.(*omap.Map)
+	if !ok {
+		return nil, &spec.Error{Msg: "compose file " + st.Compose.File + " must be a mapping"}
+	}
+	return doc, nil
+}
+
 // aliasTarget is what route `alias` mirrors of a resolved deployment (st from resolveDep, dir its
 // deployment directory), plus every host the stack serves (plain, then `*.<host>` per wildcard,
 // explicit ones included) for the collision check.
@@ -29,17 +46,9 @@ func aliasTarget(st *spec.Stack, dir, alias string) (routing.AliasTarget, []stri
 	if st.Compose == nil {
 		return t, nil, nil
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, st.Compose.File))
+	doc, err := composeDoc(st, dir)
 	if err != nil {
 		return t, nil, err
-	}
-	parsed, err := yamlx.Parse(raw)
-	if err != nil {
-		return t, nil, err
-	}
-	doc, ok := parsed.(*omap.Map)
-	if !ok {
-		return t, nil, &spec.Error{Msg: "compose file " + st.Compose.File + " must be a mapping"}
 	}
 	aug, err := autolabel.AugmentComposeDoc(autolabel.AugmentArgs{Doc: doc, Spec: st, Challenge: autolabel.Unknown})
 	if err != nil {

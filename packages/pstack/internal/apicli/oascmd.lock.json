@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "878cab9a01d936e0d6d9eae14759b2d0426ad68616a0542cdeabcdb9e5fe35ef",
+  "specDigest": "4b2291f113f238dd7818d4c06476da2274a6840928476b662338817fec792a05",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -684,7 +684,7 @@
       "path": "/api/deployments/{id}/runtime",
       "command": "deployments runtime get",
       "funcName": "NewDeploymentsRuntimeGetCommand",
-      "summary": "Containers, routes, findings and the host's ACME challenge mode.",
+      "summary": "Containers, routes, findings, the host's ACME challenge mode, and declaredServices: the services the compose logs to Loki, read from the file. Not on a share link.",
       "flags": [
         {
           "name": "id",
@@ -695,7 +695,7 @@
         }
       ],
       "ext": {},
-      "digest": "20c795b07ab7ee1c"
+      "digest": "35a6eae81cf02b9c"
     },
     "getDeploymentSource": {
       "operationId": "getDeploymentSource",

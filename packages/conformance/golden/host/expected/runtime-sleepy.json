@@ -72,6 +72,7 @@
     "reachable": true,
     "services": [
       "app"
-    ]
+    ],
+    "declaredServices": []
   }
 }
