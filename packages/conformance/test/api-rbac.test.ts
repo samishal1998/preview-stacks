@@ -132,6 +132,13 @@ const TABLE: Row[] = [
   { method: 'GET', path: '/api/deployments/nope/terminal', min: 'developer', ok: 404 },
   { method: 'PUT', path: '/api/specs/probe-{r}', body: { spec: 'version: 1\nstack: probe\naxes: []\n' }, min: 'developer', ok: 201 },
   { method: 'DELETE', path: '/api/specs/missing-{r}', min: 'developer', ok: 404 },
+  // Custom routes: reading the aliases is a viewer's, pointing them is a developer's, like the
+  // deployments they point at.
+  { method: 'GET', path: '/api/custom-routes', min: 'viewer', ok: 200 },
+  { method: 'POST', path: '/api/custom-routes', body: { name: 'probe-{r}' }, min: 'developer', ok: 201 },
+  { method: 'DELETE', path: '/api/custom-routes/missing-{r}', min: 'developer', ok: 404 },
+  { method: 'PUT', path: '/api/custom-routes/missing-{r}/assignment', body: { deployment: 'nope' }, min: 'developer', ok: 404 },
+  { method: 'DELETE', path: '/api/custom-routes/missing-{r}/assignment', min: 'developer', ok: 404 },
 
   // ── maintainer: host configuration ──────────────────────────────────────────────────────────
   { method: 'PUT', path: '/api/host-vars/PROBE_{r}', body: { value: 'v', secret: false }, min: 'maintainer', ok: 201 },
