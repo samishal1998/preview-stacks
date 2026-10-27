@@ -11,7 +11,7 @@
 - VCS writes go through `but` only. Commit with explicit file ids read from a separate `but status` call:
   `but commit -b cl -m "<type(scope): summary>" <ids>`. `cl` is the branch's short id, because two
   stacks are applied. One or more commits per task. Never `git add` or `git reset`.
-- Never commit `bun.lock`, `.dns_token`, `hetzner_42.yaml`, `packages/conformance/golden/host/**`
+- Never commit `bun.lock`, `.dns_token`, `hetzner_42.yaml`, `packages/conformance/golden/host/**` (except hand-edited `golden/host/expected/*.json`, per AGENTS.md and S2-R10)
   (including `pstack.db-{shm,wal}`), `packages/conformance/gen/host-fixture.ts`, anything under
   `.superpowers/`, credentials or sealed files. Commits carry no attribution footers.
 - Never push, open PRs, publish, or touch the live host.
