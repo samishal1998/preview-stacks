@@ -26,3 +26,14 @@ export const densities = [
   { value: 'comfortable', label: 'Comfortable' },
   { value: 'compact', label: 'Compact' },
 ];
+
+/** Bump to reset density once for every browser; the stored `v` says which reset it has seen. */
+export const PREFS_VERSION = 1;
+export type Prefs = { v: number; theme: string; mode: 'dark' | 'light' | 'system'; density: 'comfortable' | 'compact' };
+
+/** Stored prefs over the defaults. Prefs from before `PREFS_VERSION` predate a real choice, so their density is dropped. */
+export function mergePrefs(raw: unknown): Prefs {
+  const stored = raw && typeof raw === 'object' ? { ...(raw as Partial<Prefs>) } : {};
+  if (!(Number(stored.v) >= PREFS_VERSION)) delete stored.density;
+  return { theme: 'sunset', mode: 'system', density: 'compact', ...stored, v: PREFS_VERSION };
+}
