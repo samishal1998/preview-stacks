@@ -70,18 +70,23 @@ func isHelpOnly(tail []string) bool {
 	return len(tail) == 0
 }
 
+// apiBaseAnyRole is apiBase for routes a personal token may call. apiBase's token sentence is about
+// /api/config specifically; every other route admits a personal token at the right role, so the
+// general case gets the general sentence.
+func apiBaseAnyRole(env func(string) (string, bool)) (string, string, *Exit) {
+	base, token, ex := apiBase(env)
+	if ex != nil && strings.Contains(ex.Msg, "root-token only") {
+		return "", "", fail("set PSTACK_TOKEN — either the host's own token, or a personal one from `pstack api tokens create`")
+	}
+	return base, token, ex
+}
+
 // apiCmd runs the generated tree against the configured host.
 func apiCmd(argv []string, io IO) *Exit {
 	base, token := "https://pstack.invalid", ""
 	if !isHelpOnly(argv[1:]) {
 		var ex *Exit
-		base, token, ex = apiBase(io.Env)
-		if ex != nil {
-			// apiBase's token sentence is about /api/config specifically. Every other route admits
-			// a personal token at the right role, so the general case gets the general sentence.
-			if strings.Contains(ex.Msg, "root-token only") {
-				return fail("set PSTACK_TOKEN — either the host's own token, or a personal one from `pstack api tokens create`")
-			}
+		if base, token, ex = apiBaseAnyRole(io.Env); ex != nil {
 			return ex
 		}
 	}

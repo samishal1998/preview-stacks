@@ -60,7 +60,9 @@ type Parsed struct {
 	// manager's availability is left as it is.
 	PreviewsOn string
 	// Arg is the third word: `pstack swarm previews <workers|any>`.
-	Arg      string
+	Arg string
+	// Extra is every positional word after Arg: `pstack route assign <name> <deployment>`.
+	Extra    []string
 	Distro   string
 	Format   string
 	Tag      string
@@ -109,6 +111,8 @@ type Parsed struct {
 	Yes    bool
 	To     string
 	Resume bool
+	// JSON is `--json`: print the API's body instead of the terse lines (`route`).
+	JSON bool
 	// Typed records which value flags were spelled on the command line, for the commands that
 	// must only act on an EXPLICIT --ui / --orchestrator (upgrade, ui).
 	Typed map[string]bool
@@ -223,6 +227,8 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 			p.To = next(&i, p.To)
 		case "--resume":
 			p.Resume = true
+		case "--json":
+			p.JSON = true
 		case "--ui":
 			// `build-image --ui` is a switch (build the SPA image); `init --ui <mode>` takes a value.
 			// Peek rather than always consuming, so neither form has to be spelled differently.
@@ -309,6 +315,9 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 	if len(rest) > 2 {
 		p.Arg = rest[2]
 	}
+	if len(rest) > 3 {
+		p.Extra = rest[3:]
+	}
 	if p.PreviewsOn != "" && p.PreviewsOn != "workers" && p.PreviewsOn != "any" {
 		return nil, fail(fmt.Sprintf(`--previews-on must be workers or any, got "%s"`, p.PreviewsOn))
 	}
@@ -338,7 +347,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "healthcheck", "api", "completion")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "route", "healthcheck", "api", "completion")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -365,7 +374,7 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|serve|api|completion> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|route|serve|api|completion> [flags]",
 		"",
 		"Any command's own flags: pstack <command> --help",
 		"",
@@ -440,6 +449,13 @@ func Usage(version string) string {
 		"            There is no passphrase FLAG on purpose: argv is world-readable through `ps`.",
 		"            `push` names every registry and notifier URL it is about to trust and asks first;",
 		"            -y applies without asking and prints counts instead (a log is not a terminal).",
+		"",
+		"route:      pstack route ls                                  every route: name, stack, hosts",
+		"            pstack route create <name> [<deployment>] [--force]",
+		"            pstack route assign <name> <deployment> [--force]  --force moves a held route",
+		"            pstack route unassign <name>",
+		"            pstack route rm <name>",
+		"            --json prints the API's body. env: PSTACK_API_URL · PSTACK_TOKEN",
 		"",
 		"api:        pstack api <group> <command>     every HTTP route as a command, generated from",
 		"            packages/pstack/api/openapi.yaml. `pstack api --help` lists the groups.",

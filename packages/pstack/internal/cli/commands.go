@@ -261,6 +261,21 @@ asking and prints counts instead, because a log is not a terminal.
 Same three environment variables as pull.`,
 		flags: []string{"--help"},
 	},
+	"route": {
+		summary: "stable aliases for a stack: list, create, assign, unassign, remove",
+		body: `pstack route ls                                  every route: name, stack, hosts
+pstack route create <name> [<deployment>] [--force]
+pstack route assign <name> <deployment> [--force]
+pstack route unassign <name>
+pstack route rm <name>
+
+      --force   move a route another deployment holds
+      --json    print the API's body
+
+      PSTACK_API_URL   the host (no default)
+      PSTACK_TOKEN     the host's token, or a personal one (developer to write)`,
+		flags: []string{"--force", "--json", "--help"},
+	},
 	"api": {
 		summary: "every HTTP route as a command, generated from the OpenAPI document",
 		body: `pstack api <group> <command> [flags]
