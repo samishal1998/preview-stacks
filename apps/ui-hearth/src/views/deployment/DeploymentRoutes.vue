@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /** The custom routes pointed at this deployment, and assigning one: an existing route, or a new name. */
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { HAlert, HButton, HCard, HDataTable, HInput, HSelect, HStack, HText, type MenuAction, type TableColumn, type TableRow } from '@hearth-ui/vue';
 import CustomRouteDialogs from '../../components/CustomRouteDialogs.vue';
-import { hostItems } from '../../lib/customRoutes';
+import { focusLost, hostItems } from '../../lib/customRoutes';
 import { useCustomRoutes } from '../../lib/use-custom-routes';
 
 const props = defineProps<{ id: string }>();
@@ -30,10 +30,21 @@ const options = computed(() => [
 ]);
 const target = computed(() => (pick.value === NEW ? newName.value.trim() : pick.value));
 async function assign(): Promise<void> {
-  if (!target.value) return;
-  await cr.assign(target.value, props.id);
-  pick.value = newName.value = '';
+  if (target.value) await cr.assign(target.value, props.id);
 }
+// The pick is done once its route shows up here: a cancelled move or a refused assign keeps it.
+watch(mine, (m) => {
+  if (target.value && m.some((r) => r.name === target.value)) pick.value = newName.value = '';
+});
+// A closed confirm returns focus to its trigger, which the write may have removed (the row) or
+// disabled (Assign, once the pick clears): land on the Route select, not <body>. After the tick:
+// the dialog closes in the post-flush.
+const form = ref<HTMLFormElement | null>(null);
+watch([() => cr.move.value, () => cr.drop.value, target], async ([m, d]) => {
+  if (m || d) return;
+  await nextTick();
+  if (focusLost(document.activeElement, document.body)) form.value?.querySelector('select')?.focus();
+});
 </script>
 
 <template>
@@ -62,7 +73,7 @@ async function assign(): Promise<void> {
       </HDataTable>
       <HText v-else tone="muted">None.</HText>
 
-      <form v-if="cr.mayWrite.value" @submit.prevent="assign">
+      <form v-if="cr.mayWrite.value" ref="form" @submit.prevent="assign">
         <HStack direction="row" :gap="3" wrap align="end">
           <HSelect v-model="pick" label="Route" placeholder="Choose a route" :options="options" />
           <HInput v-if="pick === NEW" v-model="newName" label="Name" placeholder="checkout" autocomplete="off" />

@@ -64,11 +64,12 @@ export function useCustomRoutes() {
     if (!m) return;
     busy.value = true;
     const r = await customRoutesApi.assign(m.name, m.deployment, true);
+    // The list before the close: the dialog hands focus back to a page that already shows the result.
+    await load();
     busy.value = false;
     move.value = null;
-    if (r.ok) return done(`Moved ${m.name} to ${stackOf(m.deployment)}.`);
-    toast(problem(r, 'Not moved'), 'danger');
-    void load();
+    if (r.ok) toast(`Moved ${m.name} to ${stackOf(m.deployment)}.`, 'success');
+    else toast(problem(r, 'Not moved'), 'danger');
   }
 
   /** '' when created; else why not, for the form that asked. */
@@ -86,11 +87,12 @@ export function useCustomRoutes() {
     if (!d) return;
     busy.value = true;
     const r = d.kind === 'delete' ? await customRoutesApi.remove(d.name) : await customRoutesApi.unassign(d.name);
+    // The list before the close, as in confirmMove: the row and its trigger are gone when focus returns.
+    await load();
     busy.value = false;
     drop.value = null;
-    if (r.ok) return done(d.kind === 'delete' ? `Deleted ${d.name}.` : `Unassigned ${d.name}.`);
-    toast(problem(r, d.kind === 'delete' ? 'Not deleted' : 'Not unassigned'), 'danger');
-    void load();
+    if (r.ok) toast(d.kind === 'delete' ? `Deleted ${d.name}.` : `Unassigned ${d.name}.`, 'success');
+    else toast(problem(r, d.kind === 'delete' ? 'Not deleted' : 'Not unassigned'), 'danger');
   }
 
   const moveOpen = computed({ get: () => !!move.value, set: (v) => !v && (move.value = null) });
