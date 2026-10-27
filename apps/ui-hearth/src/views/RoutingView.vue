@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** Traefik: the routes it serves (container labels), custom routes, and its watched dynamic-config directory. */
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import {
   HAlert, HAlertDialog, HBadge, HButton, HDataTable, HDialog, HHeading, HInput, HPageHeader, HSelect, HSheet, HStack, HText, HTextarea,
   type MenuAction, type TableColumn, type TableRow,
@@ -85,12 +85,17 @@ const deploymentOptions = computed(() => [
 ]);
 /** The cell's select: a deployment assigns (or asks to move), Unassigned asks to unassign. */
 // A native select keeps what was picked even when the model does not change (a cancelled move, a
-// refused assign), so each pick remounts the selects: they show the holder until the list moves.
-const picks = ref(0);
-function pick(name: string, deployment: string): void {
-  picks.value++;
-  if (deployment) void cr.assign(name, deployment);
+// refused assign). HSelect resyncs only when its model changes, so a pick sets the model to the pick
+// for one tick and then back: the select shows the holder until the list moves, and keeps focus.
+// Never disabled while a write runs (that drops keyboard focus): a pick then is ignored instead.
+const override = reactive<Record<string, string>>({});
+async function pick(name: string, deployment: string): Promise<void> {
+  override[name] = deployment;
+  if (cr.busy.value) { /* a write is in flight: snap back */ }
+  else if (deployment) void cr.assign(name, deployment);
   else cr.drop.value = { name, kind: 'unassign' };
+  await nextTick();
+  delete override[name];
 }
 const crActions = (row: TableRow): MenuAction[] => [
   { id: 'unassign', label: 'Unassign', disabled: !crOf(row)?.deployment },
@@ -289,13 +294,11 @@ async function remove(): Promise<void> {
         </HStack>
         <HSelect
           v-else-if="column.key === 'deployment' && cr.mayWrite.value"
-          :key="picks"
           :label="`Deployment for ${row.name}`"
           hide-label
           size="compact"
-          :model-value="String(value)"
+          :model-value="override[String(row.id)] ?? String(value)"
           :options="deploymentOptions"
-          :disabled="cr.busy.value"
           @update:model-value="(v: string) => pick(String(row.id), v)"
         />
         <template v-else-if="column.key === 'deployment'">
