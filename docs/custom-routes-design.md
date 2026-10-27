@@ -8,19 +8,25 @@
 >   A stack's name or an existing route is a 409. An unknown route or deployment is a 404. POST
 >   accepts `force` and ignores it: a new route is never held. DELETE answers `{ deleted }`.
 > - **Router names can collide.** `a-b` with service `c` and `a` with service `b-c` both give
->   `pstack-route-a-b-c`. Create and assign refuse that with a 409 naming the router. The renderer
->   drops a duplicate with a `# dropped` note rather than writing a duplicate key.
+>   `pstack-route-a-b-c`. Create and assign refuse that with a 409 naming the router. A later one is
+>   settled at render like a host: the earlier claim keeps the name. The renderer's `# dropped` note
+>   stays as a safety net that never fires.
 > - **Collisions are never ambiguous (owner, 2026-10-27).** Create and assign refuse a collision up
 >   front (409). Anything that arises later, such as a deploy that claims a route host or a stack
 >   named like a route, is settled at render: the deployment's own host wins and the route's claim
->   on that host is rejected. See §"Later collisions".
+>   on that host is rejected. See §"Later collisions". The render settles it, so a GET reads what the
+>   last render decided: rows carry `blocked: [{ host, by: { kind, name } }]` (`[]` when none), a
+>   blocked wildcard spelled `*.<host>`, and kind `deployment` names the stack, or the compose
+>   project or router of a live router no deployment explains.
 > - **`hosts[]` lists wildcards** as `*.<host>` after the plain hosts. The UIs show them as text,
 >   not links.
 > - **No routes, no file.** With nothing to render, `pstack-routes.yml` is removed, not written
 >   empty. Boot with an empty table touches nothing. Boot also skips when rows exist but none is
 >   assigned, so a stale file left by a crash mid-unassign waits for the next write.
 > - **Writes that change nothing do not re-render:** an unassigned create, a no-op assign, and an
->   unassign of an unassigned route. A deploy re-renders only when the deployment has routes.
+>   unassign of an unassigned route. A registration (`PUT /api/deployments/:id`), a deploy and a
+>   removal re-render whenever any route is assigned, whoever holds it, since each can settle a
+>   collision. With nothing assigned they touch no file and ask docker nothing.
 > - **`DELETE /api/deployments/:id` unassigns too,** not only a forget, both with reason `forgotten`.
 > - **Waking, not only sleeping.** Alias hosts join a stack's waking entry as well as its sleep
 >   entry, so a visitor between `up` and readiness gets the waking page. They come from a map the
