@@ -1278,6 +1278,10 @@ td.name {
     max-width: 45%;
     overflow-wrap: anywhere;
   }
+  /* A key that is a badge (a job's state) takes its own width; under 481px it stacks like any key. */
+  .kvlist > li > .k.badge-k {
+    width: auto;
+  }
 }
 
 /* ------------------------------------------------------------------ preformatted output */

@@ -13,8 +13,8 @@ import SkeletonList from '../../components/SkeletonList.vue';
       <!-- One flex item, so the separator never ends a line on its own. -->
       <span v-if="dep.detail">
         <RouterLink :to="`/submit?from=${encodeURIComponent(dep.id)}`">Duplicate</RouterLink>
-        <span class="mute">·</span>
-        <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Edit spec &amp; compose →</RouterLink>
+        <span class="mute"> · </span>
+        <RouterLink :to="`/submit/${encodeURIComponent(dep.id)}`">Edit spec &amp; compose&nbsp;→</RouterLink>
       </span>
     </div>
 
