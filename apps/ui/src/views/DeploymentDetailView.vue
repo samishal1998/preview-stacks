@@ -11,7 +11,7 @@ import { computed, ref, watch } from 'vue';
 import { api, query } from '../api/client';
 import type { RuntimeResponse } from '../api/types';
 import { authState, can } from '../composables/useAuth';
-import { exploreUrl, showGrafana, stackQuery } from '../composables/grafana';
+import { exploreUrl, showGrafana, stackQuery, stackServices } from '../composables/grafana';
 import { settings } from '../composables/useSettings';
 import { sentence } from '../composables/useFormat';
 import { useRouter } from 'vue-router';
@@ -61,7 +61,8 @@ watch(
 
 /**
  * The whole stack in Grafana. Loki can only be asked by service name, and only /runtime knows them,
- * so it is read once per resolve. Down or asleep it names no services, and there is no link.
+ * so it is read once per resolve. The compose declares them, so a stack that is down or asleep keeps
+ * its link.
  */
 const grafanaOn = computed(() => showGrafana(authState.grafana, can('developer'), !!settings.token));
 const services = ref<string[]>([]);
@@ -76,7 +77,7 @@ watch(
     const id = dep.id;
     const r = await api.get<RuntimeResponse>(`/api/deployments/${encodeURIComponent(id)}/runtime${query(dep.vars)}`);
     if (!r.ok || dep.id !== id) return;
-    services.value = [...r.body.containers.flatMap((c) => (c.service ? [c.service] : [])), ...(r.body.services ?? [])];
+    services.value = stackServices(r.body);
   },
   { immediate: true },
 );

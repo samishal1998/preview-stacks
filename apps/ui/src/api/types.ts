@@ -372,6 +372,8 @@ export type RuntimeResponse = {
   containers: RuntimeContainer[];
   /** Every service the stack has; a swarm service with no running task has no `containers` entry. */
   services?: string[];
+  /** The services the compose logs to Loki, read from the file. Absent on a share link and on an older server. */
+  declaredServices?: string[];
   routes: RuntimeRoute[];
   findings: Array<{ level: 'error' | 'warn' | 'info'; message: string }>;
   challenge: 'http01' | 'dns01' | 'dns-persist-01' | 'unknown';
