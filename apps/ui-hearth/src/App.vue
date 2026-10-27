@@ -30,9 +30,10 @@ import SignIn from './components/SignIn.vue';
 import { ssoApi } from './api-sso';
 import { densities, palettes } from './lib/settings';
 import { isTyping, keyStep, SHORTCUTS } from './lib/shortcuts';
+import { showGrafana } from './lib/grafana';
 import { safeNext } from './lib/sso';
 import { can, sentence, type Role } from './lib/users';
-import { auth, data, dismissToast, prefs, refresh, signInWithToken, signOut, start, toasts } from './state';
+import { auth, data, dismissToast, grafana, prefs, refresh, signInWithToken, signOut, start, toasts } from './state';
 
 const route = useRoute();
 const router = useRouter();
@@ -40,8 +41,6 @@ const router = useRouter();
 const loginError = ref('');
 const loggingIn = ref(false);
 const paletteOpen = ref(false);
-
-const grafana = ref('');
 
 /** `min` is courtesy: a page the role cannot use is not listed. The server still decides. */
 const all = computed<Array<NavItem & { min?: Role }>>(() => [
@@ -63,7 +62,7 @@ const all = computed<Array<NavItem & { min?: Role }>>(() => [
 const items = computed<NavItem[]>(() => {
   const rows = all.value.filter((i) => !i.min || can(i.min, auth)).map(({ min: _min, ...i }) => i);
   // Grafana is its own site; developer and up (it reads unredacted lines).
-  return grafana.value && can('developer', auth) && !auth.viaToken ? [...rows, { id: 'grafana', label: 'Grafana', icon: 'launch' }] : rows;
+  return showGrafana(grafana.value, can('developer', auth), auth.viaToken) ? [...rows, { id: 'grafana', label: 'Grafana', icon: 'launch' }] : rows;
 });
 const active = computed(() => {
   const n = String(route.name ?? '');
