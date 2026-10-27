@@ -15,7 +15,7 @@ import { api, problem } from '../api/client';
 import type { CustomRoute, RouteHeld } from '../api/types';
 import { can } from '../composables/useAuth';
 import { state } from '../composables/useControlPlane';
-import { hostItems, moveQuestion, needsMove, type Holder } from '../composables/customRoutes';
+import { focusLost, hostItems, moveQuestion, needsMove, type Holder } from '../composables/customRoutes';
 import { toast } from '../composables/useToasts';
 import ActionButton from './ActionButton.vue';
 import ErrorNote from './ErrorNote.vue';
@@ -37,6 +37,7 @@ const formError = ref('');
 /** The holder a 409 named when the list said the route was free. */
 const stale = ref<Holder | null>(null);
 const submitBtn = ref<InstanceType<typeof ActionButton> | null>(null);
+const nameInput = ref<HTMLInputElement | null>(null);
 const ids = useId();
 
 const mayWrite = computed(() => can('developer'));
@@ -82,6 +83,16 @@ async function load(): Promise<void> {
 void load();
 defineExpose({ load });
 
+/**
+ * After a write: the list, then focus. A pending button is natively disabled and Unassign leaves with
+ * its row, so a settled write would leave focus on <body>; land on Route instead.
+ */
+async function settle(): Promise<void> {
+  await load();
+  await nextTick();
+  if (focusLost(document.activeElement, document.body)) nameInput.value?.focus();
+}
+
 /** Creates the route when it is new, else points it at the target. `force` is the confirmed move. */
 async function submit(force: boolean): Promise<void> {
   const n = typed.value;
@@ -93,7 +104,7 @@ async function submit(force: boolean): Promise<void> {
     ? await api.post<CustomRoute>('/api/custom-routes', t ? { name: n, deployment: t } : { name: n })
     : await api.put<CustomRoute & RouteHeld>(`${path(n)}/assignment`, force ? { deployment: t, force } : { deployment: t });
   busy.value = '';
-  void load();
+  void settle();
   if (r.ok) {
     toast('ok', !t ? `Created ${n}.` : force ? `Moved ${n} to ${stackOf(t)}.` : `Assigned ${n} to ${stackOf(t)}.`);
     name.value = '';
@@ -117,7 +128,7 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
   busy.value = '';
   if (res.ok) toast('ok', kind === 'delete' ? `Deleted ${r.name}.` : `Unassigned ${r.name}.`);
   else toast('error', problem(res, `${kind} ${r.name}`));
-  void load();
+  void settle();
 }
 </script>
 
@@ -142,11 +153,14 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
         <tr v-for="r in shown" :key="r.name" role="row">
           <td role="cell" class="mono" data-label="name">{{ r.name }}</td>
           <td role="cell" class="cell-wrap" data-label="hosts">
-            <div v-for="h in hostItems(r.hosts)" :key="h.host">
-              <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
-              <span v-else class="mono mute">{{ h.host }}</span>
+            <!-- One value column: a card row's cell is a flex row, and each host would be its own column. -->
+            <div>
+              <div v-for="h in hostItems(r.hosts)" :key="h.host">
+                <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
+                <span v-else class="mono mute">{{ h.host }}</span>
+              </div>
+              <span v-if="!r.hosts.length" class="mute">—</span>
             </div>
-            <span v-if="!r.hosts.length" class="mute">—</span>
           </td>
           <td v-if="!deployment" role="cell" data-label="deployment">
             <RouterLink v-if="r.deployment" :to="`/deployments/${encodeURIComponent(r.deployment)}/runtime`">
@@ -185,6 +199,7 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
           <label :for="`${ids}-name`">Route</label>
           <input
             :id="`${ids}-name`"
+            ref="nameInput"
             v-model="name"
             type="text"
             :list="`${ids}-names`"

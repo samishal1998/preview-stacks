@@ -32,3 +32,7 @@ export const moveQuestion = (name: string, from: Holder, toStack: string): strin
 /** A `*.` wildcard host does not resolve on its own: text, not a link. */
 export const hostItems = (hosts: string[]): Array<{ host: string; href: string | null }> =>
   hosts.map((host) => ({ host, href: host.startsWith('*.') ? null : `https://${host}` }));
+
+/** Focus a write dropped: on <body>, on an element it removed, or on a control it disabled. */
+export const focusLost = (a: Element | null, body: Element | null): boolean =>
+  !a || a === body || !a.isConnected || a.matches(':disabled');
