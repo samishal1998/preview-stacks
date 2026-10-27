@@ -18,7 +18,7 @@
  * The trigger is lucide's `Info` glyph rather than a typed letter `i`. A text glyph inherits font
  * metrics and italics, so it never sits centred in its own circle and reads as a stray character.
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Info } from 'lucide-vue-next';
 
 const props = defineProps<{
@@ -33,6 +33,27 @@ const props = defineProps<{
 const pinned = ref(false);
 const hovered = ref(false);
 const root = ref<HTMLElement | null>(null);
+const bub = ref<HTMLElement | null>(null);
+
+/*
+ * The bubble is anchored to its trigger, and a trigger far enough along a phone-width line pushes
+ * it off the screen (and the page sideways). Shift it back inside an 8px margin once it renders.
+ * `clientWidth`, not `innerWidth`: the latter counts a classic scrollbar.
+ */
+watch(
+  () => pinned.value || hovered.value,
+  async (open) => {
+    if (!open) return;
+    await nextTick();
+    const el = bub.value;
+    if (!el) return;
+    el.style.translate = '';
+    const r = el.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const dx = r.right > vw - 8 ? vw - 8 - r.right : r.left < 8 ? 8 - r.left : 0;
+    if (dx) el.style.translate = `${dx}px 0`;
+  },
+);
 
 /** Any click that is not inside this hint unpins it — the usual dismissal for a transient bubble. */
 function onDocPointerDown(e: PointerEvent): void {
@@ -71,6 +92,7 @@ onBeforeUnmount(() => {
     <Transition name="hint">
       <span
         v-if="pinned || hovered"
+        ref="bub"
         class="hint-bub"
         :class="[props.align === 'end' ? 'to-end' : 'to-start', props.side === 'top' ? 'above' : 'below']"
       >

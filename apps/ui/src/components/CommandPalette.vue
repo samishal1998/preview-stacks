@@ -197,7 +197,7 @@ defineExpose({ show });
               @mousemove="cursor = i"
             >
               <span class="palette-label">{{ r.it.label }}</span>
-              <span v-if="r.it.hint" class="palette-hint">{{ r.it.hint }}</span>
+              <span v-if="r.it.hint" class="palette-hint" :title="r.it.hint">{{ r.it.hint }}</span>
             </button>
           </template>
         </div>
