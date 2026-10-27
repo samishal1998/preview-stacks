@@ -1741,7 +1741,7 @@ The API:
 curl -s -X POST "$PSTACK_API_URL/api/custom-routes" -H "authorization: Bearer $PSTACK_TOKEN" \
   -d '{"name":"checkout","deployment":"pr-123"}'
 # → 201 { name: "checkout", deployment: "pr-123", stack: "myapp-pr-123",
-#         hosts: ["web-checkout.preview.example.com"], createdAt, updatedAt }
+#         hosts: ["web-checkout.preview.example.com", "api-checkout.preview.example.com"], createdAt, updatedAt }
 curl -s -X PUT "$PSTACK_API_URL/api/custom-routes/checkout/assignment" -H "authorization: Bearer $PSTACK_TOKEN" \
   -d '{"deployment":"pr-124","force":true}'
 ```
@@ -1758,15 +1758,15 @@ a personal one at `developer` to write), like `pstack api`:
 
 ```console
 $ pstack route create checkout pr-123
-checkout  myapp-pr-123  web-checkout.preview.example.com
+checkout  myapp-pr-123  web-checkout.preview.example.com, api-checkout.preview.example.com
 $ pstack route assign checkout pr-124
 pstack: checkout is assigned to myapp-pr-123 (--force moves it)
 $ pstack route assign checkout pr-124 --force
-checkout  myapp-pr-124  web-checkout.preview.example.com
+checkout  myapp-pr-124  web-checkout.preview.example.com, api-checkout.preview.example.com
 $ pstack route create staging
 staging  (unassigned)
 $ pstack route ls
-checkout  myapp-pr-124  web-checkout.preview.example.com
+checkout  myapp-pr-124  web-checkout.preview.example.com, api-checkout.preview.example.com
 staging  (unassigned)
 $ pstack route unassign checkout
 checkout  (unassigned)
