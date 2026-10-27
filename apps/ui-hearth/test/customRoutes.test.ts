@@ -32,6 +32,17 @@ test('plain hosts are links, wildcards are text', () => {
   expect(hostItems([])).toEqual([]);
 });
 
+// negative control: drop the blocked map from hostItems → the taken host is missing and this fails;
+// give it an href → it links to another stack and this fails.
+test('a blocked host is text naming who has it', () => {
+  expect(
+    hostItems(['api-checkout.example.com'], [{ host: 'web-checkout.example.com', by: { kind: 'deployment', name: 'checkout' } }]),
+  ).toEqual([
+    { host: 'api-checkout.example.com', href: 'https://api-checkout.example.com' },
+    { host: 'web-checkout.example.com', href: null, takenBy: 'checkout' },
+  ]);
+});
+
 // negative control: dropping the `getClientRects` clause fails the removed-row and closed-dialog
 // expects; dropping the `:disabled` clause fails the disabled-button expect.
 test('focus is lost on body, on a disabled control, or on an element with no box', () => {

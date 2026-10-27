@@ -79,6 +79,7 @@ const crColumns: TableColumn[] = [
 ];
 const crRows = computed<TableRow[]>(() => cr.routes.value.map((r) => ({ id: r.name, name: r.name, hosts: '', deployment: r.deployment ?? '' })));
 const crOf = (row: TableRow) => cr.routes.value.find((r) => r.name === row.id);
+const crHosts = (row: TableRow) => hostItems(crOf(row)?.hosts ?? [], crOf(row)?.blocked);
 const deploymentOptions = computed(() => [
   { value: '', label: 'Unassigned' },
   ...data.deployments.map((d) => ({ value: d.id, label: d.stack ?? d.id })),
@@ -286,11 +287,11 @@ async function remove(): Promise<void> {
     >
       <template #cell="{ row, column, value }">
         <HStack v-if="column.key === 'hosts'" direction="column" :gap="1">
-          <template v-for="h in hostItems(crOf(row)?.hosts ?? [])" :key="h.host">
+          <template v-for="h in crHosts(row)" :key="h.host">
             <a v-if="h.href" :href="h.href" target="_blank" rel="noreferrer">{{ h.host }}</a>
-            <HText v-else tone="muted">{{ h.host }}</HText>
+            <HText v-else tone="muted">{{ h.takenBy ? `${h.host} · taken by ${h.takenBy}` : h.host }}</HText>
           </template>
-          <template v-if="!crOf(row)?.hosts.length">—</template>
+          <template v-if="!crHosts(row).length">—</template>
         </HStack>
         <HSelect
           v-else-if="column.key === 'deployment' && cr.mayWrite.value"
