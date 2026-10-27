@@ -80,11 +80,26 @@ function onClick(e: MouseEvent): void {
   timer = setTimeout(disarm, 5_000);
 }
 
+/**
+ * Arms it without the first click, for a caller whose request came back needing the question after
+ * all — a route that looked free but is held. Focus moves here so the next click or Enter answers it.
+ */
+const el = ref<HTMLButtonElement | null>(null);
+function arm(): void {
+  if (!props.confirm) return;
+  disarm();
+  el.value?.focus();
+  armed.value = true;
+  timer = setTimeout(disarm, 5_000);
+}
+defineExpose({ arm });
+
 onBeforeUnmount(disarm);
 </script>
 
 <template>
   <button
+    ref="el"
     :class="[variant, armed && 'armed']"
     :disabled="pending || (disabled && !title)"
     :aria-disabled="blocked || undefined"

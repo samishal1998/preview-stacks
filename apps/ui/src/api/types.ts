@@ -443,6 +443,19 @@ export type RoutingReadResponse = { name: string; content?: string; sourceWithhe
 /** `previous` is the in-session undo — there is no history on disk, by design. */
 export type RoutingWriteResponse = { name?: string; deleted?: string; previous: string | null };
 
+/** `/api/custom-routes`: a stable alias for a stack. `deployment` and `stack` are null when unassigned. */
+export type CustomRoute = {
+  name: string;
+  deployment: string | null;
+  stack: string | null;
+  /** The alias hosts it serves now; a `*.` entry is a wildcard rule, not an address. */
+  hosts: string[];
+  createdAt: number;
+  updatedAt: number;
+};
+/** A non-force PUT on a route another deployment holds answers 409 with this. */
+export type RouteHeld = { assignedTo?: { deployment: string; stack: string | null } };
+
 /**
  * `GET /api/deployments/:id/source` — the stored spec and compose file, so replacing is editing
  * rather than retyping. Restricted for the same reason a named spec's source is.
