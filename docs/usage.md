@@ -1719,8 +1719,12 @@ Point it at the next PR and the same links follow. **No redeploy:** pstack rewri
   `force: true` (`--force`) to move it: one call, one rewrite, one `route.assigned` event carrying
   `previous`. Assigning it to the deployment that already holds it is a 200 that changes nothing.
 - **No two routers for one host.** An assign is refused (409, naming the host or the router) when a
-  route host is already served by another deployment or route. That is checked at create and assign
-  only: a deploy that later claims a route host is not refused.
+  route host is already served by another deployment or route. A collision that comes later (a
+  deploy that claims a route host, a stack named like a route) is settled at every render, never
+  left to Traefik: a deployment's own host always wins, and between two routes the one assigned
+  first wins. The route stops serving that one host, keeps its others, and lists it under `blocked`.
+  When the winner goes (unassigned, deleted, or redeployed without the host), the route serves it
+  again.
 - **Asleep is fine.** A route may point at a sleeping or not-yet-deployed deployment: it stores the
   intent. A request to a route host wakes a sleeping stack exactly like its own host does.
 - **Forgetting a deployment unassigns its routes** (`DELETE /api/deployments/:id`, or `down` with
@@ -1741,12 +1745,16 @@ The API:
 curl -s -X POST "$PSTACK_API_URL/api/custom-routes" -H "authorization: Bearer $PSTACK_TOKEN" \
   -d '{"name":"checkout","deployment":"pr-123"}'
 # → 201 { name: "checkout", deployment: "pr-123", stack: "myapp-pr-123",
-#         hosts: ["web-checkout.preview.example.com", "api-checkout.preview.example.com"], createdAt, updatedAt }
+#         hosts: ["web-checkout.preview.example.com", "api-checkout.preview.example.com"], blocked: [],
+#         createdAt, updatedAt }
 curl -s -X PUT "$PSTACK_API_URL/api/custom-routes/checkout/assignment" -H "authorization: Bearer $PSTACK_TOKEN" \
   -d '{"deployment":"pr-124","force":true}'
 ```
 
 `hosts` lists what the route serves now: the plain hosts, then each wildcard as `*.<host>`.
+`blocked` lists each host it does not serve because something else does, as
+`{ host, by: { kind, name } }`: kind `deployment` (name is its stack) or `route`. The UIs show a
+blocked host as text, "taken by <name>", never as a link.
 `deployment` and `stack` are `null` while it is unassigned. The generated
 `pstack api custom-routes list|create|delete|assign|unassign` reaches the same five routes
 (`pstack api custom-routes assign --name checkout --deployment pr-124 --force`).
@@ -1768,6 +1776,9 @@ staging  (unassigned)
 $ pstack route ls
 checkout  myapp-pr-124  web-checkout.preview.example.com, api-checkout.preview.example.com
 staging  (unassigned)
+$ pstack route ls   # after stack shop claimed web-checkout.preview.example.com
+checkout  myapp-pr-124  api-checkout.preview.example.com
+  blocked: web-checkout.preview.example.com (deployment shop)
 $ pstack route unassign checkout
 checkout  (unassigned)
 $ pstack route rm staging
@@ -1776,7 +1787,7 @@ staging  deleted
 
 | Command | Does |
 |---|---|
-| `pstack route ls` | every route: name, stack, hosts |
+| `pstack route ls` | every route: name, stack, hosts, and a `blocked:` line per host something else serves |
 | `pstack route create <name> [<deployment>]` | a new route, assigned when a deployment is given |
 | `pstack route assign <name> <deployment> [--force]` | point it at a deployment; `--force` moves it from another |
 | `pstack route unassign <name>` | stop serving it; the route is kept |
@@ -3679,7 +3690,7 @@ anything it does not list is the root token's alone.
 | POST | `/api/control/restart` | `{ service }` | **maintainer and up** — restart one control service; `pstack` itself is always 400 (it is the container answering); 404 unknown service; 503 docker down |
 | GET | `/api/domains` | — | **maintainer and up** — `{ primary, domains[], mode, note }`; the list is derived from the routers it wrote |
 | PUT | `/api/domains` | `{ domains }` | **maintainer and up** — replace the additional domains; each gets control./api./wake routers. The primary is refused (400) |
-| GET | `/api/custom-routes` | — | `[{ name, deployment, stack, hosts[], createdAt, updatedAt }]`, by name; `deployment` and `stack` are `null` when unassigned ([custom routes](#custom-routes-a-stable-name-for-a-moving-stack)) |
+| GET | `/api/custom-routes` | — | `[{ name, deployment, stack, hosts[], blocked[], createdAt, updatedAt }]`, by name; `blocked` is `[{ host, by: { kind, name } }]`, the hosts a deployment or an earlier route serves instead; `deployment` and `stack` are `null` when unassigned ([custom routes](#custom-routes-a-stable-name-for-a-moving-stack)) |
 | POST | `/api/custom-routes` | `{ name, deployment?, force? }` | **developer and up** — **201** the route · 400 a bad or reserved name · 409 the name exists or is a stack's, or a host or router another serves · 404 unknown deployment. `force` is accepted and ignored: a new route is never held |
 | DELETE | `/api/custom-routes/:name` | — | **developer and up** — `{ deleted }`; its routers go · 404 |
 | PUT | `/api/custom-routes/:name/assignment` | `{ deployment, force? }` | **developer and up** — the route; the same deployment is a no-op 200 · **409** `{ error, assignedTo: { deployment, stack } }` when another holds it, unless `force` (one move) · 409 a host or router another serves · 404 unknown route or deployment |
