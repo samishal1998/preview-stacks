@@ -130,6 +130,14 @@ draft added up CPU and memory to guess whether a sleeping stack would still fit,
 the machine manager's job, not pstack's. Shipped in 0.41.0; the five-task build plan is
 [`node-signals-plan.md`](node-signals-plan.md).
 
+### [`custom-routes-design.md`](custom-routes-design.md) — custom routes, Grafana links, compact Hearth
+
+A custom route is a stable name (`checkout`) pointed at whichever deployment a developer chooses, so
+`web-checkout.<domain>` follows a `gh-stack` stack from PR to PR with no redeploy. Also: Grafana
+Explore links on the deployment page, and Hearth compact by default. Built, unreleased; where the
+build differs is at the top. The eleven-task build plan is
+[`custom-routes-plan.md`](custom-routes-plan.md).
+
 ### [`swarm-local-testing.md`](swarm-local-testing.md) — a real cluster on a laptop
 
 CI has one machine, so placement failures, draining, and a node going down are untested until they

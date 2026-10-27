@@ -14,7 +14,26 @@
   Traefik and pstack get `oom_score_adj: -500` in the control stack. `PSTACK_NO_OOM_PROTECT=1` skips the
   daemon step; without root or systemd it is skipped with a note.
 
+- **Custom routes: a stable name for a moving stack.** Route `checkout` assigned to deployment
+  `pr-123` makes every generated host of its stack answer on a twin, `web-checkout.<domain>` beside
+  `web-myapp-pr-123.<domain>`, wildcards included. Point it at the next PR and the links follow, with
+  no redeploy: pstack rewrites the reserved Traefik file `pstack-routes.yml` from the new
+  `custom_routes` table (migration 10). Assigning a route another deployment holds is a 409 naming
+  it; `force` moves it in one call. Forgetting a deployment unassigns its routes; a route host wakes a
+  sleeping stack. `/api/custom-routes` (five routes, viewer to read, developer to write),
+  `pstack route ls|create|assign|unassign|rm`, the generated `pstack api custom-routes …`, the
+  `route.assigned` and `route.unassigned` events, and a Custom routes section on the Routing page and
+  the deployment page of Hearth and the advanced UI.
+
+- **Grafana links on the deployment page.** With Grafana running, Hearth and the advanced UI link a
+  running deployment's header to Explore on the stack's logs, and each service's logs to that
+  service's, over the last hour. Developer and up, never with a stored token or on a share link.
+
 ### Changed
+
+- **Hearth is compact by default, with smaller corners.** Density defaults to compact, and stored
+  preferences are reset to compact once; a later choice sticks. Corners are 6/10/14 px (control,
+  card, panel), down from 10/16/20.
 
 - **The control stack has no memory limits.** Traefik's 512m cap was OOM-killed by a burst of proxied
   requests, and with Traefik down every preview is down; pstack (512m), the UI (128m), Loki (2g) and
