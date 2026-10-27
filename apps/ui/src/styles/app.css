@@ -982,8 +982,9 @@ td.name {
     flex-wrap: wrap;
   }
 }
-/* On the narrowest cards a label beside its value leaves the value half a card: stack them. */
-@container (max-width: 300px) {
+/* On the narrowest cards a label beside its value leaves the value half a card: stack them. A 320px
+   phone gives its panel ~228px, a 390px one ~298px: only the first needs it. */
+@container (max-width: 260px) {
   table.cards td:not([data-label='']) {
     flex-direction: column;
     align-items: flex-start;

@@ -222,20 +222,22 @@ onBeforeUnmount(() => {
           <b>Docker did not answer.</b>
           <p>What is running could not be listed — not the same as nothing running.</p>
         </div>
-        <table v-else-if="runtime?.containers.length" role="table" class="cards" style="margin-top: var(--s3)">
-          <thead role="rowgroup">
-            <tr role="row"><th role="columnheader">Service</th><th role="columnheader">Container</th><th role="columnheader">State</th><th role="columnheader">Health</th><th v-if="runtime.containers.some((c) => c.node)" role="columnheader">Node</th></tr>
-          </thead>
-          <tbody role="rowgroup">
-            <tr v-for="c in runtime.containers" :key="c.id" role="row">
-              <td role="cell" data-label="service">{{ c.service ?? '—' }}</td>
-              <td role="cell" data-label="container" class="mono">{{ c.name }}</td>
-              <td role="cell" data-label="state"><span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span></td>
-              <td role="cell" data-label="health">{{ c.health ? sentence(c.health) : '—' }}</td>
-              <td v-if="runtime.containers.some((x) => x.node)" role="cell" data-label="node">{{ c.node ?? '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-else-if="runtime?.containers.length" class="table-scroll" style="margin-top: var(--s3)">
+          <table role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row"><th role="columnheader">Service</th><th role="columnheader">Container</th><th role="columnheader">State</th><th role="columnheader">Health</th><th v-if="runtime.containers.some((c) => c.node)" role="columnheader">Node</th></tr>
+            </thead>
+            <tbody role="rowgroup">
+              <tr v-for="c in runtime.containers" :key="c.id" role="row">
+                <td role="cell" data-label="service">{{ c.service ?? '—' }}</td>
+                <td role="cell" data-label="container" class="mono">{{ c.name }}</td>
+                <td role="cell" data-label="state"><span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span></td>
+                <td role="cell" data-label="health">{{ c.health ? sentence(c.health) : '—' }}</td>
+                <td v-if="runtime.containers.some((x) => x.node)" role="cell" data-label="node">{{ c.node ?? '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p v-else-if="runtime" class="mute" style="margin-top: var(--s3)">Nothing is running.</p>
       </section>
 

@@ -447,7 +447,8 @@ td.right {
 .two-up > .field {
   flex: 1 1 200px;
 }
-td.right button {
+/* Between buttons only: a lead margin added 8px to the pair and pushed Delete to its own line at 320px. */
+td.right button + button {
   margin-inline-start: var(--s2);
 }
 /* The picker sits in a row, not a form: it takes the width its longest label needs and no more,

@@ -245,44 +245,45 @@ async function redeliver(d: DeliveryRow): Promise<void> {
         </div>
 
         <SkeletonList v-if="!loaded" :rows="2" tall />
-        <table v-else-if="notifiers.length" role="table" class="cards">
-          <thead role="rowgroup">
-            <tr role="row">
-              <th role="columnheader">Name</th>
-              <th role="columnheader">Events</th>
-              <th role="columnheader">Last delivery</th>
-              <th role="columnheader"></th>
-            </tr>
-          </thead>
-          <tbody role="rowgroup" class="stagger">
-            <template v-for="(n, i) in notifiers" :key="n.id">
-              <tr role="row" :style="{ '--i': i }">
-                <td role="cell" class="name" data-label="name">
-                  <!-- One value item: in card mode the name and its URL line are not two columns. -->
-                  <div>
-                    {{ n.name }}
-                    <div class="mute" style="font-size: var(--t-sm)">
-                      <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
-                           the credential) — so this shows dots for those rows, which is correct. -->
-                      {{ sentence(n.type) }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
+        <div v-else-if="notifiers.length" class="table-scroll">
+          <table role="table" class="cards">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Name</th>
+                <th role="columnheader">Events</th>
+                <th role="columnheader">Last delivery</th>
+                <th role="columnheader"></th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup" class="stagger">
+              <template v-for="(n, i) in notifiers" :key="n.id">
+                <tr role="row" :style="{ '--i': i }">
+                  <td role="cell" class="name" data-label="name">
+                    <!-- One value item: in card mode the name and its URL line are not two columns. -->
+                    <div>
+                      {{ n.name }}
+                      <div class="mute" style="font-size: var(--t-sm)">
+                        <!-- Chat types keep the URL under `webhookUrl`, and the server masks it (it is
+                             the credential) — so this shows dots for those rows, which is correct. -->
+                        {{ sentence(n.type) }} · {{ String(n.config.url ?? n.config.webhookUrl ?? '') }}
+                      </div>
                     </div>
-                  </div>
-                </td>
-                <td role="cell" data-label="events">
-                  <span v-if="n.events.includes('*')" class="badge">All events</span>
-                  <span v-else>{{ n.events.join(', ') }}</span>
-                </td>
-                <td role="cell" data-label="last delivery">
-                  <span v-if="!n.lastStatus" class="mute">never</span>
-                  <span v-else :class="n.lastStatus === 'ok' ? 's-ok' : 's-failed'">
-                    {{ n.lastStatus }}
-                  </span>
-                  <div v-if="n.lastAt" class="mute nowrap" style="font-size: var(--t-sm)">
-                    <RelativeTime :at="n.lastAt" />
-                  </div>
-                </td>
-                <td role="cell" data-label="">
-                  <div class="row" style="justify-content: flex-end">
+                  </td>
+                  <td role="cell" data-label="events">
+                    <span v-if="n.events.includes('*')" class="badge">All events</span>
+                    <span v-else>{{ n.events.join(', ') }}</span>
+                  </td>
+                  <td role="cell" data-label="last delivery">
+                    <span v-if="!n.lastStatus" class="mute">never</span>
+                    <span v-else :class="n.lastStatus === 'ok' ? 's-ok' : 's-failed'">
+                      {{ n.lastStatus }}
+                    </span>
+                    <div v-if="n.lastAt" class="mute nowrap" style="font-size: var(--t-sm)">
+                      <RelativeTime :at="n.lastAt" />
+                    </div>
+                  </td>
+                  <!-- One line in a table row; card mode wraps them. -->
+                  <td role="cell" class="row-actions" data-label="">
                     <span v-if="!n.enabled" class="badge off">Disabled</span>
                     <button class="ghost sm" @click="showDeliveries(n)">
                       {{ openDeliveries === n.id ? 'Hide' : 'Deliveries' }}
@@ -292,60 +293,60 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                       {{ n.enabled ? 'Disable' : 'Enable' }}
                     </button>
                     <ActionButton class="sm" variant="danger" :confirm="`Remove ${n.name}?`" @run="remove(n)">Remove</ActionButton>
-                  </div>
-                </td>
-              </tr>
-              <tr v-if="openDeliveries === n.id" :key="`d${n.id}`" role="row">
-                <td role="cell" colspan="4">
-                  <div class="row" style="margin-bottom: var(--s2)">
-                    <span v-if="queued > 0" class="badge busy">
-                      <span class="dot pulse" />{{ queued }} queued
-                    </span>
-                    <span class="grow" />
-                    <RefreshButton :run="reloadDeliveries" />
-                  </div>
-                  <ul v-if="deliveries.length" class="kvlist">
-                    <li v-for="d in deliveries" :key="d.id">
-                      <span class="k">
-                        <span :class="d.status === 'ok' ? 's-ok' : 's-failed'">{{ sentence(d.status) }}</span>
+                  </td>
+                </tr>
+                <tr v-if="openDeliveries === n.id" :key="`d${n.id}`" role="row">
+                  <td role="cell" colspan="4">
+                    <div class="row" style="margin-bottom: var(--s2)">
+                      <span v-if="queued > 0" class="badge busy">
+                        <span class="dot pulse" />{{ queued }} queued
                       </span>
-                      <span class="v">
-                        {{ d.event }}
-                        <span class="mute" style="font-size: var(--t-sm)">
-                          · {{ stamp(d.createdAt) }} · {{ d.attempts }} attempt(s)<template
-                            v-if="d.responseCode"
-                          >
-                            · HTTP {{ d.responseCode }}</template
-                          >
+                      <span class="grow" />
+                      <RefreshButton :run="reloadDeliveries" />
+                    </div>
+                    <ul v-if="deliveries.length" class="kvlist">
+                      <li v-for="d in deliveries" :key="d.id">
+                        <span class="k">
+                          <span :class="d.status === 'ok' ? 's-ok' : 's-failed'">{{ sentence(d.status) }}</span>
                         </span>
-                        <div v-if="d.error" class="s-failed" style="font-size: var(--t-sm)">
-                          {{ d.error }}
-                        </div>
-                      </span>
-                      <!--
-                        Only when the envelope was actually stored. A row from before payloads were
-                        captured has nothing to replay, and a button that explains itself after the
-                        click is worse than one that is not offered.
-                      -->
-                      <ActionButton
-                        v-if="d.replayable"
-                        class="sm"
-                        variant="ghost"
-                        :pending="redelivering === d.id"
-                        confirm="Send it again?"
-                        title="Sends this event again with its original id, so a receiver can dedupe."
-                        @run="redeliver(d)"
-                      >
-                        Redeliver
-                      </ActionButton>
-                    </li>
-                  </ul>
-                  <p v-else class="mute">Nothing delivered yet.</p>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+                        <span class="v">
+                          {{ d.event }}
+                          <span class="mute" style="font-size: var(--t-sm)">
+                            · {{ stamp(d.createdAt) }} · {{ d.attempts }} attempt(s)<template
+                              v-if="d.responseCode"
+                            >
+                              · HTTP {{ d.responseCode }}</template
+                            >
+                          </span>
+                          <div v-if="d.error" class="s-failed" style="font-size: var(--t-sm)">
+                            {{ d.error }}
+                          </div>
+                        </span>
+                        <!--
+                          Only when the envelope was actually stored. A row from before payloads were
+                          captured has nothing to replay, and a button that explains itself after the
+                          click is worse than one that is not offered.
+                        -->
+                        <ActionButton
+                          v-if="d.replayable"
+                          class="sm"
+                          variant="ghost"
+                          :pending="redelivering === d.id"
+                          confirm="Send it again?"
+                          title="Sends this event again with its original id, so a receiver can dedupe."
+                          @run="redeliver(d)"
+                        >
+                          Redeliver
+                        </ActionButton>
+                      </li>
+                    </ul>
+                    <p v-else class="mute">Nothing delivered yet.</p>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
         <p v-else class="mute">No notifiers yet. Add one below.</p>
       </section>
 
