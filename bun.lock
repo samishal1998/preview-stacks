@@ -40,7 +40,7 @@
       "name": "@samyx/preview-stacks-ui-hearth",
       "version": "0.42.0",
       "dependencies": {
-        "@hearth-ui/vue": "0.7.1",
+        "@hearth-ui/vue": "0.8.0",
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
         "vue": "^3.5.13",
@@ -276,7 +276,7 @@
 
     "@floating-ui/vue": ["@floating-ui/vue@1.1.11", "", { "dependencies": { "@floating-ui/dom": "^1.7.6", "@floating-ui/utils": "^0.2.11", "vue-demi": ">=0.13.0" } }, "sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw=="],
 
-    "@hearth-ui/vue": ["@hearth-ui/vue@0.7.1", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-wWmhMWz874aWR56NYmU927SIFph19OMlJ3oZN8DbayYE1Ljl6HQFgNfS+W2rL8owGqmuUOWnDJvFkG1UUIjrWQ=="],
+    "@hearth-ui/vue": ["@hearth-ui/vue@0.8.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-vIW65l+/MyeB+u3tNqq/nZZ9TmtK/m75KvuxTGmkhMFhdK4NRHPLBVwkCQ5Y2fN0WmtWekWzMTFGy16TC6bVBA=="],
 
     "@hono/node-server": ["@hono/node-server@2.0.12", "", { "peerDependencies": { "hono": "^4" } }, "sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg=="],
 
