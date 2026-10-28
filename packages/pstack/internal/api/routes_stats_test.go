@@ -250,7 +250,8 @@ func TestStatsDockerSilentKeepsNodes(t *testing.T) {
 }
 
 // negative control: set history to [] when !r.fresh in statsNodeRow → the length-1 assertion fails,
-// and an agent-less host and a stale one look the same (NP-R13).
+// and an agent-less host and a stale one look the same (NP-R13). Or drop the agent logs answer
+// from statsFake → the fresh pre-check fails.
 func TestStatsStaleKeepsHistory(t *testing.T) {
 	s := statsServer(t)
 	s.host = statsFake(map[string]string{
@@ -259,9 +260,14 @@ func TestStatsStaleKeepsHistory(t *testing.T) {
 		nodestats.AgentLogsCmds(true)[1]: agentOutput(t),
 	})
 	s.statsTick()
-	s.statsNow = func() int64 { return 1_000_000 + nodestats.StaleMs + 1 }
 
 	body, _ := statsRead(t, s)
+	if fresh := statsNodes(t, body); body["agent"] != true || len(fresh) != 2 || fresh[1]["stale"] != false {
+		t.Fatalf("agent = %v nodes = %v, want worker-1 fresh before the clock moves", body["agent"], fresh)
+	}
+
+	s.statsNow = func() int64 { return 1_000_000 + nodestats.StaleMs + 1 }
+	body, _ = statsRead(t, s)
 	if body["agent"] != false {
 		t.Fatalf("agent = %v, want false once the only batch is stale", body["agent"])
 	}
