@@ -1,6 +1,6 @@
 {
   "name": "@samyx/preview-stacks-ui-hearth",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "private": false,
   "description": "The Hearth web UI for preview-stacks — an opt-in SPA that talks to the pstack HTTP API.",
   "type": "module",

@@ -1,6 +1,6 @@
 # Custom routes, Grafana links and the compact Hearth theme
 
-> **Built, unreleased.** Using it: [usage.md](usage.md#custom-routes-a-stable-name-for-a-moving-stack),
+> **Shipped in 0.44.0.** Using it: [usage.md](usage.md#custom-routes-a-stable-name-for-a-moving-stack),
 > `pstack route`. The build plan is [custom-routes-plan.md](custom-routes-plan.md). The spec below is
 > kept as approved on 2026-10-26. Where the build differs from it:
 >
