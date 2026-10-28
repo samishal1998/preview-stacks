@@ -28,14 +28,15 @@ import {
 import { api } from './api';
 import SignIn from './components/SignIn.vue';
 import { ssoApi } from './api-sso';
-import { densities, palettes } from './lib/settings';
+import { densities, hasDensity, palettes } from './lib/settings';
 import { isTyping, keyStep, SHORTCUTS } from './lib/shortcuts';
 import { showGrafana } from './lib/grafana';
 import { safeNext } from './lib/sso';
 import { can, sentence, type Role } from './lib/users';
 import { auth, data, dismissToast, grafana, prefs, refresh, signInWithToken, signOut, start, toasts } from './state';
 
-// About 60 % of the library's 10/16/20px corners. Overlays are native dialogs and popovers inside the island, so they inherit these.
+// About 60 % of the library's 10/16/20px corners, for its palettes; the custom theme sets its own. Overlays are
+// native dialogs and popovers inside the island, so they inherit these.
 const RADIUS = { '--h-radius-control': '6px', '--h-radius-card': '10px', '--h-radius-panel': '14px' };
 
 const route = useRoute();
@@ -165,7 +166,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>
-  <HTheme :theme="prefs.theme" :mode="prefs.mode" :density="prefs.density" :tokens="RADIUS">
+  <HTheme :theme="prefs.theme" :mode="prefs.mode" :density="prefs.density" :tokens="hasDensity(prefs.theme) ? RADIUS : undefined">
     <!-- A public page (a share link) renders without the sign-in gate or the shell. -->
     <RouterView v-if="route.meta.public" />
 
@@ -221,7 +222,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           <HStack direction="column" :gap="3">
             <HThemeSwitcher v-model="prefs.mode" />
             <HSelect v-model="prefs.theme" label="Palette" :options="palettes" />
-            <HSelect v-model="prefs.density" label="Density" :options="densities" />
+            <HSelect v-if="hasDensity(prefs.theme)" v-model="prefs.density" label="Density" :options="densities" />
           </HStack>
         </HPopover>
       </template>
