@@ -177,10 +177,13 @@ type Server struct {
 	// true. Under emptyMu, like the clocks it is computed from.
 	signalsSent map[string]signalPayload
 
-	// statsMu owns stats, nodeMeta, selfKey and onSwarm (routes_stats.go). Written by statsTick, read
-	// by the route. Its own mutex, never held across a docker call or an Emit (Go rule 14).
+	// statsMu owns stats, nodeMeta, selfKey, onSwarm and pressure (routes_stats.go, pressure.go).
+	// Written by statsTick, read by the route. Its own mutex, never held across a docker call or an
+	// Emit (Go rule 14).
 	statsMu sync.Mutex
 	stats   *nodestats.Store
+	// pressure is node key → the kinds it is in, judged on fresh batches only. Absent is none.
+	pressure map[string][]nodestats.Kind
 	// nodeMeta is node id → what `node ls` said, kept when docker does not answer. Empty on compose.
 	nodeMeta map[string]nodeMeta
 	// selfKey is the control-plane node: SwarmInfo's NodeID on swarm, the only batch's key on compose.
@@ -317,6 +320,7 @@ func New(o Options) (*Server, error) {
 		emptySince:  map[string]int64{},
 		signalsSent: map[string]signalPayload{},
 		stats:       nodestats.NewStore(),
+		pressure:    map[string][]nodestats.Kind{},
 		nodeMeta:    map[string]nodeMeta{},
 		statsNow:    func() int64 { return time.Now().UnixMilli() },
 		spec:        newOpenAPIDoc(o.OpenAPISpec),

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/webhooks"
@@ -83,8 +84,14 @@ func TestEnvelopeAndSign(t *testing.T) {
 // delete `case "route.assigned", "route.unassigned"` → got "route.assigned on myapp-pr-2."; drop the
 // `previous` clause → the move line loses "(moved from pr-1)"; drop the deployment fallback → got
 // "Route cart now points at .".
+// negative control: delete `case "node.pressure", "node.recovered"` → got "node.pressure on pressure/n2.";
+// join the kinds with " and " → the two-kind line differs.
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
+	pressureData := func(kinds string, disk, memory, cpu float64) string {
+		return `{"id":"pressure/n2","node":"n2","hostname":"worker-2","kinds":` + kinds + `,"disk":` + jsonx.NumberString(disk) +
+			`,"memory":` + jsonx.NumberString(memory) + `,"cpu":` + jsonx.NumberString(cpu) + `,"thresholds":{"disk":90,"memory":10,"cpu":2}}`
+	}
 	cases := map[string]string{
 		"Test delivery from pstack — the connection works. No job ran.":                              Summarize(ev("job.succeeded", `{"test":true}`)),
 		"Deploy succeeded on pr-1 in 2s.":                                                            Summarize(ev("job.succeeded", `{"stack":"pr-1","action":"up","durationMs":1600}`)),
@@ -109,6 +116,9 @@ func TestSummarize(t *testing.T) {
 		"Route checkout now points at myapp-pr-2.":                                                   Summarize(ev("route.assigned", `{"route":"checkout","deployment":"pr-2","stack":"myapp-pr-2"}`)),
 		"Route checkout no longer points at myapp-pr-1 (forgotten).":                                 Summarize(ev("route.unassigned", `{"route":"checkout","deployment":"pr-1","stack":"myapp-pr-1","reason":"forgotten"}`)),
 		"Route cart now points at pr-3.":                                                             Summarize(ev("route.assigned", `{"route":"cart","deployment":"pr-3","stack":null}`)),
+		"worker-2 is under pressure: disk 94% ≥ 90%.":                                                Summarize(ev("node.pressure", pressureData(`["disk"]`, 94.2, 30, 0.4))),
+		"worker-2 is under pressure: memory 7% free ≤ 10%, load 2.4 per core ≥ 2.":                   Summarize(ev("node.pressure", pressureData(`["memory","cpu"]`, 50, 6.8, 2.4))),
+		"Resolved — worker-2 is no longer under pressure.":                                           Summarize(ev("node.recovered", pressureData(`[]`, 80, 30, 0.4))),
 		"Loki settings changed by alice: retention, storage.":                                        Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
 	}
 	for want, got := range cases {

@@ -85,7 +85,8 @@ func statsNodes(t *testing.T, body map[string]any) []map[string]any {
 var statsValueKeys = []string{"at", "cores", "load1", "load5", "memTotal", "memAvailable", "diskTotal", "diskFree"}
 
 // negative control: count the stack-less container as a stack "" → stacks gains a third row and the
-// body comparison fails; and serialising Node "" as "" instead of null fails it too (NP-R15).
+// body comparison fails; and serialising Node "" as "" instead of null fails it too (NP-R15). The
+// fixture's disk is 95.1 % used, so the node is in disk pressure.
 func TestStatsComposeHost(t *testing.T) {
 	s := statsServer(t)
 	// A compose host's agent has no swarm node id: its batch carries node "".
@@ -99,7 +100,7 @@ func TestStatsComposeHost(t *testing.T) {
 	_, raw := statsRead(t, s)
 	want := `{"v":1,"at":1000000,"agent":true,"nodes":[{"node":null,"hostname":"worker-1","role":null,` +
 		`"at":1000000,"stale":false,"cores":8,"load1":1.02,"load5":1.1,"memTotal":33399881728,` +
-		`"memAvailable":4294967296,"diskTotal":105152176128,"diskFree":5136490496,"pressure":[],"prune":null,` +
+		`"memAvailable":4294967296,"diskTotal":105152176128,"diskFree":5136490496,"pressure":["disk"],"prune":null,` +
 		`"history":[{"at":1000000,"load5":1.1,"memAvailable":4294967296,"diskFree":5136490496}]}],` +
 		`"stacks":[{"stack":"pr-7","cpuPct":0.52,"mem":1610612736,"containers":1,"nodes":["worker-1"]},` +
 		`{"stack":"pr-42","cpuPct":3.1,"mem":129394278,"containers":1,"nodes":["worker-1"]}],` +

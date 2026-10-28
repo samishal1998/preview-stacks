@@ -6,8 +6,9 @@
 // ── THE LOOP ASKS DOCKER, THE ROUTE DOES NOT ────────────────────────────────────────────────────
 //
 // statsTick runs `docker info` (and `node ls` on a manager) and the agent's logs commands, then
-// records the newest complete batch per node under statsMu. The route reads only memory
-// (invariant 10: none of this is a table, and a restart forgets it). Reads emit nothing.
+// records the newest complete batch per node under statsMu, then judges pressure (pressure.go),
+// which emits its edges after the lock. The route reads only memory (invariant 10: none of this is a
+// table, and a restart forgets it). Reads emit nothing.
 //
 // ── UNKNOWN IS null ─────────────────────────────────────────────────────────────────────────────
 //
@@ -85,6 +86,7 @@ func (s *Server) statsTick() {
 		}
 		s.stats.Record(now, batches)
 	}()
+	s.evaluatePressure(now)
 }
 
 // statsLoop ticks until the server stops. Started only when the interval is above zero. A panic
@@ -114,6 +116,7 @@ type statsRow struct {
 	meta  nodeMeta
 	entry nodestats.Entry
 	fresh bool
+	kinds []nodestats.Kind
 }
 
 type stackSum struct {
@@ -150,6 +153,7 @@ func (s *Server) statsBody(now int64) jsonx.Object {
 		r := &rows[i]
 		r.entry, _ = s.stats.Get(r.key)
 		_, r.fresh = s.stats.Fresh(r.key, now)
+		r.kinds = s.pressureKinds(r.key, r.fresh)
 		agent = agent || r.fresh
 		nodes = append(nodes, statsNodeRow(*r, s.onSwarm))
 		if !r.fresh {
@@ -237,8 +241,8 @@ func statsNodeRow(r statsRow, onSwarm bool) jsonx.Object {
 		{K: "memAvailable", V: memAvailable},
 		{K: "diskTotal", V: diskTotal},
 		{K: "diskFree", V: diskFree},
-		// The pressure guards and the prune runner fill these.
-		{K: "pressure", V: []string{}},
+		{K: "pressure", V: r.kinds},
+		// The prune runner fills this.
 		{K: "prune", V: nil},
 		{K: "history", V: history},
 	}
