@@ -276,12 +276,24 @@ func TestComposeDispatchesOnTheOrchestrator(t *testing.T) {
 		if len(notes) == 0 || !strings.HasPrefix(notes[0], "swarm: service app: ") {
 			t.Errorf("notes: %v", notes)
 		}
-		// Under compose with nothing to generate, nothing is written.
+		// Under compose with Loki off, the log cap alone writes it beside the original too.
+		prev := autolabel.DetectLogging
+		autolabel.DetectLogging = func(exec.Runner) string { return "" }
+		t.Cleanup(func() { autolabel.DetectLogging = prev })
 		plain := specFrom(t, "mat-plain.yml", nil)
 		os.Remove(filepath.Join(dir, "infra", autolabel.GeneratedCompose))
 		m2, err := autolabel.MaterializeCompose(autolabel.MaterializeArgs{Dir: dir, Spec: plain, Runner: r, Challenge: &http01})
-		if err != nil || m2.File != "infra/dc.yml" {
+		if err != nil || m2.File != "infra/"+autolabel.GeneratedCompose {
 			t.Errorf("plain: %+v %v", m2, err)
+		}
+		// With its own `logging:` there is nothing to generate, and nothing is written.
+		if err := os.WriteFile(filepath.Join(dir, "infra", "dc.yml"), []byte("services:\n  app:\n    image: nginx\n    logging: {driver: json-file}\n"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		os.Remove(filepath.Join(dir, "infra", autolabel.GeneratedCompose))
+		m2, err = autolabel.MaterializeCompose(autolabel.MaterializeArgs{Dir: dir, Spec: plain, Runner: r, Challenge: &http01})
+		if err != nil || m2.File != "infra/dc.yml" {
+			t.Errorf("own logging: %+v %v", m2, err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "infra", autolabel.GeneratedCompose)); err == nil {
 			t.Errorf("written under compose with nothing to generate")
@@ -467,7 +479,8 @@ func TestLoggedDeploysCheckThePluginFirst(t *testing.T) {
 		logging(t, "")
 		r := host(t, nil)
 		must(t)(ComposeUp(specFrom(t, "plain.yml", nil), r, nil, nil))
-		if got := strings.Join(r.Commands(), "\n"); got != "docker compose -p 's1' -f 'dc.yml' --profile 'a' up -d --remove-orphans" {
+		// The derived file all the same: with Loki off it carries the json-file cap.
+		if got := strings.Join(r.Commands(), "\n"); got != "docker compose -p 's1' -f 'compose.generated.yml' --profile 'a' up -d --remove-orphans" {
 			t.Errorf("commands:\n%s", got)
 		}
 	})

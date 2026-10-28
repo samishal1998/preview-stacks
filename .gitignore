@@ -27,6 +27,9 @@ hetzner*.yml
 # 2026-09-19).
 /temp*.yml
 
+# The derived compose file a CLI run from packages/pstack/examples writes beside the example's own.
+packages/pstack/examples/compose.generated.yml
+
 # GoReleaser`s pre-build scratch (the version-stamped installer).
 .build/
 

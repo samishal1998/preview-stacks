@@ -298,11 +298,12 @@ func TestGeneratedTraefikLabels(t *testing.T) {
 		}
 		exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 
-		t.Run("a compose file with no pstack.routing.* is used unchanged, with nothing written", func(t *testing.T) {
-			// negative control: drop the `!isSwarm && generated.Len() == 0` return — the second case
-			// (the text mentions pstack.routing. but nothing was generated) writes the file.
+		t.Run("nothing routed and every service with its own logging: the submitted file, nothing written", func(t *testing.T) {
+			// negative control: drop the `!isSwarm && generated.Len() == 0 && …` return — both cases
+			// write the file.
+			logTo(t, "")
 			dir := t.TempDir()
-			write(t, dir, "services:\n  app:\n    image: nginx\n")
+			write(t, dir, "services:\n  app:\n    image: nginx\n    logging: {driver: json-file}\n")
 			r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
 			if err != nil || r.File != "docker-compose.yml" {
 				t.Errorf("got %+v, %v", r, err)
@@ -312,7 +313,7 @@ func TestGeneratedTraefikLabels(t *testing.T) {
 			}
 			// The text mentions the label but the only service carrying it opted out with its own
 			// traefik.* labels: nothing generated, so the submitted file is what compose reads.
-			write(t, dir, "services:\n  app:\n    image: nginx\n    labels: [pstack.routing.port=80, traefik.enable=true]\n")
+			write(t, dir, "services:\n  app:\n    image: nginx\n    logging: {driver: json-file}\n    labels: [pstack.routing.port=80, traefik.enable=true]\n")
 			r, err = MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
 			if err != nil || r.File != "docker-compose.yml" || r.Skipped.GetString("app") == "" {
 				t.Errorf("got %+v, %v", r, err)
@@ -614,32 +615,29 @@ func TestLoggingInjection(t *testing.T) {
 		}
 	})
 
-	t.Run("logging off: no block, and a stack with no routing keeps its own file", func(t *testing.T) {
-		// negative control: drop the `pushURL != ""` guard around InjectLogging — the routed app
-		// gains a block with an empty loki-url.
+	t.Run("logging off: no loki block, the json-file cap instead, routed or not", func(t *testing.T) {
+		// negative control: drop the `pushURL != ""` guard around InjectLogging — the app gains a
+		// loki block with an empty loki-url.
 		logTo(t, "")
-		dir := t.TempDir()
-		write(t, dir, "services:\n  app:\n    image: nginx\n")
-		r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
-		if err != nil || r.File != "docker-compose.yml" || r.Logged == nil || len(r.Logged) != 0 || r.LogNotes == nil {
-			t.Errorf("plain: %+v, %v", r, err)
-		}
-		if exists(filepath.Join(dir, GeneratedCompose)) {
-			t.Error("derived file written with logging off and nothing routed")
-		}
-		write(t, dir, "services:\n  app:\n    image: nginx\n    labels: [pstack.routing.port=80]\n")
-		r, err = MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
-		if err != nil || r.File != GeneratedCompose || len(r.Logged) != 0 {
-			t.Fatalf("routed: %+v, %v", r, err)
-		}
-		if written(t, dir).GetMap("services").GetMap("app").Has("logging") {
-			t.Errorf("block injected with logging off")
+		for _, body := range []string{
+			"services:\n  app:\n    image: nginx\n",
+			"services:\n  app:\n    image: nginx\n    labels: [pstack.routing.port=80]\n",
+		} {
+			dir := t.TempDir()
+			write(t, dir, body)
+			r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: quiet, Challenge: &http01})
+			if err != nil || r.File != GeneratedCompose || r.Logged == nil || len(r.Logged) != 0 || r.LogNotes == nil || len(r.LogNotes) != 0 {
+				t.Fatalf("%q: %+v, %v", body, r, err)
+			}
+			if got := jsonOf(t, written(t, dir).GetMap("services").GetMap("app").GetMap("logging")); got != capBlock {
+				t.Errorf("%q: app logging %s", body, got)
+			}
 		}
 	})
 
 	t.Run("logging on: a stack with no routing gets the derived file, and own blocks are named", func(t *testing.T) {
-		// negative control: drop `&& pushURL == ""` from the pre-check — the submitted file is
-		// used.
+		// negative control: turn `if pushURL != ""` around InjectLogging into `if false` — web gets
+		// the json-file cap and Logged is empty.
 		logTo(t, lokiURL)
 		dir := t.TempDir()
 		write(t, dir, mixed)
@@ -749,6 +747,61 @@ func TestLoggingInjection(t *testing.T) {
 			t.Errorf("mode %04o, want 0600", got)
 		}
 	})
+}
+
+// capBlock is CapLogs' block as JSON, key order included: the spec's 10m × 3 cap, values strings.
+const capBlock = `{"driver":"json-file","options":{"max-size":"10m","max-file":"3"}}`
+
+func TestCapLogs(t *testing.T) {
+	// negative control: drop the svc.Has("logging") branch — db's block is replaced and db is listed.
+	// negative control: drop the Clone() in CapLogs — the input's web gains the block.
+	in := doc(t, "services:\n  web:\n    image: nginx\n  db:\n    image: postgres\n    logging: {driver: json-file}\n")
+	before := jsonOf(t, in)
+	out, capped := CapLogs(in)
+	services := out.GetMap("services")
+	if got := jsonOf(t, services.GetMap("web").GetMap("logging")); got != capBlock {
+		t.Errorf("web: %s", got)
+	}
+	if got := jsonOf(t, services.GetMap("db").GetMap("logging")); got != `{"driver":"json-file"}` {
+		t.Errorf("db: %s", got)
+	}
+	if !reflect.DeepEqual(capped, []string{"web"}) {
+		t.Errorf("capped: %v", capped)
+	}
+	if jsonOf(t, in) != before {
+		t.Errorf("input mutated: %s", jsonOf(t, in))
+	}
+	// negative control: start from `var capped []string` — the empty result is nil.
+	if _, none := CapLogs(doc(t, "services: {}\n")); none == nil {
+		t.Error("capped is nil")
+	}
+}
+
+func TestMaterializeCapsLogsWhenLokiIsOff(t *testing.T) {
+	// negative control: restore the `!wantsRouting && !isSwarm && pushURL == ""` early return — the
+	// submitted file is used and nothing is written.
+	// negative control: drop `&& len(capped) == 0` from the "nothing generated" return — same.
+	logTo(t, "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: nginx\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	http01 := HTTP01
+	r, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: s(t), Runner: exec.NewFake(nil, ""), Challenge: &http01})
+	if err != nil || r.File != GeneratedCompose {
+		t.Fatalf("got %+v, %v", r, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, GeneratedCompose))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := omap.Parse(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonOf(t, v.(*omap.Map).GetMap("services").GetMap("web").GetMap("logging")); got != capBlock {
+		t.Errorf("web: %s", got)
+	}
 }
 
 func TestAPreviewCannotClaimAControlHostname(t *testing.T) {
