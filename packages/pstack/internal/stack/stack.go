@@ -33,6 +33,8 @@ const (
 	PhaseAssertGone Phase = "assert_gone"
 	PhaseAssertLive Phase = "assert_live"
 	PhaseCompose    Phase = "compose"
+	// PhaseCapacity is no hook: the API refused an up or wake because no node has room.
+	PhaseCapacity Phase = "capacity"
 )
 
 // StepResult is one hook's verdict. The wire shape the job transcript carries.

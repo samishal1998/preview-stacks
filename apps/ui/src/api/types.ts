@@ -120,7 +120,7 @@ export type JobState =
   | 'leaked'
   | 'cancelled'
   | 'superseded';
-export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
+export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose' | 'capacity';
 export type Visibility = 'shown' | 'masked';
 
 /** `GET /api/health` — unwrapped. */

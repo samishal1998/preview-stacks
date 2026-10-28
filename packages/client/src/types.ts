@@ -192,7 +192,7 @@ export type ShareLink = {
 
 export type StepResult = {
   axis: string;
-  phase: 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
+  phase: 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose' | 'capacity';
   ok: boolean;
   code: number;
   message?: string;

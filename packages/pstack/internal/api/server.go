@@ -681,6 +681,10 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 		runner := s.runnerFor(st, dep.Dir, ctx)
 		switch action {
 		case jobs.Up, jobs.Wake:
+			// Before anything runs or is announced: a refused wake did not wake.
+			if why, refused := s.capacityRefusal(orchestrator, s.statsNow()); refused {
+				return stack.Outcome{OK: false, Steps: []stack.StepResult{{Axis: st.Stack, Phase: stack.PhaseCapacity, OK: false, Code: 1, Message: &why}}, Outputs: map[string]string{}}, nil
+			}
 			if action == jobs.Wake {
 				s.bus.Emit("stack.woken", jsonx.O("stack", st.Stack, "deployment", id, "by", o.By))
 			}
