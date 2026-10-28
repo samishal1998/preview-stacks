@@ -13,8 +13,8 @@
 //   - Logs are capped at 1 MB in json-file: the stats loop reads only the last 90 s.
 //
 // A PRUNE prints one `pstack-prune v1 <node id, or - on compose> <size>` line per docker prune that
-// succeeded, from docker's `Total reclaimed space:` (image) or `Total:` (BuildKit's builder prune,
-// NP-R4) line. A failed prune prints nothing, so nothing is reported for it. POSIX sh and sed only:
+// succeeded, from docker's `Total reclaimed space:` (image, and the classic builder) or `Total:`
+// (BuildKit's builder) line. A failed prune prints nothing, so nothing is reported for it. POSIX sh and sed only:
 // it runs in bash in the pstack container and in busybox in the agent image.
 package nodestats
 
@@ -76,7 +76,9 @@ func PruneScript(untilH int, builder bool) string {
 	s := `n=$(docker info --format "{{.Swarm.NodeID}}" 2>/dev/null); n=${n:--}; ` +
 		`docker image prune -af` + filter + ` | sed -n "s/^Total reclaimed space: /pstack-prune v1 $n /p"`
 	if builder {
-		s += `; docker builder prune -af` + filter + ` | sed -n "s/^Total:[[:space:]]*/pstack-prune v1 $n /p"`
+		// The classic CLI in the pstack image prints `Total reclaimed space:`, buildx in the agent image
+		// `Total:\t`. \{0,1\}, not \?: busybox sed runs the job.
+		s += `; docker builder prune -af` + filter + ` | sed -n "s/^Total\( reclaimed space\)\{0,1\}:[[:space:]]*/pstack-prune v1 $n /p"`
 	}
 	return s
 }

@@ -101,7 +101,7 @@ func TestPruneScript(t *testing.T) {
 	t.Run("scheduled", func(t *testing.T) {
 		// negative control: print "until=168" without the h → fails.
 		want := head + `docker image prune -af --filter until=168h | sed -n "s/^Total reclaimed space: /pstack-prune v1 $n /p"; ` +
-			`docker builder prune -af --filter until=168h | sed -n "s/^Total:[[:space:]]*/pstack-prune v1 $n /p"`
+			`docker builder prune -af --filter until=168h | sed -n "s/^Total\( reclaimed space\)\{0,1\}:[[:space:]]*/pstack-prune v1 $n /p"`
 		if got := PruneScript(168, true); got != want {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
@@ -113,23 +113,26 @@ func TestPruneScript(t *testing.T) {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
 	})
-	// The script against docker's own output shapes, through a real sh (NP-R4: BuildKit prints
-	// `Total:\t<size>`).
-	// negative control: match `Total reclaimed space:` for the builder too → the 512kB is lost.
+	// The script against docker's own output shapes, through a real sh: buildx (agent image) prints
+	// `Total:\t<size>`, the classic builder (pstack image) `Total reclaimed space: <size>`.
+	// negative control: match `Total reclaimed space:` for the builder only → the buildx 512kB is lost.
+	// negative control: match `Total:` for the builder only → the classic 512kB is lost.
 	// negative control: print the node with no "-" fallback → the compose line has an empty field.
 	t.Run("through sh", func(t *testing.T) {
 		dir := t.TempDir()
 		fake := "#!/bin/sh\ncase \"$1 $2\" in\n" +
 			"'info --format') printf '%s\\n' \"$NODE\" ;;\n" +
 			"'image prune') printf 'Deleted Images:\\nuntagged: a:1\\n\\nTotal reclaimed space: 1.234GB\\n' ;;\n" +
-			"'builder prune') printf 'ID\\tRECLAIMABLE\\tSIZE\\nabc\\ttrue\\t512kB\\nTotal:\\t512kB\\n' ;;\n" +
+			"'builder prune') if [ -n \"$CLASSIC\" ]; then printf 'Deleted build cache objects:\\nabc\\n\\nTotal reclaimed space: 512kB\\n';" +
+			" else printf 'ID\\tRECLAIMABLE\\tSIZE\\nabc\\ttrue\\t512kB\\nTotal:\\t512kB\\n'; fi ;;\n" +
 			"esac\n"
 		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(fake), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		classic := ""
 		run := func(node string) []Reclaimed {
 			cmd := osexec.Command("sh", "-c", PruneScript(168, true))
-			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "NODE=" + node}
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "NODE=" + node, "CLASSIC=" + classic}
 			out, err := cmd.Output()
 			if err != nil {
 				t.Fatal(err)
@@ -141,6 +144,10 @@ func TestPruneScript(t *testing.T) {
 		}
 		if got, want := run(""), []Reclaimed{{Node: "", Bytes: 1234512000}}; !reflect.DeepEqual(got, want) {
 			t.Errorf("compose: got %+v, want %+v", got, want)
+		}
+		classic = "1"
+		if got, want := run(""), []Reclaimed{{Node: "", Bytes: 1234512000}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("classic builder: got %+v, want %+v", got, want)
 		}
 	})
 }
