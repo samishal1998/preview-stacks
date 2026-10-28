@@ -493,6 +493,13 @@ func Summarize(e events.Event) string {
 			return "Resolved — " + field(d, "hostname") + " is no longer under pressure."
 		}
 		return field(d, "hostname") + " is under pressure: " + describePressure(d) + "."
+	case "node.pruned":
+		host := field(d, "hostname")
+		if host == "" {
+			host = "this host"
+		}
+		freed, _ := d["freedBytes"].(float64)
+		return "Pruned " + host + " (" + field(d, "reason") + "): " + decimalBytes(freed) + " freed."
 	default:
 		if stack == "" {
 			stack = "this host"
@@ -512,6 +519,17 @@ func describePressure(d map[string]any) string {
 		lines = append(lines, nodestats.Describe(nodestats.Kind(k), r, t))
 	}
 	return strings.Join(lines, ", ")
+}
+
+// decimalBytes is docker's decimal units, one decimal: "12.3 GB", "0 B".
+func decimalBytes(n float64) string {
+	units := []string{"B", "kB", "MB", "GB", "TB"}
+	i := 0
+	for n >= 1000 && i < len(units)-1 {
+		n /= 1000
+		i++
+	}
+	return jsonx.NumberString(math.Round(n*10)/10) + " " + units[i]
 }
 
 func actionWord(action any) string {

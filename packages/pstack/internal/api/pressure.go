@@ -121,6 +121,11 @@ func (s *Server) evaluatePressure(now int64) {
 func (s *Server) inPressure(key string, now int64) ([]nodestats.Kind, nodestats.Reading, bool) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
+	return s.inPressureLocked(key, now)
+}
+
+// inPressureLocked is inPressure for a caller that holds statsMu.
+func (s *Server) inPressureLocked(key string, now int64) ([]nodestats.Kind, nodestats.Reading, bool) {
 	b, fresh := s.stats.Fresh(key, now)
 	if !fresh {
 		return []nodestats.Kind{}, nodestats.Reading{}, false
