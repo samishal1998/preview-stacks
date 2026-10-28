@@ -134,7 +134,7 @@ the machine manager's job, not pstack's. Shipped in 0.41.0; the five-task build 
 
 A custom route is a stable name (`checkout`) pointed at whichever deployment a developer chooses, so
 `web-checkout.<domain>` follows a `gh-stack` stack from PR to PR with no redeploy. Also: Grafana
-Explore links on the deployment page, and Hearth compact by default. Built, unreleased; where the
+Explore links on the deployment page, and Hearth compact by default. Shipped in 0.44.0; where the
 build differs is at the top. The eleven-task build plan is
 [`custom-routes-plan.md`](custom-routes-plan.md).
 
