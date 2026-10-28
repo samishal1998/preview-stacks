@@ -1,0 +1,6 @@
+pstack-agent v1 node {"seq":900,"node":"n1","hostname":"worker-1","cores":4,"load1":0.5,"load5":0.6,"memTotal":8000,"memAvailable":4000,"diskPath":"/var/lib/docker","diskTotal":1000,"diskFree":500}
+pstack-agent v1 ctr {"seq":900,"node":"n1","id":"aaaaaaaaaaaa","stack":"pr-dead","cpuPct":1,"mem":100}
+pstack-agent v1 end {"seq":900,"node":"n1"}
+pstack-agent v1 node {"seq":1,"node":"n1","hostname":"worker-1","cores":4,"load1":0.1,"load5":0.2,"memTotal":8000,"memAvailable":6000,"diskPath":"/var/lib/docker","diskTotal":1000,"diskFree":700}
+pstack-agent v1 ctr {"seq":1,"node":"n1","id":"bbbbbbbbbbbb","stack":"pr-new","cpuPct":2,"mem":200}
+pstack-agent v1 end {"seq":1,"node":"n1"}
