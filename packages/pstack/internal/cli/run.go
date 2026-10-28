@@ -242,12 +242,14 @@ func run(argv []string, io IO) *Exit {
 				}
 			}
 		}
+		// Env-only and never read back (NP-R6): `||`, so an empty value is the default image.
+		agentImage, _ := io.Env("PSTACK_AGENT_IMAGE")
 		err := initctl.Init(initctl.Options{
 			DataDir: dataDir, Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
 			Challenge: initctl.Challenge(args.Challenge), UI: initctl.UI(args.UI), Orchestrator: spec.Orchestrator(args.Orchestrator),
 			Logging: initctl.Logging(args.Logging), Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
 			IngressSubnet: args.IngressSubnet, SharedSubnet: args.SharedSubnet, PreviewsOn: args.PreviewsOn,
-			NoOOMProtect: envOn(io.Env, "PSTACK_NO_OOM_PROTECT"),
+			NoOOMProtect: envOn(io.Env, "PSTACK_NO_OOM_PROTECT"), AgentImage: agentImage,
 		})
 		if err != nil {
 			return &Exit{Code: ExitFailed, Msg: err.Error()}

@@ -3563,6 +3563,7 @@ different problems with different owners.
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_LOGGING` | `init` `cloud-init` | `none` | same as `--logging` |
 | `PSTACK_NO_OOM_PROTECT` | `init` | *unset* | any value but `0` skips protecting `dockerd` from the OOM killer (below). For a host that manages `docker.service` itself |
+| `PSTACK_AGENT_IMAGE` | `init` | `docker:29-cli` | the image `pstack-agent` runs in on every node. Not read back: re-export it on every `init` and `upgrade`, or the agent returns to the default. Cloud-init does not pass it |
 | `PSTACK_PREVIEWS_ON` | `init` `cloud-init` | *unset* | same as `--previews-on` |
 | `PSTACK_INGRESS_SUBNET` `PSTACK_SHARED_SUBNET` | `init` (and `upgrade`, which runs it) | *unset* | same as `--ingress-subnet` / `--shared-subnet`. Set on `pstack upgrade`, it reaches the `init` the upgrade runs — the one-command way to enlarge an existing host's network |
 | `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |

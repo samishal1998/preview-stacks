@@ -1,6 +1,7 @@
 // Package nodestats holds the pure half of node pressure: reading pstack-agent's log lines into
-// batches, and remembering the newest batch and an hour of samples per node. It runs no command and
-// takes no lock; the api package owns the loop, the docker calls and the mutex.
+// batches, remembering the newest batch and an hour of samples per node, and spelling the agent's
+// docker commands (commands.go). It runs no command and takes no lock; init runs the create commands,
+// and the api package owns the loop, the docker calls and the mutex.
 //
 // HOW A BATCH IS READ (templates/agent/agent.sh writes it):
 //
