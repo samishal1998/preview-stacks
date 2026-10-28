@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fake docker for agent_test.go. Matches the full argv, so a drifted --format string fails the test
+# instead of producing a plausible batch. FAKE_DOCKER_FAIL=<subcommand> makes that read exit 1. The
+# last three containers' labels carry `"`, `\` and `|`: the script drops them, so agent-output.txt omits them.
+[ "$1" = "${FAKE_DOCKER_FAIL:-}" ] && exit 1
+case "$*" in
+'info --format {{.Swarm.NodeID}}|{{.Name}}|{{.DockerRootDir}}')
+	printf '%s\n' 'x8k2m9qv1n3p4r5s6t7u8w9y0|worker-1|/var/lib/docker' ;;
+'ps --format {{.ID}}|{{.Label "com.docker.stack.namespace"}}|{{.Label "com.docker.compose.project"}}')
+	printf '%s\n' '3f2a1b4c5d6e|pr-42|' '7a8b9c0d1e2f||pr-7' '0123456789ab||' \
+		'aaaaaaaaaaa1|x","stack":"pr-42|' 'bbbbbbbbbbb2||pr\7' 'ccccccccccc3|x|pr-42|' ;;
+'stats --no-stream --format {{.ID}}|{{.CPUPerc}}|{{.MemUsage}}')
+	printf '%s\n' '0123456789ab|0.00%|512kB / 31.1GiB' '3f2a1b4c5d6e|3.10%|123.4MiB / 31.1GiB' \
+		'7a8b9c0d1e2f|0.52%|1.5GiB / 31.1GiB' 'aaaaaaaaaaa1|1.00%|1MiB / 31.1GiB' \
+		'bbbbbbbbbbb2|1.00%|1MiB / 31.1GiB' 'ccccccccccc3|1.00%|1MiB / 31.1GiB' ;;
+*)
+	printf 'fake docker: unexpected argv: %s\n' "$*" >&2
+	exit 1 ;;
+esac

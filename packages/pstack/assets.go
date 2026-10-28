@@ -1,4 +1,4 @@
-// Package pstack carries the eight files the binary embeds. Explicit paths, never a glob: the
+// Package pstack carries the nine files the binary embeds. Explicit paths, never a glob: the
 // READMEs beside the assets must not ship, and a pattern that matches nothing is a compile error —
 // which is exactly the failure mode `with { type: 'text' }` had at bundle time, moved earlier.
 package pstack
@@ -33,6 +33,12 @@ var LokiConfig string
 //
 //go:embed templates/control/grafana/datasources.yaml
 var GrafanaDatasources string
+
+// AgentScript is the pstack-agent node reporter, passed as `sh -c` to a stock docker CLI image on
+// every node (no pstack binary on workers). It only reports; every decision is the control plane's.
+//
+//go:embed templates/agent/agent.sh
+var AgentScript string
 
 // CloudInitTemplate is the cloud-config user-data template.
 //
