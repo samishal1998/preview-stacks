@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake df for agent_test.go: records its argv to $FAKE_DF_ARGS and prints a `df -P` table.
+printf '%s\n' "$*" > "$FAKE_DF_ARGS"
+printf '%s\n' 'Filesystem     1024-blocks      Used Available Capacity Mounted on' \
+	'/dev/sda1        102687672  92418904   5016104      95% /host'

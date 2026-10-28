@@ -1,0 +1,5 @@
+pstack-agent v1 node {"seq":1,"node":"x8k2m9qv1n3p4r5s6t7u8w9y0","hostname":"worker-1","cores":8,"load1":1.02,"load5":1.1,"memTotal":33399881728,"memAvailable":4294967296,"diskPath":"/var/lib/docker","diskTotal":105152176128,"diskFree":5136490496}
+pstack-agent v1 ctr {"seq":1,"node":"x8k2m9qv1n3p4r5s6t7u8w9y0","id":"3f2a1b4c5d6e","stack":"pr-42","cpuPct":3.1,"mem":129394278}
+pstack-agent v1 ctr {"seq":1,"node":"x8k2m9qv1n3p4r5s6t7u8w9y0","id":"7a8b9c0d1e2f","stack":"pr-7","cpuPct":0.52,"mem":1610612736}
+pstack-agent v1 ctr {"seq":1,"node":"x8k2m9qv1n3p4r5s6t7u8w9y0","id":"0123456789ab","stack":"","cpuPct":0,"mem":512000}
+pstack-agent v1 end {"seq":1,"node":"x8k2m9qv1n3p4r5s6t7u8w9y0"}

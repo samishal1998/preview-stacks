@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake nproc for agent_test.go.
+printf '%s\n' 8
