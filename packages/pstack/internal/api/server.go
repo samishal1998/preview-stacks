@@ -177,9 +177,9 @@ type Server struct {
 	// true. Under emptyMu, like the clocks it is computed from.
 	signalsSent map[string]signalPayload
 
-	// statsMu owns stats, nodeMeta, selfKey, onSwarm and pressure (routes_stats.go, pressure.go).
-	// Written by statsTick, read by the route. Its own mutex, never held across a docker call or an
-	// Emit (Go rule 14).
+	// statsMu owns stats, nodeMeta, selfKey, onSwarm, pressure, lastPrune, lastEmergency and
+	// lastScheduled (routes_stats.go, pressure.go, prune.go). Written by statsTick and the prune
+	// runner, read by the route. Its own mutex, never held across a docker call or an Emit (Go rule 14).
 	statsMu sync.Mutex
 	stats   *nodestats.Store
 	// pressure is node key → the kinds it is in, judged on fresh batches only. Absent is none.
@@ -191,6 +191,18 @@ type Server struct {
 	onSwarm bool
 	// statsNow is the stats clock, a seam for tests. Not under statsMu: set once in New.
 	statsNow func() int64
+	// lastPrune is node key → its newest prune that reported; lastEmergency is node key → when its
+	// last emergency prune started; lastScheduled is when the last scheduled one started, 0 until
+	// the first tick (NP-R3). Memory only (invariant 10).
+	lastPrune     map[string]pruneRecord
+	lastEmergency map[string]int64
+	lastScheduled int64
+	// pruneRunning is true while a prune runs: at most one at a time.
+	pruneRunning atomic.Bool
+	// The prune's seams: its runner on a given ctx, and how maybePrune starts it (a goroutine; tests
+	// run it in place, NP-R2). Set once in New.
+	pruneRunner func(ctx context.Context) exec.Runner
+	pruneStart  func(reason string, keys []string)
 
 	// probeSem bounds concurrent /api/probe work. Buffered channel as a semaphore rather than a
 	// mutex: the route must answer `busy` immediately instead of queueing, since the caller is a
@@ -346,6 +358,10 @@ func New(o Options) (*Server, error) {
 	s.lokiRunner = func(runCtx context.Context) exec.Runner {
 		return exec.New(exec.Options{Level: exec.Quiet, BaseEnv: env, Ctx: runCtx})
 	}
+	s.lastPrune, s.lastEmergency = map[string]pruneRecord{}, map[string]int64{}
+	// The same quiet runner on env, on the prune's own ctx.
+	s.pruneRunner = s.lokiRunner
+	s.pruneStart = func(reason string, keys []string) { go s.prune(reason, keys) }
 	s.lokiPoll = 2 * time.Second
 	s.lokiNow = time.Now
 	s.ssoTTL = 5 * 60

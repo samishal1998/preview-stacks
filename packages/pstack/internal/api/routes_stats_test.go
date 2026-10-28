@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -22,11 +23,15 @@ const (
 		`{"ID":"` + statsWorkerID + `","Hostname":"worker-1","Status":"Ready","Availability":"Active","ManagerStatus":""}` + "\n"
 )
 
-// statsServer is signalsServer with the stats clock pinned, so every `at` in a body is known.
+// statsServer is signalsServer with the stats clock pinned, so every `at` in a body is known. A
+// prune runs synchronously on whatever fake s.host is when it runs: the fixture's 95 % disk starts an
+// emergency prune on the first tick, and it must never reach a real docker.
 func statsServer(t *testing.T) *Server {
 	t.Helper()
 	s := signalsServer(t)
 	s.statsNow = func() int64 { return 1_000_000 }
+	s.pruneStart = s.prune
+	s.pruneRunner = func(context.Context) exec.Runner { return s.host }
 	return s
 }
 

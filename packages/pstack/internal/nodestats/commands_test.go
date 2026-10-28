@@ -1,6 +1,9 @@
 package nodestats
 
 import (
+	"os"
+	osexec "os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -57,6 +60,114 @@ func TestAgentCommands(t *testing.T) {
 		}
 		if got := AgentLogsCmds(true); !reflect.DeepEqual(got, []string{local, "docker service logs --since 90s --raw pstack-agent 2>/dev/null"}) {
 			t.Errorf("swarm: %q", got)
+		}
+	})
+}
+
+// negative control: drop math.Round from ParseSize → 1.234GB lands one byte short.
+func TestParseSize(t *testing.T) {
+	// negative control: map kB to 1024 → 512kB reads 524288.
+	for in, want := range map[string]int64{"0B": 0, "512kB": 512000, "1.234GB": 1234000000, "12.5MB": 12500000, "2TB": 2e12} {
+		if got, ok := ParseSize(in); !ok || got != want {
+			t.Errorf("ParseSize(%q) = %d %v, want %d", in, got, ok, want)
+		}
+	}
+	// negative control: return true for an unknown unit → "1.2XB" reads as ok.
+	for _, in := range []string{"junk", "", "GB", "1.2XB"} {
+		if _, ok := ParseSize(in); ok {
+			t.Errorf("ParseSize(%q) ok, want false", in)
+		}
+	}
+}
+
+// negative control: keep "-" as the node → the compose row is "-", not "".
+// negative control: overwrite instead of adding → n2 reads 512000, not 1234512000.
+func TestParsePrune(t *testing.T) {
+	out := "pstack-prune v1 n2 1.234GB\nsome docker progress line\npstack-prune v1 - 0B\r\n" +
+		"pstack-prune v1 n2 512kB\npstack-prune v1 n3 junk\n"
+	want := []Reclaimed{{Node: "", Bytes: 0}, {Node: "n2", Bytes: 1234512000}}
+	if got := ParsePrune(out); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	// negative control: start from a nil slice → nothing parsed is nil.
+	if got := ParsePrune(""); got == nil || len(got) != 0 {
+		t.Fatalf("empty = %#v, want []", got)
+	}
+}
+
+// negative control: drop the builder line from PruneScript → the builder subtest's string differs.
+func TestPruneScript(t *testing.T) {
+	head := `n=$(docker info --format "{{.Swarm.NodeID}}" 2>/dev/null); n=${n:--}; `
+	t.Run("scheduled", func(t *testing.T) {
+		// negative control: print "until=168" without the h → fails.
+		want := head + `docker image prune -af --filter until=168h | sed -n "s/^Total reclaimed space: /pstack-prune v1 $n /p"; ` +
+			`docker builder prune -af --filter until=168h | sed -n "s/^Total:[[:space:]]*/pstack-prune v1 $n /p"`
+		if got := PruneScript(168, true); got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	t.Run("emergency", func(t *testing.T) {
+		// negative control: keep the until filter at 0 → `--filter until=0h` appears.
+		want := head + `docker image prune -af | sed -n "s/^Total reclaimed space: /pstack-prune v1 $n /p"`
+		if got := PruneScript(0, false); got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	// The script against docker's own output shapes, through a real sh (NP-R4: BuildKit prints
+	// `Total:\t<size>`).
+	// negative control: match `Total reclaimed space:` for the builder too → the 512kB is lost.
+	// negative control: print the node with no "-" fallback → the compose line has an empty field.
+	t.Run("through sh", func(t *testing.T) {
+		dir := t.TempDir()
+		fake := "#!/bin/sh\ncase \"$1 $2\" in\n" +
+			"'info --format') printf '%s\\n' \"$NODE\" ;;\n" +
+			"'image prune') printf 'Deleted Images:\\nuntagged: a:1\\n\\nTotal reclaimed space: 1.234GB\\n' ;;\n" +
+			"'builder prune') printf 'ID\\tRECLAIMABLE\\tSIZE\\nabc\\ttrue\\t512kB\\nTotal:\\t512kB\\n' ;;\n" +
+			"esac\n"
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		run := func(node string) []Reclaimed {
+			cmd := osexec.Command("sh", "-c", PruneScript(168, true))
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "NODE=" + node}
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return ParsePrune(string(out))
+		}
+		if got, want := run("n2"), []Reclaimed{{Node: "n2", Bytes: 1234512000}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("swarm: got %+v, want %+v", got, want)
+		}
+		if got, want := run(""), []Reclaimed{{Node: "", Bytes: 1234512000}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("compose: got %+v, want %+v", got, want)
+		}
+	})
+}
+
+// negative control: drop swarm.Shq around the constraint → the quoted constraint is missing.
+func TestPruneJobCmd(t *testing.T) {
+	tail := ` --restart-condition none --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock --entrypoint sh` +
+		` "$(docker service inspect -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' pstack-agent)" -c 'echo hi'`
+	t.Run("global", func(t *testing.T) {
+		// negative control: add --detach → a create returns before the job ran, and fails.
+		want := `docker service create --name pstack-prune-1 --mode global-job --constraint 'node.id!=n1'` + tail
+		if got := PruneJobCmd("pstack-prune-1", "echo hi", "node.id!=n1", true); got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	t.Run("replicated", func(t *testing.T) {
+		// negative control: drop --replicas 1 → fails.
+		want := `docker service create --name pstack-prune-1 --mode replicated-job --replicas 1 --constraint 'node.id==n2'` + tail
+		if got := PruneJobCmd("pstack-prune-1", "echo hi", "node.id==n2", false); got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	t.Run("no constraint", func(t *testing.T) {
+		// negative control: always add the constraint → `--constraint ''` appears.
+		want := `docker service create --name pstack-prune-1 --mode global-job` + tail
+		if got := PruneJobCmd("pstack-prune-1", "echo hi", "", true); got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
 		}
 	})
 }

@@ -86,6 +86,8 @@ func TestEnvelopeAndSign(t *testing.T) {
 // "Route cart now points at .".
 // negative control: delete `case "node.pressure", "node.recovered"` → got "node.pressure on pressure/n2.";
 // join the kinds with " and " → the two-kind line differs.
+// negative control: delete `case "node.pruned"` → got "node.pruned on this host."; format bytes in
+// binary units → "11.5 GB" instead of "12.3 GB".
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	pressureData := func(kinds string, disk, memory, cpu float64) string {
@@ -119,6 +121,9 @@ func TestSummarize(t *testing.T) {
 		"worker-2 is under pressure: disk 94% ≥ 90%.":                                                Summarize(ev("node.pressure", pressureData(`["disk"]`, 94.2, 30, 0.4))),
 		"worker-2 is under pressure: memory 7% free ≤ 10%, load 2.4 per core ≥ 2.":                   Summarize(ev("node.pressure", pressureData(`["memory","cpu"]`, 50, 6.8, 2.4))),
 		"Resolved — worker-2 is no longer under pressure.":                                           Summarize(ev("node.recovered", pressureData(`[]`, 80, 30, 0.4))),
+		"Pruned worker-2 (pressure): 12.3 GB freed.":                                                 Summarize(ev("node.pruned", `{"node":"n2","hostname":"worker-2","reason":"pressure","freedBytes":12345678901}`)),
+		"Pruned worker-1 (scheduled): 0 B freed.":                                                    Summarize(ev("node.pruned", `{"node":null,"hostname":"worker-1","reason":"scheduled","freedBytes":0}`)),
+		"Pruned this host (scheduled): 512 kB freed.":                                                Summarize(ev("node.pruned", `{"node":null,"hostname":"","reason":"scheduled","freedBytes":512000}`)),
 		"Loki settings changed by alice: retention, storage.":                                        Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
 	}
 	for want, got := range cases {

@@ -539,6 +539,24 @@ Both events carry the same fields:
 
 As with signals, a restart raises again whatever is still true, because the state is only in memory.
 
+### `node.pruned`
+
+A prune removed unused images on a node. Swarm and compose hosts.
+
+- `scheduled`: every 6 hours, images and build cache older than `image_prune_after_h` hours (`0`
+  turns it off).
+- `pressure`: a node's disk is in pressure. Unused images of any age, at most once per node every
+  10 minutes.
+
+One event per node that reported, `freedBytes: 0` included. A prune that failed sends nothing.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `node` | string \| null | The swarm node id, `null` on a compose host. |
+| `hostname` | string | The machine's hostname. |
+| `reason` | `"scheduled"` \| `"pressure"` | Why it ran. |
+| `freedBytes` | number | Bytes freed, as docker reported them (decimal units). |
+
 ---
 
 ## Test deliveries

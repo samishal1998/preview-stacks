@@ -116,6 +116,9 @@ var Names = []string{
 	// in pressure fires nothing.
 	"node.pressure",
 	"node.recovered",
+	// A prune removed unused images on a node (internal/api/prune.go): `scheduled` every 6 hours, or
+	// `pressure` when its disk is full. One per node that reported; a failed prune sends nothing.
+	"node.pruned",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a
