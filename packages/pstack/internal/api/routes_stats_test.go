@@ -249,6 +249,40 @@ func TestStatsDockerSilentKeepsNodes(t *testing.T) {
 	})
 }
 
+// negative control: set history to [] when !r.fresh in statsNodeRow → the length-1 assertion fails,
+// and an agent-less host and a stale one look the same (NP-R13).
+func TestStatsStaleKeepsHistory(t *testing.T) {
+	s := statsServer(t)
+	s.host = statsFake(map[string]string{
+		statsInfoCmd:                     statsSwarmInfo,
+		statsNodeLsCmd:                   statsNodeLs,
+		nodestats.AgentLogsCmds(true)[1]: agentOutput(t),
+	})
+	s.statsTick()
+	s.statsNow = func() int64 { return 1_000_000 + nodestats.StaleMs + 1 }
+
+	body, _ := statsRead(t, s)
+	if body["agent"] != false {
+		t.Fatalf("agent = %v, want false once the only batch is stale", body["agent"])
+	}
+	nodes := statsNodes(t, body)
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %v, want both rows kept", nodes)
+	}
+	wrk := nodes[1]
+	if wrk["hostname"] != "worker-1" || wrk["role"] != "worker" || wrk["stale"] != true {
+		t.Fatalf("worker-1 = %v, want the row kept and stale", wrk)
+	}
+	for _, k := range statsValueKeys {
+		if v, ok := wrk[k]; !ok || v != nil {
+			t.Errorf("worker-1 %s = %v (present %v), want null", k, v, ok)
+		}
+	}
+	if h, ok := wrk["history"].([]any); !ok || len(h) != 1 {
+		t.Errorf("worker-1 history = %#v, want the one sample kept", wrk["history"])
+	}
+}
+
 // negative control: parse PSTACK_STATS_TICK_MS with num() → an explicit "0" reads as unset and serve
 // turns the loop on at 30 s.
 func TestTuningStatsTick(t *testing.T) {
