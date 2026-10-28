@@ -74,7 +74,7 @@ tags:
   - name: tokens
     description: 'Personal API tokens.'
   - name: settings
-    description: 'The two settings changeable at runtime, without a restart.'
+    description: 'The host settings changeable at runtime, without a restart: the job cap, the default role, the node pressure thresholds and the image prune age.'
   - name: sso
     description: 'Single sign-on providers.'
   - name: swarm
@@ -671,7 +671,7 @@ paths:
     get:
       tags: [settings]
       operationId: listSettings
-      summary: Both runtime settings, resolved, each saying which layer it came from.
+      summary: Every runtime setting, resolved, each saying which layer it came from.
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
   /api/settings/max_jobs:
@@ -706,6 +706,91 @@ paths:
               required: [value]
               properties:
                 value: { type: string, enum: [viewer, developer, maintainer, admin] }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/settings/pressure_disk_pct:
+    put:
+      tags: [settings]
+      operationId: setPressureDiskPct
+      x-cli-name: set-pressure-disk-pct
+      summary: Disk used % that puts a node in pressure. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: integer, description: A whole number from 0 to 100. 0 is off. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/settings/pressure_mem_pct:
+    put:
+      tags: [settings]
+      operationId: setPressureMemPct
+      x-cli-name: set-pressure-mem-pct
+      summary: Available memory % at or below which a node is in pressure. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: integer, description: A whole number from 0 to 100. 0 is off. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/settings/pressure_cpu_load:
+    put:
+      tags: [settings]
+      operationId: setPressureCpuLoad
+      x-cli-name: set-pressure-cpu-load
+      summary: 5-minute load per core that puts a node in pressure. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: number, description: A number 0 or more. 0 is off. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/settings/pressure_sleep_idle_min:
+    put:
+      tags: [settings]
+      operationId: setPressureSleepIdleMin
+      x-cli-name: set-pressure-sleep-idle-min
+      summary: Minutes a stack sits idle before pressure may sleep it. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: integer, description: A whole number from 0 to 525600. 0 is off. }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  /api/settings/image_prune_after_h:
+    put:
+      tags: [settings]
+      operationId: setImagePruneAfterH
+      x-cli-name: set-image-prune-after-h
+      summary: Hours an unused image is kept before the prune removes it. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: integer, description: A whole number from 0 to 87600. 0 is off. }
       responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
 
   # ── single sign-on ──────────────────────────────────────────────────────────────────────────────

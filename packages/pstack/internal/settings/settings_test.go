@@ -1,6 +1,8 @@
 package settings
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
@@ -124,5 +126,116 @@ func TestSetValidatesKeyAndValue(t *testing.T) {
 	}
 	if strays != 0 {
 		t.Fatalf("unknown keys must not reach the table: %d stored", strays)
+	}
+}
+
+// negative control: return 80 from PressureDiskPct → "pressure_disk_pct = 80, want 90" fires.
+func TestPressureSettingsDefaults(t *testing.T) {
+	s := open(t, 0)
+	if got := s.PressureDiskPct(); got != 90 {
+		t.Fatalf("pressure_disk_pct = %d, want 90", got)
+	}
+	if got := s.PressureMemPct(); got != 10 {
+		t.Fatalf("pressure_mem_pct = %d, want 10", got)
+	}
+	if got := s.PressureCPULoad(); got != 2 {
+		t.Fatalf("pressure_cpu_load = %v, want 2", got)
+	}
+	if got := s.PressureSleepIdleMin(); got != 30 {
+		t.Fatalf("pressure_sleep_idle_min = %d, want 30", got)
+	}
+	if got := s.ImagePruneAfterH(); got != 168 {
+		t.Fatalf("image_prune_after_h = %d, want 168", got)
+	}
+	// A row hand-edited to nonsense is the default, never 0 (which would turn the guard off).
+	if _, err := s.Store.DB.Exec("INSERT INTO settings (key, value, updated_at) VALUES (?, 'lots', 0)", KeyPressureDiskPct); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.PressureDiskPct(); got != 90 {
+		t.Fatalf("a garbage row: pressure_disk_pct = %d, want 90", got)
+	}
+}
+
+// negative control: drop the `n <= max` bound from wholeIn → "pressure_disk_pct = \"101\"
+// accepted" fires; drop the IsInf check from load → "pressure_cpu_load = \"Inf\" accepted" fires.
+func TestPressureSettingsSetAndRefuse(t *testing.T) {
+	s := open(t, 0)
+	cases := []struct {
+		key, value string
+		ok         bool
+		read       func() float64
+		want       float64
+	}{
+		{KeyPressureDiskPct, "0", true, func() float64 { return float64(s.PressureDiskPct()) }, 0},
+		{KeyPressureDiskPct, "100", true, func() float64 { return float64(s.PressureDiskPct()) }, 100},
+		{KeyPressureDiskPct, "101", false, nil, 0},
+		{KeyPressureDiskPct, "9.5", false, nil, 0},
+		{KeyPressureDiskPct, "-1", false, nil, 0},
+		{KeyPressureMemPct, "15", true, func() float64 { return float64(s.PressureMemPct()) }, 15},
+		{KeyPressureMemPct, "101", false, nil, 0},
+		{KeyPressureCPULoad, "2.5", true, s.PressureCPULoad, 2.5},
+		{KeyPressureCPULoad, "0", true, s.PressureCPULoad, 0},
+		{KeyPressureCPULoad, "-1", false, nil, 0},
+		{KeyPressureCPULoad, "Inf", false, nil, 0},
+		{KeyPressureCPULoad, "NaN", false, nil, 0},
+		{KeyPressureCPULoad, "", false, nil, 0},
+		{KeyPressureSleepIdleMin, "0", true, func() float64 { return float64(s.PressureSleepIdleMin()) }, 0},
+		{KeyPressureSleepIdleMin, "-5", false, nil, 0},
+		{KeyPressureSleepIdleMin, "1.5", false, nil, 0},
+		{KeyImagePruneAfterH, "0", true, func() float64 { return float64(s.ImagePruneAfterH()) }, 0},
+		{KeyImagePruneAfterH, "abc", false, nil, 0},
+	}
+	for _, c := range cases {
+		err := s.Set(c.key, c.value)
+		if !c.ok {
+			if err == nil || !IsError(err) || !strings.Contains(err.Error(), c.key) {
+				t.Fatalf("%s = %q accepted, or refused without naming the key (%v)", c.key, c.value, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s = %q refused: %v", c.key, c.value, err)
+		}
+		if got := c.read(); got != c.want {
+			t.Fatalf("%s = %q reads %v, want %v", c.key, c.value, got, c.want)
+		}
+	}
+	// Stored canonically: 2.0 is "2".
+	if err := s.Set(KeyPressureCPULoad, "2.0"); err != nil {
+		t.Fatal(err)
+	}
+	var v string
+	if err := s.Store.DB.QueryRow("SELECT value FROM settings WHERE key = ?", KeyPressureCPULoad).Scan(&v); err != nil || v != "2" {
+		t.Fatalf(`"2.0" was stored as %q (%v), want "2"`, v, err)
+	}
+}
+
+// The two bounds keep minutes × 60 000 in an int64 and `until=<N>h` a duration docker takes.
+// negative control: bound both keys by math.MaxInt in Set → "pressure_sleep_idle_min = 525601: <nil>"
+// fires.
+// negative control: bound both keys by math.MaxInt in Usable → the hand-edited row reads 525601.
+func TestPressureSettingsUpperBounds(t *testing.T) {
+	s := open(t, 0)
+	for _, c := range []struct {
+		key      string
+		max, def int
+		read     func() int
+	}{
+		{KeyPressureSleepIdleMin, 525600, 30, s.PressureSleepIdleMin},
+		{KeyImagePruneAfterH, 87600, 168, s.ImagePruneAfterH},
+	} {
+		top, over := strconv.Itoa(c.max), strconv.Itoa(c.max+1)
+		if err := s.Set(c.key, top); err != nil || c.read() != c.max {
+			t.Fatalf("%s = %s: %v, reads %d", c.key, top, err, c.read())
+		}
+		if err := s.Set(c.key, over); err == nil || err.Error() != c.key+" must be a whole number from 0 to "+top {
+			t.Fatalf("%s = %s: %v", c.key, over, err)
+		}
+		if _, err := s.Store.DB.Exec("UPDATE settings SET value = ? WHERE key = ?", over, c.key); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.read(); got != c.def {
+			t.Fatalf("hand-edited %s = %s reads %d, want the default %d", c.key, over, got, c.def)
+		}
 	}
 }

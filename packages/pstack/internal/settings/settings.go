@@ -1,15 +1,25 @@
 // Package settings is the handful of host knobs an operator may change at RUNTIME, without
 // restarting the control container.
 //
-// ── TWO KEYS, AND THE LIST IS CLOSED ─────────────────────────────────────────────────────────────
+// ── SEVEN KEYS, AND THE LIST IS CLOSED ───────────────────────────────────────────────────────────
 //
-//	max_jobs      integer >= 1     how many lifecycle jobs run at once across every stack
-//	default_role  one of the four  the role an account created with no role named gets
+//	max_jobs                 integer >= 1     how many lifecycle jobs run at once across every stack
+//	default_role             one of the four  the role an account created with no role named gets
+//	pressure_disk_pct        integer 0–100    disk used % that puts a node in pressure (90)
+//	pressure_mem_pct         integer 0–100    MemAvailable % at or below which a node is in pressure (10)
+//	pressure_cpu_load        number >= 0      5-min load per core that puts a node in pressure (2)
+//	pressure_sleep_idle_min  integer 0–525600 idle minutes before pressure may sleep a stack (30)
+//	image_prune_after_h      integer 0–87600  age in hours of an unused image the prune removes (168)
+//
+// For the last five, `0` turns that thing off (docs/node-pressure-design.md §3). The two upper
+// bounds, a year of minutes and ten years of hours, keep minutes × 60 000 in an int64 and the
+// prune's `until=<N>h` a duration docker takes.
 //
 // This is NOT a generic key-value store: Set validates both the key and the value, and an unknown
 // key is REFUSED rather than stored. A settings table that accepts anything becomes the dumping
 // ground the migration says it is not, and every "just one more key" arrives without a validator.
-// Adding a key is an arm in Set's switch, a reader beside MaxJobs, and a permissions row.
+// Adding a key is an arm in Set's and Usable's switches, a reader beside MaxJobs, and a permissions
+// row.
 //
 // It is also not a hole in invariant 10: every row is configuration an operator CHOSE. Nothing here
 // describes what is running.
@@ -18,6 +28,7 @@
 //
 //	max_jobs      database > PSTACK_MAX_JOBS (envMaxJobs) > jobs.DefaultMaxRunning
 //	default_role  database > viewer                        — there is NO environment variable
+//	the five pressure keys  database > the default above    — no environment variable either
 //
 // The environment variable is the DEFAULT, not the authority. An operator who never opens the UI
 // keeps exactly the behaviour they had, and one who sets the value in the UI is not overridden by
@@ -35,6 +46,11 @@
 //   - default_role — an unrankable role is refused by auth.Role.Rank, so a garbage row would mint
 //     accounts that can do nothing; falling back to `viewer` is the same least-privilege direction
 //     the rest of the auth code takes. It can never resolve UPWARD, and never to admin.
+//   - the pressure keys — a garbage row read as 0 would silently turn a guard off. The default keeps
+//     it on.
+//
+// Usable is the one predicate for "is this stored row a value its reader takes": the readers and
+// the API's `source` both use it, so the two cannot disagree about a hand-edited row.
 //
 // ── NEVER CALL A READER FROM INSIDE store.Tx ─────────────────────────────────────────────────────
 //
@@ -45,11 +61,13 @@
 package settings
 
 import (
+	"math"
 	"strconv"
 	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
 )
 
@@ -63,8 +81,13 @@ func IsError(err error) bool { _, ok := err.(*Error); return ok }
 
 // The keys. There are no others, and Set refuses anything that is not one of these.
 const (
-	KeyMaxJobs     = "max_jobs"
-	KeyDefaultRole = "default_role"
+	KeyMaxJobs              = "max_jobs"
+	KeyDefaultRole          = "default_role"
+	KeyPressureDiskPct      = "pressure_disk_pct"
+	KeyPressureMemPct       = "pressure_mem_pct"
+	KeyPressureCPULoad      = "pressure_cpu_load"
+	KeyPressureSleepIdleMin = "pressure_sleep_idle_min"
+	KeyImagePruneAfterH     = "image_prune_after_h"
 )
 
 // Settings is the table. Owner: the server; every method is one statement.
@@ -117,7 +140,73 @@ func (s *Settings) DefaultRole() string {
 	return string(auth.Viewer)
 }
 
-// Set validates and stores one setting. The key must be one of the two and the value must be valid
+// PressureDiskPct is the disk used % that puts a node in pressure: database > 90. 0 is off.
+func (s *Settings) PressureDiskPct() int { return s.whole(KeyPressureDiskPct, 90) }
+
+// PressureMemPct is the MemAvailable % at or below which a node is in pressure: database > 10.
+func (s *Settings) PressureMemPct() int { return s.whole(KeyPressureMemPct, 10) }
+
+// PressureCPULoad is the 5-min load per core that puts a node in pressure: database > 2.
+func (s *Settings) PressureCPULoad() float64 {
+	if v := s.get(KeyPressureCPULoad); Usable(KeyPressureCPULoad, v) {
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	}
+	return 2.0
+}
+
+// PressureSleepIdleMin is how long a stack must sit idle before pressure may sleep it: database > 30.
+func (s *Settings) PressureSleepIdleMin() int { return s.whole(KeyPressureSleepIdleMin, 30) }
+
+// ImagePruneAfterH is the age in hours of an unused image the prune removes: database > 168.
+func (s *Settings) ImagePruneAfterH() int { return s.whole(KeyImagePruneAfterH, 168) }
+
+// whole is an integer key's stored value, or def when the row is missing or not Usable.
+func (s *Settings) whole(key string, def int) int {
+	if v := s.get(key); Usable(key, v) {
+		n, _ := strconv.Atoi(v)
+		return n
+	}
+	return def
+}
+
+// wholeMax is each integer key's upper bound (the header's table).
+var wholeMax = map[string]int{
+	KeyPressureDiskPct: 100, KeyPressureMemPct: 100, KeyPressureSleepIdleMin: 525600, KeyImagePruneAfterH: 87600,
+}
+
+// wholeIn parses an integer in [0, max].
+func wholeIn(v string, max int) (int, bool) {
+	n, err := strconv.Atoi(v)
+	return n, err == nil && n >= 0 && n <= max
+}
+
+// load parses a finite number >= 0. ParseFloat takes "Inf" and "NaN", so both are refused here.
+func load(v string) (float64, bool) {
+	f, err := strconv.ParseFloat(v, 64)
+	return f, err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) && f >= 0
+}
+
+// Usable reports whether raw, as stored or as written, is a value key's reader takes. False for an
+// unknown key.
+func Usable(key, raw string) bool {
+	switch key {
+	case KeyMaxJobs:
+		n, err := strconv.Atoi(raw)
+		return err == nil && n >= 1
+	case KeyDefaultRole:
+		return auth.ValidRole(raw)
+	case KeyPressureDiskPct, KeyPressureMemPct, KeyPressureSleepIdleMin, KeyImagePruneAfterH:
+		_, ok := wholeIn(raw, wholeMax[key])
+		return ok
+	case KeyPressureCPULoad:
+		_, ok := load(raw)
+		return ok
+	}
+	return false
+}
+
+// Set validates and stores one setting. The key must be one of the seven and the value must be valid
 // FOR that key; anything else returns *Error and writes nothing.
 //
 // Values are stored in canonical form ("008" becomes "8"), so a reader never has to be lenient
@@ -134,6 +223,18 @@ func (s *Settings) Set(key, value string) error {
 		if !auth.ValidRole(value) {
 			return &Error{Msg: "default_role must be one of: " + auth.RolesText}
 		}
+	case KeyPressureDiskPct, KeyPressureMemPct, KeyPressureSleepIdleMin, KeyImagePruneAfterH:
+		n, ok := wholeIn(value, wholeMax[key])
+		if !ok {
+			return &Error{Msg: key + " must be a whole number from 0 to " + strconv.Itoa(wholeMax[key])}
+		}
+		value = strconv.Itoa(n)
+	case KeyPressureCPULoad:
+		f, ok := load(value)
+		if !ok {
+			return &Error{Msg: key + " must be a number of 0 or more"}
+		}
+		value = js.NumberString(f) // rule 7: 2.0 stores "2", 2.5 stores "2.5"
 	default:
 		return &Error{Msg: "unknown setting: " + key}
 	}
