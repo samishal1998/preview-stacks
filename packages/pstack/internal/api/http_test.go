@@ -839,7 +839,7 @@ func TestJobCancelRouteTakesAQueuedJobAndSaysNothingRan(t *testing.T) {
 	}
 }
 
-// ── the two runtime host settings: the read, the two writes, and the cap that applies NOW ────────
+// ── the runtime host settings: the read, the writes, and the cap that applies NOW ─────────────────
 //
 // The failure mode of every one of these is SILENCE: a stored cap that boot ignores, a PUT that
 // stores a number nothing reads until a restart, a `source` that says "env" while the database is
@@ -1059,7 +1059,7 @@ func TestPutSettingRefusesWhatItCannotStore(t *testing.T) {
 	if w := callSettings(t, s, "PUT", "/api/settings/max_jobs", `{"value":8.0}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"value": 8`) {
 		t.Errorf("8.0: %d %s", w.Code, w.Body.String())
 	}
-	// A third key is not a setting: the chain never dispatches it.
+	// A key outside the list is not a setting: the chain never dispatches it.
 	if w := callSettings(t, s, "PUT", "/api/settings/shell_command", `{"value":"rm -rf /"}`); w.Code != 404 {
 		t.Errorf("an unknown key: %d %s", w.Code, w.Body.String())
 	}

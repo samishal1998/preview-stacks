@@ -1,5 +1,6 @@
 /**
- * THE TWO RUNTIME HOST SETTINGS, proved from outside the binary: `max_jobs` and `default_role`.
+ * THE RUNTIME HOST SETTINGS, proved from outside the binary: `max_jobs`, `default_role`, and the
+ * five pressure keys (admin-only, stored, validated).
  *
  * `internal/settings` and `internal/api` have their own tests for the resolver and the routes. This
  * file asserts the three things only a real process can show, and they are the three an operator
@@ -38,6 +39,15 @@ const PASSWORD = 'correct-horse-battery-staple';
 type SettingRow = { key: string; value: number | string; source: string; minRole: string };
 type SettingsBody = { settings: SettingRow[]; env: { PSTACK_MAX_JOBS: number | null }; precedence: string };
 type JobRow = { id: string; stack: string; action: string; state: string };
+
+/** The five pressure rows on a host where nobody set one: what the binary ships with, admin to change. */
+const PRESSURE_DEFAULTS: SettingRow[] = [
+  { key: 'pressure_disk_pct', value: 90, source: 'default', minRole: 'admin' },
+  { key: 'pressure_mem_pct', value: 10, source: 'default', minRole: 'admin' },
+  { key: 'pressure_cpu_load', value: 2, source: 'default', minRole: 'admin' },
+  { key: 'pressure_sleep_idle_min', value: 30, source: 'default', minRole: 'admin' },
+  { key: 'image_prune_after_h', value: 168, source: 'default', minRole: 'admin' },
+];
 
 const readSettings = async (s: Booted, headers = s.H): Promise<SettingsBody> =>
   (await (await fetch(`${s.base}/api/settings`, { headers })).json()) as SettingsBody;
@@ -100,7 +110,7 @@ async function session(base: string, username: string): Promise<Record<string, s
   return { cookie: raw.split(';')[0]!, 'content-type': 'application/json' };
 }
 
-describe('settings: max_jobs and default_role, at runtime', () => {
+describe('settings: the runtime host settings', () => {
   // negative control: in internal/settings/settings.go, MaxJobs() checks s.envMaxJobs BEFORE the
   // stored row — the write reads back `"value": 2` where the test wants 6, so the database stops
   // outranking the environment before the restart is even reached. Also: in routes_settings.go emit
@@ -115,6 +125,7 @@ describe('settings: max_jobs and default_role, at runtime', () => {
         settings: [
           { key: 'max_jobs', value: 4, source: 'default', minRole: 'maintainer' },
           { key: 'default_role', value: 'viewer', source: 'default', minRole: 'admin' },
+          ...PRESSURE_DEFAULTS,
         ],
         // NULL, not 0: `PSTACK_MAX_JOBS=0` is read as unset, so a literal 0 could not be told apart
         // from "never set" and would contradict the row's own `source: "default"`.
@@ -131,7 +142,11 @@ describe('settings: max_jobs and default_role, at runtime', () => {
     const first = await bootServer({ tag: 'set-env', dataDir, env, keep: true });
     try {
       expect(await readSettings(first)).toMatchObject({
-        settings: [{ key: 'max_jobs', value: 2, source: 'env', minRole: 'maintainer' }, { key: 'default_role', value: 'viewer', source: 'default', minRole: 'admin' }],
+        settings: [
+          { key: 'max_jobs', value: 2, source: 'env', minRole: 'maintainer' },
+          { key: 'default_role', value: 'viewer', source: 'default', minRole: 'admin' },
+          ...PRESSURE_DEFAULTS,
+        ],
         env: { PSTACK_MAX_JOBS: 2 },
       });
 
@@ -435,7 +450,15 @@ describe('settings: max_jobs and default_role, at runtime', () => {
       // READING is a viewer's — the page that shows the cap is the page everybody sees, and the row
       // itself carries the role it takes to change it.
       const seen = await readSettings(s, as.viewer!);
-      expect(seen.settings.map((r) => `${r.key}: ${r.minRole}`)).toEqual(['max_jobs: maintainer', 'default_role: admin']);
+      expect(seen.settings.map((r) => `${r.key}: ${r.minRole}`)).toEqual([
+        'max_jobs: maintainer',
+        'default_role: admin',
+        'pressure_disk_pct: admin',
+        'pressure_mem_pct: admin',
+        'pressure_cpu_load: admin',
+        'pressure_sleep_idle_min: admin',
+        'image_prune_after_h: admin',
+      ]);
 
       // max_jobs is OPERATIONAL — it sits with host configuration, at maintainer.
       expect((await putSetting(s, 'max_jobs', 2, as.developer!)).status).toBe(403);
@@ -453,11 +476,50 @@ describe('settings: max_jobs and default_role, at runtime', () => {
       expect((await set.json()) as SettingRow).toMatchObject({ key: 'default_role', value: 'developer', source: 'db' });
 
       // A key nobody listed has no row in the table, so it is the root token's by default-deny —
-      // and even for root it is not a route: the chain dispatches two literals and nothing else.
+      // and even for root it is not a route: the chain dispatches seven literals and nothing else.
       const unlisted = await putSetting(s, 'shell_command', 'rm -rf /', as.admin!);
       expect(unlisted.status).toBe(403);
       expect((await unlisted.json()) as { error: string }).toEqual({ error: 'this route is restricted to the PSTACK_TOKEN bearer' });
       expect((await putSetting(s, 'shell_command', 'rm -rf /')).status).toBe(404);
+    } finally {
+      await s.stop();
+    }
+  }, 60_000);
+
+  // negative control: in internal/api/permissions.go set the `/api/settings/pressure_disk_pct` row's
+  // min to auth.Maintainer — the maintainer's PUT answers 200 where the test wants 403. Also: in
+  // internal/settings/settings.go make Usable return false for pressure_disk_pct — the GET reads back
+  // `value: 90, source: "default"`. Both run, observed failing, restored.
+  test('the pressure settings are an admin\'s, and a write reads back from the database', async () => {
+    const s = await bootServer({ tag: 'set-pressure' });
+    try {
+      const as: Record<string, Record<string, string>> = {};
+      for (const role of ['maintainer', 'admin'] as const) {
+        expect((await createUser(s, { username: role, password: PASSWORD, role })).status).toBe(201);
+        as[role] = await session(s.base, role);
+      }
+      const refused = await putSetting(s, 'pressure_disk_pct', 85, as.maintainer!);
+      expect(refused.status).toBe(403);
+      expect((await refused.json()) as { error: string }).toEqual({ error: 'this route requires the admin role or higher — you are a maintainer' });
+
+      const set = await putSetting(s, 'pressure_disk_pct', 85, as.admin!);
+      expect(set.status).toBe(200);
+      expect(await set.json()).toEqual({ key: 'pressure_disk_pct', value: 85, source: 'db', minRole: 'admin', stored: true });
+
+      const bad = await putSetting(s, 'pressure_cpu_load', -1, as.admin!);
+      expect(bad.status).toBe(400);
+      expect((await bad.json()) as { error: string }).toEqual({ error: 'pressure_cpu_load must be a number of 0 or more' });
+
+      expect(await readSettings(s)).toEqual({
+        settings: [
+          { key: 'max_jobs', value: 4, source: 'default', minRole: 'maintainer' },
+          { key: 'default_role', value: 'viewer', source: 'default', minRole: 'admin' },
+          { key: 'pressure_disk_pct', value: 85, source: 'db', minRole: 'admin' },
+          ...PRESSURE_DEFAULTS.slice(1),
+        ],
+        env: { PSTACK_MAX_JOBS: null },
+        precedence: 'database > environment > built-in default',
+      });
     } finally {
       await s.stop();
     }

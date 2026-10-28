@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "4b2291f113f238dd7818d4c06476da2274a6840928476b662338817fec792a05",
+  "specDigest": "fd2d06a9909bfe112b1ee04483737194ae09c61c772f38dfac3a48d80b5c50ed",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -1083,9 +1083,9 @@
       "path": "/api/settings",
       "command": "settings list",
       "funcName": "NewSettingsListCommand",
-      "summary": "Both runtime settings, resolved, each saying which layer it came from.",
+      "summary": "Every runtime setting, resolved, each saying which layer it came from.",
       "ext": {},
-      "digest": "6ec6d6a9c8d004da"
+      "digest": "d3a7b17c2aaa5235"
     },
     "listSpecs": {
       "operationId": "listSpecs",
@@ -1528,6 +1528,31 @@
       },
       "digest": "5c27a683e8479e8d"
     },
+    "setImagePruneAfterH": {
+      "operationId": "setImagePruneAfterH",
+      "method": "PUT",
+      "path": "/api/settings/image_prune_after_h",
+      "command": "settings set-image-prune-after-h",
+      "funcName": "NewSettingsSetImagePruneAfterHCommand",
+      "summary": "Hours an unused image is kept before the prune removes it. Admin only.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "int",
+          "required": true,
+          "description": "A whole number from 0 to 87600. 0 is off."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-image-prune-after-h"
+      },
+      "digest": "9a7e30966aecce52"
+    },
     "setLogging": {
       "operationId": "setLogging",
       "method": "PUT",
@@ -1637,6 +1662,106 @@
         "name": "set-max-jobs"
       },
       "digest": "eb2ede7e8108a80e"
+    },
+    "setPressureCpuLoad": {
+      "operationId": "setPressureCpuLoad",
+      "method": "PUT",
+      "path": "/api/settings/pressure_cpu_load",
+      "command": "settings set-pressure-cpu-load",
+      "funcName": "NewSettingsSetPressureCpuLoadCommand",
+      "summary": "5-minute load per core that puts a node in pressure. Admin only.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "number",
+          "required": true,
+          "description": "A number 0 or more. 0 is off."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-pressure-cpu-load"
+      },
+      "digest": "a5bcfc7494d7bef0"
+    },
+    "setPressureDiskPct": {
+      "operationId": "setPressureDiskPct",
+      "method": "PUT",
+      "path": "/api/settings/pressure_disk_pct",
+      "command": "settings set-pressure-disk-pct",
+      "funcName": "NewSettingsSetPressureDiskPctCommand",
+      "summary": "Disk used % that puts a node in pressure. Admin only.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "int",
+          "required": true,
+          "description": "A whole number from 0 to 100. 0 is off."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-pressure-disk-pct"
+      },
+      "digest": "996b6aec6bd1a0bd"
+    },
+    "setPressureMemPct": {
+      "operationId": "setPressureMemPct",
+      "method": "PUT",
+      "path": "/api/settings/pressure_mem_pct",
+      "command": "settings set-pressure-mem-pct",
+      "funcName": "NewSettingsSetPressureMemPctCommand",
+      "summary": "Available memory % at or below which a node is in pressure. Admin only.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "int",
+          "required": true,
+          "description": "A whole number from 0 to 100. 0 is off."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-pressure-mem-pct"
+      },
+      "digest": "e5494266101fe746"
+    },
+    "setPressureSleepIdleMin": {
+      "operationId": "setPressureSleepIdleMin",
+      "method": "PUT",
+      "path": "/api/settings/pressure_sleep_idle_min",
+      "command": "settings set-pressure-sleep-idle-min",
+      "funcName": "NewSettingsSetPressureSleepIdleMinCommand",
+      "summary": "Minutes a stack sits idle before pressure may sleep it. Admin only.",
+      "flags": [
+        {
+          "name": "value",
+          "source": "body",
+          "type": "int",
+          "required": true,
+          "description": "A whole number from 0 to 525600. 0 is off."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set-pressure-sleep-idle-min"
+      },
+      "digest": "b2144f0ce75f70a8"
     },
     "setUserPassword": {
       "operationId": "setUserPassword",

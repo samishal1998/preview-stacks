@@ -1,4 +1,4 @@
-// The two host settings an operator may change at RUNTIME: `GET /api/settings` and
+// The host settings an operator may change at RUNTIME: `GET /api/settings` and
 // `PUT /api/settings/<key>`. internal/settings owns the keys, the validation and the precedence;
 // this file is the HTTP surface and the two things that happen the moment a value changes.
 //
@@ -9,10 +9,10 @@
 // 8 into it and still sees 4 has no way to tell a rejected write from a stale page from a value
 // their environment is overriding, and "why did my change not stick" is unanswerable.
 //
-// The SOURCE is computed here, per key, mirroring internal/settings' own predicate for "is this
-// stored row usable" — that package resolves a VALUE and exposes no Source(key). It is a small
-// duplication and it is deliberate; the alternative (comparing the resolved value with the stored
-// text) lies about a hand-edited "008", which Atoi accepts and string equality does not.
+// The SOURCE is computed here, per key, from settings.Usable — the same predicate the readers use
+// for "is this stored row usable", so the two cannot disagree. Comparing the resolved value with the
+// stored text instead would lie about a hand-edited "008", which Atoi accepts and string equality
+// does not. The pressure keys have no environment layer: `db` or `default`.
 //
 // ── A WRITE APPLIES NOW, AND LOWERING THE CAP CANCELS NOTHING ───────────────────────────────────
 //
@@ -24,17 +24,15 @@
 // ── THE PERMISSION IS PER KEY, AND LIVES IN permissions.go ──────────────────────────────────────
 //
 // max_jobs is operational (MAINTAINER, with host configuration); default_role is user management by
-// another name (ADMIN, with the promotion paths). The two rows are exact paths, so a key nobody
-// listed is root's by the table's default-deny — and the chain 404s it, because this file
-// dispatches on the two literals only. `minRole` in the read is taken FROM that table rather than
+// another name (ADMIN, with the promotion paths); the five pressure keys are ADMIN. The rows are
+// exact paths, so a key nobody listed is root's by the table's default-deny — and the chain 404s
+// it, because routes.go dispatches on the seven literals only. `minRole` in the read is taken FROM that table rather than
 // written down again here: a second copy is the drift permissions.go's header exists to prevent.
 package api
 
 import (
 	"net/http"
-	"strconv"
 
-	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
@@ -54,20 +52,27 @@ func (s *Server) storedSetting(key string) string {
 // least role that may change it.
 func (s *Server) settingRow(key string) jsonx.Object {
 	source := "default"
+	if settings.Usable(key, s.storedSetting(key)) {
+		source = "db"
+	} else if key == settings.KeyMaxJobs && s.opts.MaxJobs >= 1 {
+		source = "env"
+	}
 	var value any
 	switch key {
 	case settings.KeyMaxJobs:
 		value = s.settings.MaxJobs()
-		if n, err := strconv.Atoi(s.storedSetting(key)); err == nil && n >= 1 {
-			source = "db"
-		} else if s.opts.MaxJobs >= 1 {
-			source = "env"
-		}
 	case settings.KeyDefaultRole:
 		value = s.settings.DefaultRole()
-		if auth.ValidRole(s.storedSetting(key)) {
-			source = "db"
-		}
+	case settings.KeyPressureDiskPct:
+		value = s.settings.PressureDiskPct()
+	case settings.KeyPressureMemPct:
+		value = s.settings.PressureMemPct()
+	case settings.KeyPressureCPULoad:
+		value = s.settings.PressureCPULoad()
+	case settings.KeyPressureSleepIdleMin:
+		value = s.settings.PressureSleepIdleMin()
+	case settings.KeyImagePruneAfterH:
+		value = s.settings.ImagePruneAfterH()
 	}
 	// Straight from the gate's own table, so this cannot say maintainer while the route refuses
 	// anyone below admin.
@@ -75,7 +80,7 @@ func (s *Server) settingRow(key string) jsonx.Object {
 	return jsonx.O("key", key, "value", value, "source", source, "minRole", string(p.min))
 }
 
-// getSettings is GET /api/settings: both keys, resolved, with their source.
+// getSettings is GET /api/settings: every key, resolved, with its source, in a fixed order.
 func (s *Server) getSettings(w http.ResponseWriter) error {
 	// The environment's contribution, named once: it is what `source: "env"` refers to. NULL, not
 	// 0, when nothing usable was set — `PSTACK_MAX_JOBS=0` is read as unset (TuningFromEnv's `??`
@@ -86,14 +91,19 @@ func (s *Server) getSettings(w http.ResponseWriter) error {
 		envMaxJobs = s.opts.MaxJobs
 	}
 	writeJSON(w, 200, jsonx.O(
-		"settings", []jsonx.Object{s.settingRow(settings.KeyMaxJobs), s.settingRow(settings.KeyDefaultRole)},
+		"settings", []jsonx.Object{
+			s.settingRow(settings.KeyMaxJobs), s.settingRow(settings.KeyDefaultRole),
+			s.settingRow(settings.KeyPressureDiskPct), s.settingRow(settings.KeyPressureMemPct),
+			s.settingRow(settings.KeyPressureCPULoad), s.settingRow(settings.KeyPressureSleepIdleMin),
+			s.settingRow(settings.KeyImagePruneAfterH),
+		},
 		"env", jsonx.O("PSTACK_MAX_JOBS", envMaxJobs),
 		"precedence", "database > environment > built-in default",
 	))
 	return nil
 }
 
-// putSetting is PUT /api/settings/<key>, for the two keys the chain dispatches. The value is
+// putSetting is PUT /api/settings/<key>, for the keys the chain dispatches. The value is
 // validated by internal/settings — an unknown key or a bad value is its *Error, which fail() maps
 // to 400.
 func (s *Server) putSetting(w http.ResponseWriter, r *http.Request, key string) error {

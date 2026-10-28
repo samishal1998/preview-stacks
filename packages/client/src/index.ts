@@ -352,11 +352,11 @@ export function createClient(opts: ClientOptions) {
     },
 
     /**
-     * The two host settings that change at RUNTIME: the running-job cap and the role an account
-     * created with no role named gets.
+     * The host settings that change at RUNTIME: the running-job cap, the role an account created
+     * with no role named gets, the node pressure thresholds and the image prune age.
      *
-     * Reading is viewer's; writing is per KEY, not per route — `max_jobs` is maintainer's and
-     * `default_role` is admin's, and each row says which in `minRole`. The read also says where
+     * Reading is viewer's; writing is per KEY, not per route — `max_jobs` is maintainer's, the rest
+     * are admin's, and each row says which in `minRole`. The read also says where
      * each value came from (`source`), which is the only way to tell a value you set from one your
      * environment is supplying.
      */
@@ -364,7 +364,9 @@ export function createClient(opts: ClientOptions) {
       get: () => get<HostSettings>('/api/settings'),
       /**
        * Store one. Refused (400) for an unknown key or a value the server will not take —
-       * `max_jobs` is an integer ≥ 1, `default_role` one of the four roles.
+       * `max_jobs` is an integer ≥ 1, `default_role` one of the four roles, `pressure_disk_pct` and
+       * `pressure_mem_pct` integers 0–100, `pressure_cpu_load` a number ≥ 0,
+       * `pressure_sleep_idle_min` and `image_prune_after_h` integers ≥ 0.
        *
        * `max_jobs` takes effect on the NEXT dispatch, with no restart: raising it starts a job that
        * was waiting for a slot, and LOWERING IT CANCELS NOTHING — the jobs already running run to

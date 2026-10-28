@@ -141,7 +141,7 @@ var groupShort = map[string]string{
 	"host-vars":     "Host variables and secrets, shared by every deployment.",
 	"users":         "Accounts, roles and passwords.",
 	"tokens":        "Personal API tokens.",
-	"settings":      "The two settings changeable at runtime, without a restart.",
+	"settings":      "Host settings changeable at runtime: job cap, default role, pressure thresholds, image prune age.",
 	"sso":           "Single sign-on providers.",
 	"swarm":         "The swarm, and what a new worker runs to join it.",
 	"tls":           "The host's certificate mode, and the bring-your-own wildcard.",

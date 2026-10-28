@@ -386,10 +386,18 @@ export type Me = {
 // ── host settings ─────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The two settings that can be changed at RUNTIME, without restarting the container. The server
- * refuses any other key rather than storing it, so this union is the whole surface.
+ * The settings that can be changed at RUNTIME, without restarting the container. The server
+ * refuses any other key rather than storing it, so this union is the whole surface. The five
+ * pressure keys have no environment layer, and `0` turns each off.
  */
-export type SettingKey = 'max_jobs' | 'default_role';
+export type SettingKey =
+  | 'max_jobs'
+  | 'default_role'
+  | 'pressure_disk_pct'
+  | 'pressure_mem_pct'
+  | 'pressure_cpu_load'
+  | 'pressure_sleep_idle_min'
+  | 'image_prune_after_h';
 
 /**
  * One setting, as read and as returned by a write.
@@ -401,12 +409,17 @@ export type SettingKey = 'max_jobs' | 'default_role';
  * before this existed.
  *
  * `minRole` is the least role that may WRITE this key, served from the server's own permission
- * table: `max_jobs` is maintainer's, `default_role` is admin's. Reading is viewer's. Treat a name
+ * table: `max_jobs` is maintainer's, `default_role` and the pressure keys are admin's. Reading is
+ * viewer's. Treat a name
  * this build does not recognise as the most privileged, never the least.
  */
 export type SettingRow = {
   key: SettingKey;
-  /** A number for `max_jobs`; a role name for `default_role`. */
+  /**
+   * A role name for `default_role`; a number for every other key: an integer for `max_jobs`,
+   * `pressure_disk_pct`, `pressure_mem_pct` (0–100), `pressure_sleep_idle_min` (minutes) and
+   * `image_prune_after_h` (hours), and any number ≥ 0 for `pressure_cpu_load`.
+   */
   value: number | string;
   source: 'db' | 'env' | 'default';
   minRole: string;

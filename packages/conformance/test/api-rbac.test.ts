@@ -212,6 +212,14 @@ const TABLE: Row[] = [
   // may not EXPORT one — the row below.
   { method: 'POST', path: '/api/config/sealed', body: {}, min: 'admin', ok: 400 },
 
+  // The pressure thresholds and the image prune age. Each decides when previews are refused or put
+  // to sleep host-wide, so they sit with the admin surfaces. The allowed role gets the stored row.
+  { method: 'PUT', path: '/api/settings/pressure_disk_pct', body: { value: 90 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/pressure_mem_pct', body: { value: 10 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/pressure_cpu_load', body: { value: 2 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/pressure_sleep_idle_min', body: { value: 30 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/image_prune_after_h', body: { value: 168 }, min: 'admin', ok: 200 },
+
   // ── root: the whole host, portable, in plaintext ────────────────────────────────────────────
   { method: 'GET', path: '/api/config', min: 'root', ok: 200 },
   { method: 'POST', path: '/api/config', body: {}, min: 'root', ok: 400 },
