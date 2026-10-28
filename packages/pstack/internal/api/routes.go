@@ -215,6 +215,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	if path == "/api/signals" && r.Method == http.MethodGet {
 		return s.signalsGet(w)
 	}
+	// What the node agents last reported. Memory only, emits nothing (routes_stats.go).
+	if path == "/api/stats" && r.Method == http.MethodGet {
+		return s.statsGet(w)
+	}
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)
 		// Plugins are read only on a host that ships logs, found the way deploys find it; with logging

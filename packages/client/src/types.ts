@@ -133,6 +133,53 @@ export type SwarmInfo = {
   note: string;
 };
 
+/** One node, from its pstack-agent. Every reading is null while the node is stale or never reported. */
+export type NodeStats = {
+  /** The swarm node id; null on a compose host. */
+  node: string | null;
+  hostname: string;
+  /** `manager` or `worker` on swarm; null on a compose host. */
+  role: 'manager' | 'worker' | null;
+  /** When this node's newest batch arrived. */
+  at: number | null;
+  /** No batch in 2 minutes: the readings are unknown, never pressure. */
+  stale: boolean;
+  cores: number | null;
+  load1: number | null;
+  load5: number | null;
+  memTotal: number | null;
+  memAvailable: number | null;
+  diskTotal: number | null;
+  diskFree: number | null;
+  /** The pressure kinds this node is under. */
+  pressure: string[];
+  /** This node's last prune; null when there has been none. */
+  prune: { at: number; freedBytes: number; reason: string } | null;
+  /** Up to an hour of samples, oldest first. Kept while the node is stale. */
+  history: Array<{ at: number; load5: number; memAvailable: number; diskFree: number }>;
+};
+
+/** One stack's use, summed over the fresh batches. */
+export type StackStats = {
+  stack: string;
+  cpuPct: number;
+  mem: number;
+  containers: number;
+  /** Hostnames it runs on. */
+  nodes: string[];
+};
+
+export type Stats = {
+  v: 1;
+  at: number;
+  /** True when any node reported in the last 2 minutes. */
+  agent: boolean;
+  nodes: NodeStats[];
+  /** Sorted by memory, most first. */
+  stacks: StackStats[];
+  prune: { lastAt: number | null; lastFreed: number | null };
+};
+
 export type ShareLink = {
   /** `https://control.<domain>/deployments/<id>/public-logs-view?token=…` */
   url: string;

@@ -52,6 +52,7 @@ import type {
   SpecMeta,
   SsoConfig,
   SsoConfigResponse,
+  Stats,
   SwarmInfo,
   User,
 } from './types.ts';
@@ -256,6 +257,11 @@ export function createClient(opts: ClientOptions) {
        */
       join: (o: { format: 'token' | 'command' | 'script' | 'cloud-config'; distro?: string } = { format: 'command' }) =>
         get<string>(`/api/swarm/join${qs(undefined, { format: o.format, distro: o.distro })}`),
+    },
+
+    /** What each node's pstack-agent last reported, and the stacks using it. Unknown is null. */
+    stats: {
+      get: () => get<Stats>('/api/stats'),
     },
 
     /**

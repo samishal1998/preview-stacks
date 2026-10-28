@@ -148,4 +148,5 @@ var groupShort = map[string]string{
 	"logging":       "Loki's settings: chunks, retention, storage.",
 	"config":        "The whole portable configuration: export it, or apply one.",
 	"host":          "The host itself — health, the control stack, terminal history, the probe.",
+	"stats":         "Node and stack usage, from each node's pstack-agent.",
 }

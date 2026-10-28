@@ -83,6 +83,8 @@ tags:
     description: 'The whole portable configuration: export it, apply one.'
   - name: host
     description: 'The host itself — health, the control stack, terminal history, the probe.'
+  - name: stats
+    description: 'What each node''s pstack-agent last reported, and the stacks using it. In memory; unknown values are null.'
 
 paths:
   # ── deployments ─────────────────────────────────────────────────────────────────────────────────
@@ -846,6 +848,14 @@ paths:
       operationId: getSignals
       x-cli-name: signals
       summary: What the swarm looks like now — every node with its task count, and every task docker would not place.
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/stats:
+    get:
+      tags: [stats]
+      operationId: getStats
+      x-cli-name: get
+      summary: Each node's disk, memory and load from its agent, an hour of samples, and CPU and memory per stack. Unknown is null.
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
   /api/swarm:

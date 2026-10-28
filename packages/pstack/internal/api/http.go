@@ -65,10 +65,18 @@ type Tuning struct {
 	// tick", is exactly what the conformance harness sets. SignalsTickSet says which it was.
 	SignalsTickMs  float64
 	SignalsTickSet bool
+	// StatsTickMs is PSTACK_STATS_TICK_MS: how often the node agents' logs are read. Parsed exactly
+	// like the signals pair, explicit 0 included.
+	StatsTickMs  float64
+	StatsTickSet bool
 }
 
 // SignalsTickDefaultMs is what `serve` uses when PSTACK_SIGNALS_TICK_MS is unset.
 const SignalsTickDefaultMs = 30_000
+
+// StatsTickDefaultMs is what `serve` uses when PSTACK_STATS_TICK_MS is unset: the agent's batch
+// interval.
+const StatsTickDefaultMs = 30_000
 
 // TuningFromEnv reads the knobs.
 func TuningFromEnv(env func(string) (string, bool)) Tuning {
@@ -83,15 +91,21 @@ func TuningFromEnv(env func(string) (string, bool)) Tuning {
 		}
 		return n
 	}
-	tickMs, tickSet := float64(0), false
-	if v, ok := env("PSTACK_SIGNALS_TICK_MS"); ok && strings.TrimSpace(v) != "" {
-		if n := js.ParseNumber(v); js.IsFinite(n) && n >= 0 {
-			tickMs, tickSet = n, true
+	tick := func(k string) (float64, bool) {
+		if v, ok := env(k); ok && strings.TrimSpace(v) != "" {
+			if n := js.ParseNumber(v); js.IsFinite(n) && n >= 0 {
+				return n, true
+			}
 		}
+		return 0, false
 	}
+	tickMs, tickSet := tick("PSTACK_SIGNALS_TICK_MS")
+	statsMs, statsSet := tick("PSTACK_STATS_TICK_MS")
 	return Tuning{
 		SignalsTickMs:        tickMs,
 		SignalsTickSet:       tickSet,
+		StatsTickMs:          statsMs,
+		StatsTickSet:         statsSet,
 		ReadinessPollMs:      num("PSTACK_READINESS_POLL_MS"),
 		ReadinessTimeoutMs:   num("PSTACK_READINESS_TIMEOUT_MS"),
 		ReadinessRestartLoop: num("PSTACK_READINESS_RESTART_LOOP"),
