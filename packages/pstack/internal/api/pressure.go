@@ -21,6 +21,16 @@
 // active node, or no data, it allows (NP-R18): unknown is never pressure. A compose deployment, on
 // either host, is refused when the self node is in pressure.
 //
+// ── SLEEP THE LEAST RECENTLY USED ───────────────────────────────────────────────────────────────
+//
+// pressureSleep is the memory and cpu answer. Each stats tick it sleeps ONE stack in total, across
+// every node (NP-R21): of the stacks with a container on a node in memory or cpu pressure, the one
+// whose scheduler.Recency is oldest (NP-R20), ties by stack name. Eligible means awake, not `kind:
+// shared`, not busy, and unused for `pressure_sleep_idle_min`; 0 turns it off. It does nothing when
+// the traffic meter cannot read Traefik: silence is not idle. `st.Sleep` is not required, since a
+// wake runs `up` off the record. The reason is `<hostname> <Describe>` of the stack's first node in
+// key order, as Describe words it (NP-R22): `worker-2 memory 6% free ≤ 10%`.
+//
 // ── THE id ──────────────────────────────────────────────────────────────────────────────────────
 //
 // `pressure/<key>` (NP-R17): the swarm node id on swarm, as the spec spells it, and the hostname on a
@@ -32,7 +42,9 @@ import (
 	"math"
 	"sort"
 
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 )
 
@@ -97,10 +109,7 @@ func (s *Server) evaluatePressure(now int64) {
 			default:
 				continue
 			}
-			hostname := b.Node.Hostname
-			if m, ok := s.nodeMeta[key]; ok && m.Hostname != "" {
-				hostname = m.Hostname
-			}
+			hostname := s.hostnameLocked(key, b)
 			var node *string
 			if b.Node.Node != "" {
 				node = &b.Node.Node
@@ -173,14 +182,101 @@ func (s *Server) capacityRefusal(o spec.Orchestrator, now int64) (why string, re
 		}
 		if first == "" {
 			b, _ := s.stats.Fresh(key, now)
-			hostname := b.Node.Hostname
-			if m, ok := s.nodeMeta[key]; ok && m.Hostname != "" {
-				hostname = m.Hostname
-			}
-			first = hostname + ": " + nodestats.Describe(kinds[0], r, t)
+			first = s.hostnameLocked(key, b) + ": " + nodestats.Describe(kinds[0], r, t)
 		}
 	}
 	return first, first != ""
+}
+
+// pressureSleep sleeps at most one stack: the least recently used on a node in memory or cpu
+// pressure. The nodes are read under statsMu; docker and startLifecycle run after it.
+func (s *Server) pressureSleep(now int64) {
+	idleMin := s.settings.PressureSleepIdleMin()
+	if idleMin == 0 || !s.meter.OK() {
+		return
+	}
+	t := nodestats.Thresholds{
+		DiskPct: s.settings.PressureDiskPct(),
+		MemPct:  s.settings.PressureMemPct(),
+		CPULoad: s.settings.PressureCPULoad(),
+	}
+	reasons := map[string]string{} // stack → why, from its first node in key order
+	func() {
+		s.statsMu.Lock()
+		defer s.statsMu.Unlock()
+		for _, key := range s.stats.Keys() {
+			kinds, r, in := s.inPressureLocked(key, now)
+			if !in {
+				continue
+			}
+			var kind nodestats.Kind
+			for _, k := range kinds {
+				if k == nodestats.Memory || k == nodestats.CPU {
+					kind = k
+					break
+				}
+			}
+			if kind == "" {
+				continue
+			}
+			b, _ := s.stats.Fresh(key, now)
+			why := s.hostnameLocked(key, b) + " " + nodestats.Describe(kind, r, t)
+			for _, c := range b.Ctrs {
+				if _, seen := reasons[c.Stack]; c.Stack != "" && !seen {
+					reasons[c.Stack] = why
+				}
+			}
+		}
+	}()
+	if len(reasons) == 0 {
+		return
+	}
+	metas, err := s.registry.List()
+	if err != nil {
+		return
+	}
+	var best struct {
+		id     string
+		st     *spec.Stack
+		recent int64
+	}
+	for _, m := range metas {
+		if m.Sleep != nil || m.Kind == spec.Shared {
+			continue
+		}
+		st, err := s.resolveDep(m.ID, nil)
+		if err != nil || st.Compose == nil || reasons[st.Stack] == "" || s.jobs.IsBusy(st.Stack) {
+			continue
+		}
+		rt, err := s.runtimeView(st)
+		if err != nil {
+			continue
+		}
+		recent, ok := scheduler.Recency(s.scheduler.BootAt, rt, s.meter)
+		if !ok || now-recent < int64(idleMin)*60_000 {
+			continue
+		}
+		if best.st == nil || recent < best.recent || recent == best.recent && st.Stack < best.st.Stack {
+			best.id, best.st, best.recent = m.ID, st, recent
+		}
+	}
+	if best.st == nil {
+		return
+	}
+	dep, err := s.registry.Get(best.id)
+	if err != nil || dep == nil {
+		return
+	}
+	s.startLifecycle(best.id, dep, best.st, jobs.Sleep, lifecycleOptions{By: "pressure", Reason: reasons[best.st.Stack], OnlyIfIdle: true})
+}
+
+// hostnameLocked is the node's name for people: `node ls`'s on swarm, else the agent's. Caller holds
+// statsMu.
+func (s *Server) hostnameLocked(key string, b nodestats.Batch) string {
+	if m, ok := s.nodeMeta[key]; ok && m.Hostname != "" {
+		return m.Hostname
+	}
+	return b.Node.Hostname
 }
 
 // pressureKinds is the node's kinds for /api/stats: [] unless fresh. Caller holds statsMu.

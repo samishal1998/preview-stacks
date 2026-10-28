@@ -167,3 +167,37 @@ func TestWakePageSaysWhichOfTheThreeThingsIsTrue(t *testing.T) {
 		t.Error("the failed class is what stills the lamp")
 	}
 }
+
+// negative control: return (boot, true) always → every row but "boot" fails.
+func TestRecency(t *testing.T) {
+	ms := func(v int64) *int64 { return &v }
+	text := `traefik_router_requests_total{router="app-wk@docker"} 1`
+	m := NewTrafficMeter("http://x/metrics", func(string) (string, bool) { return text, true }, nil)
+	m.Sample(1000)
+	text = `traefik_router_requests_total{router="app-wk@docker"} 2`
+	m.Sample(9000)
+	cases := []struct {
+		name string
+		rt   RuntimeView
+		want int64
+		ok   bool
+	}{
+		// negative control: drop the Reachable check → 5000 with ok.
+		{"unreachable", RuntimeView{StartedAt: []*int64{ms(5000)}}, 0, false},
+		// negative control: drop `|| len(rt.StartedAt) == 0` → 100 with ok.
+		{"nothing runs", RuntimeView{Reachable: true, StartedAt: []*int64{}}, 0, false},
+		// negative control: skip latestStart → 100 (boot).
+		{"newest start", RuntimeView{Reachable: true, StartedAt: []*int64{ms(3000), nil, ms(5000)}}, 5000, true},
+		// negative control: skip LastActivity → 5000.
+		{"last request", RuntimeView{Reachable: true, StartedAt: []*int64{ms(5000)}, Routers: []string{"app-wk"}}, 9000, true},
+		// negative control: start since at 0 instead of boot → 0.
+		{"boot", RuntimeView{Reachable: true, StartedAt: []*int64{nil}}, 100, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got, ok := Recency(100, c.rt, m); got != c.want || ok != c.ok {
+				t.Fatalf("Recency = %d %v, want %d %v", got, ok, c.want, c.ok)
+			}
+		})
+	}
+}
