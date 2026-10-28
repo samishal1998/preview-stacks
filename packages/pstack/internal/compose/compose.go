@@ -77,7 +77,8 @@ func baseOf(st *spec.Stack, files []string) string {
 }
 
 // filesFor resolves which compose files to pass to `-f`, in order, generating the augmented one when
-// the submitted file needs it: `pstack.routing.*` labels, swarm, or a host that ships logs to Loki.
+// the submitted file needs it: `pstack.routing.*` labels, swarm, or a service without `logging:` (the
+// loki driver with Loki on, the json-file cap without).
 // m is what the materialization did, for the job log; nil under --dry-run.
 //
 // Called by EVERY subcommand, not just `up`. The generated labels are derived from the resolved spec,

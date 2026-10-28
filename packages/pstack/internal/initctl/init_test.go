@@ -840,12 +840,18 @@ func TestLokiService(t *testing.T) {
 // fence under "#### The service (`GrafanaService`)"), which is the HTTP-01 render. Copied for
 // lokiConfigSpecLines' reason: the render golden is generated from the binary, so only an independent
 // copy catches a line transcribed wrong, and most of these lines are sign-in controls no other check reads.
+// Plus the json-file cap after `restart:`, from docs/node-pressure-design.md §5 (0.45.0).
 var grafanaServiceSpecLines = []string{
 	"",
 	"  # Grafana, with --logging loki: the reader for Loki. Signed in with pstack accounts (forwardAuth).",
 	"  grafana:",
 	"    image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
 	"    restart: unless-stopped",
+	"    logging:",
+	"      driver: json-file",
+	"      options:",
+	"        max-size: 50m",
+	`        max-file: "3"`,
 	"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
 	"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
 	"    networks: [logs]",
@@ -1745,4 +1751,36 @@ func TestInitProtectsTheDaemonFromTheOOMKiller(t *testing.T) {
 			t.Errorf("out %q cmds %v", out, cmds)
 		}
 	})
+}
+
+func TestControlServicesCapTheirLogs(t *testing.T) {
+	t.Setenv("PSTACK_LOKI_PASSWORD", "")
+	for _, ui := range []initctl.UI{initctl.Basic, initctl.Advanced, initctl.Hearth} {
+		for _, logging := range []initctl.Logging{initctl.LoggingNone, initctl.Loki} {
+			t.Run(string(ui)+"-"+string(logging), func(t *testing.T) {
+				// negative control: drop the logging block from the template's traefik service — traefik has none.
+				// negative control: drop controlLogCap from GrafanaService — grafana has none (the loki cells).
+				_, yaml := render(t, func(o *initctl.Options) { o.UI, o.Logging = ui, logging })
+				v, err := yamlx.ParseString(yaml)
+				if err != nil {
+					t.Fatal(err)
+				}
+				services := v.(*omap.Map).GetMap("services")
+				if !slices.Contains(services.Keys(), "traefik") || !slices.Contains(services.Keys(), "pstack") {
+					t.Fatalf("services %v", services.Keys())
+				}
+				for _, name := range services.Keys() {
+					size, files := "50m", "3"
+					if name == "traefik" {
+						size, files = "10m", "2"
+					}
+					l := services.GetMap(name).GetMap("logging")
+					o := l.GetMap("options")
+					if l.GetString("driver") != "json-file" || o.GetString("max-size") != size || o.GetString("max-file") != files {
+						t.Errorf("%s logging %v, want json-file %s × %s", name, l, size, files)
+					}
+				}
+			})
+		}
+	}
 }

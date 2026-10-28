@@ -38,6 +38,13 @@ services:
     # Uncapped, so it is also the biggest container when the host runs dry: the kernel takes the
     # highest score first, and a preview's process (0) must be taken before this one.
     oom_score_adj: -500
+    # Capped, because docker caps nothing by default: one host's traefik -json.log reached 3.6 GB and
+    # filled the disk. The smallest cap here: its access log matters only for a short while.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "2"
     ports:
       - "80:80"
       - "443:443"
@@ -113,6 +120,12 @@ services:
     restart: unless-stopped
     # The OOM killer takes a preview's process (0) before the control plane's.
     oom_score_adj: -500
+    # Capped like every control service (Traefik's, above, says why).
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
     networks: [preview-ingress, preview-shared]
     # Overrides the image's non-root default, on purpose. The socket below is mounted read-write,
     # which is root-equivalent on this host no matter which uid holds it — so a non-root container
@@ -225,6 +238,11 @@ services:
   loki:
     image: grafana/loki:3.7.7
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
     # Only Traefik shares this network. Never preview-ingress: Loki has no auth, and every preview
     # container sits on preview-ingress — any of them could read every stack's logs.
     networks: [logs]
@@ -261,6 +279,11 @@ services:
   grafana:
     image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
     # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches
     # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.
     networks: [logs]

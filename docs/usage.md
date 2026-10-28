@@ -390,13 +390,18 @@ Add `-v` to see the actual commands and their output:
 $ PR=8 pstack up -v
 stack: pr-8
 → compose up (backend)
-  $ docker compose -p 'pr-8' -f 'docker-compose.preview.yml' -f 'docker-compose.preview.tls.yml' --profile 'backend' up -d --remove-orphans
+  $ docker compose -p 'pr-8' -f 'compose.generated.yml' -f 'docker-compose.preview.tls.yml' --profile 'backend' up -d --remove-orphans
 ```
 
 That is the whole Compose contract, visible: `-p <stack>` for namespacing, one `-f` per file
 (`compose.file` then each `compose.overlays` entry, in order), the selected profiles, and
 `--remove-orphans` so relabelling from `backend+frontend` to `backend` actually stops the frontend
 instead of orphaning it.
+
+The first `-f` is `compose.generated.yml`, which pstack writes beside `compose.file` and never
+over it. It does this whenever a service needs routing labels or has no `logging:` key. Such a
+service gets a json-file log cap (10m × 3), or the loki driver on a host that runs Loki. Add
+`compose.generated.yml` to your repository's `.gitignore`.
 
 ### Reading the step report
 

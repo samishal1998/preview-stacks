@@ -77,8 +77,12 @@
 // is unreachable the driver holds a node-wide lock while it retries, so every `docker stop` on that
 // node waits out the retry loop; only small retries, timeout and backoff bound the wait to seconds.
 //
+// With Loki off, CapLogs gives the same services docker's json-file driver capped at 10m × 3
+// instead: docker caps no container log by default, and one host's disk filled with them. The same
+// opt-out holds — any `logging` key is yours — but nothing is named in the job log.
+//
 // The consequence under compose: a stack with no routing labels runs from the derived file whenever
-// a service got the block. With logging off nothing here runs, and the old gates hold exactly.
+// a service got either block, which is every stack with a service that has no `logging:`.
 //
 // ── THE CHALLENGE PROBE (a Go-only note) ─────────────────────────────────────────────────────────
 //
@@ -527,6 +531,24 @@ func InjectLogging(doc *omap.Map, stack, pushURL string) (out *omap.Map, logged,
 	return out, logged, own
 }
 
+// CapLogs is InjectLogging's twin for a host without Loki: every service without a `logging` key
+// gets docker's json-file driver capped at 10m × 3, and is returned in file order, never nil. Pure,
+// like InjectLogging, and a `logging` key of any shape opts out the same way.
+func CapLogs(doc *omap.Map) (out *omap.Map, capped []string) {
+	out = doc.Clone()
+	capped = []string{}
+	services := out.GetMap("services")
+	for _, name := range services.Keys() {
+		svc := services.GetMap(name)
+		if svc == nil || svc.Has("logging") {
+			continue
+		}
+		svc.Set("logging", omap.From("driver", "json-file", "options", omap.From("max-size", "10m", "max-file", "3")))
+		capped = append(capped, name)
+	}
+	return out, capped
+}
+
 // LoggedServices is the services of a parsed compose that a deploy hands the loki driver, in file
 // order, never nil: the ones InjectLogging labels `service_name=<stack>-<service>`, less those the
 // selected profiles leave out (Swarmify's rule, which compose's --profile shares). Pure: no docker
@@ -583,8 +605,9 @@ type MaterializeResult struct {
 // from the shell's).
 //
 // Returns the filename compose should use — the derived one when anything was generated or a
-// service got the logging block, and the original otherwise, so a deployment that writes its own
-// labels gets exactly the file it submitted with no derived artefact left lying around.
+// service got a logging block (loki's or the json-file cap), and the original otherwise, so a
+// deployment that writes its own labels and its own `logging:` gets exactly the file it submitted
+// with no derived artefact left lying around.
 //
 // Regenerated on every compose invocation rather than cached at submit time, because the labels depend
 // on the RESOLVED spec: `up` with one set of variables and `down` with another must not disagree about
@@ -619,16 +642,13 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		return nil, &spec.Error{Msg: "compose file " + original + " must be a mapping"}
 	}
 
-	// Discovery runs before the pre-check because Loki on its own is a reason to write the derived
-	// file — but only once the file parsed, so a missing or broken file still costs no docker call.
+	// Only once the file parsed, so a missing or broken file still costs no docker call. No pre-check
+	// returns early here: Loki on or off, a service without `logging:` gets a block.
 	pushURL := DetectLogging(a.Runner)
 
-	// Cheap pre-check: no pstack.routing.* anywhere and no Loki means nothing to generate, and no
-	// reason to ask docker for the challenge mode. Under swarm the conversion still has to run.
+	// No pstack.routing.* anywhere means no labels to generate, and no reason to ask docker for the
+	// challenge mode.
 	wantsRouting := strings.Contains(raw, "pstack.routing.")
-	if !wantsRouting && !isSwarm && pushURL == "" {
-		return untouched(), nil
-	}
 
 	out := doc
 	generated := omap.New()
@@ -650,13 +670,15 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	}
 	// After the labels and before the swarm conversion: one step for both orchestrators, and
 	// Swarmify keeps `logging`.
-	logged, logNotes := []string{}, []string{}
+	logged, logNotes, capped := []string{}, []string{}, []string{}
 	if pushURL != "" {
 		var own []string
 		out, logged, own = InjectLogging(out, a.Spec.Stack, pushURL)
 		for _, svc := range own {
 			logNotes = append(logNotes, "logging: service "+svc+" has its own logging: — left alone")
 		}
+	} else {
+		out, capped = CapLogs(out)
 	}
 	notes := []string{}
 	if isSwarm {
@@ -666,7 +688,7 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		out = converted.Doc
 		notes = converted.Notes
 	}
-	if !isSwarm && generated.Len() == 0 && len(logged) == 0 {
+	if !isSwarm && generated.Len() == 0 && len(logged) == 0 && len(capped) == 0 {
 		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: skipped, Notes: []string{}, Logged: []string{}, LogNotes: logNotes}, nil
 	}
 

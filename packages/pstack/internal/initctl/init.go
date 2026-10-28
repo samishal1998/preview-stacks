@@ -917,6 +917,10 @@ func ControlUIService(ui UI) string {
 	return "      - traefik.http.routers.pstack-ui.service=pstack"
 }
 
+// controlLogCap is the json-file cap the template's pstack service carries, for the services init
+// appends to it. Docker caps no container log by default; Traefik's is smaller, in the template.
+const controlLogCap = "    logging:\n      driver: json-file\n      options:\n        max-size: 50m\n        max-file: \"3\""
+
 // AdvancedUIService is the optional advanced-UI container. Omitted entirely in basic mode — not
 // merely disabled.
 //
@@ -942,6 +946,7 @@ func AdvancedUIService(ui UI) string {
 		"  advanced-ui:",
 		"    image: " + image,
 		"    restart: unless-stopped",
+		controlLogCap,
 		"    depends_on: [pstack]",
 		"    networks: [preview-ingress]",
 		"    labels:",
@@ -974,6 +979,7 @@ func LokiService(logging Logging, challenge Challenge, password string) string {
 		"  loki:",
 		"    image: grafana/loki:" + swarm.LokiVersion,
 		"    restart: unless-stopped",
+		controlLogCap,
 		"    # Only Traefik shares this network. Never preview-ingress: Loki has no auth, and every preview",
 		"    # container sits on preview-ingress — any of them could read every stack's logs.",
 		"    networks: [logs]",
@@ -1030,6 +1036,7 @@ func GrafanaService(logging Logging, challenge Challenge) string {
 		"  grafana:",
 		"    image: grafana/grafana:" + GrafanaVersion + "    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
 		"    restart: unless-stopped",
+		controlLogCap,
 		"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
 		"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
 		"    networks: [logs]",
