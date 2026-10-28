@@ -37,9 +37,9 @@ test('problem wording', () => {
   expect(problem({ status: 409, body: { error: 'dup' } }, 'Add')).toBe('Add: dup');
 });
 
-test('prefs: fresh or unreadable prefs start compact', () => {
+test('prefs: fresh or unreadable prefs start on the custom theme, compact', () => {
   // negative control: defaulting density to 'comfortable' fails this test.
-  for (const raw of [{}, null, 'junk', 7]) expect(mergePrefs(raw)).toEqual({ v: PREFS_VERSION, theme: 'sunset', mode: 'system', density: 'compact' });
+  for (const raw of [{}, null, 'junk', 7]) expect(mergePrefs(raw)).toEqual({ v: PREFS_VERSION, theme: 'custom', mode: 'system', density: 'compact' });
 });
 
 test('prefs: old prefs without v reset density to compact once and keep the rest', () => {
@@ -50,4 +50,12 @@ test('prefs: old prefs without v reset density to compact once and keep the rest
 test('prefs: versioned prefs keep the chosen density', () => {
   // negative control: resetting density unconditionally turns this 'comfortable' into 'compact'.
   expect(mergePrefs({ v: PREFS_VERSION, theme: 'rose', mode: 'light', density: 'comfortable' })).toEqual({ v: PREFS_VERSION, theme: 'rose', mode: 'light', density: 'comfortable' });
+});
+
+test('prefs: before v2 the old default sunset moves to the custom theme; a picked palette stays', () => {
+  // negative control: dropping the `stored.theme === 'sunset'` check turns this 'ocean' into 'custom'.
+  expect(mergePrefs({ v: 1, theme: 'sunset', mode: 'dark', density: 'comfortable' })).toEqual({ v: PREFS_VERSION, theme: 'custom', mode: 'dark', density: 'comfortable' });
+  expect(mergePrefs({ v: 1, theme: 'ocean', mode: 'dark', density: 'comfortable' })).toEqual({ v: PREFS_VERSION, theme: 'ocean', mode: 'dark', density: 'comfortable' });
+  // A sunset picked after v2 is a choice.
+  expect(mergePrefs({ v: 2, theme: 'sunset', mode: 'dark', density: 'compact' }).theme).toBe('sunset');
 });

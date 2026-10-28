@@ -1,5 +1,6 @@
 import { createApp } from 'vue';
 import '@hearth-ui/vue/styles.css';
+import './theme.css';
 import App from './App.vue';
 import { router } from './router';
 

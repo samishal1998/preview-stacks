@@ -19,7 +19,7 @@ import {
 } from '@hearth-ui/vue';
 import type { HostSettings, SettingKey, SettingRow } from '@samyx/preview-stacks-client';
 import { settingsApi } from '../api-settings';
-import { SOURCE_LABEL, capProblem, densities, mayWrite, palettes } from '../lib/settings';
+import { SOURCE_LABEL, capProblem, densities, hasDensity, mayWrite, palettes } from '../lib/settings';
 import { problem } from '../lib/settings-problem';
 import { roleOptions } from '../lib/users';
 import { getToken, tokenShape } from '../lib/token';
@@ -148,7 +148,7 @@ async function save(): Promise<void> {
         <HStack direction="column" :gap="3" style="max-width: 28rem">
           <HThemeSwitcher v-model="prefs.mode" />
           <HSelect v-model="prefs.theme" label="Palette" :options="palettes" />
-          <HSelect v-model="prefs.density" label="Density" :options="densities" />
+          <HSelect v-if="hasDensity(prefs.theme)" v-model="prefs.density" label="Density" :options="densities" />
         </HStack>
       </HCard>
     </HStack>

@@ -1,0 +1,190 @@
+/*
+ * pstack's own Hearth theme (`theme="custom"`): a themeProfileCSS export, kept verbatim. Imported after
+ * the library's stylesheet so its sizes win over the density presets at the same specificity.
+ */
+:is([data-hearth-theme="custom"]) {
+  --h-motion: .15s;
+  --h-combo-input-padding-y: max(0px, calc((34px - 1.4em - 2px) / 2));
+  --h-heading-md: 24px;
+  --h-text-md: 14px;
+  --h-control-padding: 10px;
+  --h-combo-line-padding: 0px;
+  --h-page-padding: clamp(12px, 2vw, 24px);
+  --h-separator-space: 20px;
+  --h-heading-lg: 32px;
+  --h-radius-card: 10px;
+  --h-content-max: 1440px;
+  --h-control-padding-y: max(0px, calc((32px - 1.4em - 2px) / 2));
+  --h-radius-panel: 14px;
+  --h-radius-pill: 999px;
+  --h-input-padding-x: 10px;
+  --h-row-height: 32px;
+  --h-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --h-compact-control-height: min(32px, 40px);
+  --h-row-padding: 6px;
+  --h-heading-xl: 40px;
+  --h-field-padding-y: max(0px, calc((34px - 1.4em - 2px) / 2));
+  --h-sidebar-height: 420px;
+  --h-radius-control: 4px;
+  --h-font-size: 13px;
+  --h-card-padding: 14px;
+  --h-control-height: 32px;
+  --h-heading-sm: 18px;
+  --h-field-font-size: 13px;
+  --h-focus-width: 2px;
+  --h-sidebar-width: 232px;
+  --h-space: 3px;
+  --h-field-height: 34px;
+  --h-gap: 8px;
+  --h-choice-height: 32px;
+  --h-text-lg: 16px;
+  --h-text-sm: 12px;
+  --h-progress-height: 8px;
+  --h-adornment-size: max(24px, calc(34px - 8px));
+  --h-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --h-font-min-size: 12px;
+}
+
+:is([data-hearth-theme="custom"]):not([data-hearth-mode]),
+:is([data-hearth-theme="custom"])[data-hearth-mode="dark"] {
+  color-scheme: dark;
+  --h-border: #ffffff17;
+  --h-text: #f7f8fb;
+  --h-raised: color-mix(in srgb, #ff7a2f 5%, #191c22);
+  --h-faint: #91a0b6;
+  --h-panel: color-mix(in srgb, #ff7a2f 3%, #191c22);
+  --h-border-strong: #536177;
+  --h-shadow: 0 12px 40px #0000002e;
+  --h-accent: #ff7a2f;
+  --h-mountain-mid: #1a2c44;
+  --h-mountain-front: #0b1424;
+  --h-scene-bg: linear-gradient(145deg, #162338, #0d1727 65%, #292934);
+  --h-mountain-back: #485064;
+  --h-surface: #191c22;
+  --h-on-accent: #24160f;
+  --h-warning: #f4b21a;
+  --h-success: #24c978;
+  --h-accent-text: #ffb15c;
+  --h-bg: #101216;
+  --h-scene-text: #f7f8fb;
+  --h-muted: #aeb8ca;
+  --h-scene-muted: #b5bfd1;
+  --h-accent-hover: #ffb15c;
+  --h-info: #86b8f5;
+  --h-danger: #ff8290;
+  --h-shadow-soft: 0 4px 14px #0000001a;
+  --h-focus: #ffb15c;
+  --h-accent-subtle: color-mix(in srgb, #ff7a2f 6%, transparent);
+}
+
+:is([data-hearth-theme="custom"])[data-hearth-mode="light"] {
+  color-scheme: light;
+  --h-border: #121f3421;
+  --h-text: #111827;
+  --h-raised: color-mix(in srgb, #ff7a2f 5%, #fff);
+  --h-faint: #65738a;
+  --h-panel: color-mix(in srgb, #ff7a2f 3%, #fff);
+  --h-border-strong: #8391a7;
+  --h-shadow: 0 12px 40px #26334d14;
+  --h-accent: #ff7a2f;
+  --h-mountain-mid: #1a2c44;
+  --h-mountain-front: #0b1424;
+  --h-scene-bg: linear-gradient(145deg, #162338, #0d1727 65%, #292934);
+  --h-mountain-back: #485064;
+  --h-surface: #fff;
+  --h-on-accent: #ffffff;
+  --h-warning: #886211;
+  --h-success: #117b4a;
+  --h-accent-text: #a4421b;
+  --h-bg: #f5f6f8;
+  --h-scene-text: #f7f8fb;
+  --h-muted: #526075;
+  --h-scene-muted: #b5bfd1;
+  --h-accent-hover: #ffb15c;
+  --h-info: #245f9d;
+  --h-danger: #b02e40;
+  --h-shadow-soft: 0 3px 14px #26334d0d;
+  --h-focus: #a4421b;
+  --h-accent-subtle: color-mix(in srgb, #ff7a2f 6%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :is([data-hearth-theme="custom"])[data-hearth-mode="system"] {
+    color-scheme: dark;
+    --h-border: #ffffff17;
+    --h-text: #f7f8fb;
+    --h-raised: color-mix(in srgb, #ff7a2f 5%, #191c22);
+    --h-faint: #91a0b6;
+    --h-panel: color-mix(in srgb, #ff7a2f 3%, #191c22);
+    --h-border-strong: #536177;
+    --h-shadow: 0 12px 40px #0000002e;
+    --h-accent: #ff7a2f;
+    --h-mountain-mid: #1a2c44;
+    --h-mountain-front: #0b1424;
+    --h-scene-bg: linear-gradient(145deg, #162338, #0d1727 65%, #292934);
+    --h-mountain-back: #485064;
+    --h-surface: #191c22;
+    --h-on-accent: #24160f;
+    --h-warning: #f4b21a;
+    --h-success: #24c978;
+    --h-accent-text: #ffb15c;
+    --h-bg: #101216;
+    --h-scene-text: #f7f8fb;
+    --h-muted: #aeb8ca;
+    --h-scene-muted: #b5bfd1;
+    --h-accent-hover: #ffb15c;
+    --h-info: #86b8f5;
+    --h-danger: #ff8290;
+    --h-shadow-soft: 0 4px 14px #0000001a;
+    --h-focus: #ffb15c;
+    --h-accent-subtle: color-mix(in srgb, #ff7a2f 6%, transparent);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :is([data-hearth-theme="custom"])[data-hearth-mode="system"] {
+    color-scheme: light;
+    --h-border: #121f3421;
+    --h-text: #111827;
+    --h-raised: color-mix(in srgb, #ff7a2f 5%, #fff);
+    --h-faint: #65738a;
+    --h-panel: color-mix(in srgb, #ff7a2f 3%, #fff);
+    --h-border-strong: #8391a7;
+    --h-shadow: 0 12px 40px #26334d14;
+    --h-accent: #ff7a2f;
+    --h-mountain-mid: #1a2c44;
+    --h-mountain-front: #0b1424;
+    --h-scene-bg: linear-gradient(145deg, #162338, #0d1727 65%, #292934);
+    --h-mountain-back: #485064;
+    --h-surface: #fff;
+    --h-on-accent: #ffffff;
+    --h-warning: #886211;
+    --h-success: #117b4a;
+    --h-accent-text: #a4421b;
+    --h-bg: #f5f6f8;
+    --h-scene-text: #f7f8fb;
+    --h-muted: #526075;
+    --h-scene-muted: #b5bfd1;
+    --h-accent-hover: #ffb15c;
+    --h-info: #245f9d;
+    --h-danger: #b02e40;
+    --h-shadow-soft: 0 3px 14px #26334d0d;
+    --h-focus: #a4421b;
+    --h-accent-subtle: color-mix(in srgb, #ff7a2f 6%, transparent);
+  }
+}
+
+/* Loaded after the library, the sizes above would also beat its coarse-pointer floor: keep 44px touch targets. */
+@media (pointer: coarse) {
+  :is([data-hearth-theme="custom"]) {
+    --h-control-height: 44px;
+    --h-field-height: 44px;
+    --h-choice-height: 44px;
+    --h-row-height: 44px;
+    --h-compact-control-height: 44px;
+    --h-adornment-size: 44px;
+    --h-control-padding-y: max(0px, calc((44px - 1.4em - 2px) / 2));
+    --h-field-padding-y: max(0px, calc((44px - 1.4em - 2px) / 2));
+    --h-combo-input-padding-y: max(0px, calc((44px - 1.4em - 2px) / 2));
+  }
+}

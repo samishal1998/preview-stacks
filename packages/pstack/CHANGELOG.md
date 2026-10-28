@@ -35,9 +35,10 @@
 
 ### Changed
 
-- **Hearth is compact by default, with smaller corners.** Density defaults to compact, and stored
-  preferences are reset to compact once; a later choice sticks. Corners are 6/10/14 px (control,
-  card, panel), down from 10/16/20.
+- **Hearth has its own theme, compact by default.** The new Pstack palette (`@hearth-ui/vue` 0.8.0)
+  is the default: 32px controls, 4/10/14 px corners (control, card, panel) and an orange accent, in
+  dark and light. A browser still on the old default (Sunset) moves to it once; a picked palette
+  sticks. The library palettes keep a density choice, compact by default, with 6/10/14 px corners.
 
 - **The control stack has no memory limits.** Traefik's 512m cap was OOM-killed by a burst of proxied
   requests, and with Traefik down every preview is down; pstack (512m), the UI (128m), Loki (2g) and
