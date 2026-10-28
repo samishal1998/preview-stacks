@@ -1,14 +1,22 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
 )
 
 // The agent fixture's disk is 95.1 % used; this diskFree puts it at 80 %.
@@ -145,4 +153,205 @@ func composeAgent(t *testing.T) (*Server, *string) {
 	}
 	s.host = f
 	return s, &logs
+}
+
+const capNow = int64(1_000_000)
+
+// capNode seeds one node's batch, as statsTick would leave it: 94 % disk when pressured, 50 %
+// otherwise. at is when the batch arrived; meta is set only when availability is non-empty (swarm).
+func capNode(s *Server, key, hostname, availability string, pressured bool, at int64) {
+	free := int64(50)
+	if pressured {
+		free = 6
+	}
+	n := nodestats.NodeLine{Hostname: hostname, Cores: 2, MemTotal: 100, MemAvailable: 50, DiskTotal: 100, DiskFree: free}
+	if availability != "" {
+		n.Node = key
+	}
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.stats.Record(at, []nodestats.Batch{{Key: key, Raw: key + hostname, Node: n}})
+	if availability != "" {
+		s.onSwarm = true
+		s.nodeMeta[key] = nodeMeta{Hostname: hostname, Role: "worker", Availability: availability}
+	}
+	if pressured {
+		s.pressure[key] = []nodestats.Kind{nodestats.Disk}
+	}
+}
+
+// negative control: refuse when ANY active node is in pressure → "one in pressure" is refused.
+func TestCapacityRefusalSwarmRule(t *testing.T) {
+	// Keys sort opposite to hostnames in "both in pressure", so first by hostname is not first by key.
+	cases := []struct {
+		name string
+		seed func(s *Server)
+		why  string
+	}{
+		// negative control: return refused when the active set is empty → this case is refused.
+		{"no node data", func(s *Server) {}, ""},
+		// negative control: stop at the first pressured node instead of the first free one → refused.
+		{"one of two in pressure", func(s *Server) {
+			capNode(s, "a", "worker-1", "active", true, capNow)
+			capNode(s, "b", "worker-2", "active", false, capNow)
+		}, ""},
+		// negative control: sort the candidates by key → names worker-2.
+		{"both in pressure", func(s *Server) {
+			capNode(s, "a", "worker-2", "active", true, capNow)
+			capNode(s, "b", "worker-1", "active", true, capNow)
+		}, "worker-1: disk 94% ≥ 90%"},
+		// negative control: count every listed node, drained or not → the drained calm node allows it.
+		{"the free node drained", func(s *Server) {
+			capNode(s, "a", "worker-2", "active", true, capNow)
+			capNode(s, "b", "worker-1", "drain", false, capNow)
+		}, "worker-2: disk 94% ≥ 90%"},
+		// negative control: treat a stale node as busy → refused (invariant 11).
+		{"the free node stale", func(s *Server) {
+			capNode(s, "a", "worker-2", "active", true, capNow)
+			capNode(s, "b", "worker-1", "active", false, capNow-nodestats.StaleMs-1_000)
+		}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := statsServer(t)
+			c.seed(s)
+			why, refused := s.capacityRefusal(spec.Swarm, capNow)
+			if refused != (c.why != "") || why != c.why {
+				t.Fatalf("capacityRefusal = %q %v, want %q", why, refused, c.why)
+			}
+		})
+	}
+}
+
+// negative control: apply the swarm rule to every orchestrator → a compose host has no nodeMeta, so
+// self in pressure is allowed.
+func TestCapacityRefusalCompose(t *testing.T) {
+	// negative control: always return allowed → the self node in pressure is not refused.
+	t.Run("self in pressure", func(t *testing.T) {
+		s := statsServer(t)
+		capNode(s, "worker-1", "worker-1", "", true, capNow)
+		s.selfKey = "worker-1"
+		why, refused := s.capacityRefusal(spec.Compose, capNow)
+		if !refused || why != "worker-1: disk 94% ≥ 90%" {
+			t.Fatalf("capacityRefusal = %q %v", why, refused)
+		}
+	})
+	// negative control: refuse when any node is in pressure, not only self → the worker refuses it.
+	t.Run("a worker in pressure only", func(t *testing.T) {
+		s := statsServer(t)
+		capNode(s, "n1", "mgr", "active", false, capNow)
+		capNode(s, "n2", "worker-1", "active", true, capNow)
+		s.selfKey = "n1"
+		if why, refused := s.capacityRefusal(spec.Compose, capNow); refused {
+			t.Fatalf("capacityRefusal = %q, want allowed", why)
+		}
+	})
+}
+
+// capServer is crServer with a docker that records every argv to the returned log, and the self node
+// (worker-1, a compose host) in disk pressure.
+func capServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Options{DataDir: t.TempDir(), Token: "t0ken", RoutingDir: t.TempDir(), Bus: events.New(), Log: func(string) {},
+		Env: exec.Merge(exec.Environ(), map[string]string{"PATH": bin + ":" + os.Getenv("PATH")})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	s.host = exec.NewFake(nil, "")
+	s.statsNow = func() int64 { return capNow }
+	crDeploy(t, s, "pr-1", "myapp-pr-1", crCompose)
+	capNode(s, "worker-1", "worker-1", "", true, capNow)
+	s.selfKey = "worker-1"
+	return s, calls
+}
+
+// capRun starts one lifecycle job on pr-1 and returns it once it has ended, with every event the
+// bus carried meanwhile.
+func capRun(t *testing.T, s *Server, action jobs.Action) (jobs.Job, []string) {
+	t.Helper()
+	var mu sync.Mutex
+	seen := []string{}
+	off := s.bus.On(func(e events.Event) { mu.Lock(); seen = append(seen, e.Event); mu.Unlock() })
+	defer off()
+	dep, err := s.registry.Get("pr-1")
+	if err != nil || dep == nil {
+		t.Fatal(dep, err)
+	}
+	st, err := s.resolveDep("pr-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, ok := s.startLifecycle("pr-1", dep, st, action, lifecycleOptions{By: "test"})
+	if !ok {
+		t.Fatal("not started")
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		j, _ := s.jobs.Get(job.ID)
+		if j.State != jobs.Queued && j.State != jobs.Running {
+			s.readiness.Cancel(st.Stack)
+			mu.Lock()
+			defer mu.Unlock()
+			return j, append([]string{}, seen...)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job never finished")
+		}
+	}
+}
+
+func capCalls(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// negative control: drop the capacityRefusal guard from work → both subtests fail.
+func TestUpRefusedUnderPressure(t *testing.T) {
+	for _, action := range []jobs.Action{jobs.Up, jobs.Wake} {
+		// negative control: drop the capacityRefusal guard from work → compose up runs and the job
+		// succeeds.
+		// negative control: put the guard after the stack.woken emit → the wake emits it.
+		t.Run(string(action), func(t *testing.T) {
+			s, calls := capServer(t)
+			j, seen := capRun(t, s, action)
+			why := "worker-1: disk 94% ≥ 90%"
+			want := []stack.StepResult{{Axis: "myapp-pr-1", Phase: stack.PhaseCapacity, OK: false, Code: 1, Message: &why}}
+			if j.State != jobs.Failed || j.Outcome == nil || !reflect.DeepEqual(j.Outcome.Steps, want) {
+				t.Fatalf("job = %s %+v", j.State, j.Outcome)
+			}
+			if c := capCalls(t, calls); strings.Contains(c, "compose") {
+				t.Fatalf("docker ran:\n%s", c)
+			}
+			if slices.Contains(seen, "stack.woken") || !slices.Contains(seen, "job.failed") {
+				t.Fatalf("events = %q", seen)
+			}
+		})
+	}
+}
+
+// negative control: guard every action in work → down is refused too and never runs compose down.
+func TestDownAllowedUnderPressure(t *testing.T) {
+	s, calls := capServer(t)
+	j, _ := capRun(t, s, jobs.Down)
+	if j.Outcome == nil {
+		t.Fatalf("job = %s, no outcome", j.State)
+	}
+	for _, step := range j.Outcome.Steps {
+		if step.Phase == stack.PhaseCapacity {
+			t.Fatalf("down refused: %+v", j.Outcome.Steps)
+		}
+	}
+	if c := capCalls(t, calls); !strings.Contains(c, "compose") {
+		t.Fatalf("compose down never ran:\n%s", c)
+	}
 }

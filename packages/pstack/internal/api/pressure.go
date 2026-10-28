@@ -14,6 +14,13 @@
 // Only a fresh, readable batch is judged (invariant 11). A stale node's entry is left as it was and
 // nothing fires: it did not recover, it went quiet. inPressure says false for it, so no guard acts.
 //
+// ── NO ROOM, NO NEW WORK ────────────────────────────────────────────────────────────────────────
+//
+// capacityRefusal is the guard startLifecycle runs before an up or a wake. On swarm it refuses when
+// every active node is fresh and in pressure: which node a task lands on cannot be known. With no
+// active node, or no data, it allows (NP-R18): unknown is never pressure. A compose deployment, on
+// either host, is refused when the self node is in pressure.
+//
 // ── THE id ──────────────────────────────────────────────────────────────────────────────────────
 //
 // `pressure/<key>` (NP-R17): the swarm node id on swarm, as the spec spells it, and the hostname on a
@@ -23,8 +30,10 @@ package api
 
 import (
 	"math"
+	"sort"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 )
 
 type pressureThresholds struct {
@@ -133,6 +142,45 @@ func (s *Server) inPressureLocked(key string, now int64) ([]nodestats.Kind, node
 	r, ok := nodestats.Read(b.Node)
 	kinds := append([]nodestats.Kind{}, s.pressure[key]...)
 	return kinds, r, ok && len(kinds) > 0
+}
+
+// capacityRefusal says why an up or wake of a deployment on o is refused: `worker-2: disk 94% ≥ 90%`,
+// the first node by hostname and its first kind.
+func (s *Server) capacityRefusal(o spec.Orchestrator, now int64) (why string, refused bool) {
+	t := nodestats.Thresholds{
+		DiskPct: s.settings.PressureDiskPct(),
+		MemPct:  s.settings.PressureMemPct(),
+		CPULoad: s.settings.PressureCPULoad(),
+	}
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	keys := []string{s.selfKey}
+	if o == spec.Swarm {
+		keys = []string{}
+		for key, m := range s.nodeMeta {
+			if m.Availability == "active" {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		sort.SliceStable(keys, func(i, j int) bool { return s.nodeMeta[keys[i]].Hostname < s.nodeMeta[keys[j]].Hostname })
+	}
+	first := ""
+	for _, key := range keys {
+		kinds, r, in := s.inPressureLocked(key, now)
+		if !in {
+			return "", false
+		}
+		if first == "" {
+			b, _ := s.stats.Fresh(key, now)
+			hostname := b.Node.Hostname
+			if m, ok := s.nodeMeta[key]; ok && m.Hostname != "" {
+				hostname = m.Hostname
+			}
+			first = hostname + ": " + nodestats.Describe(kinds[0], r, t)
+		}
+	}
+	return first, first != ""
 }
 
 // pressureKinds is the node's kinds for /api/stats: [] unless fresh. Caller holds statsMu.
