@@ -111,6 +111,7 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("sso", "config").AddCommand(NewSsoConfigPutCommand(exec))
 	group("sso", "provider").AddCommand(NewSsoProviderDeleteCommand(exec))
 	group("sso", "provider").AddCommand(NewSsoProviderPutCommand(exec))
+	group("stats").AddCommand(NewStatsGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmJoinCommand(exec))
 	group("swarm").AddCommand(NewSwarmNodeRemoveCommand(exec))
@@ -2761,6 +2762,29 @@ func NewSsoProviderPutCommand(exec oascmd.ExecOptions) *cobra.Command {
 			req.RawBody = []byte(flagData)
 		case len(body) > 0:
 			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewStatsGetCommand returns the "stats get" command (GET /api/stats).
+func NewStatsGetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "Each node's disk, memory and load from its agent, an hour of samples, and CPU and memory per stack. Unknown is null.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/stats",
 		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")

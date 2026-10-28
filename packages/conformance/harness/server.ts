@@ -92,6 +92,9 @@ export async function bootServer(o: BootOptions = {}): Promise<Booted> {
       PSTACK_TOKEN: token ?? undefined,
       // Receivers and fake providers live on 127.0.0.1; the SSRF guard must let the test reach them.
       PSTACK_NOTIFY_ALLOW_PRIVATE: '1',
+      // The stats loop reads `docker info` and the agent's logs: off unless a test turns it on, so no
+      // server reads the machine's own daemon (api-stats.test.ts sets its own tick and shim).
+      PSTACK_STATS_TICK_MS: '0',
       PSTACK_ROUTING_DIR: o.routingDir,
       DOCKER_CONFIG: o.registryDir,
       PSTACK_DOMAIN: o.domain,

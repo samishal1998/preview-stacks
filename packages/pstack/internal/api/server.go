@@ -35,6 +35,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/log"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/loki"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/notify"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/readiness"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/redact"
@@ -73,6 +74,9 @@ type Options struct {
 	// difference. ZERO IS OFF, and off is the zero value on purpose: `serve` is the only caller
 	// that turns it on.
 	SignalsTickMs int64
+	// StatsTickMs is how often statsLoop reads the agents' logs (routes_stats.go). Zero is off, like
+	// SignalsTickMs: only `serve` turns it on.
+	StatsTickMs int64
 
 	// Readiness tuning; zero means the defaults (2s / 180s / 3 restarts).
 	ReadinessPollMs    int64
@@ -172,6 +176,18 @@ type Server struct {
 	// change and nothing else. Empty at boot, which is why a restart re-raises whatever is still
 	// true. Under emptyMu, like the clocks it is computed from.
 	signalsSent map[string]signalPayload
+
+	// statsMu owns stats, nodeMeta, selfKey and onSwarm (routes_stats.go). Written by statsTick, read
+	// by the route. Its own mutex, never held across a docker call or an Emit (Go rule 14).
+	statsMu sync.Mutex
+	stats   *nodestats.Store
+	// nodeMeta is node id → what `node ls` said, kept when docker does not answer. Empty on compose.
+	nodeMeta map[string]nodeMeta
+	// selfKey is the control-plane node: SwarmInfo's NodeID on swarm, the only batch's key on compose.
+	selfKey string
+	onSwarm bool
+	// statsNow is the stats clock, a seam for tests. Not under statsMu: set once in New.
+	statsNow func() int64
 
 	// probeSem bounds concurrent /api/probe work. Buffered channel as a semaphore rather than a
 	// mutex: the route must answer `busy` immediately instead of queueing, since the caller is a
@@ -300,6 +316,9 @@ func New(o Options) (*Server, error) {
 		probeSem:    make(chan struct{}, probeSlots),
 		emptySince:  map[string]int64{},
 		signalsSent: map[string]signalPayload{},
+		stats:       nodestats.NewStore(),
+		nodeMeta:    map[string]nodeMeta{},
+		statsNow:    func() int64 { return time.Now().UnixMilli() },
 		spec:        newOpenAPIDoc(o.OpenAPISpec),
 		ssoClient:   sso.NewClient(nil),
 		bus:         o.Bus,
@@ -942,6 +961,9 @@ func (s *Server) Start() error {
 	// the conformance suite boots dozens — never starts shelling out to docker on a timer.
 	if s.opts.SignalsTickMs > 0 {
 		go s.signalsLoop()
+	}
+	if s.opts.StatsTickMs > 0 {
+		go s.statsLoop()
 	}
 	// Before Serve, so the first /api/health is already right.
 	s.grafanaCheckIn()

@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "fd2d06a9909bfe112b1ee04483737194ae09c61c772f38dfac3a48d80b5c50ed",
+  "specDigest": "574c4edccd889275a8fd4439b9bcb46ac2ec0f0e2833e0f4231f526bf17f02d6",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -896,6 +896,18 @@
         "name": "config get"
       },
       "digest": "33759ba1b7465868"
+    },
+    "getStats": {
+      "operationId": "getStats",
+      "method": "GET",
+      "path": "/api/stats",
+      "command": "stats get",
+      "funcName": "NewStatsGetCommand",
+      "summary": "Each node's disk, memory and load from its agent, an hour of samples, and CPU and memory per stack. Unknown is null.",
+      "ext": {
+        "name": "get"
+      },
+      "digest": "cfc554a84a65898e"
     },
     "getSwarm": {
       "operationId": "getSwarm",

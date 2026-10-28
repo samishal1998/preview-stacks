@@ -108,6 +108,7 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		// the swarm
 		{"GET", "/api/swarm", auth.Viewer},
 		{"GET", "/api/signals", auth.Viewer},
+		{"GET", "/api/stats", auth.Viewer},
 		{"POST", "/api/swarm/nodes/n1/drain", auth.Maintainer},
 		{"POST", "/api/swarm/nodes/n1/undrain", auth.Maintainer},
 		{"DELETE", "/api/swarm/nodes/n1", auth.Maintainer},

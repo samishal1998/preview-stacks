@@ -97,6 +97,7 @@ func Serve(o ServeOptions) *Exit {
 		// typo into a CI pipeline that polls a 404 forever with nothing saying why.
 		ProbeOff:         strings.EqualFold(strings.TrimSpace(get("PSTACK_PROBE")), "off"),
 		SignalsTickMs:    signalsTick(tuning),
+		StatsTickMs:      statsTick(tuning),
 		SSOStateTTLS:     int64(tuning.SSOStateTTLS),
 		SSODiscoveryTTLS: int64(tuning.SSODiscoveryTTLS),
 		Version:          version.Get(),
@@ -174,4 +175,12 @@ func signalsTick(t api.Tuning) int64 {
 		return int64(t.SignalsTickMs)
 	}
 	return api.SignalsTickDefaultMs
+}
+
+// statsTick is signalsTick for PSTACK_STATS_TICK_MS: explicit 0 is off, unset is 30 s.
+func statsTick(t api.Tuning) int64 {
+	if t.StatsTickSet {
+		return int64(t.StatsTickMs)
+	}
+	return api.StatsTickDefaultMs
 }

@@ -199,6 +199,8 @@ var permissions = []perm{
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	// The cluster's shape carries no credential, so it reads like the swarm panel does.
 	{path: "/api/signals", methods: mGet, min: auth.Viewer},
+	// Node and stack usage: numbers, no credential, read like the swarm panel.
+	{path: "/api/stats", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},
 	// Taking a machine out of the running, putting it back, and forgetting one that is gone. Host
 	// configuration, like the join token above — and none of the three creates or destroys a machine.

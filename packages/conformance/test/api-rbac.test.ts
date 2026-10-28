@@ -106,6 +106,8 @@ const TABLE: Row[] = [
   // What the cluster looks like right now. It names nodes and stuck tasks and carries no credential,
   // so it reads like the swarm panel beside it.
   { method: 'GET', path: '/api/signals', min: 'viewer', ok: 200 },
+  // Node and stack usage from the agents: numbers, no credential.
+  { method: 'GET', path: '/api/stats', min: 'viewer', ok: 200 },
   { method: 'GET', path: '/api/terminal-sessions', min: 'viewer', ok: 200 },
   // Decided: the roster is ordinary team information — who to hand a deployment to — and carries no
   // secret. Reading it is a viewer's; every write on it is an admin's, three rows down.
