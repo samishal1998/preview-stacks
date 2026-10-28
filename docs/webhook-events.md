@@ -514,6 +514,31 @@ the deployment that already holds it fires nothing.
 | `stack` | string \| null | That deployment's stack, or `null` when its spec does not resolve. |
 | `reason` | `"unassigned"` \| `"deleted"` \| `"forgotten"` | Unassigned through the API, the route deleted, or its deployment forgotten. The route is kept in the first and last cases. |
 
+### `node.pressure` / `node.recovered`
+
+A node's newest agent report crossed one of the `pressure_*` settings: disk used, memory free or
+load per core. Swarm and compose hosts.
+
+`node.pressure` fires when a node goes from no kinds to some, `node.recovered` when it goes back to
+none. Recovery needs the value back past the line by a margin: 5 points for disk and memory, 0.25
+for cpu. A change of kinds while the node stays in pressure fires nothing; `GET /api/stats` has the
+current picture. A node whose agent stops reporting fires neither: unknown is not recovered.
+
+Both events carry the same fields:
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `id` | string | `pressure/<node id>` on swarm, `pressure/<hostname>` on a compose host. **Dedupe on this.** |
+| `node` | string \| null | The swarm node id, `null` on a compose host. |
+| `hostname` | string | The machine's hostname. |
+| `kinds` | string[] | `disk`, `memory`, `cpu`, in that order: the kinds held now. `[]` on `node.recovered`. |
+| `disk` | number | Disk used, %, one decimal. |
+| `memory` | number | Memory free (`MemAvailable`), %, one decimal. |
+| `cpu` | number | 5-minute load per core, one decimal. |
+| `thresholds` | object | `{disk, memory, cpu}`: the settings judged against. `0` is off. |
+
+As with signals, a restart raises again whatever is still true, because the state is only in memory.
+
 ---
 
 ## Test deliveries

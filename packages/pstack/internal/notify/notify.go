@@ -45,6 +45,7 @@ import (
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/redact"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/webhooks"
@@ -487,12 +488,30 @@ func Summarize(e events.Event) string {
 			s += " (moved from " + p + ")"
 		}
 		return s + "."
+	case "node.pressure", "node.recovered":
+		if e.Event == "node.recovered" {
+			return "Resolved — " + field(d, "hostname") + " is no longer under pressure."
+		}
+		return field(d, "hostname") + " is under pressure: " + describePressure(d) + "."
 	default:
 		if stack == "" {
 			stack = "this host"
 		}
 		return e.Event + " on " + stack + "."
 	}
+}
+
+// describePressure is nodestats.Describe of each kind, off the payload's rounded readings.
+func describePressure(d map[string]any) string {
+	num := func(m map[string]any, k string) float64 { f, _ := m[k].(float64); return f }
+	r := nodestats.Reading{DiskUsedPct: num(d, "disk"), MemFreePct: num(d, "memory"), LoadPerCore: num(d, "cpu")}
+	th, _ := d["thresholds"].(map[string]any)
+	t := nodestats.Thresholds{DiskPct: int(num(th, "disk")), MemPct: int(num(th, "memory")), CPULoad: num(th, "cpu")}
+	lines := []string{}
+	for _, k := range strs(d["kinds"]) {
+		lines = append(lines, nodestats.Describe(nodestats.Kind(k), r, t))
+	}
+	return strings.Join(lines, ", ")
 }
 
 func actionWord(action any) string {
