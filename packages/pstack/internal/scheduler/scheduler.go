@@ -1,6 +1,7 @@
 // Package scheduler is sleep and wake-on-call: the SleepIndex (hostname → the deployment the
 // catch-all router's request belongs to), the TrafficMeter (Traefik's per-router counters → "last
-// request"), the tick that applies a spec's `sleep:` policy, and the "spinning up" page.
+// request"), the tick that applies a spec's `sleep:` policy, Recency (when a deployment was last in
+// use, which the api package's pressure sleep ranks by too), and the "spinning up" page.
 //
 // The index holds two kinds of deployment, and the second is not this package's to decide: one that
 // is ASLEEP, and one that has been WOKEN but is not serving yet. The api package keeps the latter
@@ -379,35 +380,50 @@ func (s *Scheduler) Tick() {
 			continue
 		}
 		rt, err := s.deps.Runtime(st)
-		if err != nil || !rt.Reachable || len(rt.StartedAt) == 0 {
+		if err != nil {
+			continue
+		}
+		since, ok := Recency(s.BootAt, rt, s.deps.Meter)
+		if !ok {
 			continue // unknown, or nothing to sleep
 		}
-		var lastDeploy int64
-		known := false
-		for _, t := range rt.StartedAt {
-			if t != nil && (!known || *t > lastDeploy) {
-				lastDeploy, known = *t, true
-			}
-		}
-		if st.Sleep.AfterMs > 0 && known && now-lastDeploy >= st.Sleep.AfterMs {
+		if lastDeploy, known := latestStart(rt); st.Sleep.AfterMs > 0 && known && now-lastDeploy >= st.Sleep.AfterMs {
 			s.deps.Sleep(meta.ID, st, "after "+FormatDuration(st.Sleep.AfterMs))
 			continue
 		}
-		if st.Sleep.IdleMs > 0 && s.deps.Meter.OK() {
-			// The idle clock starts at the later of: boot, the last deploy, the last request.
-			floor := s.BootAt
-			if known && lastDeploy > floor {
-				floor = lastDeploy
-			}
-			since := floor
-			if la := s.deps.Meter.LastActivity(rt.Routers); la > since {
-				since = la
-			}
-			if now-since >= st.Sleep.IdleMs {
-				s.deps.Sleep(meta.ID, st, "idle "+FormatDuration(st.Sleep.IdleMs))
-			}
+		if st.Sleep.IdleMs > 0 && s.deps.Meter.OK() && now-since >= st.Sleep.IdleMs {
+			s.deps.Sleep(meta.ID, st, "idle "+FormatDuration(st.Sleep.IdleMs))
 		}
 	}
+}
+
+// Recency is when a deployment was last in use: the latest of boot, its newest container start and
+// its last request. The idle rule and the api package's pressure sleep both rank by it. False when
+// docker did not answer or nothing runs: unknown, or nothing to sleep.
+func Recency(boot int64, rt RuntimeView, m *TrafficMeter) (int64, bool) {
+	if !rt.Reachable || len(rt.StartedAt) == 0 {
+		return 0, false
+	}
+	since := boot
+	if t, known := latestStart(rt); known && t > since {
+		since = t
+	}
+	if la := m.LastActivity(rt.Routers); la > since {
+		since = la
+	}
+	return since, true
+}
+
+// latestStart is the newest container start, if docker said any.
+func latestStart(rt RuntimeView) (int64, bool) {
+	var latest int64
+	known := false
+	for _, t := range rt.StartedAt {
+		if t != nil && (!known || *t > latest) {
+			latest, known = *t, true
+		}
+	}
+	return latest, known
 }
 
 // ── the page ─────────────────────────────────────────────────────────────────────────────────────

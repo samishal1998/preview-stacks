@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +16,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
@@ -353,5 +356,230 @@ func TestDownAllowedUnderPressure(t *testing.T) {
 	}
 	if c := capCalls(t, calls); !strings.Contains(c, "compose") {
 		t.Fatalf("compose down never ran:\n%s", c)
+	}
+}
+
+const sleepNow = int64(1_800_000_000_000)
+
+// sleepFixture is a server whose jobs run a docker that answers ok, whose meter has read Traefik,
+// booted long ago, with one deployment per stack (pr-N holds myapp-pr-N). started is how many minutes
+// ago each stack's one container started; s.host answers the runtime view of exactly those stacks.
+type sleepFixture struct {
+	s       *Server
+	metrics *string
+	mu      sync.Mutex
+	slept   []string // stack.slept: "<stack> <reason>"
+}
+
+func newSleepFixture(t *testing.T, started map[string]int, fetchOK bool) *sleepFixture {
+	t.Helper()
+	fx := &sleepFixture{metrics: new(string)}
+	s, err := New(Options{DataDir: t.TempDir(), Token: "t0ken", RoutingDir: t.TempDir(), Bus: events.New(), Log: func(string) {},
+		MetricsURL: "http://traefik/metrics", SchedulerFetch: func(string) (string, bool) { return *fx.metrics, fetchOK },
+		Env: exec.Merge(exec.Environ(), map[string]string{"PATH": fakeDockerPath(t)})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	fx.s = s
+	s.statsNow = func() int64 { return sleepNow }
+	s.pruneStart = s.prune
+	s.pruneRunner = func(context.Context) exec.Runner { return s.host }
+	s.scheduler.BootAt = 0
+	f := exec.NewFake(nil, "")
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		for stack, min := range started {
+			switch strings.TrimSpace(cmd) {
+			case "docker ps -aq --filter 'label=com.docker.compose.project=" + stack + "'":
+				return exec.Result{OK: true, Stdout: "c-" + stack + "\n"}, true
+			case "docker inspect 'c-" + stack + "'":
+				at := time.UnixMilli(sleepNow - int64(min)*60_000).UTC().Format(time.RFC3339Nano)
+				return exec.Result{OK: true, Stdout: `[{"Id":"c-` + stack + `","Name":"/` + stack + `-web-1","State":{"Status":"running","StartedAt":"` + at + `"}}]`}, true
+			}
+		}
+		return exec.Result{OK: false, Stderr: "Cannot connect to the Docker daemon"}, true
+	}
+	s.host = f
+	for stack := range started {
+		crDeploy(t, s, strings.TrimPrefix(stack, "myapp-"), stack, crCompose)
+	}
+	s.meter.Sample(sleepNow)
+	s.bus.On(func(e events.Event) {
+		if e.Event == "stack.slept" {
+			var d struct{ Stack, Reason string }
+			_ = json.Unmarshal(e.Data, &d)
+			fx.mu.Lock()
+			fx.slept = append(fx.slept, d.Stack+" "+d.Reason)
+			fx.mu.Unlock()
+		}
+	})
+	return fx
+}
+
+// node seeds a fresh batch for key with a container of each stack, in the given kinds: memory reads
+// 6 % free, cpu 3 per core.
+func (fx *sleepFixture) node(key, hostname string, kinds []nodestats.Kind, stacks ...string) {
+	n := nodestats.NodeLine{Hostname: hostname, Cores: 2, MemTotal: 100, MemAvailable: 50, DiskTotal: 100, DiskFree: 50}
+	for _, k := range kinds {
+		switch k {
+		case nodestats.Memory:
+			n.MemAvailable = 6
+		case nodestats.CPU:
+			n.Load5 = 6
+		case nodestats.Disk:
+			n.DiskFree = 6
+		}
+	}
+	ctrs := []nodestats.CtrLine{}
+	for _, st := range stacks {
+		ctrs = append(ctrs, nodestats.CtrLine{ID: "c-" + st, Stack: st})
+	}
+	fx.s.statsMu.Lock()
+	defer fx.s.statsMu.Unlock()
+	fx.s.stats.Record(sleepNow, []nodestats.Batch{{Key: key, Raw: key + hostname, Node: n, Ctrs: ctrs}})
+	if len(kinds) > 0 {
+		fx.s.pressure[key] = kinds
+	}
+}
+
+// settle waits until no stack has a job outstanding, then returns what slept.
+func (fx *sleepFixture) settle(t *testing.T, stacks ...string) []string {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		busy := false
+		for _, st := range stacks {
+			busy = busy || fx.s.jobs.IsBusy(st)
+		}
+		if !busy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a job never finished")
+		}
+	}
+	fx.mu.Lock()
+	defer fx.mu.Unlock()
+	return append([]string{}, fx.slept...)
+}
+
+// negative control: rank by newest instead of oldest → myapp-pr-3 sleeps.
+// negative control: drop the call from statsTick → nothing sleeps.
+func TestPressureSleepsTheLeastRecentlyUsed(t *testing.T) {
+	stacks := map[string]int{"myapp-pr-1": 120, "myapp-pr-2": 180, "myapp-pr-3": 60, "myapp-pr-4": 600}
+	fx := newSleepFixture(t, stacks, true)
+	fx.node("n2", "worker-2", []nodestats.Kind{nodestats.Memory}, "myapp-pr-1", "myapp-pr-2", "myapp-pr-3")
+	// negative control: take every deployment, not only those on the node → myapp-pr-4 sleeps.
+	fx.node("n1", "worker-1", nil, "myapp-pr-4")
+	fx.s.statsTick()
+	got := fx.settle(t, "myapp-pr-1", "myapp-pr-2", "myapp-pr-3", "myapp-pr-4")
+	if want := []string{"myapp-pr-2 worker-2 memory 6% free ≤ 10%"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("slept = %q, want %q", got, want)
+	}
+}
+
+// negative control: drop the meter check → pr-1 sleeps on a meter that cannot read Traefik.
+func TestPressureSleepSkipsWhenMeterNotOK(t *testing.T) {
+	fx := newSleepFixture(t, map[string]int{"myapp-pr-1": 600}, false)
+	fx.node("n2", "worker-2", []nodestats.Kind{nodestats.Memory}, "myapp-pr-1")
+	fx.s.pressureSleep(sleepNow)
+	if got := fx.settle(t, "myapp-pr-1"); len(got) != 0 {
+		t.Fatalf("slept = %q", got)
+	}
+}
+
+// negative control: an empty pressureSleep → shared, busy and already asleep fail (pr-2 never sleeps).
+func TestPressureSleepEligibility(t *testing.T) {
+	memory := []nodestats.Kind{nodestats.Memory}
+	next := []string{"myapp-pr-2 worker-2 memory 6% free ≤ 10%"}
+	cases := []struct {
+		name string
+		seed func(t *testing.T, fx *sleepFixture)
+		want []string
+	}{
+		// negative control: drop the Shared check → the shared pr-1 is picked and pr-2 never sleeps.
+		{"shared", func(t *testing.T, fx *sleepFixture) {
+			compose := crCompose
+			shared := strings.Replace(crSpec("myapp-pr-1"), "version: 1\n", "version: 1\nkind: shared\n", 1)
+			if _, err := fx.s.registry.Put("pr-1", shared, registry.PutOptions{ComposeYaml: &compose}); err != nil {
+				t.Fatal(err)
+			}
+			fx.node("n2", "worker-2", memory, "myapp-pr-1", "myapp-pr-2")
+		}, next},
+		// negative control: drop the IsBusy check → pr-1 is picked, OnlyIfIdle refuses it, and pr-2
+		// never sleeps.
+		{"busy", func(t *testing.T, fx *sleepFixture) {
+			release, ok := fx.s.jobs.Hold("myapp-pr-1")
+			if !ok {
+				t.Fatal("hold refused")
+			}
+			t.Cleanup(release)
+			fx.node("n2", "worker-2", memory, "myapp-pr-1", "myapp-pr-2")
+		}, next},
+		// negative control: drop the asleep check → pr-1 sleeps again.
+		{"already asleep", func(t *testing.T, fx *sleepFixture) {
+			if err := fx.s.registry.SetSleep("pr-1", &registry.SleepRecord{Since: 1, Reason: "operator", Hosts: []string{}, Rules: []string{}}); err != nil {
+				t.Fatal(err)
+			}
+			fx.node("n2", "worker-2", memory, "myapp-pr-1", "myapp-pr-2")
+		}, next},
+		// negative control: compare idle against the setting in seconds, not minutes → pr-1 sleeps.
+		// negative control: rank by container start only, not the last request → pr-1 sleeps.
+		{"used 10 min ago", func(t *testing.T, fx *sleepFixture) {
+			fx.s.wakeMu.Lock()
+			if fx.s.routeRouters == nil {
+				fx.s.routeRouters = map[string][]string{}
+			}
+			fx.s.routeRouters["myapp-pr-1"] = []string{"pstack-route-checkout-web"}
+			fx.s.wakeMu.Unlock()
+			line := `traefik_router_requests_total{router="pstack-route-checkout-web@file"} `
+			*fx.metrics = line + "1"
+			fx.s.meter.Sample(sleepNow - 20*60_000)
+			*fx.metrics = line + "2"
+			fx.s.meter.Sample(sleepNow - 10*60_000)
+			fx.node("n2", "worker-2", memory, "myapp-pr-1")
+		}, []string{}},
+		// negative control: act on disk too → pr-1 sleeps on a full disk.
+		{"disk-only pressure", func(t *testing.T, fx *sleepFixture) {
+			fx.node("n2", "worker-2", []nodestats.Kind{nodestats.Disk}, "myapp-pr-1", "myapp-pr-2")
+		}, []string{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// pr-1 is the least recently used and disqualified; where pr-2 is on the node, it is next.
+			fx := newSleepFixture(t, map[string]int{"myapp-pr-1": 600, "myapp-pr-2": 300}, true)
+			c.seed(t, fx)
+			fx.s.pressureSleep(sleepNow)
+			stacks := []string{"myapp-pr-1", "myapp-pr-2"}
+			if c.name == "busy" {
+				stacks = stacks[1:] // held until cleanup
+			}
+			if got := fx.settle(t, stacks...); !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("slept = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// negative control: start every eligible stack instead of the best one → both sleep.
+func TestPressureSleepOnePerTick(t *testing.T) {
+	fx := newSleepFixture(t, map[string]int{"myapp-pr-1": 600, "myapp-pr-2": 300}, true)
+	fx.node("n1", "worker-1", []nodestats.Kind{nodestats.CPU}, "myapp-pr-1")
+	fx.node("n2", "worker-2", []nodestats.Kind{nodestats.Memory}, "myapp-pr-2")
+	fx.s.pressureSleep(sleepNow)
+	if got, want := fx.settle(t, "myapp-pr-1", "myapp-pr-2"), []string{"myapp-pr-1 worker-1 load 3 per core ≥ 2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("slept = %q, want %q", got, want)
+	}
+}
+
+// negative control: drop the zero check → pr-1 sleeps with auto-sleep off.
+func TestPressureSleepOffAtZero(t *testing.T) {
+	fx := newSleepFixture(t, map[string]int{"myapp-pr-1": 600}, true)
+	if err := fx.s.settings.Set(settings.KeyPressureSleepIdleMin, "0"); err != nil {
+		t.Fatal(err)
+	}
+	fx.node("n2", "worker-2", []nodestats.Kind{nodestats.Memory}, "myapp-pr-1")
+	fx.s.pressureSleep(sleepNow)
+	if got := fx.settle(t, "myapp-pr-1"); len(got) != 0 {
+		t.Fatalf("slept = %q", got)
 	}
 }

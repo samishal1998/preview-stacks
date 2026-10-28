@@ -7,8 +7,9 @@
 //
 // statsTick runs `docker info` (and `node ls` on a manager) and the agent's logs commands, then
 // records the newest complete batch per node under statsMu, then judges pressure (pressure.go),
-// which emits its edges after the lock, then may start a prune (prune.go). The route reads only
-// memory (invariant 10: none of this is a table, and a restart forgets it). Reads emit nothing.
+// which emits its edges after the lock, then may start a prune (prune.go), then may sleep one stack
+// (pressureSleep). The route reads only memory (invariant 10: none of this is a table, and a restart
+// forgets it). Reads emit nothing.
 //
 // ── UNKNOWN IS null ─────────────────────────────────────────────────────────────────────────────
 //
@@ -89,6 +90,7 @@ func (s *Server) statsTick() {
 	}()
 	s.evaluatePressure(now)
 	s.maybePrune(now)
+	s.pressureSleep(now)
 }
 
 // statsLoop ticks until the server stops. Started only when the interval is above zero. A panic
