@@ -87,7 +87,7 @@ pstack init --domain preview.example.com --acme-email <you>@example.com
 | `PSTACK_IMAGE` | no | control image, default `pstack:local` (build it: `docker build -t pstack:local .`) |
 | `PSTACK_DATA` | no | default `/var/lib/pstack` |
 | `PSTACK_LOKI_PASSWORD` | no | with `loki`: the push password, 32 lowercase hex. Generated when unset; kept in `control/.env` as `LOKI_PUSH_PASSWORD` |
-| `PSTACK_AGENT_IMAGE` | no | the image `pstack-agent` (the node reporter) runs in, default `docker:29-cli`. **Not read back**: export it again on every `init` and `upgrade` |
+| `PSTACK_AGENT_IMAGE` | no | the image `pstack-agent` (the node reporter) runs in, default `docker:29.9.2-cli`, pinned by digest. **Not read back**: export it again on every `init` and `upgrade` |
 
 It checks preconditions by name first (Docker socket, Compose plugin, control image), creates
 `<data>/deployments` and the two external networks **`preview-ingress`** and **`preview-shared`**

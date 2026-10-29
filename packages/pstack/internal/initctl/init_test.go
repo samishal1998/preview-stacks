@@ -1847,12 +1847,12 @@ func TestInitStartsTheAgent(t *testing.T) {
 		if strings.Contains(joined, "docker service create") || slices.Contains(cmds, selfIDProbe) {
 			t.Errorf("compose ran swarm commands: %v", cmds)
 		}
-		if !strings.Contains(out, "  previews  docker compose on this host\n  agent     pstack-agent (docker:29-cli)\n") {
+		if !strings.Contains(out, "  previews  docker compose on this host\n  agent     pstack-agent (docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb)\n") {
 			t.Errorf("out %q", out)
 		}
 	})
 	t.Run("PSTACK_AGENT_IMAGE's value reaches the command and the summary", func(t *testing.T) {
-		// negative control: ignore opts.AgentImage in Init → docker:29-cli is used.
+		// negative control: ignore opts.AgentImage in Init → docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb is used.
 		out, cmds, err := agentRun(t, spec.Compose, nil, func(o *initctl.Options) { o.AgentImage = "mirror/docker:29-cli" })
 		if err != nil || indexOf(cmds, nodestats.AgentContainerCmd(pstack.AgentScript, "mirror/docker:29-cli")) < 0 ||
 			!strings.Contains(out, "  agent     pstack-agent (mirror/docker:29-cli)\n") {
@@ -1875,7 +1875,7 @@ func TestInitStartsTheAgentOnSwarm(t *testing.T) {
 			t.Fatalf("container %d, service %d: %v", ctr, svc, cmds)
 		}
 		// NP-R11: the agent line sits between previews and its workers continuation.
-		if !regexp.MustCompile(`(?m)^  previews  .*\n  agent     pstack-agent \(docker:29-cli\)\n            workers need `).MatchString(out) {
+		if !regexp.MustCompile(`(?m)^  previews  .*\n  agent     pstack-agent \(docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb\)\n            workers need `).MatchString(out) {
 			t.Errorf("out %q", out)
 		}
 	})
@@ -1903,7 +1903,7 @@ func TestInitStartsTheAgentOnSwarm(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"[dry-run] swarm node id\n", "[dry-run] node agent\n", "[dry-run] node agent service\n", "  agent     pstack-agent (docker:29-cli)\n"} {
+		for _, want := range []string{"[dry-run] swarm node id\n", "[dry-run] node agent\n", "[dry-run] node agent service\n", "  agent     pstack-agent (docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb)\n"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("missing %q:\n%s", want, out.String())
 			}

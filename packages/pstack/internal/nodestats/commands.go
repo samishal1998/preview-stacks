@@ -27,8 +27,9 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
 
-// AgentImage is the stock docker CLI image the agent script runs in on every node.
-const AgentImage = "docker:29-cli"
+// AgentImage is the stock docker CLI image the agent script runs in on every node, pinned by digest so
+// every node runs the image the release was tested with. Bump it per release.
+const AgentImage = "docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb"
 
 // AgentName is the agent's container name on the local node and its service name on swarm.
 const AgentName = "pstack-agent"
