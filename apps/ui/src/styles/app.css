@@ -1486,6 +1486,9 @@ pre.log mark {
 .s-failed {
   color: var(--fail);
 }
+.bad {
+  color: var(--fail);
+}
 .s-leaked {
   color: var(--leak);
 }

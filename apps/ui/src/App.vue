@@ -26,6 +26,7 @@ import {
   Boxes,
   ClockFading,
   FileCode2,
+  Gauge,
   KeyRound,
   LayoutDashboard,
   Network,
@@ -128,6 +129,11 @@ const runningJobs = computed(() => state.jobs.filter((j) => j.state === 'running
         <RouterLink to="/swarm" class="navlink">
           <Network :size="17" aria-hidden="true" />
           <span>Swarm</span>
+        </RouterLink>
+
+        <RouterLink to="/stats" class="navlink">
+          <Gauge :size="17" aria-hidden="true" />
+          <span>Stats</span>
         </RouterLink>
 
         <RouterLink to="/registries" class="navlink">

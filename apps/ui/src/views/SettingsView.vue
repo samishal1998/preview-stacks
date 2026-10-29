@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * Settings: where the API is, how to authenticate to it, how the app looks — and the two settings
- * that live on the HOST.
+ * Settings: where the API is, how to authenticate to it, how the app looks — and the settings that
+ * live on the HOST.
  *
  * ── TWO KINDS OF CONTROL ON ONE PAGE ─────────────────────────────────────────────────────────────
  *
@@ -12,19 +12,25 @@
  *   - THIS BROWSER — Connection and Appearance. `useSettings` writes them straight to localStorage;
  *     nothing is sent anywhere, nobody else sees them, and there is nothing to save because the
  *     bindings write through immediately. That is why those panels have no Save button.
- *   - THIS HOST — the concurrency limit and the default role for new accounts. Stored in the
+ *   - THIS HOST — the concurrency limit, the default role for new accounts and the five
+ *     node-pressure keys (thresholds, auto-sleep, image prune age; `0` turns each off). Stored in the
  *     server's database, in force for everybody, and saved EXPLICITLY: a number box that wrote
  *     through on every keystroke would set the cap to 1 on the way to typing 12.
  *
  * ── WHERE THE VALUE CAME FROM, ALWAYS ────────────────────────────────────────────────────────────
  *
- * Both host settings render their `source`, because "I changed it and it did not stick" is
+ * Every host setting renders its `source`, because "I changed it and it did not stick" is
  * otherwise unanswerable: a box saying 4 cannot tell a refused write from a stale page from an
  * environment variable overriding it. Precedence is database > environment > built-in default — so
  * `PSTACK_MAX_JOBS` is now the DEFAULT rather than the authority, and a value set here is not
  * silently reverted by the next restart. A save flips the row's source to "db", so the write's own
  * response is what the page re-renders from; keeping the old row and patching just the number would
  * leave the line still crediting the environment.
+ *
+ * ── A BLANK PRESSURE FIELD IS NOT 0 ──────────────────────────────────────────────────────────────
+ *
+ * `0` turns a guard off, so an emptied box must never be saved as one: `pressureProblem` refuses it,
+ * and the reason sits under the field with `aria-describedby`, not only in the button's title.
  *
  * ── LOWERING THE CAP CANCELS NOTHING ─────────────────────────────────────────────────────────────
  *
@@ -39,16 +45,17 @@
  * cannot reach looks broken rather than restricted, and the reason cannot live only in a `title`
  * because a disabled `SelectMenu` has no element of its own to hang one on. The threshold comes
  * from the server's own permission table (`minRole`, per key — maintainer for the cap, admin for
- * the role) and is never re-derived here. An unrecognised name is read as ADMIN: `rank()` scores a
- * role it has never heard of as 0, so passing one through unguarded would enable the control for
- * everyone. Hiding is courtesy either way — the server's 403 is the enforcement, and it lands in
+ * the role and the pressure keys) and is never re-derived here. An unrecognised name is read as
+ * ADMIN: `rank()` scores a role it has never heard of as 0, so passing one through unguarded would
+ * enable the control for everyone. Hiding is courtesy either way — the server's 403 is the enforcement, and it lands in
  * `hostError`.
  */
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { api, problem } from '../api/client';
 import { ROLES, type HostSettings, type Role, type SettingKey, type SettingRow, type SettingWritten } from '../api/types';
 import { can } from '../composables/useAuth';
 import { capProblem } from '../composables/useJobQueue';
+import { PRESSURE, pressureProblem, type PressureSetting } from '../composables/stats';
 import { settings } from '../composables/useSettings';
 import { state, loadHealth, loadJobs } from '../composables/useControlPlane';
 import { sentence } from '../composables/useFormat';
@@ -105,6 +112,8 @@ const hostLoaded = ref(false);
  */
 const maxJobsDraft = ref<string | number>('');
 const roleDraft = ref('viewer');
+/** The five pressure drafts by key; `string | number` for the same reason as `maxJobsDraft`. */
+const pressureDrafts = reactive<Record<string, string | number>>({});
 /** Which key is in flight — one at a time, so a save cannot be racing its own re-read. */
 const savingKey = ref<SettingKey | null>(null);
 
@@ -112,10 +121,11 @@ const row = (key: SettingKey): SettingRow | null => host.value?.settings.find((s
 const maxJobs = computed(() => row('max_jobs'));
 const defaultRole = computed(() => row('default_role'));
 
-/** Both drafts back to what the server just said. Called after every read and every write. */
+/** Every draft back to what the server just said. Called after every read and every write. */
 function resetDrafts(): void {
   maxJobsDraft.value = String(maxJobs.value?.value ?? '');
   roleDraft.value = String(defaultRole.value?.value ?? 'viewer');
+  for (const p of PRESSURE) pressureDrafts[p.key] = String(row(p.key)?.value ?? '');
 }
 
 async function loadHost(): Promise<void> {
@@ -197,6 +207,9 @@ const maxJobsProblem = computed(() => capProblem(maxJobsDraft.value));
 /** `Number` on both sides: the input hands back a string, so `'4' !== 4` would leave Save lit forever. */
 const maxJobsDirty = computed(() => Number(maxJobsDraft.value) !== Number(maxJobs.value?.value));
 const roleDirty = computed(() => roleDraft.value !== String(defaultRole.value?.value ?? ''));
+/** A string comparison, not `Number`: `Number('')` is 0, and a blank box must read as changed. */
+const pressureDirty = (p: PressureSetting) => String(pressureDrafts[p.key] ?? '').trim() !== String(row(p.key)?.value ?? '');
+const pressureError = (p: PressureSetting) => (pressureDirty(p) ? pressureProblem(p, pressureDrafts[p.key] ?? '') : '');
 
 /** One line each, in the picker itself — a role name alone does not say what it costs to grant. */
 const ROLE_WHAT: Record<Role, string> = {
@@ -376,6 +389,43 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
             <b>{{ SOURCE_LABEL[defaultRole.source] }}.</b> {{ whyReadOnly(defaultRole) }}
           </div>
         </div>
+
+        <!-- Shown only for the keys this server serves: an older one has none of them. -->
+        <template v-for="p in PRESSURE" :key="p.key">
+          <div v-if="row(p.key)" class="field">
+            <label :for="p.key">{{ p.label }}</label>
+            <div class="row">
+              <input
+                :id="p.key"
+                v-model="pressureDrafts[p.key]"
+                type="number"
+                min="0"
+                :max="p.max === Infinity ? undefined : p.max"
+                :step="p.int ? 1 : 'any'"
+                :inputmode="p.int ? 'numeric' : 'decimal'"
+                :disabled="!mayWrite(row(p.key))"
+                :title="whyReadOnly(row(p.key)) || undefined"
+                :aria-invalid="pressureError(p) ? true : undefined"
+                :aria-describedby="pressureError(p) ? `${p.key}-problem` : undefined"
+                :style="`width: 8rem${mayWrite(row(p.key)) ? '' : '; opacity: 0.45; cursor: not-allowed'}`"
+              />
+              <ActionButton
+                variant="primary"
+                :pending="savingKey === p.key"
+                :disabled="!mayWrite(row(p.key)) || !pressureDirty(p) || !!pressureError(p) || savingKey !== null"
+                :title="whyReadOnly(row(p.key)) || pressureError(p) || (pressureDirty(p) ? undefined : 'this is already the stored value')"
+                @click="save(p.key, Number(pressureDrafts[p.key]))"
+              >
+                Save
+              </ActionButton>
+            </div>
+            <div v-if="pressureError(p)" :id="`${p.key}-problem`" class="bad hint">{{ pressureError(p) }}</div>
+            <div class="mute hint">{{ p.unit }}. 0 = off.</div>
+            <div class="mute hint">
+              <b>{{ SOURCE_LABEL[row(p.key)!.source] }}.</b> {{ whyReadOnly(row(p.key)) }}
+            </div>
+          </div>
+        </template>
       </template>
       <p v-else-if="!hostLoaded" class="mute hint">Reading…</p>
     </section>
