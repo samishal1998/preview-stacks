@@ -1528,7 +1528,7 @@ deploys and wakes, alerts, prunes images and sleeps idle stacks. Using it:
 
 **The agent is not the pstack binary.** Workers carry no pstack and no control image by design,
 and no pstack image is published anywhere a worker could pull. So `pstack-agent` is a shell script
-embedded in the binary, run as `sh -c` in a stock `docker:29-cli` image that any node can pull.
+embedded in the binary, run as `sh -c` in a stock `docker:29.9.2-cli` image (pinned by digest) that any node can pull.
 It reports and decides nothing. Thresholds, prune timing and which stack sleeps are settings on the
 manager, so changing one redeploys nothing.
 

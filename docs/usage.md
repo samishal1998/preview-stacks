@@ -3473,9 +3473,10 @@ A full disk took a host down for days once: images piled up, Traefik's own log r
 Traefik could not restart. pstack now watches every machine and acts before that.
 
 **The agent.** `pstack init` runs `pstack-agent` on every node: a POSIX shell script in a stock
-`docker:29-cli` image, with the docker socket and the host's `/` mounted read-only. On a compose
-host it is one container. On a swarm it is a container on this manager plus a global service on
-every other node, so a worker that joins later gets one with nothing to install. Every 30 s it
+`docker:29.9.2-cli` image pinned by digest, with the docker socket and the host's `/` mounted
+read-only. On a compose host it is one container. On a swarm it is a container on this manager
+plus a global service on every other node, so a worker that joins later gets one with nothing to
+install. Every 30 s it
 prints one batch to its own log:
 
 - disk: `df` of the host's docker data root, not the container's overlay;
@@ -3573,7 +3574,7 @@ next deploy.
 
 - `PSTACK_AGENT_IMAGE` (`init`): another image for the agent, such as a mirror. It is **not read
   back**: export it on every `pstack init` and `pstack upgrade`, or the agent returns to
-  `docker:29-cli`. Cloud-init does not pass it. If the image does not pull, `init` prints a note and
+  `docker:29.9.2-cli`. Cloud-init does not pass it. If the image does not pull, `init` prints a note and
   the guards stay off.
 - `PSTACK_STATS_TICK_MS` (`serve`): how often the logs are read, 30000 by default. `0` turns the
   loop off, and with it every guard and prune.
@@ -3682,7 +3683,7 @@ different problems with different owners.
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_LOGGING` | `init` `cloud-init` | `none` | same as `--logging` |
 | `PSTACK_NO_OOM_PROTECT` | `init` | *unset* | any value but `0` skips protecting `dockerd` from the OOM killer (below). For a host that manages `docker.service` itself |
-| `PSTACK_AGENT_IMAGE` | `init` | `docker:29-cli` | the image `pstack-agent` runs in on every node. Not read back: re-export it on every `init` and `upgrade`, or the agent returns to the default. Cloud-init does not pass it |
+| `PSTACK_AGENT_IMAGE` | `init` | `docker:29.9.2-cli` | the image `pstack-agent` runs in on every node. Not read back: re-export it on every `init` and `upgrade`, or the agent returns to the default. Cloud-init does not pass it |
 | `PSTACK_PREVIEWS_ON` | `init` `cloud-init` | *unset* | same as `--previews-on` |
 | `PSTACK_INGRESS_SUBNET` `PSTACK_SHARED_SUBNET` | `init` (and `upgrade`, which runs it) | *unset* | same as `--ingress-subnet` / `--shared-subnet`. Set on `pstack upgrade`, it reaches the `init` the upgrade runs — the one-command way to enlarge an existing host's network |
 | `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |

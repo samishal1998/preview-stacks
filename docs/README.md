@@ -141,7 +141,7 @@ build differs is at the top. The eleven-task build plan is
 
 ### [`node-pressure-design.md`](node-pressure-design.md) — a reporter on every node, guards in the control plane
 
-`pstack-agent`, a shell script in a stock `docker:29-cli` image on every node, prints disk, memory
+`pstack-agent`, a shell script in a stock `docker:29.9.2-cli` image (pinned by digest) on every node, prints disk, memory
 and load to its log; the control plane reads the logs, and while a node is in pressure it alerts,
 prunes images, sleeps the least recently used idle stack and refuses deploys and wakes. Also log
 caps on the control stack and on previews, scheduled prunes, `GET /api/stats` and a Stats page.

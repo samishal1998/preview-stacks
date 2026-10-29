@@ -37,7 +37,7 @@
 > - **The preview log cap means every deploy writes `compose.generated.yml`,** a CLI `pstack up`
 >   beside the user's compose file included.
 > - **`PSTACK_AGENT_IMAGE` is an env-only init input, never read back** (like
->   `PSTACK_NO_OOM_PROTECT`). An `upgrade` run without it returns the agent to `docker:29-cli`.
+>   `PSTACK_NO_OOM_PROTECT`). An `upgrade` run without it returns the agent to `docker:29.9.2-cli`.
 >   Cloud-init does not pass it.
 > - **Invariant 20 is amended, not broken:** the caps are inline blocks in the template and the
 >   service builders, and no marker was added.
@@ -53,7 +53,7 @@
 1. **The agent is a shell script in a stock `docker:<ver>-cli` image, not the pstack binary.**
    Workers have no `pstack:local` and no pstack binary, by design (the worker cloud-config: "no
    pstack, no control stack"), and no pstack image is published to a registry. A global service
-   needs an image every node can pull. `docker:29-cli` (pinned, `PSTACK_AGENT_IMAGE` overrides) is
+   needs an image every node can pull. `docker:29.9.2-cli` (pinned by digest, `PSTACK_AGENT_IMAGE` overrides) is
    pullable like any preview image and carries `sh`, `awk`, `df` and the docker CLI. The script is
    embedded in the binary (`templates/agent/agent.sh`) and passed as the service command.
    The other way, building `pstack:local` on every worker, means the join script and the worker

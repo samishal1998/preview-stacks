@@ -14,7 +14,7 @@ func TestAgentCommands(t *testing.T) {
 		// negative control: swap --restart unless-stopped for --restart always → fails.
 		want := "docker rm -f pstack-agent >/dev/null 2>&1; docker run -d --name pstack-agent --restart unless-stopped" +
 			" --label pstack.role=agent -v /var/run/docker.sock:/var/run/docker.sock:ro -v /:/host:ro" +
-			" --log-driver json-file --log-opt max-size=1m --entrypoint sh docker:29-cli -c 'echo hi'"
+			" --log-driver json-file --log-opt max-size=1m --entrypoint sh docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb -c 'echo hi'"
 		if got := AgentContainerCmd("echo hi", AgentImage); got != want {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
@@ -26,7 +26,7 @@ func TestAgentCommands(t *testing.T) {
 			" --label pstack.role=agent --constraint 'node.id!=n1'" +
 			" --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock,readonly" +
 			" --mount type=bind,src=/,dst=/host,readonly --log-driver json-file --log-opt max-size=1m --restart-condition any" +
-			" --entrypoint sh docker:29-cli -c 'echo hi'"
+			" --entrypoint sh docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb -c 'echo hi'"
 		if got := AgentServiceCmd("echo hi", AgentImage, "n1"); got != want {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
@@ -37,7 +37,7 @@ func TestAgentCommands(t *testing.T) {
 			" --label pstack.role=agent" +
 			" --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock,readonly" +
 			" --mount type=bind,src=/,dst=/host,readonly --log-driver json-file --log-opt max-size=1m --restart-condition any" +
-			" --entrypoint sh docker:29-cli -c 'echo hi'"
+			" --entrypoint sh docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb -c 'echo hi'"
 		if got := AgentServiceCmd("echo hi", AgentImage, ""); got != want {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
