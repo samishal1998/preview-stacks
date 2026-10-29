@@ -1,4 +1,5 @@
 /** Rules for the host settings page. Rendering hints only: the server's 403 is the enforcement. */
+import type { SettingKey } from '@samyx/preview-stacks-client';
 import { ROLES, type Role } from './users';
 
 /** The server takes an integer of 1 or more. */
@@ -7,6 +8,26 @@ export function capProblem(draft: string | number | null): string {
   if (!raw) return 'Enter a number.';
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) return 'A whole number, 1 or more.';
+  return '';
+}
+
+/** The node-pressure keys, in page order. `0` turns each off. */
+export const PRESSURE = [
+  { key: 'pressure_disk_pct', label: 'Disk pressure at', unit: '% used', max: 100, int: true },
+  { key: 'pressure_mem_pct', label: 'Memory pressure at', unit: '% free', max: 100, int: true },
+  { key: 'pressure_cpu_load', label: 'CPU pressure at', unit: '5-min load per core', max: Infinity, int: false },
+  { key: 'pressure_sleep_idle_min', label: 'Auto-sleep after', unit: 'Minutes idle', max: 525600, int: true },
+  { key: 'image_prune_after_h', label: 'Prune images older than', unit: 'Hours', max: 87600, int: true },
+] as const satisfies ReadonlyArray<{ key: SettingKey; label: string; unit: string; max: number; int: boolean }>;
+export type PressureSetting = (typeof PRESSURE)[number];
+
+/** A blank field is a problem, not 0: 0 would turn the guard off. */
+export function pressureProblem(p: PressureSetting, draft: string): string {
+  const raw = draft.trim();
+  if (!raw) return 'Enter a number.';
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > p.max) return p.max === Infinity ? '0 or more.' : `0 to ${p.max}.`;
+  if (p.int && !Number.isInteger(n)) return 'A whole number.';
   return '';
 }
 
