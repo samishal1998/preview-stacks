@@ -91,7 +91,8 @@ hook.
 ## The control plane
 
 On a host, `pstack init` stands up a small control stack: Traefik for routing and TLS on your
-domain, the pstack API, and a web UI at `control.<domain>`. From then on previews are
+domain, the pstack API, and a web UI at `control.<domain>`. Beside it, `pstack-agent` reports every
+node's disk, memory and load. From then on previews are
 **deployments**: submit a spec over the API — usually from CI — and pstack runs `up`, `down` or
 `verify` as a **job**, one at a time per preview, with a log you can follow.
 
@@ -118,6 +119,9 @@ A host runs previews one of two ways:
 On either, a preview can **sleep** after a period without traffic: its containers are taken down,
 its volumes and axes stay, and the next request to its hostname, or to a custom route pointed at
 it, brings it back. Traffic through a custom route keeps it awake too.
+
+A node that runs short is in **pressure**. pstack then alerts, prunes unused images, sleeps the
+least recently used idle preview, and refuses new deploys and wakes until a node has room.
 
 ## Read on
 

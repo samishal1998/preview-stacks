@@ -1424,6 +1424,10 @@ What it does, in order:
 5. **`compose up -d --remove-orphans`**, then **wait for the container's HEALTHCHECK**. `up -d`
    exits 0 as soon as containers are *created*, so a crash-looping API would otherwise be reported
    as success.
+6. **The node agent** (0.45.0) — `pstack-agent` is removed and created again beside the control
+   stack, never inside it ([Node pressure](#node-pressure-an-agent-beside-the-control-stack-0450)).
+   A failure is a note, not a failed `init`: without the agent the guards are inert, which is how a
+   host behaved before.
 
 Two secrets, deliberately separate: **`PSTACK_TOKEN`** (the API bearer token — it drives a
 read-write Docker socket, i.e. root on the host) and the **DNS-01 credential** in `dns.env` (it can
@@ -1515,6 +1519,47 @@ network still holds everything it was running.
 
 See [node-signals-design.md](node-signals-design.md) for the contract and its caveats.
 
+## Node pressure: an agent beside the control stack (0.45.0)
+
+Signals say what docker refused. Pressure is the other half: a node that docker will happily keep
+filling until Traefik cannot restart. pstack now measures every node and acts on it. It refuses
+deploys and wakes, alerts, prunes images and sleeps idle stacks. Using it:
+[usage.md](usage.md#node-pressure-0450).
+
+**The agent is not the pstack binary.** Workers carry no pstack and no control image by design,
+and no pstack image is published anywhere a worker could pull. So `pstack-agent` is a shell script
+embedded in the binary, run as `sh -c` in a stock `docker:29-cli` image that any node can pull.
+It reports and decides nothing. Thresholds, prune timing and which stack sleeps are settings on the
+manager, so changing one redeploys nothing.
+
+**It sits beside the control stack, not in it.** It is not a service of `pstack-control`, so the
+control template gains no marker (invariant 20). `init` creates it, as it creates the control stack
+(invariant 12): a container on this node and, on a swarm, a global service on every other node.
+
+**The control-plane node never relies on a swarm task.** A manager drained with
+`--previews-on workers` runs no swarm task at all, global or job, and that manager is the node
+whose disk filled in the incident that started this. So the local container measures it, its
+prunes run through the host runner, and the global service carries `node.id!=<self>` so an
+undrained manager does not report twice. When `init` cannot read the manager's node id, it skips
+the service with a note rather than create it without the constraint.
+
+**Logs are the transport.** Every 30 s the API reads `docker logs --since 90s` (and
+`docker service logs` on a swarm) and keeps the newest batch that has its `end` line, per node. The
+alternative was an agent that posts to the API. pstack listens only on networks local to the
+manager, so a worker would need a credential and a trip through Traefik. Logs need no network path,
+no secret and no new route, and they work the same on both orchestrators. The agent's own log is
+capped at 1 MB.
+
+**Memory only, and unknown is never pressure.** The latest batch and an hour of samples per node
+live in memory (invariant 10); a restart forgets them. A node with no complete batch in 2 minutes
+is stale: its readings are `null` (invariant 11) and no guard acts on it. A node going quiet while
+in pressure fires nothing, because silence is not recovery. Every action is edge-triggered on the
+stats tick, like signals. Refusal sits inside `startLifecycle`'s work, so the POST route,
+wake-on-request, TLS redeploys and queued jobs all pass through it.
+
+See [node-pressure-design.md](node-pressure-design.md) for the design and where the build differs
+from it.
+
 ---
 
 ## Distribution: one static binary
@@ -1558,9 +1603,10 @@ exists locally, and the host can make one from what it has.
 
 ### Assets are embedded, not read from disk
 
-The web UI, the share page, the cloud-init template and the control templates
-(`templates/control/docker-compose.yml`, `loki/config.yaml`, `grafana/datasources.yaml`) are
-`//go:embed`ded (`packages/pstack/assets.go`, eight explicit paths — never a glob, so the READMEs
+The web UI, the share page, the cloud-init template, the control templates
+(`templates/control/docker-compose.yml`, `loki/config.yaml`, `grafana/datasources.yaml`) and the
+node agent's script (`templates/agent/agent.sh`) are
+`//go:embed`ded (`packages/pstack/assets.go`, nine explicit paths — never a glob, so the READMEs
 beside them do not ship). Nothing resolves a path relative to a source tree at runtime; the
 failure mode where a tool passes every local test and then `init` dies on a missing template on
 the one host that matters cannot occur.

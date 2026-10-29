@@ -28,6 +28,7 @@ browser); the version-control rules are in AGENTS.md.
 | Send deployed services' logs to **Loki** and read them in **Grafana** | [`usage.md` §7](usage.md#turn-loki-logging-on-or-off-pstack-logging) |
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
 | Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
+| Know what pstack does when a node's **disk, memory or CPU** runs short | [`usage.md` §9](usage.md#node-pressure-0450), [`node-pressure-design.md`](node-pressure-design.md) |
 | Test a **multi-node swarm** on a laptop, because CI has one machine | [`swarm-local-testing.md`](swarm-local-testing.md) |
 | Fix containers stuck in **`New`** on a swarm host (`could not find an available IP`) | [`preview-ingress-address-leak.md`](preview-ingress-address-leak.md) |
 | Know how the **Go binary** (0.29.0) was proven a drop-in for the TypeScript one, and what still differs | [`port-status.md`](port-status.md) |
@@ -137,6 +138,15 @@ A custom route is a stable name (`checkout`) pointed at whichever deployment a d
 Explore links on the deployment page, and Hearth compact by default. Shipped in 0.44.0; where the
 build differs is at the top. The eleven-task build plan is
 [`custom-routes-plan.md`](custom-routes-plan.md).
+
+### [`node-pressure-design.md`](node-pressure-design.md) — a reporter on every node, guards in the control plane
+
+`pstack-agent`, a shell script in a stock `docker:29-cli` image on every node, prints disk, memory
+and load to its log; the control plane reads the logs, and while a node is in pressure it alerts,
+prunes images, sleeps the least recently used idle stack and refuses deploys and wakes. Also log
+caps on the control stack and on previews, scheduled prunes, `GET /api/stats` and a Stats page.
+Asked for after a full disk took a host down for 3½ days. Built; where the build differs is at the
+top. The thirteen-task build plan is [`node-pressure-plan.md`](node-pressure-plan.md).
 
 ### [`swarm-local-testing.md`](swarm-local-testing.md) — a real cluster on a laptop
 

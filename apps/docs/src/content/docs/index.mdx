@@ -46,7 +46,8 @@ One static binary for Linux and macOS. It is the CLI, the HTTP API and the web U
   </Card>
   <Card title="Swarm, sleep and wake" icon="rocket">
     Spread previews across worker machines with Docker Swarm. Idle previews sleep and wake on the
-    next request, and pstack tells a machine manager when a worker is needed or spare.
+    next request, and pstack tells a machine manager when a worker is needed or spare. A node short
+    of disk or memory prunes images, sleeps idle previews and refuses new ones until there is room.
   </Card>
   <Card title="Teams" icon="star">
     Sign in with GitHub, Google, Okta or any OIDC provider. Four roles divide what people may do,
