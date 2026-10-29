@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A reporter on every node: `pstack-agent`.** `pstack init` (and so `upgrade`, `pstack ui` and
+  `pstack logging`) runs a small shell script in `docker:29-cli` on every machine: a container on
+  this host, plus a global swarm service on every other node. Every 30 s it prints the node's disk
+  (the docker data root), `MemAvailable`, load and per-stack CPU and memory to its own log, and the
+  control plane reads that log. Workers need nothing new. `PSTACK_AGENT_IMAGE` picks another image;
+  it is not read back, so re-export it on every `init` and `upgrade`.
+
+- **`GET /api/stats`** (viewer) and `pstack api stats get`: every node's latest report, an hour of
+  history, the stacks using it, and the last prune. A node with no report in 2 minutes is
+  `stale: true` with `null` readings. Memory only; a restart forgets it.
+
+- **Pressure guards.** A node is in pressure at `pressure_disk_pct` (90) % disk used,
+  `pressure_mem_pct` (10) % memory free or below, or `pressure_cpu_load` (2.0) 5-minute load per
+  core. While it is:
+  - `node.pressure` fires, and `node.recovered` once it is back past the line by 5 points (0.25 for
+    load).
+  - A full disk gets an emergency prune of unused images, at most once per node every 10 minutes.
+  - Memory or cpu pressure sleeps the least recently used idle stack on that node, one per 30 s,
+    when it has been unused for `pressure_sleep_idle_min` (30) minutes. A slept stack wakes on
+    request like any other.
+  - Deploys and wakes are refused when no node has room: the job fails with a `capacity` step,
+    `worker-2: disk 94% ≥ 90%`. Down, sleep and verify always run.
+  - A stale or missing report is never pressure: no guard acts on it.
+
+- **Scheduled prunes.** Every 6 hours, images and build cache older than `image_prune_after_h`
+  (168) hours are pruned on every node. `node.pruned` reports what each node freed. A sleeping
+  stack's image can go; its next wake pulls or builds it again.
+
+- **Five settings**: `pressure_disk_pct`, `pressure_mem_pct`, `pressure_cpu_load`,
+  `pressure_sleep_idle_min`, `image_prune_after_h`. Admin to change, `0` turns each off. Both
+  Settings views edit them.
+
+- **A Stats page in Hearth and the advanced UI** (`/stats`): disk, memory and load per node against
+  the thresholds, a pressure badge, an hour's sparkline, the stacks by memory, and the last prune.
+
+### Changed
+
+- **Container logs are capped.** The control stack's services get a json-file cap: Traefik
+  `max-size: 10m`, `max-file: "2"`; pstack, the advanced UI, Loki and Grafana `50m` × `"3"`.
+  Traefik's own log had grown to 3.6 GB on a host whose disk then filled. With Loki off, every
+  preview service without a `logging:` key gets `10m` × `"3"`. Every render golden and init-dry
+  transcript changed. Run `pstack upgrade` to apply both to an existing host.
+
+- **Every deploy writes `compose.generated.yml`** with Loki off too, because of that cap, and that
+  includes a CLI `pstack up` beside your own compose file. Add `compose.generated.yml` to your
+  repository's `.gitignore`.
+
 ## 0.44.0 — 2026-10-28
 
 ### Added

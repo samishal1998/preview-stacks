@@ -394,14 +394,14 @@ Never the endpoint, the bucket, the key id or the secret.
 ### `stack.slept`
 
 Fires when a stack's compose project was taken down **while its volumes and axes stayed** — by the
-scheduler (`sleep: { idle, after }` in the spec) or by `POST …/sleep`. A request to any of `hosts`
-wakes it. (0.26.0)
+scheduler (`sleep: { idle, after }` in the spec), by node pressure
+(`node.pressure`, 0.45.0), or by `POST …/sleep`. A request to any of `hosts` wakes it. (0.26.0)
 
 | `data.` field | Type | Meaning |
 |---|---|---|
 | `stack` | string | |
 | `deployment` | string | The registry id. |
-| `reason` | string | `idle 2h`, `after 3d`, or `operator: <actor>`. |
+| `reason` | string | `idle 2h`, `after 3d`, `<hostname> <why>` from pressure (`worker-2 memory 6% free ≤ 10%`), or `operator: <actor>`. |
 | `hosts` | string[] | The exact hostnames captured from its Traefik labels before teardown — what wakes it. Wildcard patterns are not listed here. |
 
 ### `stack.woken`

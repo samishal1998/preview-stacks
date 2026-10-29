@@ -1,6 +1,49 @@
 # Node pressure — a reporter on every machine, guards in the control plane, a stats page
 
-> Status: design, approved by the owner 2026-10-28. Build plan: [node-pressure-plan.md](node-pressure-plan.md). Asked for 2026-10-28, after preview.hou-clou.dev filled
+> **Built.** Using it: [usage.md](usage.md#node-pressure-0450), `GET /api/stats`, the Stats page.
+> The build plan is [node-pressure-plan.md](node-pressure-plan.md). The spec below is kept as
+> approved on 2026-10-28. Where the build differs from it:
+>
+> - **Every agent line carries `node`**, `ctr` and `end` included. A batch is matched on
+>   (node, seq), because two workers' lines interleave in `service logs` and can share a seq.
+> - **The control-plane node is served locally, never by a swarm task.** A drained manager
+>   (`--previews-on workers`) runs no swarm task, global or job, and it is the node whose disk
+>   filled. So `init` runs the agent there as a container, the global service gets
+>   `--constraint node.id!=<self>`, and that node's prunes go through the host runner. When `init`
+>   cannot read this node's swarm id, it skips the service with a note rather than create it
+>   unconstrained, which would make the manager report twice.
+> - **`/api/stats` has two fields the spec does not list:** `stale` per node (why its readings are
+>   `null`) and `prune` per node (`{at, freedBytes, reason}` or `null`), for "last prune per node".
+> - **`agent: false` is not the upgrade prompt.** The UIs say to run `pstack upgrade` only when no
+>   node has ever reported. Otherwise they show the nodes as `Stale`, since a crash-looping agent is not
+>   an un-upgraded host.
+> - **`Describe` states free memory**, because `MemAvailable` is what is measured:
+>   `memory 6% free ≤ 10%`, not the spec's `memory 93%`. Load reads `load 2.4 per core ≥ 2`. While
+>   only the recovery margin holds a kind, it says where it clears: `disk 87%, clears below 85%`.
+>   The auto-sleep reason is `<hostname> <Describe>`.
+> - **The event id is `pressure/<key>`:** the node id on swarm, as specified, and the hostname on a
+>   compose host, where `pressure/<node>` would read `pressure/`. `node` is `null` on compose in
+>   `/api/stats` and in all three events.
+> - **Refusal on swarm needs evidence.** It refuses only when every active node is fresh and in
+>   pressure. With no active node, or no data, the deploy goes ahead: unknown is never pressure.
+> - **One auto-sleep per tick in total**, across every node, not one per node.
+> - **The scheduled prune does not wait for agent data.** It runs every 6 hours from the first tick.
+>   Only the emergency prune needs a fresh report.
+> - **A prune job needs a node that takes tasks.** A swarm job no ready, active node can run waits
+>   forever, so the global job is skipped when no node but the control plane's is ready and active,
+>   and an emergency prune skips a node that is not.
+> - **Cloud-init and swarm-join goldens are unchanged.** Workers need nothing: the global service
+>   follows them. Only the init transcripts moved.
+> - **The preview log cap means every deploy writes `compose.generated.yml`,** a CLI `pstack up`
+>   beside the user's compose file included.
+> - **`PSTACK_AGENT_IMAGE` is an env-only init input, never read back** (like
+>   `PSTACK_NO_OOM_PROTECT`). An `upgrade` run without it returns the agent to `docker:29-cli`.
+>   Cloud-init does not pass it.
+> - **Invariant 20 is amended, not broken:** the caps are inline blocks in the template and the
+>   service builders, and no marker was added.
+> - **One sparkline per node, of load**, in both UIs, since disk free over an hour is usually flat.
+>
+> Asked for 2026-10-28, after preview.hou-clou.dev filled
 > its 601 GB disk with images, Traefik's restart failed with `no space left on device`, and nothing
 > served for 3½ days. Owner's picks: a pstack node agent; on pressure refuse deploys and wakes, alert,
 > auto-sleep idle stacks and prune; design then build.
