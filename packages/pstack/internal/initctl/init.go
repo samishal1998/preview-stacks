@@ -22,6 +22,10 @@
 //
 // Everything here is idempotent: re-running `init` is the supported way to change the domain,
 // rotate the token, or move to a new image.
+//
+// Init also replaces pstack-agent, the node reporter (step 5b, internal/nodestats), and is its only
+// creator (invariant 12): never the API, since the agent's service and containers are host state like
+// the control stack.
 package initctl
 
 import (
@@ -42,6 +46,7 @@ import (
 	pstack "github.com/samishal1998/preview-stacks/packages/pstack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
@@ -224,6 +229,10 @@ type Options struct {
 	// NoOOMProtect skips the dockerd oom_score_adj step (PSTACK_NO_OOM_PROTECT). For a host that
 	// manages docker.service itself, and for every test that runs init as root.
 	NoOOMProtect bool
+	// AgentImage is the image pstack-agent runs in; "" is nodestats.AgentImage. From PSTACK_AGENT_IMAGE
+	// only: no flag, no .env line, and `pstack upgrade` does not read it back, so an override must be
+	// re-exported on every init and upgrade. Cloud-init does not pass it (NP-R6).
+	AgentImage string
 }
 
 // randomHex is n random bytes, hex. Hex on purpose: `$` in a `.env` value is expanded by Compose, and
@@ -631,6 +640,37 @@ func Init(opts Options) error {
 		}
 	}
 
+	// ── 5b. The node agent ──────────────────────────────────────────────────────────────────────
+	// pstack-agent reports each node's disk, memory and load (internal/nodestats). This node always
+	// runs it as a local container; on swarm a global service covers every other node, since a
+	// drained manager runs no swarm task at all. Never fatal: without the agent every guard is inert
+	// (unknown is never pressure), which is the host's behaviour before 0.45.0. Init is the agent's
+	// only creator (invariant 12), so `pstack upgrade`, `pstack ui` and `pstack logging` recreate it
+	// by re-running this step.
+	agentImage := firstOf(opts.AgentImage, nodestats.AgentImage)
+	var agentNotes []string
+	agentNote := func(what string, r exec.Result) {
+		first, _, _ := strings.Cut(strings.TrimSpace(firstOf(r.Stderr, r.Stdout)), "\n")
+		agentNotes = append(agentNotes, "  note      "+what+" did not start: "+first)
+	}
+	self := ""
+	if orchestrator == spec.Swarm {
+		self = strings.TrimSpace(runner.Run("docker info --format '{{.Swarm.NodeID}}'", exec.RunOptions{Label: "swarm node id"}).Stdout)
+	}
+	ctr := runner.Run(nodestats.AgentContainerCmd(pstack.AgentScript, agentImage), exec.RunOptions{Label: "node agent"})
+	if !ctr.OK {
+		agentNote(nodestats.AgentName, ctr)
+	}
+	if orchestrator == spec.Swarm {
+		// A live "" would create the service with no constraint, and this node would report twice
+		// (NP-R10). A dry run reads no id, so it prints the unconstrained form.
+		if self == "" && !dryRun {
+			agentNotes = append(agentNotes, "  note      "+nodestats.AgentName+" service not created: no swarm node id")
+		} else if svc := runner.Run(nodestats.AgentServiceCmd(pstack.AgentScript, agentImage, self), exec.RunOptions{Label: "node agent service"}); !svc.OK {
+			agentNote(nodestats.AgentName+" service", svc)
+		}
+	}
+
 	// ── 6. What to do next ──────────────────────────────────────────────────────────────────────
 	// control.<domain>, not the long-gone pstack.<domain> — the hostnames split when the API and UI
 	// got their own routers.
@@ -653,6 +693,12 @@ func Init(opts Options) error {
 	}
 	lines = append(lines, subnetNotes...)
 	lines = append(lines, "  previews  "+previews)
+	// Only after the container started (a dry run's OK included): a failed agent leaves its note
+	// alone, never a line that reads as live guards (NP-R11).
+	if ctr.OK {
+		lines = append(lines, "  agent     "+nodestats.AgentName+" ("+agentImage+")")
+	}
+	lines = append(lines, agentNotes...)
 	if orchestrator == spec.Swarm {
 		lines = append(lines, "            workers need "+swarm.PortList()+" open to and from this host")
 	}
@@ -917,6 +963,10 @@ func ControlUIService(ui UI) string {
 	return "      - traefik.http.routers.pstack-ui.service=pstack"
 }
 
+// controlLogCap is the json-file cap the template's pstack service carries, for the services init
+// appends to it. Docker caps no container log by default; Traefik's is smaller, in the template.
+const controlLogCap = "    logging:\n      driver: json-file\n      options:\n        max-size: 50m\n        max-file: \"3\""
+
 // AdvancedUIService is the optional advanced-UI container. Omitted entirely in basic mode — not
 // merely disabled.
 //
@@ -942,6 +992,7 @@ func AdvancedUIService(ui UI) string {
 		"  advanced-ui:",
 		"    image: " + image,
 		"    restart: unless-stopped",
+		controlLogCap,
 		"    depends_on: [pstack]",
 		"    networks: [preview-ingress]",
 		"    labels:",
@@ -974,6 +1025,7 @@ func LokiService(logging Logging, challenge Challenge, password string) string {
 		"  loki:",
 		"    image: grafana/loki:" + swarm.LokiVersion,
 		"    restart: unless-stopped",
+		controlLogCap,
 		"    # Only Traefik shares this network. Never preview-ingress: Loki has no auth, and every preview",
 		"    # container sits on preview-ingress — any of them could read every stack's logs.",
 		"    networks: [logs]",
@@ -1030,6 +1082,7 @@ func GrafanaService(logging Logging, challenge Challenge) string {
 		"  grafana:",
 		"    image: grafana/grafana:" + GrafanaVersion + "    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
 		"    restart: unless-stopped",
+		controlLogCap,
 		"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
 		"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
 		"    networks: [logs]",

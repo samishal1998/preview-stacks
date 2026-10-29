@@ -94,6 +94,44 @@ export type SwarmInfo = {
   note: string;
 };
 
+/**
+ * `GET /api/stats` — unwrapped. One node, from its pstack-agent. Every reading is null while the
+ * node is stale or never reported: unknown, never 0 and never pressure.
+ */
+export type NodeStats = {
+  /** The swarm node id; null on a compose host. */
+  node: string | null;
+  hostname: string;
+  role: 'manager' | 'worker' | null;
+  /** When this node's newest batch arrived; null while stale. */
+  at: number | null;
+  /** No batch in 2 minutes. */
+  stale: boolean;
+  cores: number | null;
+  load1: number | null;
+  load5: number | null;
+  memTotal: number | null;
+  memAvailable: number | null;
+  diskTotal: number | null;
+  diskFree: number | null;
+  /** The pressure kinds this node is under — the server's verdict, never recomputed here. */
+  pressure: string[];
+  prune: { at: number; freedBytes: number; reason: string } | null;
+  /** Up to an hour of samples, oldest first. Kept while the node is stale. */
+  history: Array<{ at: number; load5: number; memAvailable: number; diskFree: number }>;
+};
+/** One stack's use, summed over the fresh batches. */
+export type StackStats = { stack: string; cpuPct: number; mem: number; containers: number; nodes: string[] };
+export type Stats = {
+  v: 1;
+  at: number;
+  /** True when any node reported in the last 2 minutes. */
+  agent: boolean;
+  nodes: NodeStats[];
+  stacks: StackStats[];
+  prune: { lastAt: number | null; lastFreed: number | null };
+};
+
 /** `POST /api/deployments/:id/share` → 201, unwrapped. The token appears here and nowhere else. */
 export type ShareLink = { url: string; token: string; views: ShareView[]; expiresAt: number };
 /**
@@ -120,7 +158,7 @@ export type JobState =
   | 'leaked'
   | 'cancelled'
   | 'superseded';
-export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
+export type StepPhase = 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose' | 'capacity';
 export type Visibility = 'shown' | 'masked';
 
 /** `GET /api/health` — unwrapped. */
@@ -553,10 +591,18 @@ export type VarPair = { k: string; v: string };
 // ── host settings ─────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The two settings an operator may change at RUNTIME. Not a general key/value store — the server
- * refuses a key it does not know rather than storing it, so this union is the entire surface.
+ * The settings an operator may change at RUNTIME. Not a general key/value store — the server
+ * refuses a key it does not know rather than storing it, so this union is the entire surface. The
+ * five pressure keys have no environment layer, and `0` turns each off.
  */
-export type SettingKey = 'max_jobs' | 'default_role';
+export type SettingKey =
+  | 'max_jobs'
+  | 'default_role'
+  | 'pressure_disk_pct'
+  | 'pressure_mem_pct'
+  | 'pressure_cpu_load'
+  | 'pressure_sleep_idle_min'
+  | 'image_prune_after_h';
 
 /**
  * One setting as `GET /api/settings` returns it, and as `PUT /api/settings/<key>` returns it back.
@@ -569,15 +615,19 @@ export type SettingKey = 'max_jobs' | 'default_role';
  * next restart.
  *
  * `minRole` is served FROM the server's own permission table — `max_jobs` is maintainer's
- * (operational, like host configuration), `default_role` is admin's (user management by another
- * name). Read it; never re-derive it here, or this app and the gate drift and a control gets
+ * (operational, like host configuration), `default_role` and the pressure keys are admin's (user
+ * management by another name, and guards that sleep other people's stacks). Read it; never re-derive it here, or this app and the gate drift and a control gets
  * offered that can only 403. It is `string` rather than `Role` for the same reason `User.role` is,
  * and an unknown name must be read as the MOST privileged rather than the least — `rank()` scores
  * one it has never heard of as 0, which would otherwise enable the control for everybody.
  */
 export type SettingRow = {
   key: SettingKey;
-  /** A number for `max_jobs`; a role name for `default_role`. */
+  /**
+   * A role name for `default_role`; a number for every other key: an integer for `max_jobs`,
+   * `pressure_disk_pct`, `pressure_mem_pct` (0–100), `pressure_sleep_idle_min` (minutes) and
+   * `image_prune_after_h` (hours), and any number ≥ 0 for `pressure_cpu_load`.
+   */
   value: number | string;
   source: 'db' | 'env' | 'default';
   minRole: string;

@@ -106,6 +106,8 @@ const TABLE: Row[] = [
   // What the cluster looks like right now. It names nodes and stuck tasks and carries no credential,
   // so it reads like the swarm panel beside it.
   { method: 'GET', path: '/api/signals', min: 'viewer', ok: 200 },
+  // Node and stack usage from the agents: numbers, no credential.
+  { method: 'GET', path: '/api/stats', min: 'viewer', ok: 200 },
   { method: 'GET', path: '/api/terminal-sessions', min: 'viewer', ok: 200 },
   // Decided: the roster is ordinary team information — who to hand a deployment to — and carries no
   // secret. Reading it is a viewer's; every write on it is an admin's, three rows down.
@@ -211,6 +213,14 @@ const TABLE: Row[] = [
   // An admin may IMPORT a sealed configuration (they already hold the file and its passphrase) and
   // may not EXPORT one — the row below.
   { method: 'POST', path: '/api/config/sealed', body: {}, min: 'admin', ok: 400 },
+
+  // The pressure thresholds and the image prune age. Each decides when previews are refused or put
+  // to sleep host-wide, so they sit with the admin surfaces. The allowed role gets the stored row.
+  { method: 'PUT', path: '/api/settings/pressure_disk_pct', body: { value: 90 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/pressure_mem_pct', body: { value: 10 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/pressure_cpu_load', body: { value: 2 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/pressure_sleep_idle_min', body: { value: 30 }, min: 'admin', ok: 200 },
+  { method: 'PUT', path: '/api/settings/image_prune_after_h', body: { value: 168 }, min: 'admin', ok: 200 },
 
   // ── root: the whole host, portable, in plaintext ────────────────────────────────────────────
   { method: 'GET', path: '/api/config', min: 'root', ok: 200 },

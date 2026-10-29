@@ -141,11 +141,12 @@ var groupShort = map[string]string{
 	"host-vars":     "Host variables and secrets, shared by every deployment.",
 	"users":         "Accounts, roles and passwords.",
 	"tokens":        "Personal API tokens.",
-	"settings":      "The two settings changeable at runtime, without a restart.",
+	"settings":      "Host settings changeable at runtime: job cap, default role, pressure thresholds, image prune age.",
 	"sso":           "Single sign-on providers.",
 	"swarm":         "The swarm, and what a new worker runs to join it.",
 	"tls":           "The host's certificate mode, and the bring-your-own wildcard.",
 	"logging":       "Loki's settings: chunks, retention, storage.",
 	"config":        "The whole portable configuration: export it, or apply one.",
 	"host":          "The host itself — health, the control stack, terminal history, the probe.",
+	"stats":         "Node and stack usage, from each node's pstack-agent.",
 }

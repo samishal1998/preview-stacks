@@ -95,7 +95,12 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("routing").AddCommand(NewRoutingPutCommand(exec))
 	group("settings").AddCommand(NewSettingsListCommand(exec))
 	group("settings").AddCommand(NewSettingsSetDefaultRoleCommand(exec))
+	group("settings").AddCommand(NewSettingsSetImagePruneAfterHCommand(exec))
 	group("settings").AddCommand(NewSettingsSetMaxJobsCommand(exec))
+	group("settings").AddCommand(NewSettingsSetPressureCpuLoadCommand(exec))
+	group("settings").AddCommand(NewSettingsSetPressureDiskPctCommand(exec))
+	group("settings").AddCommand(NewSettingsSetPressureMemPctCommand(exec))
+	group("settings").AddCommand(NewSettingsSetPressureSleepIdleMinCommand(exec))
 	group("swarm").AddCommand(NewSwarmSignalsCommand(exec))
 	group("specs").AddCommand(NewSpecsListCommand(exec))
 	group("specs").AddCommand(NewSpecsDeleteCommand(exec))
@@ -106,6 +111,7 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("sso", "config").AddCommand(NewSsoConfigPutCommand(exec))
 	group("sso", "provider").AddCommand(NewSsoProviderDeleteCommand(exec))
 	group("sso", "provider").AddCommand(NewSsoProviderPutCommand(exec))
+	group("stats").AddCommand(NewStatsGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmJoinCommand(exec))
 	group("swarm").AddCommand(NewSwarmNodeRemoveCommand(exec))
@@ -2144,7 +2150,7 @@ func NewRoutingPutCommand(exec oascmd.ExecOptions) *cobra.Command {
 func NewSettingsListCommand(exec oascmd.ExecOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "Both runtime settings, resolved, each saying which layer it came from.",
+		Short: "Every runtime setting, resolved, each saying which layer it came from.",
 	}
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -2208,6 +2214,47 @@ func NewSettingsSetDefaultRoleCommand(exec oascmd.ExecOptions) *cobra.Command {
 	return cmd
 }
 
+// NewSettingsSetImagePruneAfterHCommand returns the "settings
+// set-image-prune-after-h" command (PUT
+// /api/settings/image_prune_after_h).
+func NewSettingsSetImagePruneAfterHCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyValue int64
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "set-image-prune-after-h",
+		Short: "Hours an unused image is kept before the prune removes it. Admin only.",
+	}
+	cmd.Flags().Int64Var(&bodyValue, "value", 0, "A whole number from 0 to 87600. 0 is off.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/settings/image_prune_after_h",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("value") {
+			body["value"] = bodyValue
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
 // NewSettingsSetMaxJobsCommand returns the "settings set-max-jobs"
 // command (PUT /api/settings/max_jobs).
 func NewSettingsSetMaxJobsCommand(exec oascmd.ExecOptions) *cobra.Command {
@@ -2226,6 +2273,167 @@ func NewSettingsSetMaxJobsCommand(exec oascmd.ExecOptions) *cobra.Command {
 		req := oascmd.Request{
 			Method: "PUT",
 			Path:   "/api/settings/max_jobs",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("value") {
+			body["value"] = bodyValue
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSettingsSetPressureCpuLoadCommand returns the "settings
+// set-pressure-cpu-load" command (PUT /api/settings/pressure_cpu_load).
+func NewSettingsSetPressureCpuLoadCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyValue float64
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "set-pressure-cpu-load",
+		Short: "5-minute load per core that puts a node in pressure. Admin only.",
+	}
+	cmd.Flags().Float64Var(&bodyValue, "value", 0, "A number 0 or more. 0 is off.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/settings/pressure_cpu_load",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("value") {
+			body["value"] = bodyValue
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSettingsSetPressureDiskPctCommand returns the "settings
+// set-pressure-disk-pct" command (PUT /api/settings/pressure_disk_pct).
+func NewSettingsSetPressureDiskPctCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyValue int64
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "set-pressure-disk-pct",
+		Short: "Disk used % that puts a node in pressure. Admin only.",
+	}
+	cmd.Flags().Int64Var(&bodyValue, "value", 0, "A whole number from 0 to 100. 0 is off.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/settings/pressure_disk_pct",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("value") {
+			body["value"] = bodyValue
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSettingsSetPressureMemPctCommand returns the "settings
+// set-pressure-mem-pct" command (PUT /api/settings/pressure_mem_pct).
+func NewSettingsSetPressureMemPctCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyValue int64
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "set-pressure-mem-pct",
+		Short: "Available memory % at or below which a node is in pressure. Admin only.",
+	}
+	cmd.Flags().Int64Var(&bodyValue, "value", 0, "A whole number from 0 to 100. 0 is off.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/settings/pressure_mem_pct",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("value") {
+			body["value"] = bodyValue
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSettingsSetPressureSleepIdleMinCommand returns the "settings
+// set-pressure-sleep-idle-min" command (PUT
+// /api/settings/pressure_sleep_idle_min).
+func NewSettingsSetPressureSleepIdleMinCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyValue int64
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "set-pressure-sleep-idle-min",
+		Short: "Minutes a stack sits idle before pressure may sleep it. Admin only.",
+	}
+	cmd.Flags().Int64Var(&bodyValue, "value", 0, "A whole number from 0 to 525600. 0 is off.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/settings/pressure_sleep_idle_min",
 		}
 		body := map[string]any{}
 		if cmd.Flags().Changed("value") {
@@ -2554,6 +2762,29 @@ func NewSsoProviderPutCommand(exec oascmd.ExecOptions) *cobra.Command {
 			req.RawBody = []byte(flagData)
 		case len(body) > 0:
 			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewStatsGetCommand returns the "stats get" command (GET /api/stats).
+func NewStatsGetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "Each node's disk, memory and load from its agent, an hour of samples, and CPU and memory per stack. Unknown is null.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/stats",
 		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")

@@ -41,11 +41,12 @@ const LOKI_CELLS: Cell[] = [
   { challenge: 'dns01', ui: 'advanced', orchestrator: 'swarm' },
 ];
 
-/** Arms for a docker that lets `init` finish: the health wait sees `healthy`, everything else succeeds silently. */
+/** Arms for a docker that lets `init` finish: the health wait sees `healthy`, this node is swarm node n1 (so the agent service gets its constraint), everything else succeeds silently. */
 export const INIT_SHIM = [
   `  "compose -p pstack-control ps -q pstack") printf '%s\\n' 'c0ffee' ;;`,
   `  "inspect -f {{.State.Health.Status}} c0ffee") printf '%s\\n' 'healthy' ;;`,
   `  "info --format {{.Swarm.LocalNodeState}}") printf '%s\\n' 'active' ;;`,
+  `  "info --format {{.Swarm.NodeID}}") printf '%s\\n' 'n1' ;;`,
 ].join('\n');
 
 /** The swarm shim from features.test.ts — a two-node swarm with one stack. */

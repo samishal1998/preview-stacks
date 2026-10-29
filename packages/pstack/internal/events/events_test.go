@@ -16,7 +16,9 @@ func TestNames(t *testing.T) {
 		// negative control: swap "job.failed" and "job.cancelled" — the order assertion fails.
 		// negative control: file "logging.changed" beside "routing.changed" in Names — the order assertion fails.
 		// negative control: swap "route.assigned" and "route.unassigned" — the order assertion fails.
-		want := "deployment.created,deployment.updated,deployment.deleted,job.started,job.succeeded,job.failed,job.cancelled,job.leaked,spec.stored,spec.deleted,routing.changed,healthcheck.started,healthcheck.updated,healthcheck.finished,healthcheck.timedout,container.ready,container.start-failed,container.started,container.stopped,container.restarted,stack.ready,stack.failed,stack.timedout,stack.slept,stack.woken,share.created,config.exported,config.imported,job.superseded,logging.changed,signal.raised,signal.cleared,route.assigned,route.unassigned"
+		// negative control: file "node.pressure" before "route.unassigned" — the order assertion fails.
+		// negative control: file "node.pruned" before "node.recovered" — the order assertion fails.
+		want := "deployment.created,deployment.updated,deployment.deleted,job.started,job.succeeded,job.failed,job.cancelled,job.leaked,spec.stored,spec.deleted,routing.changed,healthcheck.started,healthcheck.updated,healthcheck.finished,healthcheck.timedout,container.ready,container.start-failed,container.started,container.stopped,container.restarted,stack.ready,stack.failed,stack.timedout,stack.slept,stack.woken,share.created,config.exported,config.imported,job.superseded,logging.changed,signal.raised,signal.cleared,route.assigned,route.unassigned,node.pressure,node.recovered,node.pruned"
 		if got := strings.Join(Names, ","); got != want {
 			t.Fatalf("Names = %s", got)
 		}

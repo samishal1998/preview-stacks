@@ -87,6 +87,7 @@ pstack init --domain preview.example.com --acme-email <you>@example.com
 | `PSTACK_IMAGE` | no | control image, default `pstack:local` (build it: `docker build -t pstack:local .`) |
 | `PSTACK_DATA` | no | default `/var/lib/pstack` |
 | `PSTACK_LOKI_PASSWORD` | no | with `loki`: the push password, 32 lowercase hex. Generated when unset; kept in `control/.env` as `LOKI_PUSH_PASSWORD` |
+| `PSTACK_AGENT_IMAGE` | no | the image `pstack-agent` (the node reporter) runs in, default `docker:29.9.2-cli`, pinned by digest. **Not read back**: export it again on every `init` and `upgrade` |
 
 It checks preconditions by name first (Docker socket, Compose plugin, control image), creates
 `<data>/deployments` and the two external networks **`preview-ingress`** and **`preview-shared`**
@@ -984,6 +985,7 @@ For CI, prefer the CLI (`-f`, `--set`): no host access, no token, and the exit c
 | `! kind: isolated with no axes …` (warning) | the spec is just a Compose wrapper | add the axes it needs, or mark it `kind: shared` so `down` is guarded |
 | `✗ requires  <name>  — unmet` (exit 1) | a `requires` assert failed; **nothing was created** | do what the `hint` says — usually bring the shared deployment up first |
 | a `requires` assert passes while the dependency is down | same fail-open bug as a bare `! <probe>` — the assert command itself failed | guard it the way §5 guards an `assert_gone` |
+| a deploy or wake fails with `capacity <stack>: worker-2: disk 94% ≥ 90%` | no node has room: every active node is in pressure (`GET /api/stats`, the Stats page) | free the node (sleep or tear down a stack, `docker image prune`), or raise the `pressure_*` setting; down, sleep and verify still run |
 | `409 already has a job in flight` | one job per stack | poll `GET /api/jobs/:id` to a terminal state, then retry |
 | `401 unauthorized` on a POST | `PSTACK_TOKEN` is set server-side; `GET`s are open, mutations are not | send `Authorization: Bearer $PSTACK_TOKEN` |
 | `refusing to bind 0.0.0.0 without PSTACK_TOKEN` (exit 3) | safety interlock — this API destroys infrastructure | set `PSTACK_TOKEN`, or leave it on loopback and tunnel |

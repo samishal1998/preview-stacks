@@ -17,6 +17,7 @@ import (
 	pstack "github.com/samishal1998/preview-stacks/packages/pstack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/initctl"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/nodestats"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
@@ -504,7 +505,7 @@ func TestInitSwarmNetworkRanges(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ran(log, "docker network rm") || strings.Contains(out, "note") {
+		if ran(log, "docker network rm") || strings.Contains(out, "note      preview-") {
 			t.Fatalf("touched a network already right:\n%s\n%v", out, log)
 		}
 	})
@@ -610,7 +611,7 @@ func (c cell) options(dataDir string, dryRun bool, runner exec.Runner, out *byte
 }
 
 // initShim is INIT_SHIM from packages/conformance/gen/goldens.table.ts: the health wait sees
-// `healthy`, the swarm state is `active`, everything else succeeds silently.
+// `healthy`, the swarm state is `active`, this node is swarm node n1, everything else succeeds silently.
 func initShim() *exec.Fake {
 	f := exec.NewFake(nil, "")
 	f.Answer = func(cmd string) (exec.Result, bool) {
@@ -619,6 +620,8 @@ func initShim() *exec.Fake {
 			return exec.Result{OK: true, Stdout: "healthy\n"}, true
 		case strings.Contains(cmd, "Swarm.LocalNodeState"):
 			return exec.Result{OK: true, Stdout: "active\n"}, true
+		case cmd == selfIDProbe:
+			return exec.Result{OK: true, Stdout: "n1\n"}, true
 		}
 		return exec.Result{OK: true}, true
 	}
@@ -840,12 +843,18 @@ func TestLokiService(t *testing.T) {
 // fence under "#### The service (`GrafanaService`)"), which is the HTTP-01 render. Copied for
 // lokiConfigSpecLines' reason: the render golden is generated from the binary, so only an independent
 // copy catches a line transcribed wrong, and most of these lines are sign-in controls no other check reads.
+// Plus the json-file cap after `restart:`, from docs/node-pressure-design.md §5 (0.45.0).
 var grafanaServiceSpecLines = []string{
 	"",
 	"  # Grafana, with --logging loki: the reader for Loki. Signed in with pstack accounts (forwardAuth).",
 	"  grafana:",
 	"    image: grafana/grafana:13.2.1    # not -slim (no bundled plugins), not -distroless (no curl for the health check)",
 	"    restart: unless-stopped",
+	"    logging:",
+	"      driver: json-file",
+	"      options:",
+	"        max-size: 50m",
+	`        max-file: "3"`,
 	"    # The logs network ONLY. Never preview-ingress, never a published port: anything that reaches",
 	"    # :3000 directly can send X-WEBAUTH-USER and be anyone. Only Traefik and Loki share it.",
 	"    networks: [logs]",
@@ -1743,6 +1752,199 @@ func TestInitProtectsTheDaemonFromTheOOMKiller(t *testing.T) {
 		out, cmds := run(t, nil, true)
 		if strings.Contains(strings.Join(cmds, "\n"), "oom_score_adj") || !strings.Contains(out, "[dry-run] would protect docker") {
 			t.Errorf("out %q cmds %v", out, cmds)
+		}
+	})
+}
+
+func TestControlServicesCapTheirLogs(t *testing.T) {
+	t.Setenv("PSTACK_LOKI_PASSWORD", "")
+	for _, ui := range []initctl.UI{initctl.Basic, initctl.Advanced, initctl.Hearth} {
+		for _, logging := range []initctl.Logging{initctl.LoggingNone, initctl.Loki} {
+			t.Run(string(ui)+"-"+string(logging), func(t *testing.T) {
+				// negative control: drop the logging block from the template's traefik service — traefik has none.
+				// negative control: drop controlLogCap from GrafanaService — grafana has none (the loki cells).
+				_, yaml := render(t, func(o *initctl.Options) { o.UI, o.Logging = ui, logging })
+				v, err := yamlx.ParseString(yaml)
+				if err != nil {
+					t.Fatal(err)
+				}
+				services := v.(*omap.Map).GetMap("services")
+				if !slices.Contains(services.Keys(), "traefik") || !slices.Contains(services.Keys(), "pstack") {
+					t.Fatalf("services %v", services.Keys())
+				}
+				for _, name := range services.Keys() {
+					size, files := "50m", "3"
+					if name == "traefik" {
+						size, files = "10m", "2"
+					}
+					l := services.GetMap(name).GetMap("logging")
+					o := l.GetMap("options")
+					if l.GetString("driver") != "json-file" || o.GetString("max-size") != size || o.GetString("max-file") != files {
+						t.Errorf("%s logging %v, want json-file %s × %s", name, l, size, files)
+					}
+				}
+			})
+		}
+	}
+}
+
+// agentRun runs a live init with okRunner, letting `answer` take any command first (ok=false falls
+// through). The self-id probe is matched on its prefix: the agent script itself contains
+// `{{.Swarm.NodeID}}`, so the create commands would match a bare Contains.
+func agentRun(t *testing.T, o spec.Orchestrator, answer func(cmd string) (exec.Result, bool), over func(*initctl.Options)) (string, []string, error) {
+	t.Helper()
+	f := okRunner("active", "overlay\n")
+	base := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if answer != nil {
+			if r, ok := answer(cmd); ok {
+				return r, true
+			}
+		}
+		return base(cmd)
+	}
+	var out bytes.Buffer
+	opts := initctl.Options{
+		DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+		UI: initctl.Basic, Orchestrator: o, Runner: f, Out: &out, NoOOMProtect: true,
+	}
+	if over != nil {
+		over(&opts)
+	}
+	err := initctl.Init(opts)
+	return out.String(), f.Commands(), err
+}
+
+const selfIDProbe = "docker info --format '{{.Swarm.NodeID}}'"
+
+func selfID(id string) func(string) (exec.Result, bool) {
+	return func(cmd string) (exec.Result, bool) {
+		if cmd == selfIDProbe {
+			return exec.Result{OK: true, Stdout: id + "\n"}, true
+		}
+		return exec.Result{}, false
+	}
+}
+
+func indexOf(cmds []string, want string) int {
+	return slices.Index(cmds, want)
+}
+
+// negative control: drop the agent step from Init → the container command never runs.
+func TestInitStartsTheAgent(t *testing.T) {
+	t.Run("compose: the container after the control stack is up, no service", func(t *testing.T) {
+		// negative control: run the agent before `control stack up` → the order check fails.
+		out, cmds, err := agentRun(t, spec.Compose, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctr := indexOf(cmds, nodestats.AgentContainerCmd(pstack.AgentScript, nodestats.AgentImage))
+		up := slices.IndexFunc(cmds, func(c string) bool { return strings.HasPrefix(c, "docker compose -p pstack-control -f ") })
+		if ctr < 0 || up < 0 || ctr < up {
+			t.Fatalf("container at %d, up at %d: %v", ctr, up, cmds)
+		}
+		joined := strings.Join(cmds, "\n")
+		if strings.Contains(joined, "docker service create") || slices.Contains(cmds, selfIDProbe) {
+			t.Errorf("compose ran swarm commands: %v", cmds)
+		}
+		if !strings.Contains(out, "  previews  docker compose on this host\n  agent     pstack-agent (docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb)\n") {
+			t.Errorf("out %q", out)
+		}
+	})
+	t.Run("PSTACK_AGENT_IMAGE's value reaches the command and the summary", func(t *testing.T) {
+		// negative control: ignore opts.AgentImage in Init → docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb is used.
+		out, cmds, err := agentRun(t, spec.Compose, nil, func(o *initctl.Options) { o.AgentImage = "mirror/docker:29-cli" })
+		if err != nil || indexOf(cmds, nodestats.AgentContainerCmd(pstack.AgentScript, "mirror/docker:29-cli")) < 0 ||
+			!strings.Contains(out, "  agent     pstack-agent (mirror/docker:29-cli)\n") {
+			t.Fatalf("err %v out %q cmds %v", err, out, cmds)
+		}
+	})
+}
+
+// negative control: drop the service command from the agent step → no service create runs.
+func TestInitStartsTheAgentOnSwarm(t *testing.T) {
+	t.Run("container and a global service that skips this node", func(t *testing.T) {
+		// negative control: pass "" as the self id to AgentServiceCmd → the constrained command is missing.
+		out, cmds, err := agentRun(t, spec.Swarm, selfID("n1"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctr := indexOf(cmds, nodestats.AgentContainerCmd(pstack.AgentScript, nodestats.AgentImage))
+		svc := indexOf(cmds, nodestats.AgentServiceCmd(pstack.AgentScript, nodestats.AgentImage, "n1"))
+		if ctr < 0 || svc < 0 {
+			t.Fatalf("container %d, service %d: %v", ctr, svc, cmds)
+		}
+		// NP-R11: the agent line sits between previews and its workers continuation.
+		if !regexp.MustCompile(`(?m)^  previews  .*\n  agent     pstack-agent \(docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb\)\n            workers need `).MatchString(out) {
+			t.Errorf("out %q", out)
+		}
+	})
+	t.Run("no self id: the service is skipped with a note", func(t *testing.T) {
+		// negative control: drop the "" guard → an unconstrained service runs and the manager reports twice.
+		out, cmds, err := agentRun(t, spec.Swarm, selfID(""), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.Join(cmds, "\n"), "docker service create") {
+			t.Errorf("service created: %v", cmds)
+		}
+		if !strings.Contains(out, "  note      pstack-agent service not created: no swarm node id\n") {
+			t.Errorf("out %q", out)
+		}
+	})
+	t.Run("a dry run prints the steps and the summary line", func(t *testing.T) {
+		// negative control: print the summary line only when the container command really ran (`ctr.OK && !ctr.Skipped`) → a dry run lacks it.
+		var out bytes.Buffer
+		r := exec.New(exec.Options{DryRun: true, Out: &out})
+		err := initctl.Init(initctl.Options{
+			DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+			UI: initctl.Basic, Orchestrator: spec.Swarm, Runner: r, Out: &out, DryRun: true, NoOOMProtect: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"[dry-run] swarm node id\n", "[dry-run] node agent\n", "[dry-run] node agent service\n", "  agent     pstack-agent (docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb)\n"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("missing %q:\n%s", want, out.String())
+			}
+		}
+	})
+}
+
+// negative control: return the container failure as an error from Init → init fails.
+func TestInitAgentFailureIsANote(t *testing.T) {
+	fail := func(prefix string) func(string) (exec.Result, bool) {
+		return func(cmd string) (exec.Result, bool) {
+			if cmd == selfIDProbe {
+				return exec.Result{OK: true, Stdout: "n1\n"}, true
+			}
+			if strings.HasPrefix(cmd, prefix) {
+				return exec.Result{OK: false, Code: 1, Stderr: "pull access denied\nmore"}, true
+			}
+			return exec.Result{}, false
+		}
+	}
+	t.Run("container", func(t *testing.T) {
+		// negative control: print the agent summary line whatever the result → it shows after a failure.
+		out, _, err := agentRun(t, spec.Compose, fail("docker rm -f pstack-agent"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "  note      pstack-agent did not start: pull access denied\n") || strings.Contains(out, "more") {
+			t.Errorf("out %q", out)
+		}
+		if strings.Contains(out, "  agent     ") {
+			t.Errorf("summary line after a failure: %q", out)
+		}
+	})
+	t.Run("service", func(t *testing.T) {
+		// negative control: ignore the service result → no note.
+		out, _, err := agentRun(t, spec.Swarm, fail("docker service rm pstack-agent"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "  note      pstack-agent service did not start: pull access denied\n") {
+			t.Errorf("out %q", out)
 		}
 	})
 }

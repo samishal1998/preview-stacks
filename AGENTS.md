@@ -50,9 +50,9 @@ semantics harder to state, it is a net loss even if it adds a feature.
 
 ```
 packages/pstack/       the CLI, API and embedded basic UI — one static Go binary. The product.
-                       cmd/pstack (main), internal/<pkg> (everything), assets.go (the eight embeds),
+                       cmd/pstack (main), internal/<pkg> (everything), assets.go (the nine embeds),
                        api/openapi.yaml (generates `pstack api`; served at /api/openapi.{yaml,json}),
-                       ui/, templates/ (control compose, loki/, grafana/, cloud-init), examples/,
+                       ui/, templates/ (control compose, loki/, grafana/, agent/, cloud-init), examples/,
                        tools/yamlcat (a parser-diff tool, not shipped), CHANGELOG.md,
                        package.json (the lockstep version of record).
 packages/conformance/  the black-box specification (bun:test): goldens + tests that spawn bin/pstack.
@@ -87,7 +87,7 @@ Do not add a module for what a few lines do.
 
 ### `packages/pstack/internal` — by responsibility
 
-One package per responsibility (42 of them), named as the reference's files were:
+One package per responsibility (43 of them), named as the reference's files were:
 
 **The core lifecycle** (read these first; the product is here):
 
@@ -104,16 +104,17 @@ One package per responsibility (42 of them), named as the reference's files were
 
 | File | Responsibility |
 |---|---|
-| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, customroutes, deploy, domains, grafana, logging, openapi, probe, settings, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). `server.go`'s header has no route list and still names the deleted `api.ts` — fix it when you next touch that file. Owns the `:id` → spec-variable binding. |
-| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (91) is a constant a test checks against the lock file. |
+| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, customroutes, deploy, domains, grafana, logging, openapi, probe, settings, signals, stats, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job, `pressure.go` and `prune.go` the node-pressure guards the stats loop runs. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). `server.go`'s header has no route list and still names the deleted `api.ts` — fix it when you next touch that file. Owns the `:id` → spec-variable binding. |
+| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (97) is a constant a test checks against the lock file. |
 | `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), per-command help and completion (`commands.go`, `completion.go`), the init silent-revert guard (`initguard.go`), **exit codes**, the `serve` loopback interlock, `healthcheck`. `main.go` is one call. Logic belongs in the package, not here. |
 | `jobs` | In-memory job registry: one RUNNING job per key plus a queue one deep where the newest supersedes the queued one, a global concurrency cap (`PSTACK_MAX_JOBS`, 4), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation per job and per stack. `loki-apply` is its one non-deployment action. |
 | `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
 | `specs` | Named specs: store once, reference from many deployments. |
 | `scheduler` | Sleep/wake: the `SleepIndex`, the `TrafficMeter` (Traefik's per-router counters → "last request"), the `Scheduler` tick (`idle`/`after`), and the spinning-up page. Everything it knows is in memory — invariant 10. |
 | `signals` | What a machine manager needs from a swarm: every node with its task count, and every task docker would not place, read straight from docker (`Look`). No arithmetic and no policy — it reports, the caller decides. The ticker, the empty-clocks and the three node actions are in `api/routes_signals.go`. |
+| `nodestats` | What `pstack-agent` reports (0.45.0): the agent's and the prunes' docker command strings, `Parse` (the newest complete batch per node, in stream order), the `Store` (latest batch plus a 120-sample ring, memory only, no mutex of its own), and `Evaluate`/`Describe` (pressure with hysteresis). Pure. The loop, the events and the guards are in `api/routes_stats.go`, `pressure.go` and `prune.go`; the script is `templates/agent/agent.sh`. |
 | `share` | Share links: an HS256 JWT signed with `PSTACK_TOKEN`. Sign, verify, and nothing stored. |
-| `settings` | Runtime knobs (`max_jobs`, `default_role`): a closed key list, env as the default not the authority, readers that never fail and resolve downward. |
+| `settings` | Runtime knobs (`max_jobs`, `default_role`, the four `pressure_*` keys, `image_prune_after_h`): a closed key list, env as the default not the authority, readers that never fail and resolve downward. |
 | `config` | The portable host configuration (`GET`/`POST /api/config`, `pstack pull config`/`push config`). `Assemble` is a full credential dump; `Apply` creates or skips, never updates or deletes. Loki settings stay behind. |
 | `initctl` | `pstack init` — stands up the control stack, including the Loki and Grafana services (`LokiService`, `GrafanaService`, `LokiWiring`). CLI-only, permanently; its header explains why. |
 | `upgrade` | `pstack upgrade`, `pstack ui <mode>` and `pstack logging loki`/`off`. Reads back what `init` decided so nothing rotates. |
@@ -140,7 +141,7 @@ One package per responsibility (42 of them), named as the reference's files were
 | `sso` | The OIDC/OAuth2 protocol, and only that: presets, discovery (cached per `Client`), PKCE, the token exchange, ID-token verification (RS256/ES256, stdlib), claim mapping, the `TransientStore`. Touches no accounts. |
 | `hostvars` | Host-level `${vars.*}` / `${secrets.*}`. |
 | `registries` | Private-registry credentials for image pulls. |
-| `events` | The domain event bus. `Names` (34) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
+| `events` | The domain event bus. `Names` (37) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
 | `webhooks` | Notifier registrations + the delivery log. |
 | `notify` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
 
@@ -149,8 +150,8 @@ Foundations under `internal/` with no product logic: `omap` (the ordered map eve
 `Number()`, `encodeURIComponent`, `URLSearchParams`…), `version`, `testfacts`. Every one is tested
 against `packages/conformance/golden/facts` — what the reference runtime measurably did.
 
-Every package has a `_test.go` beside it (~330 Go test functions). The black-box suite is
-`packages/conformance` (303 tests in 26 files: every route group, 93 CLI transcripts, a complete
+Every package has a `_test.go` beside it (~460 Go test functions). The black-box suite is
+`packages/conformance` (333 tests in 30 files: every route group, 99 CLI transcripts, a complete
 host fixture). `packages/client/test/client.test.ts` drives the client against the spawned binary —
 that is the anti-drift check for the SDK.
 
@@ -217,7 +218,8 @@ not what Traefik serves). Every table is justified in its migration as configura
 source of truth in Docker to contradict. The deployment registry stayed a directory of YAML an
 operator can read and repair over SSH. **If you find yourself adding a table whose rows describe
 what is running, you are about to be wrong.** Whether Loki or Grafana runs is read from docker for
-the same reason (invariant 23).
+the same reason (invariant 23). Node stats, pressure state and prune results (0.45.0) are memory
+only too: a restart forgets them and the next agent batch puts them back.
 
 **11. Tri-state fields never collapse to a boolean.** `busy`, `running`, `reachable`, `verified`,
 `enabled` (logging), a node's `lokiPlugin` are `boolean | null`, and `null` means *could not
@@ -230,7 +232,9 @@ recreating that stack from a request kills the process mid-operation, and a brok
 host with no control plane and no remote way to repair it. Never add a route that calls them.
 `POST /api/control/restart` and the `loki-apply` job are not exceptions but the boundary drawn
 exactly: they restart a control container *other than pstack's own* (refused by name, whoever asks),
-they never recreate one, and the same image comes back.
+they never recreate one, and the same image comes back. `pstack-agent` (0.45.0) is host state like
+the control stack: `init` (and so `upgrade`, `pstack ui`, `pstack logging`) creates it, the API only
+reads its logs and starts prune jobs.
 
 **13. The container name in a request is never trusted.** `docker exec`/`stop` accept any container
 on the daemon — including Traefik (every preview on the host) and `pstack-control` itself (whose
@@ -276,12 +280,15 @@ adopting the first of several matches — is how one person signs in as another.
 CLOSED for the same reason: a non-empty allow-list plus no address is a refusal.
 
 **20. Logging off adds nothing to the control compose except pstack's unconditional
-`./loki:/etc/loki` mount (invariant 21).** `LokiService`/`GrafanaService` return `""` without
-`--logging loki` and ride the EXISTING `#__ADVANCED_UI_SERVICE__` marker; `LokiWiring` extends three
-existing lines through anchors checked with `Contains` before `Replace(…, 1)` and fails init by name
-if one moved; `loki.Render` walks 10 anchors the same way. *Why:* every `#__MARKER__` leaves a line
+`./loki:/etc/loki` mount (invariant 21) and the json-file log caps (0.45.0).**
+`LokiService`/`GrafanaService` return `""` without `--logging loki` and ride the EXISTING
+`#__ADVANCED_UI_SERVICE__` marker; `LokiWiring` extends three existing lines through anchors
+checked with `Contains` before `Replace(…, 1)` and fails init by name if one moved; `loki.Render`
+walks 10 anchors the same way. *Why:* every `#__MARKER__` leaves a line
 behind when rendered off, so a new one changes every host's compose file. **Never add a marker.**
-0.40.0 changed every logging-off cell once, for that mount; that change is not a precedent.
+0.40.0 changed every logging-off cell once, for that mount, and 0.45.0 once more, for a
+`logging: {driver: json-file, …}` block on each control service (no marker: inline in the template
+and in the service builders). Neither change is a precedent.
 
 **21. pstack's `./loki:/etc/loki` mount is unconditional**, and init creates `control/loki` at 0755
 in every mode. *Why (ruling X1):* pstack's env is an explicit list, so its service block is then
@@ -440,7 +447,7 @@ A new HTTP-level test belongs in `packages/conformance`; a unit test beside the 
 
 The binary is a re-implementation of a fixed contract — the conformance suite, the goldens and
 the exact docker argv — and the contract has JavaScript semantics baked in (JSON key order,
-`.length` in UTF-16, `Number()`, last-wins query parsing). These rules are what keep forty-one
+`.length` in UTF-16, `Number()`, last-wins query parsing). These rules are what keep forty-three
 packages byte-compatible with it, and they stay after the port because the contract stays:
 
 1. **JSON is structs (field order) or `*omap.Map`/`jsonx.Object` — never `map[string]any`**, and
@@ -478,8 +485,9 @@ packages byte-compatible with it, and they stay after the port because the contr
     (lowercase, empty path → `/`) is explicit where the TS relied on `new URL()`.
 14. Concurrency: every shared struct names its owner or its mutex in a comment; **no method calls a
     sink, a subscriber or a bus listener while holding a mutex**; goroutines only where listed (the
-    job runner, a delivery send, stream pumps, the watchers), each with `recover`. `events.Emit`
-    dispatches synchronously, in registration order — never `go fn(e)`.
+    job runner, a delivery send, stream pumps, the watchers, `statsLoop` and the prune runner it
+    starts), each with `recover`. `events.Emit` dispatches synchronously, in registration order —
+    never `go fn(e)`.
 15. Streams: pumps read to EOF → `wg.Wait()` → `cmd.Wait()` → the terminal frame. Never `Wait`
     while a pump is still reading. `exec.Command("bash", "-c", cmd)` with `cmd.Cancel` sending
     SIGTERM (a hook may trap it); no `Setpgid`.
@@ -502,8 +510,15 @@ packages byte-compatible with it, and they stay after the port because the contr
 
     Carve-out: `serve`'s tuning knobs are env-only by precedent (S2-R9) — the `api.Tuning` fields
     `TuningFromEnv` reads (`PSTACK_MAX_JOBS`, the `PSTACK_READINESS_*` knobs, the SSO TTLs,
-    `PSTACK_LOKI_READY_TIMEOUT_MS`/`_UID`) plus `PSTACK_LOKI_DIR` (`loki.Dir`). Rule 18 applies to
-    command inputs such as `init`, `cloud-init` and `swarm` flags.
+    `PSTACK_LOKI_READY_TIMEOUT_MS`/`_UID`, `PSTACK_SIGNALS_TICK_MS`, `PSTACK_STATS_TICK_MS`) plus
+    `PSTACK_LOKI_DIR` (`loki.Dir`). Rule 18 applies to command inputs such as `init`, `cloud-init`
+    and `swarm` flags.
+
+    A second, narrower carve-out: an env-only `init` input that is never read back.
+    `PSTACK_NO_OOM_PROTECT` and `PSTACK_AGENT_IMAGE` have no flag, no `upgrade` readback, no
+    `initguard` row and no cloud-init passthrough, so an operator who sets one re-exports it on every
+    `init` and `upgrade`, and the docs say so where the variable is listed (NP-R6). Use it only for
+    a value where falling back to the default is safe.
 
 ## How to add things
 
@@ -571,10 +586,13 @@ never return an error and resolve downward — never up to admin. Never call a r
 ### A control-template change or a new init input
 
 Anchors, never a marker (invariant 20). The eight logging-off render cells and the init, upgrade,
-`ui`-switch, cloud-init and swarm-join transcripts stay byte-identical: `bun gen/goldens.ts` (never
-`bun run gen`, which rebuilds `golden/host`), then read the golden diff first. A new init input
-also needs the `upgrade` readback (which `pstack ui` and `pstack logging` re-run init from), an
-`initguard` row (invariant 26), cloud-init passthrough, and a flag + env pair (Go rule 18).
+`ui`-switch, cloud-init and swarm-join transcripts stay byte-identical, except where a change means
+to move them, as the json-file log caps (0.45.0) moved every render cell and init-dry transcript
+once: `bun gen/goldens.ts` (never `bun run gen`, which rebuilds `golden/host`), then read the golden
+diff first and name the change in the commit. A new init input also needs the `upgrade` readback
+(which `pstack ui` and `pstack logging` re-run init from), an `initguard` row (invariant 26),
+cloud-init passthrough, and a flag + env pair (Go rule 18), unless it is an env-only input that is
+never read back (rule 18's second carve-out: `PSTACK_AGENT_IMAGE`, `PSTACK_NO_OOM_PROTECT`).
 
 ### A new notifier type
 

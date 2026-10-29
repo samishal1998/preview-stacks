@@ -390,7 +390,7 @@ Add `-v` to see the actual commands and their output:
 $ PR=8 pstack up -v
 stack: pr-8
 → compose up (backend)
-  $ docker compose -p 'pr-8' -f 'docker-compose.preview.yml' -f 'docker-compose.preview.tls.yml' --profile 'backend' up -d --remove-orphans
+  $ docker compose -p 'pr-8' -f 'compose.generated.yml' -f 'docker-compose.preview.tls.yml' --profile 'backend' up -d --remove-orphans
 ```
 
 That is the whole Compose contract, visible: `-p <stack>` for namespacing, one `-f` per file
@@ -398,12 +398,17 @@ That is the whole Compose contract, visible: `-p <stack>` for namespacing, one `
 `--remove-orphans` so relabelling from `backend+frontend` to `backend` actually stops the frontend
 instead of orphaning it.
 
+The first `-f` is `compose.generated.yml`, which pstack writes beside `compose.file` and never
+over it. It does this whenever a service needs routing labels or has no `logging:` key. Such a
+service gets a json-file log cap (10m × 3), or the loki driver on a host that runs Loki. Add
+`compose.generated.yml` to your repository's `.gitignore`.
+
 ### Reading the step report
 
 ```
   ✓ assert_gone  database
   │ │            └─ axis name, or `(compose)` for the compose step
-  │ └─ phase: up · assert_live · down · assert_gone · compose
+  │ └─ phase: up · assert_live · down · assert_gone · compose · capacity
   └─ mark
 ```
 
@@ -906,6 +911,9 @@ $ curl -s https://api.preview.example.com/api/jobs/up-pr-123-1-apeq0d
 `leaked` is its own state for the same reason exit 2 is its own code. `cancelled` and `superseded`
 are deliberately not the same state: a cancelled job may have left half a deploy behind, a
 superseded one did nothing at all.
+
+A deploy or wake refused because no node has room is `failed`, with one `capacity` step
+([Node pressure](#node-pressure-0450)).
 
 **A poller must stop on all five final states, not on `ok`/`failed` alone.** `queued` and
 `superseded` both arrived in 0.32.0 — a loop written against the older five treats `queued` as
@@ -2483,7 +2491,8 @@ sleep:
 ```
 
 Either, both, or neither. Durations are `90s`, `30m`, `2h`, `3d`, `1h30m`. A spec without a `sleep:`
-block is never put to sleep by the scheduler.
+block is never put to sleep by the scheduler. A node short of memory or cpu can still sleep it
+([Node pressure](#node-pressure-0450)).
 
 - **`idle`** reads Traefik's per-router request counters (a metrics entrypoint the control stack
   exposes to the API container only — nothing in the request path). The idle clock starts at the
@@ -3052,10 +3061,10 @@ that. There are four, they are **ordered**, and each one includes everything bel
 
 | Role | What it adds |
 |---|---|
-| `viewer` | **Reads.** Deployments, runtime, logs and log streams, source, readiness, jobs, specs, routing, custom routes, registries, host variables (never a secret's *value*), notifiers and their deliveries, the control stack, the swarm, terminal-session history, and the list of accounts |
+| `viewer` | **Reads.** Deployments, runtime, logs and log streams, source, readiness, jobs, specs, routing, custom routes, registries, host variables (never a secret's *value*), notifiers and their deliveries, the control stack, the swarm, node stats, terminal-session history, and the list of accounts |
 | `developer` | **Stacks.** Submit and delete deployments, `up` / `down` / `verify` / `sleep` / `wake`, start / stop / restart a container, cancel a job, mint a share link, open a container shell, write and delete named specs, create, assign and delete custom routes |
 | `maintainer` | **The host's configuration.** Host variables and secrets, private-registry logins, Traefik dynamic files, notifiers (create, edit, test, redeliver), the swarm join token, and *reading* the SSO configuration |
-| `admin` | **People.** Create, delete and re-role accounts, set someone else's password, *write* the SSO configuration, and apply a sealed config |
+| `admin` | **People.** Create, delete and re-role accounts, set someone else's password, *write* the SSO configuration, and apply a sealed config. Also the pressure and prune settings |
 
 Two things sit outside that ladder:
 
@@ -3101,6 +3110,7 @@ every account until someone puts it in the table.
 | `GET /api/settings` | `viewer` |
 | `PUT /api/settings/max_jobs` | `maintainer` |
 | `PUT /api/settings/default_role` | `admin` |
+| `PUT /api/settings/{pressure_disk_pct,pressure_mem_pct,pressure_cpu_load,pressure_sleep_idle_min,image_prune_after_h}` | `admin` |
 | `POST /api/users` · `PATCH`/`DELETE /api/users/:id` | `admin` |
 | `PUT /api/users/:id/password` **for anybody else** | `admin` |
 | `PUT`/`DELETE /api/sso/config` · `/api/sso/config/:key` | `admin` |
@@ -3122,10 +3132,11 @@ next to the thing beside it:
   maintainer who could point this host at an identity provider they control would be able to sign in
   through it as an admin. That is a promotion path, and promotion paths live with people. Reading
   the configuration stays maintainer — it returns a mask, never the client secret.
-- **The two runtime settings split by KEY, not by route.** `max_jobs` is operational and sits with
+- **The runtime settings split by KEY, not by route.** `max_jobs` is operational and sits with
   host configuration at maintainer; `default_role` decides what every account created without an
   explicit role can reach, which is user management by another name, so it sits with the promotion
-  paths at admin. Reading either is a viewer's — the page that shows the cap is the page everybody
+  paths at admin. The five pressure keys are admin too: `0` turns a guard off for every node.
+  Reading any of them is a viewer's — the page that shows the cap is the page everybody
   sees, and each row carries the role it takes to change it.
 
 A refusal says which role was wanted and which one you hold, because an operator staring at a bare
@@ -3456,6 +3467,120 @@ hand-rolled script can.
 | weekly | `docker system df` on the host; a growing disk means an axis you haven't modelled yet |
 | per new axis | the section 5 drill before it goes near a shared host |
 
+### Node pressure (0.45.0)
+
+A full disk took a host down for days once: images piled up, Traefik's own log reached 3.6 GB, and
+Traefik could not restart. pstack now watches every machine and acts before that.
+
+**The agent.** `pstack init` runs `pstack-agent` on every node: a POSIX shell script in a stock
+`docker:29.9.2-cli` image pinned by digest, with the docker socket and the host's `/` mounted
+read-only. On a compose host it is one container. On a swarm it is a container on this manager
+plus a global service on every other node, so a worker that joins later gets one with nothing to
+install. Every 30 s it
+prints one batch to its own log:
+
+- disk: `df` of the host's docker data root, not the container's overlay;
+- memory: `MemAvailable`, which does not count the page cache as used;
+- load: the 1- and 5-minute load average and the core count;
+- per container: its stack and its CPU and memory use.
+
+The control plane reads those logs every 30 s (`docker logs --since 90s`, and `docker service logs`
+on a swarm), so the agent needs no network path to pstack and no credential. The agent decides
+nothing: every threshold is a setting on this host. A host from before 0.45.0 has no agent until
+`pstack upgrade`.
+
+**What it reports**, on the **Stats** page of either UI, from `GET /api/stats` (viewer), or with
+`pstack api stats get`:
+
+```json
+{
+  "v": 1, "at": 1785014255903, "agent": true,
+  "nodes": [
+    { "node": "x8k2m9qv1n3p4r5s6t7u8w9y0", "hostname": "worker-2", "role": "worker",
+      "at": 1785014250000, "stale": false, "cores": 8, "load1": 1.02, "load5": 1.1,
+      "memTotal": 33399881728, "memAvailable": 4294967296,
+      "diskTotal": 105152176128, "diskFree": 5136490496,
+      "pressure": ["disk"],
+      "prune": { "at": 1785014100000, "freedBytes": 12300000000, "reason": "pressure" },
+      "history": [{ "at": 1785014250000, "load5": 1.1, "memAvailable": 4294967296, "diskFree": 5136490496 }] }
+  ],
+  "stacks": [{ "stack": "pr-42", "cpuPct": 3.1, "mem": 129394278, "containers": 1, "nodes": ["worker-2"] }],
+  "prune": { "lastAt": 1785014100000, "lastFreed": 12300000000 }
+}
+```
+
+- A node with no complete batch in 2 minutes is `stale: true`, and `at` and every reading are
+  `null`. Its `history` (an hour, 120 samples) stays.
+- `node` is the swarm node id, `null` on a compose host. `role` is `manager` or `worker`, `null` on
+  compose.
+- Everything here is in memory. A restart forgets the history and the last prune.
+
+**When a node is in pressure.** On its newest fresh batch:
+
+| Kind | In pressure when | Setting (default) | Clears at |
+|---|---|---|---|
+| `disk` | used ≥ N % | `pressure_disk_pct` (90) | below N − 5 |
+| `memory` | `MemAvailable` ≤ N % of total | `pressure_mem_pct` (10) | above N + 5 |
+| `cpu` | 5-minute load ÷ cores ≥ N | `pressure_cpu_load` (2.0) | below N − 0.25 |
+
+`0` turns a kind off. The margin keeps a value sitting on the line from flapping. **A stale or
+missing node is never in pressure**: no guard acts on data it does not have.
+
+**What pstack does while a node is in pressure:**
+
+1. **Alerts.** `node.pressure` on the way in, `node.recovered` on the way out
+   ([webhook-events.md](webhook-events.md)). A restart raises again what is still true; dedupe on
+   `id`.
+2. **Prunes a full disk.** Unused images of any age on that node, at most once per node every 10
+   minutes, so a disk full of something else is not pruned in a loop. `node.pruned` says how much
+   it freed.
+3. **Sleeps one stack** when memory or cpu is short: the least recently used stack with a container
+   on that node, one per 30 s across the whole host. Eligible means awake, not `kind: shared`, no
+   job in flight, and unused for `pressure_sleep_idle_min` (30) minutes; `0` turns this off. The
+   stack needs no `sleep:` block, and it wakes on the next request like any other
+   ([Sleep and wake-on-call](#sleep-and-wake-on-call)). `stack.slept` carries the reason,
+   `worker-2 memory 6% free ≤ 10%`. It does nothing while Traefik's request counters cannot be read:
+   silence is not idle.
+4. **Refuses deploys and wakes when there is no room.** On a swarm, that is when every active node
+   is in pressure, since which node a task lands on is not known in advance. On a compose host, when
+   the host is. The job fails with one step, and the wake page shows it:
+
+   ```json
+   { "axis": "pr-42", "phase": "capacity", "ok": false, "code": 1, "message": "worker-2: disk 94% ≥ 90%", "skipped": false }
+   ```
+
+   Down, sleep and verify always run: they are how pressure goes away. Swarm can still place a task
+   on a full node while another has room.
+
+**Scheduled prunes.** Every 6 hours, on every node, images and build cache older than
+`image_prune_after_h` (168, a week) hours: `docker image prune -af --filter until=<N>h` and the same
+for `docker builder prune`. `0` turns it off. `until` is the image's age, not its last use:
+
+- An image any container uses, a stopped one included, is never removed.
+- **A sleeping stack's image can be pruned.** Its next wake pulls or builds it again, so that wake
+  is slower.
+- Containers and volumes are never pruned. A swarm keeps each service's last five exited tasks, and
+  those hold their images until newer tasks push them out.
+
+On a swarm a prune is a `pstack-prune-<ms>` job service, removed when it ends. This manager is
+always pruned directly: a drained manager runs no swarm task.
+
+**Log caps.** The control stack's containers cap their json-file logs (Traefik `10m` × 2, the rest
+`50m` × 3). With Loki off, every preview service without a `logging:` key gets `10m` × 3. Run
+`pstack upgrade` to apply the control-stack caps to an existing host; previews get theirs on their
+next deploy.
+
+**Two environment variables:**
+
+- `PSTACK_AGENT_IMAGE` (`init`): another image for the agent, such as a mirror. It is **not read
+  back**: export it on every `pstack init` and `pstack upgrade`, or the agent returns to
+  `docker:29.9.2-cli`. Cloud-init does not pass it. If the image does not pull, `init` prints a note and
+  the guards stay off.
+- `PSTACK_STATS_TICK_MS` (`serve`): how often the logs are read, 30000 by default. `0` turns the
+  loop off, and with it every guard and prune.
+
+The five settings are in [Runtime settings](#runtime-settings-0330).
+
 ---
 
 ## 10. Reference
@@ -3558,12 +3683,14 @@ different problems with different owners.
 | `PSTACK_ORCHESTRATOR` | `serve` `init` | `compose` / `swarm` | `serve`: the default for a spec that does not say (`compose`); `init`: same as `--orchestrator` (`swarm`). The control stack sets it for the API from what `init` decided. |
 | `PSTACK_LOGGING` | `init` `cloud-init` | `none` | same as `--logging` |
 | `PSTACK_NO_OOM_PROTECT` | `init` | *unset* | any value but `0` skips protecting `dockerd` from the OOM killer (below). For a host that manages `docker.service` itself |
+| `PSTACK_AGENT_IMAGE` | `init` | `docker:29.9.2-cli` | the image `pstack-agent` runs in on every node. Not read back: re-export it on every `init` and `upgrade`, or the agent returns to the default. Cloud-init does not pass it |
 | `PSTACK_PREVIEWS_ON` | `init` `cloud-init` | *unset* | same as `--previews-on` |
 | `PSTACK_INGRESS_SUBNET` `PSTACK_SHARED_SUBNET` | `init` (and `upgrade`, which runs it) | *unset* | same as `--ingress-subnet` / `--shared-subnet`. Set on `pstack upgrade`, it reaches the `init` the upgrade runs — the one-command way to enlarge an existing host's network |
 | `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
 | `PSTACK_PROBE` | `serve` | *on* | `off` removes `GET /api/probe/:id`, the unauthenticated [probe](#probe-a-preview-without-a-token-0340); the path then 404s like any unknown one. Any other value, including a misspelling, leaves it on — a typo should not silently turn a CI pipeline into one that polls a 404 forever |
 | `PSTACK_MAX_JOBS` | `serve` | `4` | lifecycle jobs running at once, across every stack. **The default for the `max_jobs` setting, not the authority** (0.33.0): a value stored through `PUT /api/settings/max_jobs` outranks it and survives a restart, so setting it here is how a host that never opens the UI is configured — see [Runtime settings](#runtime-settings-0330). |
+| `PSTACK_STATS_TICK_MS` | `serve` | `30000` | how often the node agents' logs are read and pressure judged. `0` turns the loop off, and with it every pressure guard and prune — see [Node pressure](#node-pressure-0450) |
 | `PSTACK_TRAEFIK_METRICS` | `serve` | — | Traefik's Prometheus endpoint, what `sleep.idle` reads. `http://traefik:8082/metrics` inside the control stack; unset means `idle` never triggers. |
 | `PSTACK_READINESS_POLL_MS` · `PSTACK_READINESS_TIMEOUT_MS` | `serve` | `2000` · `180000` | how often the readiness watcher re-reads docker, and how long before it calls a stack timed out. Tuning for a test harness driving `serve` black-box; a host never needs them. |
 | `PSTACK_READINESS_RESTART_LOOP` | `serve` | `3` | restarts tolerated before the readiness watcher calls a container a crash loop. Unlike the two above, this is operator-facing: raise it on a swarm host — swarm has no `depends_on`, so a dependent service legitimately restarts a few times while its database converges. |
@@ -3579,7 +3706,7 @@ different problems with different owners.
 
 ### Runtime settings (0.33.0)
 
-Two host knobs are changeable **while the server runs**, without restarting the control container.
+Seven host knobs are changeable **while the server runs**, without restarting the control container.
 They live in the database, and the list is closed — this is not a general key-value store, and a key
 nobody named is refused rather than stored.
 
@@ -3587,12 +3714,18 @@ nobody named is refused rather than stored.
 |---|---|---|---|---|
 | `max_jobs` | whole number ≥ 1 | `viewer` | `maintainer` | how many lifecycle jobs run at once across every stack. **In force on the request that sets it** — the registry takes the new cap immediately |
 | `default_role` | one of `viewer`, `developer`, `maintainer`, `admin` | `viewer` | `admin` | the role an account created with **no `role` named** gets: `POST /api/users` without one, and any SSO provider whose own `defaultRole` is empty |
+| `pressure_disk_pct` | whole number 0–100, default `90` | `viewer` | `admin` | disk used % that puts a node in [pressure](#node-pressure-0450). `0` is off |
+| `pressure_mem_pct` | whole number 0–100, default `10` | `viewer` | `admin` | memory free % (`MemAvailable`) at or below which a node is in pressure. `0` is off |
+| `pressure_cpu_load` | number ≥ 0, default `2` | `viewer` | `admin` | 5-minute load per core that puts a node in pressure. `0` is off |
+| `pressure_sleep_idle_min` | whole number 0–525600, default `30` | `viewer` | `admin` | how long a stack must be unused before pressure may sleep it. `0` turns auto-sleep off |
+| `image_prune_after_h` | whole number 0–87600, default `168` | `viewer` | `admin` | age in hours of the unused images and build cache the 6-hourly prune removes. `0` turns it off |
 
 **Precedence: database > environment > built-in default.** A stored value wins; without one the
 environment variable is used; without that, what the binary ships with. `PSTACK_MAX_JOBS` is
 therefore the *default* for `max_jobs`, not the authority — a host whose operator never opens the UI
 behaves exactly as it always did, and one who sets the value here is **not overridden on the next
-restart**. `default_role` has no environment variable at all: it is `viewer` until somebody sets it.
+restart**. `default_role` and the five pressure keys have no environment variable at all: each is
+its default until somebody sets it.
 
 **Which layer won is readable**, because a box that says `4` when you typed `8` is otherwise
 unexplainable:
@@ -3604,7 +3737,12 @@ curl -s https://api.preview.example.com/api/settings -H "Authorization: Bearer $
 {
   "settings": [
     { "key": "max_jobs",     "value": 4,        "source": "default", "minRole": "maintainer" },
-    { "key": "default_role", "value": "viewer", "source": "default", "minRole": "admin" }
+    { "key": "default_role", "value": "viewer", "source": "default", "minRole": "admin" },
+    { "key": "pressure_disk_pct",       "value": 90,  "source": "default", "minRole": "admin" },
+    { "key": "pressure_mem_pct",        "value": 10,  "source": "default", "minRole": "admin" },
+    { "key": "pressure_cpu_load",       "value": 2,   "source": "default", "minRole": "admin" },
+    { "key": "pressure_sleep_idle_min", "value": 30,  "source": "default", "minRole": "admin" },
+    { "key": "image_prune_after_h",     "value": 168, "source": "default", "minRole": "admin" }
   ],
   "env": { "PSTACK_MAX_JOBS": null },
   "precedence": "database > environment > built-in default"
@@ -3632,7 +3770,7 @@ itself (`DELETE FROM settings WHERE key = 'max_jobs'` against `<PSTACK_DATA>/db/
 control container stopped). Changing your mind about the *value* is a second `PUT`; changing your
 mind about the *layer* is not something the API does.
 
-The two tiers are different on purpose. `max_jobs` is operational and sits with the rest of the
+The tiers are different on purpose. `max_jobs` is operational and sits with the rest of the
 host's configuration, at `maintainer`. `default_role` is **user management by another name** — it
 decides what every account created without an explicit role can reach — so it sits with the
 promotion paths, at `admin`. It never widens what the *caller* may do: creating accounts is already
@@ -3666,9 +3804,10 @@ anything it does not list is the root token's alone.
 | POST | `/api/deployments/:id/cancel` | — | **200** `{ cancelled: [job…], by, warning }` — stops the running job AND the queued one. `cancelled` is `[]`, never null. The warning appears only when something had actually started |
 | GET | `/api/config` | — | the whole portable configuration in **plaintext**: password hashes, token hashes, host secrets, notifier secrets, the SSO client secrets, registry logins. **Root token only** — an admin session or personal token is `403`. `cache-control: no-store`. Emits `config.exported` |
 | POST | `/api/config` | that document | applies it create-or-skip → `{ trusts, created, skipped }` · 400 on a document this build does not understand · 403 for anything but the root token · 413 over 8 MiB. Emits `config.imported`, **including when it fails part-way** |
-| GET | `/api/settings` | — | `{ settings: [{ key, value, source, minRole }…], env, precedence }` — the two runtime settings, resolved, each saying which layer it came from. `viewer`. See [Runtime settings](#runtime-settings-0330) |
+| GET | `/api/settings` | — | `{ settings: [{ key, value, source, minRole }…], env, precedence }` — the seven runtime settings, resolved, each saying which layer it came from. `viewer`. See [Runtime settings](#runtime-settings-0330) |
 | PUT | `/api/settings/max_jobs` | `{ value }` | the row + `stored` + a `note`. **`maintainer`.** In force immediately — no restart; lowering it cancels nothing already running · 400 on anything but a whole number ≥ 1 |
 | PUT | `/api/settings/default_role` | `{ value }` | the row + `stored`. **`admin`** — it decides the role of accounts created without one · 400 on an unknown role |
+| PUT | `/api/settings/pressure_disk_pct` · `pressure_mem_pct` · `pressure_cpu_load` · `pressure_sleep_idle_min` · `image_prune_after_h` | `{ value }` | the row + `stored`. **`admin`.** Read on the next stats tick · 400 outside the key's range ([Runtime settings](#runtime-settings-0330)) |
 | POST | `/api/users` | `{ username, password, email?, role? }` | **201** `{ user }`. **Admin only** (0.31.0), and an absent `role` means the host's `default_role` setting — `viewer` until somebody sets one. This route honours `admin` if that is the host default, unlike an inheriting SSO provider which is capped below it: creating accounts is already admin-only, so an admin minting at a level they chose is exercising authority they have, not a stranger acquiring it. See [7e](#7e-who-can-do-what-the-four-roles-0320). An unknown role is a 400. The optional `email` is what lets an SSO login adopt this account instead of creating a second one |
 | PATCH | `/api/users/:id` | `{ role }` | `{ updated, role }` · **admin only** · 400 on an unknown role or on demoting the last admin · 404. Takes effect on that account's next request |
 | DELETE | `/api/users/:id` | — | `{ deleted }` · **admin only** · 400 on the last user or the last admin · 404 |
@@ -3682,6 +3821,7 @@ anything it does not list is the root token's alone.
 | PUT | `/api/sso/config` | `{ key, …config, clientSecret }` | `{ ok, key, config, callbackUrl }` · 400 on a bad field, an unreachable issuer, or a keyless body when several providers exist. Submitting the mask keeps that key's stored secret |
 | DELETE | `/api/sso/config` · `/api/sso/config/<key>` | — | forget that provider; the accounts it created stay · bare with several providers is 400 naming the keys · 404 if none |
 | GET | `/api/swarm` | — | `{ reachable, active, nodeId, managerAddr, nodes[], ports[], note }` — never the join token |
+| GET | `/api/stats` | — | `{ v, at, agent, nodes[], stacks[], prune }` — what every node's `pstack-agent` last reported, an hour of history, and the last prune. Unknown is `null`. Reads emit nothing ([Node pressure](#node-pressure-0450)) |
 | GET | `/api/signals` | — | `{ swarm, reachable, nodes[], stuck[] }` — what the cluster looks like now, for whatever adds and removes machines ([§7b](#adding-and-removing-worker-machines-0410)) |
 | POST | `/api/swarm/nodes/:id/drain` | — | **maintainer and up** — stop placing work on a node and move what is there |
 | POST | `/api/swarm/nodes/:id/undrain` | — | **maintainer and up** — put it back |

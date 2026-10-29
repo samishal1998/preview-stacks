@@ -111,6 +111,14 @@ var Names = []string{
 	// carrying `previous`; route.unassigned carries why (`unassigned`, `deleted`, `forgotten`).
 	"route.assigned",
 	"route.unassigned",
+	// A node's disk, memory or cpu crossed its pressure_* line, or came back past it by the margin
+	// (internal/api/pressure.go). Appended, like the ones above. Edges only: a change of kinds while
+	// in pressure fires nothing.
+	"node.pressure",
+	"node.recovered",
+	// A prune removed unused images on a node (internal/api/prune.go): `scheduled` every 6 hours, or
+	// `pressure` when its disk is full. One per node that reported; a failed prune sends nothing.
+	"node.pruned",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a

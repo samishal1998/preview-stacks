@@ -16,6 +16,7 @@ export const router = createRouter({
     { path: '/submit/:id?', name: 'submit', component: () => import('./views/SubmitView.vue'), props: true },
     { path: '/routing', name: 'routing', component: () => import('./views/RoutingView.vue') },
     { path: '/swarm', name: 'swarm', component: () => import('./views/SwarmView.vue') },
+    { path: '/stats', name: 'stats', component: () => import('./views/StatsView.vue') },
     { path: '/control', name: 'control', component: () => import('./views/ControlView.vue') },
     { path: '/registries', name: 'registries', component: () => import('./views/RegistriesView.vue') },
     { path: '/notifiers', name: 'notifiers', component: () => import('./views/NotifiersView.vue') },

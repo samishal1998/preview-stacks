@@ -137,9 +137,9 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.ssoConfigRoutes(w, r)
 	}
 
-	// ---- the two runtime host settings ----
+	// ---- the runtime host settings ----
 	// One literal per key, not a pattern: the permission is PER KEY (maintainer for the cap, admin
-	// for the role a new account gets), and a key nobody listed 404s here rather than reaching a
+	// for the role a new account gets and for the pressure keys), and a key nobody listed 404s here rather than reaching a
 	// validator it would fail anyway. routes_settings.go's header has the rest.
 	if path == "/api/settings" && r.Method == http.MethodGet {
 		return s.getSettings(w)
@@ -149,6 +149,21 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	}
 	if path == "/api/settings/default_role" {
 		return s.putSetting(w, r, settings.KeyDefaultRole)
+	}
+	if path == "/api/settings/pressure_disk_pct" {
+		return s.putSetting(w, r, settings.KeyPressureDiskPct)
+	}
+	if path == "/api/settings/pressure_mem_pct" {
+		return s.putSetting(w, r, settings.KeyPressureMemPct)
+	}
+	if path == "/api/settings/pressure_cpu_load" {
+		return s.putSetting(w, r, settings.KeyPressureCPULoad)
+	}
+	if path == "/api/settings/pressure_sleep_idle_min" {
+		return s.putSetting(w, r, settings.KeyPressureSleepIdleMin)
+	}
+	if path == "/api/settings/image_prune_after_h" {
+		return s.putSetting(w, r, settings.KeyImagePruneAfterH)
 	}
 
 	// ---- the control stack, visible ----
@@ -199,6 +214,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	// it emits nothing (see routes_signals.go).
 	if path == "/api/signals" && r.Method == http.MethodGet {
 		return s.signalsGet(w)
+	}
+	// What the node agents last reported. Memory only, emits nothing (routes_stats.go).
+	if path == "/api/stats" && r.Method == http.MethodGet {
+		return s.statsGet(w)
 	}
 	if path == "/api/swarm" && r.Method == http.MethodGet {
 		info := swarm.SwarmInfo(s.host)

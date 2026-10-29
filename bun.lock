@@ -20,7 +20,7 @@
     },
     "apps/ui": {
       "name": "@samyx/preview-stacks-ui",
-      "version": "0.42.0",
+      "version": "0.44.0",
       "dependencies": {
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
@@ -38,9 +38,9 @@
     },
     "apps/ui-hearth": {
       "name": "@samyx/preview-stacks-ui-hearth",
-      "version": "0.42.0",
+      "version": "0.44.0",
       "dependencies": {
-        "@hearth-ui/vue": "0.8.0",
+        "@hearth-ui/vue": "0.9.0",
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
         "vue": "^3.5.13",
@@ -56,7 +56,7 @@
     },
     "packages/client": {
       "name": "@samyx/preview-stacks-client",
-      "version": "0.42.0",
+      "version": "0.44.0",
       "devDependencies": {
         "@samyx/preview-stacks": "workspace:*",
         "@types/bun": "latest",
@@ -74,7 +74,7 @@
     },
     "packages/pstack": {
       "name": "@samyx/preview-stacks",
-      "version": "0.42.0",
+      "version": "0.44.0",
     },
   },
   "packages": {
@@ -276,7 +276,7 @@
 
     "@floating-ui/vue": ["@floating-ui/vue@1.1.11", "", { "dependencies": { "@floating-ui/dom": "^1.7.6", "@floating-ui/utils": "^0.2.11", "vue-demi": ">=0.13.0" } }, "sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw=="],
 
-    "@hearth-ui/vue": ["@hearth-ui/vue@0.8.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-vIW65l+/MyeB+u3tNqq/nZZ9TmtK/m75KvuxTGmkhMFhdK4NRHPLBVwkCQ5Y2fN0WmtWekWzMTFGy16TC6bVBA=="],
+    "@hearth-ui/vue": ["@hearth-ui/vue@0.9.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-0AF84PKSSOWQ4YMMGFVdR+E/GbXUxFWyV23+5XMxWOryR2tBQqCeZR6tQgaitRQRUJ5wzkxl9PWAGqGJuTrxtg=="],
 
     "@hono/node-server": ["@hono/node-server@2.0.12", "", { "peerDependencies": { "hono": "^4" } }, "sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg=="],
 
@@ -516,7 +516,7 @@
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.4", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A=="],
 
-    "@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
+    "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
     "@types/debug": ["@types/debug@4.1.13", "", { "dependencies": { "@types/ms": "*" } }, "sha512-KSVgmQmzMwPlmtljOomayoR89W4FynCAi3E8PPs7vmDVPe84hT+vGPKkJfThkmXs0x0jAaa9U8uW8bbfyS2fWw=="],
 
@@ -642,7 +642,7 @@
 
     "browserslist": ["browserslist@4.28.7", "", { "dependencies": { "baseline-browser-mapping": "^2.10.44", "caniuse-lite": "^1.0.30001806", "electron-to-chromium": "^1.5.393", "node-releases": "^2.0.51", "update-browserslist-db": "^1.2.3" }, "bin": { "browserslist": "cli.js" } }, "sha512-JxV13hNrFxqjOc8alRbq9dK1MM79NEXYpma2B2J4wAtpWS5zIEIKqWPGCl7N4o7Uc7B7itylh7SuDujATRyyTw=="],
 
-    "bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
+    "bun-types": ["bun-types@1.4.4", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
 
     "bundle-name": ["bundle-name@4.1.0", "", { "dependencies": { "run-applescript": "^7.0.0" } }, "sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q=="],
 

@@ -192,6 +192,16 @@ describe('0.26.0: sleep/wake, share links, the swarm', () => {
   });
 });
 
+describe('node stats', () => {
+  test('stats.get answers the shape, with lists that are never null', async () => {
+    const stats = await client.stats.get();
+    expect(stats.v).toBe(1);
+    expect(typeof stats.agent).toBe('boolean');
+    expect(Array.isArray(stats.nodes)).toBe(true);
+    expect(Array.isArray(stats.stacks)).toBe(true);
+  });
+});
+
 describe('0.27.0: single sign-on', () => {
   test('providers round-trip under keys, and the client secret has no read path', async () => {
     const empty = await client.sso.config();

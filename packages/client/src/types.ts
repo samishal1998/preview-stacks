@@ -133,6 +133,53 @@ export type SwarmInfo = {
   note: string;
 };
 
+/** One node, from its pstack-agent. Every reading is null while the node is stale or never reported. */
+export type NodeStats = {
+  /** The swarm node id; null on a compose host. */
+  node: string | null;
+  hostname: string;
+  /** `manager` or `worker` on swarm; null on a compose host. */
+  role: 'manager' | 'worker' | null;
+  /** When this node's newest batch arrived. */
+  at: number | null;
+  /** No batch in 2 minutes: the readings are unknown, never pressure. */
+  stale: boolean;
+  cores: number | null;
+  load1: number | null;
+  load5: number | null;
+  memTotal: number | null;
+  memAvailable: number | null;
+  diskTotal: number | null;
+  diskFree: number | null;
+  /** The pressure kinds this node is under. */
+  pressure: string[];
+  /** This node's last prune; null when there has been none. */
+  prune: { at: number; freedBytes: number; reason: string } | null;
+  /** Up to an hour of samples, oldest first. Kept while the node is stale. */
+  history: Array<{ at: number; load5: number; memAvailable: number; diskFree: number }>;
+};
+
+/** One stack's use, summed over the fresh batches. */
+export type StackStats = {
+  stack: string;
+  cpuPct: number;
+  mem: number;
+  containers: number;
+  /** Hostnames it runs on. */
+  nodes: string[];
+};
+
+export type Stats = {
+  v: 1;
+  at: number;
+  /** True when any node reported in the last 2 minutes. */
+  agent: boolean;
+  nodes: NodeStats[];
+  /** Sorted by memory, most first. */
+  stacks: StackStats[];
+  prune: { lastAt: number | null; lastFreed: number | null };
+};
+
 export type ShareLink = {
   /** `https://control.<domain>/deployments/<id>/public-logs-view?token=…` */
   url: string;
@@ -145,7 +192,7 @@ export type ShareLink = {
 
 export type StepResult = {
   axis: string;
-  phase: 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose';
+  phase: 'requires' | 'up' | 'down' | 'assert_gone' | 'assert_live' | 'compose' | 'capacity';
   ok: boolean;
   code: number;
   message?: string;
@@ -386,10 +433,18 @@ export type Me = {
 // ── host settings ─────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The two settings that can be changed at RUNTIME, without restarting the container. The server
- * refuses any other key rather than storing it, so this union is the whole surface.
+ * The settings that can be changed at RUNTIME, without restarting the container. The server
+ * refuses any other key rather than storing it, so this union is the whole surface. The five
+ * pressure keys have no environment layer, and `0` turns each off.
  */
-export type SettingKey = 'max_jobs' | 'default_role';
+export type SettingKey =
+  | 'max_jobs'
+  | 'default_role'
+  | 'pressure_disk_pct'
+  | 'pressure_mem_pct'
+  | 'pressure_cpu_load'
+  | 'pressure_sleep_idle_min'
+  | 'image_prune_after_h';
 
 /**
  * One setting, as read and as returned by a write.
@@ -401,12 +456,17 @@ export type SettingKey = 'max_jobs' | 'default_role';
  * before this existed.
  *
  * `minRole` is the least role that may WRITE this key, served from the server's own permission
- * table: `max_jobs` is maintainer's, `default_role` is admin's. Reading is viewer's. Treat a name
+ * table: `max_jobs` is maintainer's, `default_role` and the pressure keys are admin's. Reading is
+ * viewer's. Treat a name
  * this build does not recognise as the most privileged, never the least.
  */
 export type SettingRow = {
   key: SettingKey;
-  /** A number for `max_jobs`; a role name for `default_role`. */
+  /**
+   * A role name for `default_role`; a number for every other key: an integer for `max_jobs`,
+   * `pressure_disk_pct`, `pressure_mem_pct` (0–100), `pressure_sleep_idle_min` (minutes) and
+   * `image_prune_after_h` (hours), and any number ≥ 0 for `pressure_cpu_load`.
+   */
   value: number | string;
   source: 'db' | 'env' | 'default';
   minRole: string;

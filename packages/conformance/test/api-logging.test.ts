@@ -5,12 +5,13 @@
  * docker shim plays that container (LOKI_SHIM, shared with the goldens). What only a real process
  * shows: the derived compose file a deploy hands docker, read back from disk; the plugin check that
  * stops a compose deploy before `up`; and the swarm job log naming the node without the plugin.
+ * With no loki container, the same services get a json-file cap instead.
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bootServer, waitJob, type Booted } from '../harness/server.ts';
-import { arm, dockerShim } from '../harness/docker-shim.ts';
+import { ALWAYS_OK, arm, dockerShim } from '../harness/docker-shim.ts';
 import { LOKI_PASSWORD, LOKI_SHIM, NODE_PLUGINS, SWARM_SHIM } from '../gen/goldens.table.ts';
 
 type Job = {
@@ -124,6 +125,26 @@ describe('Loki logging: injection at deploy', () => {
       expect(nodeNotes).toEqual(['logging: no loki plugin: wrk']);
       // Swarm keeps logged services off wrk by itself; the note says why, and the deploy still runs.
       expect(docker.calls().some((c) => c.startsWith('stack deploy '))).toBe(true);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  }, 30_000);
+
+  // negative control: make autolabel.MaterializeCompose run CapLogs only when pushURL != "" — web
+  // has no logging block and the deploy reads the submitted compose.yml, so the file is missing.
+  test('logging off: a compose deploy caps every service without its own logging, and names none', async () => {
+    const docker = dockerShim(ALWAYS_OK, { record: true });
+    const s = await boot(docker);
+    try {
+      const job = await deploy(s, 'lg-off', 'compose');
+      expect(job.state).toBe('ok');
+      const services = generated(s, 'lg-off');
+      expect(JSON.stringify(services.web!.logging)).toBe(JSON.stringify({ driver: 'json-file', options: { 'max-size': '10m', 'max-file': '3' } }));
+      expect(services.db!.logging).toEqual({ driver: 'json-file' });
+      expect(said(job).some((m) => m.startsWith('logging: '))).toBe(false);
+      expect(docker.calls().some((c) => c.startsWith('plugin inspect'))).toBe(false);
+      expect(docker.calls().some((c) => c.startsWith('compose ') && c.includes(' -f compose.generated.yml ') && c.includes(' up '))).toBe(true);
     } finally {
       await s.stop();
       docker.remove();

@@ -394,14 +394,14 @@ Never the endpoint, the bucket, the key id or the secret.
 ### `stack.slept`
 
 Fires when a stack's compose project was taken down **while its volumes and axes stayed** — by the
-scheduler (`sleep: { idle, after }` in the spec) or by `POST …/sleep`. A request to any of `hosts`
-wakes it. (0.26.0)
+scheduler (`sleep: { idle, after }` in the spec), by node pressure
+(`node.pressure`, 0.45.0), or by `POST …/sleep`. A request to any of `hosts` wakes it. (0.26.0)
 
 | `data.` field | Type | Meaning |
 |---|---|---|
 | `stack` | string | |
 | `deployment` | string | The registry id. |
-| `reason` | string | `idle 2h`, `after 3d`, or `operator: <actor>`. |
+| `reason` | string | `idle 2h`, `after 3d`, `<hostname> <why>` from pressure (`worker-2 memory 6% free ≤ 10%`), or `operator: <actor>`. |
 | `hosts` | string[] | The exact hostnames captured from its Traefik labels before teardown — what wakes it. Wildcard patterns are not listed here. |
 
 ### `stack.woken`
@@ -513,6 +513,49 @@ the deployment that already holds it fires nothing.
 | `deployment` | string | The deployment id it pointed at. |
 | `stack` | string \| null | That deployment's stack, or `null` when its spec does not resolve. |
 | `reason` | `"unassigned"` \| `"deleted"` \| `"forgotten"` | Unassigned through the API, the route deleted, or its deployment forgotten. The route is kept in the first and last cases. |
+
+### `node.pressure` / `node.recovered`
+
+A node's newest agent report crossed one of the `pressure_*` settings: disk used, memory free or
+load per core. Swarm and compose hosts.
+
+`node.pressure` fires when a node goes from no kinds to some, `node.recovered` when it goes back to
+none. Recovery needs the value back past the line by a margin: 5 points for disk and memory, 0.25
+for cpu. A change of kinds while the node stays in pressure fires nothing; `GET /api/stats` has the
+current picture. A node whose agent stops reporting fires neither: unknown is not recovered.
+
+Both events carry the same fields:
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `id` | string | `pressure/<node id>` on swarm, `pressure/<hostname>` on a compose host. **Dedupe on this.** |
+| `node` | string \| null | The swarm node id, `null` on a compose host. |
+| `hostname` | string | The machine's hostname. |
+| `kinds` | string[] | `disk`, `memory`, `cpu`, in that order: the kinds held now. `[]` on `node.recovered`. |
+| `disk` | number | Disk used, %, one decimal. |
+| `memory` | number | Memory free (`MemAvailable`), %, one decimal. |
+| `cpu` | number | 5-minute load per core, one decimal. |
+| `thresholds` | object | `{disk, memory, cpu}`: the settings judged against. `0` is off. |
+
+As with signals, a restart raises again whatever is still true, because the state is only in memory.
+
+### `node.pruned`
+
+A prune removed unused images on a node. Swarm and compose hosts.
+
+- `scheduled`: every 6 hours, images and build cache older than `image_prune_after_h` hours (`0`
+  turns it off).
+- `pressure`: a node's disk is in pressure. Unused images of any age, at most once per node every
+  10 minutes.
+
+One event per node that reported, `freedBytes: 0` included. A prune that failed sends nothing.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `node` | string \| null | The swarm node id, `null` on a compose host. |
+| `hostname` | string | The machine's hostname. |
+| `reason` | `"scheduled"` \| `"pressure"` | Why it ran. |
+| `freedBytes` | number | Bytes freed, as docker reported them (decimal units). |
 
 ---
 

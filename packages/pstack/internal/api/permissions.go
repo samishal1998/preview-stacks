@@ -139,17 +139,25 @@ var permissions = []perm{
 	{path: "/api/sso/config", methods: mPutDelete, min: auth.Admin},
 	{re: ssoProviderRe, methods: mPutDelete, min: auth.Admin},
 
-	// ── the two runtime host settings: PER KEY, because they are different kinds of thing ───────
+	// ── the runtime host settings: PER KEY, because they are different kinds of thing ───────────
 	// Reading both is a viewer's — the values explain why a job is queued and what a new account
 	// gets, and neither is a secret. Writing splits: `max_jobs` is operational and sits with host
 	// configuration; `default_role` decides the role of every account created without one, which is
 	// user management by another name and belongs with the promotion paths.
 	//
-	// Exact paths, one per key. A third key would be a third row, and until it has one the table's
+	// The pressure thresholds and the image prune age decide when every preview on a node is
+	// refused, slept or pruned — admin, per docs/node-pressure-design.md §3.
+	//
+	// Exact paths, one per key. A new key is a new row, and until it has one the table's
 	// default-deny answers it — see routes_settings.go.
 	{path: "/api/settings", methods: mGet, min: auth.Viewer},
 	{path: "/api/settings/max_jobs", methods: mPut, min: auth.Maintainer},
 	{path: "/api/settings/default_role", methods: mPut, min: auth.Admin},
+	{path: "/api/settings/pressure_disk_pct", methods: mPut, min: auth.Admin},
+	{path: "/api/settings/pressure_mem_pct", methods: mPut, min: auth.Admin},
+	{path: "/api/settings/pressure_cpu_load", methods: mPut, min: auth.Admin},
+	{path: "/api/settings/pressure_sleep_idle_min", methods: mPut, min: auth.Admin},
+	{path: "/api/settings/image_prune_after_h", methods: mPut, min: auth.Admin},
 
 	// ── the control stack ───────────────────────────────────────────────────────────────────────
 	// Maintainer for both, like the other host-configuration surfaces. The restart's harder rule —
@@ -191,6 +199,8 @@ var permissions = []perm{
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	// The cluster's shape carries no credential, so it reads like the swarm panel does.
 	{path: "/api/signals", methods: mGet, min: auth.Viewer},
+	// Node and stack usage: numbers, no credential, read like the swarm panel.
+	{path: "/api/stats", methods: mGet, min: auth.Viewer},
 	{path: "/api/swarm/join", methods: mGet, min: auth.Maintainer},
 	// Taking a machine out of the running, putting it back, and forgetting one that is gone. Host
 	// configuration, like the join token above — and none of the three creates or destroys a machine.

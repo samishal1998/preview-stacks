@@ -43,6 +43,7 @@ func required(method, path string) auth.Role {
 // case fails, which is the per-key half of the settings contract. All four were run. Also: give the
 // /api/logging/storage row auth.Maintainer → the storage case fails.
 // Also: give the customRouteRe row auth.Viewer → the three custom-route write cases fail. Run.
+// Also: give the /api/settings/pressure_disk_pct row auth.Maintainer → its case fails. Run.
 func TestPermissionTableIsTheSpecification(t *testing.T) {
 	cases := []struct {
 		method, path string
@@ -90,10 +91,16 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		{"PUT", "/api/sso/config/gh", auth.Admin},
 		{"DELETE", "/api/sso/config/gh", auth.Admin},
 
-		// the two runtime host settings: one read for both, one write tier PER KEY
+		// the seven runtime host settings: one read for all, one write tier PER KEY
 		{"GET", "/api/settings", auth.Viewer},
 		{"PUT", "/api/settings/max_jobs", auth.Maintainer},
 		{"PUT", "/api/settings/default_role", auth.Admin},
+		// the pressure thresholds and the prune age: admin, like the spec says
+		{"PUT", "/api/settings/pressure_disk_pct", auth.Admin},
+		{"PUT", "/api/settings/pressure_mem_pct", auth.Admin},
+		{"PUT", "/api/settings/pressure_cpu_load", auth.Admin},
+		{"PUT", "/api/settings/pressure_sleep_idle_min", auth.Admin},
+		{"PUT", "/api/settings/image_prune_after_h", auth.Admin},
 		// A key nobody listed is root's, like any unlisted route — and the chain 404s it.
 		{"PUT", "/api/settings/shell_command", rootOnly},
 		{"POST", "/api/settings/max_jobs", rootOnly},
@@ -101,6 +108,7 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		// the swarm
 		{"GET", "/api/swarm", auth.Viewer},
 		{"GET", "/api/signals", auth.Viewer},
+		{"GET", "/api/stats", auth.Viewer},
 		{"POST", "/api/swarm/nodes/n1/drain", auth.Maintainer},
 		{"POST", "/api/swarm/nodes/n1/undrain", auth.Maintainer},
 		{"DELETE", "/api/swarm/nodes/n1", auth.Maintainer},
@@ -352,6 +360,7 @@ func TestGateBoundaries(t *testing.T) {
 		{viewer, "GET", "/api/settings"},
 		{maint, "PUT", "/api/settings/max_jobs"},
 		{admin, "PUT", "/api/settings/default_role"},
+		{admin, "PUT", "/api/settings/pressure_disk_pct"},
 		{admin, "PUT", "/api/host-vars/DB_URL"},
 		{admin, "POST", "/api/users"},
 		{admin, "PUT", "/api/sso/config"},
@@ -394,6 +403,7 @@ func TestGateBoundaries(t *testing.T) {
 		{maint, "POST", "/api/config/sealed"},
 		// …and the role a new account is created with is user management, so it does not.
 		{maint, "PUT", "/api/settings/default_role"},
+		{maint, "PUT", "/api/settings/pressure_cpu_load"},
 		{dev, "PUT", "/api/settings/max_jobs"},
 		// Not even an admin invents a third setting: an unlisted key is root's.
 		{admin, "PUT", "/api/settings/shell_command"},

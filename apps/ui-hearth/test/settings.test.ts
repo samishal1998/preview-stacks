@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { capProblem, mayWrite, mergePrefs, PREFS_VERSION } from '../src/lib/settings';
+import { capProblem, mayWrite, mergePrefs, PREFS_VERSION, PRESSURE, pressureProblem } from '../src/lib/settings';
 import { canCreate, configFor, eventsFor, targetOf } from '../src/lib/notifiers';
 import { problem } from '../src/lib/settings-problem';
 
@@ -9,6 +9,29 @@ test('cap rule', () => {
   expect(capProblem(0)).not.toBe('');
   expect(capProblem('1.5')).not.toBe('');
   expect(capProblem('12')).toBe('');
+});
+
+test('pressure rules: blank is not 0 (0 turns the guard off)', () => {
+  const p = (k: string) => PRESSURE.find((x) => x.key === k)!;
+  expect(PRESSURE.map((x) => x.key)).toEqual(['pressure_disk_pct', 'pressure_mem_pct', 'pressure_cpu_load', 'pressure_sleep_idle_min', 'image_prune_after_h']);
+  for (const x of PRESSURE) {
+    expect(pressureProblem(x, '')).not.toBe('');
+    expect(pressureProblem(x, '-1')).not.toBe('');
+    expect(pressureProblem(x, '0')).toBe('');
+  }
+  expect(pressureProblem(p('pressure_disk_pct'), '90')).toBe('');
+  expect(pressureProblem(p('pressure_disk_pct'), '101')).not.toBe('');
+  expect(pressureProblem(p('pressure_mem_pct'), '9.5')).not.toBe('');
+  expect(pressureProblem(p('pressure_cpu_load'), '2.5')).toBe('');
+  expect(pressureProblem(p('pressure_cpu_load'), '500')).toBe('');
+  expect(pressureProblem(p('image_prune_after_h'), '1000')).toBe('');
+  expect(pressureProblem(p('pressure_sleep_idle_min'), '1.5')).not.toBe('');
+  // The server's bounds (settings.go wholeMax). negative control: max Infinity for either key fails this.
+  expect(pressureProblem(p('pressure_sleep_idle_min'), '525600')).toBe('');
+  expect(pressureProblem(p('pressure_sleep_idle_min'), '525601')).toBe('0 to 525600.');
+  expect(pressureProblem(p('image_prune_after_h'), '87600')).toBe('');
+  expect(pressureProblem(p('image_prune_after_h'), '87601')).toBe('0 to 87600.');
+  expect(pressureProblem(p('pressure_disk_pct'), '101')).toBe('0 to 100.');
 });
 
 test('mayWrite fails closed', () => {
