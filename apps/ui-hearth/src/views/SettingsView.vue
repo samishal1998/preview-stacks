@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
  * Host settings (stored on the server, for everybody) and this browser's appearance.
- * The concurrency cap needs maintainer, the default role needs admin; each row says where its value came from.
+ * The concurrency cap needs maintainer, the default role and the five node-pressure keys need admin; each row
+ * says where its value came from.
  */
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import {
   HAlert,
   HButton,
@@ -19,7 +20,7 @@ import {
 } from '@hearth-ui/vue';
 import type { HostSettings, SettingKey, SettingRow } from '@samyx/preview-stacks-client';
 import { settingsApi } from '../api-settings';
-import { SOURCE_LABEL, capProblem, densities, hasDensity, mayWrite, palettes } from '../lib/settings';
+import { PRESSURE, SOURCE_LABEL, capProblem, densities, hasDensity, mayWrite, palettes, pressureProblem, type PressureSetting } from '../lib/settings';
 import { problem } from '../lib/settings-problem';
 import { roleOptions } from '../lib/users';
 import { getToken, tokenShape } from '../lib/token';
@@ -33,6 +34,7 @@ const saving = ref(false);
 
 const maxJobsDraft = ref('');
 const roleDraft = ref('viewer');
+const pressureDrafts = reactive<Record<string, string>>({});
 
 const row = (k: SettingKey): SettingRow | null => host.value?.settings.find((s) => s.key === k) ?? null;
 const maxJobs = computed(() => row('max_jobs'));
@@ -44,7 +46,9 @@ const source = (r: SettingRow | null) => (r ? `${SOURCE_LABEL[r.source]}.` : '')
 const capError = computed(() => (maxJobsDirty.value ? capProblem(maxJobsDraft.value) : ''));
 const maxJobsDirty = computed(() => may(maxJobs.value) && maxJobsDraft.value.trim() !== String(maxJobs.value?.value ?? ''));
 const roleDirty = computed(() => may(defaultRole.value) && roleDraft.value !== String(defaultRole.value?.value ?? ''));
-const dirty = computed(() => maxJobsDirty.value || roleDirty.value);
+const pressureDirty = (p: PressureSetting) => may(row(p.key)) && (pressureDrafts[p.key] ?? '').trim() !== String(row(p.key)?.value ?? '');
+const pressureError = (p: PressureSetting) => (pressureDirty(p) ? pressureProblem(p, pressureDrafts[p.key] ?? '') : '');
+const dirty = computed(() => maxJobsDirty.value || roleDirty.value || PRESSURE.some(pressureDirty));
 
 const running = computed(() => data.jobs.filter((j) => j.state === 'running').length);
 const waiting = computed(() => data.jobs.filter((j) => j.state === 'queued').length);
@@ -52,6 +56,7 @@ const waiting = computed(() => data.jobs.filter((j) => j.state === 'queued').len
 function reset(): void {
   maxJobsDraft.value = String(maxJobs.value?.value ?? '');
   roleDraft.value = String(defaultRole.value?.value ?? 'viewer');
+  for (const p of PRESSURE) pressureDrafts[p.key] = String(row(p.key)?.value ?? '');
 }
 
 async function load(): Promise<void> {
@@ -69,8 +74,9 @@ async function load(): Promise<void> {
 void load();
 
 async function save(): Promise<void> {
-  if (capError.value) {
-    error.value = capError.value;
+  const bad = capError.value || PRESSURE.map(pressureError).find(Boolean);
+  if (bad) {
+    error.value = bad;
     return;
   }
   saving.value = true;
@@ -79,6 +85,7 @@ async function save(): Promise<void> {
   const writes: Array<[SettingKey, number | string]> = [];
   if (maxJobsDirty.value) writes.push(['max_jobs', Number(maxJobsDraft.value)]);
   if (roleDirty.value) writes.push(['default_role', roleDraft.value]);
+  for (const p of PRESSURE) if (pressureDirty(p)) writes.push([p.key, Number(pressureDrafts[p.key])]);
   for (const [key, value] of writes) {
     const r = await settingsApi.write(key, value);
     if (!r.ok) {
@@ -133,6 +140,19 @@ async function save(): Promise<void> {
             :options="roleOptions"
             :disabled="!may(defaultRole)"
             :hint="`Existing accounts keep their role. ${source(defaultRole)} ${why(defaultRole)}`"
+          />
+          <HInput
+            v-for="p in PRESSURE"
+            :key="p.key"
+            v-model="pressureDrafts[p.key]"
+            type="number"
+            min="0"
+            :max="p.max === Infinity ? undefined : p.max"
+            :step="p.int ? 1 : 'any'"
+            :label="p.label"
+            :disabled="!may(row(p.key))"
+            :error="pressureError(p)"
+            :hint="`${p.unit}. 0 = off. ${source(row(p.key))} ${why(row(p.key))}`"
           />
         </HStack>
       </HCard>

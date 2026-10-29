@@ -54,6 +54,7 @@ const all = computed<Array<NavItem & { min?: Role }>>(() => [
   { id: 'specs', label: 'Specs', icon: 'code' },
   { id: 'routing', label: 'Routing', icon: 'globe' },
   { id: 'swarm', label: 'Swarm', icon: 'server' },
+  { id: 'stats', label: 'Stats', icon: 'health' },
   { id: 'control', label: 'Control', icon: 'layout', min: 'maintainer' },
   { id: 'registries', label: 'Registries', icon: 'lock' },
   { id: 'notifiers', label: 'Notifiers', icon: 'info' },
