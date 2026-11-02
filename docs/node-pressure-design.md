@@ -1,6 +1,6 @@
 # Node pressure — a reporter on every machine, guards in the control plane, a stats page
 
-> **Built.** Using it: [usage.md](usage.md#node-pressure-0450), `GET /api/stats`, the Stats page.
+> **Shipped in 0.45.0.** Using it: [usage.md](usage.md#node-pressure-0450), `GET /api/stats`, the Stats page.
 > The build plan is [node-pressure-plan.md](node-pressure-plan.md). The spec below is kept as
 > approved on 2026-10-28. Where the build differs from it:
 >

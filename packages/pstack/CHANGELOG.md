@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.45.0 — 2026-11-02
 
 ### Added
 
@@ -8,9 +8,9 @@
   `pstack logging`) runs a small shell script in `docker:29.9.2-cli` (pinned by digest) on every
   machine: a container on this host, plus a global swarm service on every other node. Every 30 s
   it prints the node's disk (the docker data root), `MemAvailable`, load and per-stack CPU and
-  memory to its own log, and the
-  control plane reads that log. Workers need nothing new. `PSTACK_AGENT_IMAGE` picks another image;
-  it is not read back, so re-export it on every `init` and `upgrade`.
+  memory to its own log, and the control plane reads that log. Workers need nothing new.
+  `PSTACK_AGENT_IMAGE` picks another image; it is not read back, so re-export it on every `init`
+  and `upgrade`.
 
 - **`GET /api/stats`** (viewer) and `pstack api stats get`: every node's latest report, an hour of
   history, the stacks using it, and the last prune. A node with no report in 2 minutes is
