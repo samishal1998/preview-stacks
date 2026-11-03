@@ -276,6 +276,34 @@ pstack route rm <name>
       PSTACK_TOKEN     the host's token, or a personal one (developer to write)`,
 		flags: []string{"--force", "--json", "--help"},
 	},
+	"forward": {
+		summary: "send this host's deploys and unserved visitors to another pstack",
+		body: `pstack forward                                where this host forwards, if anywhere
+pstack forward set <url> [--via <ip[:port]>]  forward to that pstack's API URL
+pstack forward off
+
+      --via <ip[:port]>   dial this address; the URL's host stays the Host and TLS name
+
+      PSTACK_API_URL         this host (no default)
+      PSTACK_TOKEN           this host's token, or a personal one (admin to set or off)
+      PSTACK_FORWARD_TOKEN   a user token on <url>, developer or higher. Never a flag`,
+		flags: []string{"--via", "--help"},
+	},
+	"migrate": {
+		summary: "copy deployments and their state from one host to another",
+		body: `pstack migrate --from <API URL> --to <API URL> [<id>...] [--sleep-source]
+
+Copies each deployment the target lacks or has older, then matches the source's state: running,
+asleep or down. Newest wins, so a re-run catches up. Exit 1 when any failed.
+
+      --from <API URL>   the source host
+      --to <API URL>     the target host
+      --sleep-source     sleep each source copy once the target's is ok. Never down
+
+      PSTACK_FROM_TOKEN  a token on the source
+      PSTACK_TO_TOKEN    a token on the target`,
+		flags: []string{"--from", "--to", "--sleep-source", "--help"},
+	},
 	"api": {
 		summary: "every HTTP route as a command, generated from the OpenAPI document",
 		body: `pstack api <group> <command> [flags]

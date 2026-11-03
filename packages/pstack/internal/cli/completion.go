@@ -42,6 +42,7 @@ var subcommands = map[string][]string{
 	"pull":       {"config"},
 	"push":       {"config"},
 	"route":      {"ls", "create", "assign", "unassign", "rm"},
+	"forward":    {"set", "off"},
 	"completion": Shells,
 }
 
