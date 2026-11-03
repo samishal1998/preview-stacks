@@ -474,6 +474,32 @@ func TestAssembleSkipsTheLokiRow(t *testing.T) {
 	}
 }
 
+// negative control: delete the forward block in Assemble → a stored row goes unnamed and the second
+// check fails. (Appending the line whether or not a row exists fails the first check instead.)
+func TestAssembleSkipsTheForwardRow(t *testing.T) {
+	const line = "forward: host-specific — re-enter it on the target"
+	h := newHost(t)
+	before := assemble(t, h).Skipped
+	for _, s := range before {
+		if strings.HasPrefix(s, "forward:") {
+			t.Fatalf("an empty forward_config table was named: %v", before)
+		}
+	}
+	if err := store.SetForward(h.Store.DB, store.Forward{To: "https://api.b.example.com", Token: "pstack_pat_x"}); err != nil {
+		t.Fatal(err)
+	}
+	after := assemble(t, h).Skipped
+	n := 0
+	for _, s := range after {
+		if s == line {
+			n++
+		}
+	}
+	if n != 1 || len(after) != len(before)+1 {
+		t.Fatalf("skipped after a save: %v — want exactly one more line, %q", after, line)
+	}
+}
+
 // negative control: drop the `d.Version != FormatVersion` check in Parse — the unknown document
 // parses, nothing names the writer, and this fails.
 func TestParseRefusesADocumentVersionItDoesNotUnderstand(t *testing.T) {

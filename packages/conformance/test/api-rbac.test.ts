@@ -189,6 +189,14 @@ const TABLE: Row[] = [
   { method: 'PUT', path: '/api/logging', min: 'maintainer', ok: 409 },
   // Storage is admin: one save sends every node's logs to an outside bucket, for good.
   { method: 'PUT', path: '/api/logging/storage', min: 'admin', ok: 409 },
+  // Forwarding. The read is host configuration and never carries the token; the writes are admin —
+  // one save decides where every deploy runs. An empty body is the handler's 400; DELETE on an
+  // unset row is still 200.
+  // negative control: give the /api/forward PUT/DELETE row auth.Maintainer in permissions.go — the
+  // maintainer cells go 403 → 400/200 and the matrix test reports it.
+  { method: 'GET', path: '/api/forward', min: 'maintainer', ok: 200 },
+  { method: 'PUT', path: '/api/forward', body: {}, min: 'admin', ok: 400 },
+  { method: 'DELETE', path: '/api/forward', min: 'admin', ok: 200 },
   // Reading the SSO configuration is a maintainer's — it returns a mask, never the client secret.
   // Writing it is two rows down, and admin, for a reason worth reading there.
   { method: 'GET', path: '/api/sso/config', min: 'maintainer', ok: 200 },

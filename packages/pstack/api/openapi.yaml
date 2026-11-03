@@ -81,6 +81,8 @@ tags:
     description: 'The swarm, and what a new worker runs to join it.'
   - name: config
     description: 'The whole portable configuration: export it, apply one.'
+  - name: forward
+    description: 'Where this host forwards deploys and unserved visitors, while it is being retired.'
   - name: host
     description: 'The host itself — health, the control stack, terminal history, the probe.'
   - name: stats
@@ -1133,6 +1135,38 @@ paths:
           application/json:
             schema: { type: object }
       responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+
+  # ── forwarding ──────────────────────────────────────────────────────────────────────────────────
+  /api/forward:
+    get:
+      tags: [forward]
+      operationId: getForward
+      x-cli-name: get
+      summary: 'Where this host forwards deploys and unserved visitors: { to, via, establishedAt, lastOkAt }, or null when off. Never the token. Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    put:
+      tags: [forward]
+      operationId: setForward
+      x-cli-name: set
+      summary: 'Forward to another pstack (B). Checked first: B''s GET /api/auth/me answers 200 for the token, which is not root and is developer or higher; `to` is not this host''s own API (unless `via` is given). Any failure is a 400 naming the check, and nothing is saved. Admin: it decides where every deploy runs.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, token]
+              properties:
+                to: { type: string, description: 'B''s API URL, e.g. https://api.b.example.com. http:// only to a loopback or private address.' }
+                via: { type: string, description: 'B''s IP[:port], dialled instead of resolving `to`; Host and the TLS server name stay `to`''s.' }
+                token: { type: string, description: 'Write-only. A user token on B, developer or higher, never root.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    delete:
+      tags: [forward]
+      operationId: deleteForward
+      x-cli-name: 'off'
+      summary: 'Stop forwarding. Applies to the next request. Admin.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
 
 components:
   parameters:

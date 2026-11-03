@@ -63,6 +63,9 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("deployments").AddCommand(NewDeploymentsWakeCommand(exec))
 	group("tls").AddCommand(NewTlsDomainsCommand(exec))
 	group("tls").AddCommand(NewTlsDomainsSetCommand(exec))
+	group("forward").AddCommand(NewForwardOffCommand(exec))
+	group("forward").AddCommand(NewForwardGetCommand(exec))
+	group("forward").AddCommand(NewForwardSetCommand(exec))
 	group("host").AddCommand(NewHostHealthCommand(exec))
 	group("host-vars").AddCommand(NewHostVarsListCommand(exec))
 	group("host-vars").AddCommand(NewHostVarsDeleteCommand(exec))
@@ -1146,6 +1149,104 @@ func NewTlsDomainsSetCommand(exec oascmd.ExecOptions) *cobra.Command {
 		body := map[string]any{}
 		if cmd.Flags().Changed("domains") {
 			body["domains"] = bodyDomains
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewForwardOffCommand returns the "forward off" command (DELETE
+// /api/forward).
+func NewForwardOffCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "off",
+		Short: "Stop forwarding. Applies to the next request. Admin.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "DELETE",
+			Path:   "/api/forward",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewForwardGetCommand returns the "forward get" command (GET
+// /api/forward).
+func NewForwardGetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "Where this host forwards deploys and unserved visitors: { to, via, establishedAt, lastOkAt }, or null when off. Never the token. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/forward",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewForwardSetCommand returns the "forward set" command (PUT
+// /api/forward).
+func NewForwardSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		bodyTo    string
+		bodyVia   string
+		bodyToken string
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "Forward to another pstack (B). Checked first: B's GET /api/auth/me answers 200 for the token, which is not root and is developer or higher; `to` is not this host's own API (unless `via` is given). Any failure is a 400 naming the check, and nothing is saved. Admin: it decides where every deploy runs.",
+	}
+	cmd.Flags().StringVar(&bodyTo, "to", "", "B's API URL, e.g. https://api.b.example.com. http:// only to a loopback or private address.")
+	cmd.Flags().StringVar(&bodyVia, "via", "", "B's IP[:port], dialled instead of resolving `to`; Host and the TLS server name stay `to`'s.")
+	cmd.Flags().StringVar(&bodyToken, "token", "", "Write-only. A user token on B, developer or higher, never root.")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/forward",
+		}
+		body := map[string]any{}
+		if cmd.Flags().Changed("to") {
+			body["to"] = bodyTo
+		}
+		if cmd.Flags().Changed("via") {
+			body["via"] = bodyVia
+		}
+		if cmd.Flags().Changed("token") {
+			body["token"] = bodyToken
 		}
 		switch {
 		case flagData != "":

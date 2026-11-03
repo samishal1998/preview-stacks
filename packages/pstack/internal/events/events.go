@@ -119,6 +119,11 @@ var Names = []string{
 	// A prune removed unused images on a node (internal/api/prune.go): `scheduled` every 6 hours, or
 	// `pressure` when its disk is full. One per node that reported; a failed prune sends nothing.
 	"node.pruned",
+	// Forwarding to another host (internal/api/forward.go). Appended, like the ones above.
+	// `forward.changed`: the setting was saved ({to, via}) or removed ({to: null, via: null}).
+	// `forward.failed`: a forwarded request never reached B ({to, error, attempts}). Never the token.
+	"forward.changed",
+	"forward.failed",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a

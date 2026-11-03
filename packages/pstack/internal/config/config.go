@@ -12,7 +12,9 @@
 // describe what is happening on ONE host. Restoring a deployment row onto a machine where that
 // stack does not run is not merely useless, it is a lie about the world (invariant 10), and a
 // restored session id is a live credential nobody minted. Loki's settings stay behind too: a bucket
-// and a cutover date belong to one host's Loki. Assemble names them in Skipped.
+// and a cutover date belong to one host's Loki. So does the forward setting (forward_config): it is
+// one host's way out, and applied on the host it points at, that host would forward to itself.
+// Assemble names them in Skipped.
 //
 // ── THIS PACKAGE ADDS A ROUTE, NOT A READ PATH ───────────────────────────────────────────────────
 //
@@ -266,6 +268,11 @@ func (s Sources) Assemble() (*Document, error) {
 		d.Skipped = append(d.Skipped, "loki: "+err.Error())
 	} else if row != nil {
 		d.Skipped = append(d.Skipped, "loki: host-specific — re-enter it on the target")
+	}
+	if row, err := store.GetForward(s.Store.DB); err != nil {
+		d.Skipped = append(d.Skipped, "forward: "+err.Error())
+	} else if row != nil {
+		d.Skipped = append(d.Skipped, "forward: host-specific — re-enter it on the target")
 	}
 	if d.Specs, d.Skipped, err = s.specList(d.Skipped); err != nil {
 		return nil, err

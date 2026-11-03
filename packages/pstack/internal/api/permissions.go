@@ -195,6 +195,12 @@ var permissions = []perm{
 	{path: "/api/logging", methods: []string{http.MethodGet, http.MethodPut}, min: auth.Maintainer},
 	{path: "/api/logging/storage", methods: mPut, min: auth.Admin},
 
+	// ── forwarding ──────────────────────────────────────────────────────────────────────────────
+	// The read is host configuration and never carries the token. The writes are ADMIN for BLAST
+	// RADIUS, the wildcard argument above: one save decides where every deploy on this host runs.
+	{path: "/api/forward", methods: mGet, min: auth.Maintainer},
+	{path: "/api/forward", methods: mPutDelete, min: auth.Admin},
+
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	// The cluster's shape carries no credential, so it reads like the swarm panel does.

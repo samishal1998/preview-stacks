@@ -88,6 +88,8 @@ func TestEnvelopeAndSign(t *testing.T) {
 // join the kinds with " and " → the two-kind line differs.
 // negative control: delete `case "node.pruned"` → got "node.pruned on this host."; format bytes in
 // binary units → "11.5 GB" instead of "12.3 GB".
+// negative control: delete `case "forward.changed"` → got "forward.changed on this host."; drop its
+// `via` branch → the via line loses " via 10.0.0.2". Delete `case "forward.failed"` → its line differs.
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	pressureData := func(kinds string, disk, memory, cpu float64) string {
@@ -124,7 +126,11 @@ func TestSummarize(t *testing.T) {
 		"Pruned worker-2 (pressure): 12.3 GB freed.":                                                 Summarize(ev("node.pruned", `{"node":"n2","hostname":"worker-2","reason":"pressure","freedBytes":12345678901}`)),
 		"Pruned worker-1 (scheduled): 0 B freed.":                                                    Summarize(ev("node.pruned", `{"node":null,"hostname":"worker-1","reason":"scheduled","freedBytes":0}`)),
 		"Pruned this host (scheduled): 512 kB freed.":                                                Summarize(ev("node.pruned", `{"node":null,"hostname":"","reason":"scheduled","freedBytes":512000}`)),
-		"Loki settings changed by alice: retention, storage.":                                        Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
+		"Forwarding to https://api.b.":                                                               Summarize(ev("forward.changed", `{"to":"https://api.b","via":null}`)),
+		"Forwarding to https://api.b via 10.0.0.2.":                                                  Summarize(ev("forward.changed", `{"to":"https://api.b","via":"10.0.0.2"}`)),
+		"Forwarding off.": Summarize(ev("forward.changed", `{"to":null,"via":null}`)),
+		"Forwarding to https://api.b failed after 3 attempt(s): refused": Summarize(ev("forward.failed", `{"to":"https://api.b","error":"refused","attempts":3}`)),
+		"Loki settings changed by alice: retention, storage.":            Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
 	}
 	for want, got := range cases {
 		if got != want {

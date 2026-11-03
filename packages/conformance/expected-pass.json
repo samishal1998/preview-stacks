@@ -5,6 +5,7 @@
     "test/api-control.test.ts": 3,
     "test/api-custom-routes.test.ts": 8,
     "test/api-domains.test.ts": 3,
+    "test/api-forward.test.ts": 1,
     "test/api-grafana.test.ts": 4,
     "test/api-host-vars.test.ts": 2,
     "test/api-jobs-and-containers.test.ts": 12,

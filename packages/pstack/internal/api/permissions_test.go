@@ -44,6 +44,7 @@ func required(method, path string) auth.Role {
 // /api/logging/storage row auth.Maintainer → the storage case fails.
 // Also: give the customRouteRe row auth.Viewer → the three custom-route write cases fail. Run.
 // Also: give the /api/settings/pressure_disk_pct row auth.Maintainer → its case fails. Run.
+// Also: give the /api/forward PUT/DELETE row auth.Maintainer → its two cases fail. Run.
 func TestPermissionTableIsTheSpecification(t *testing.T) {
 	cases := []struct {
 		method, path string
@@ -133,6 +134,10 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		{"PUT", "/api/logging", auth.Maintainer},
 		{"PUT", "/api/logging/storage", auth.Admin},
 		{"GET", "/api/logging/storage", rootOnly},
+		{"GET", "/api/forward", auth.Maintainer},
+		{"PUT", "/api/forward", auth.Admin},
+		{"DELETE", "/api/forward", auth.Admin},
+		{"POST", "/api/forward", rootOnly},
 
 		// logs, source, containers, the shell, runtime, readiness
 		{"GET", "/api/deployments/pr-1/logs", auth.Viewer},
