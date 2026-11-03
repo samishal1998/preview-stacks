@@ -1,8 +1,44 @@
 # Moving stacks between hosts: `pstack migrate` and forwarding
 
-> **Design, approved 2026-11-03. Not built.** Owner decisions are marked **(owner)**. Cut to the
-> smallest version on review (owner, 2026-11-03); what was cut and when to add it back is under
-> "Out of scope".
+> **Design, approved 2026-11-03. Built for 0.46.0.** Using it: [usage.md §7f](usage.md#7f-move-stacks-to-another-host-0460).
+> Owner decisions are marked **(owner)**. Cut to the smallest version on review (owner, 2026-11-03);
+> what was cut and when to add it back is under "Out of scope". The build plan is
+> [migrate-forward-plan.md](migrate-forward-plan.md). The spec below is kept as approved. Where the
+> build differs from it:
+>
+> - **The forward row is not in `pull config`'s export** (P-R1), against "The setting". Applied to
+>   B, it would make B forward to B. The export names it in `skipped`: `forward: host-specific —
+>   re-enter it on the target`. Cost if wrong: re-entering one token after a host rebuild.
+> - **Only a failed TCP dial or DNS lookup is retried** (P-R2, MF-R15), not a TLS handshake failure as §1
+>   lists. A handshake failure is a certificate mismatch that a retry cannot fix, and a failure after
+>   the dial is answered at once: 502 `forward: <host>: <error>`, `forward.failed` with `attempts: 1`.
+>   Cost if wrong: a CI deploy during B's certificate issuance fails at once.
+> - **`lastOkAt` is written at most once a minute** (P-R3), not on every answer as §1 says, so
+>   visitor traffic is not one SQLite write per request. Cost if wrong: the Control line is up to a
+>   minute stale.
+> - **`migrate` acts on a deployment only when it copied it or the target's state differs** (P-R4),
+>   so a second run does nothing. A row it did not copy is only ever brought up to the source's
+>   state: a newer, running target stays running. Cost if wrong: none found.
+> - **`migrate` keeps named specs named** (P-R5): `PUT {specName, vars}`, relying on `push config`
+>   having copied the spec. Cost if wrong: a 404 no such spec, reported as failed.
+> - **The own-URL refusal applies only without `via`** (MF-R2; §1 "Loop guard", "Establishing" check 3).
+>   With `via`, `api.<shared domain>` is exactly the case `via` exists for; the loop guard and B's
+>   `/api/auth/me` check catch a self-forward. Under `http-01` B has no certificate for
+>   `api.<A's domain>` until DNS moves, so the recipe uses B's own-domain API URL there. Cost if
+>   wrong: a self-forward with `via` is caught only by the loop guard.
+> - **`forward.changed` on `DELETE` is `{ "to": null, "via": null }`** (MF-R8), an object, not the `null`
+>   §1 shows, because every event's `data` is an object. Cost if wrong: none.
+> - **A job A itself holds is served by A** (MF-R13; §1 "Job ids are B's"): `/api/jobs/:id`, `…/stream` and
+>   `…/cancel` are forwarded only when A has no job with that id, so a control job such as
+>   `loki-apply` stays reachable. `GET /api/jobs` is forwarded. Cost if wrong: none.
+> - **Share links follow the deploy API** (MF-R14). `POST …/share` is forwarded, so a link minted through a
+>   forwarding A is B's and verifies only on B. A share link's own requests are served by A. Cost if
+>   wrong: a share link opened on A before DNS moves fails.
+> - **A source sleep refused for `kind: shared` (409) or no compose section (400) is not a failure**
+>   (MF-R18; §3): it prints `left running (shared|no compose)`, so recipe step 5 can exit 0. Cost if wrong:
+>   none.
+> - **`GET /api/forward` returns `via` too** (MF-R26): `{ to, via, establishedAt, lastOkAt }`. It is not a
+>   secret and `forward.changed` carries it. Cost if wrong: none.
 
 ## Why
 

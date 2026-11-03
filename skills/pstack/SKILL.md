@@ -277,6 +277,47 @@ Details: the usage guide's
 [Grafana](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#grafana) and
 [Swarm mode](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#swarm-mode).
 
+### Moving stacks to another host
+
+`pull config` / `push config` move a host's configuration, never its deployments. Two commands move
+those, from host A (retiring) to host B:
+
+```bash
+# on A: pass deploys, and visitors A does not serve, to B
+PSTACK_FORWARD_TOKEN=<user token on B, developer or higher, not root> \
+  pstack forward set https://api.<B's domain> [--via <B's IP>]
+pstack forward          # Forwarding to … · last ok 3m ago
+pstack forward off
+
+# from anywhere: copy A's deployments to B and match each one's state there
+PSTACK_FROM_TOKEN=… PSTACK_TO_TOKEN=… \
+  pstack migrate --from https://api.<A's domain> --to https://api.<B's domain> [<id>...] [--sleep-source]
+```
+
+- **Forwarding** passes every `/api/deployments` and `/api/jobs` request to B after A's own role
+  check, with B's token in place of the caller's, so CI keeps deploying against A and the jobs run
+  on B. A visitor request for a preview hostname A does not serve goes to B too; one asleep on A is
+  forwarded, not woken. `X-Pstack-Forwarded-By` stops loops. Set needs admin on A and checks B's
+  `/api/auth/me` first: 400 naming the check, nothing saved. A dial failure is retried (3 attempts,
+  2 s then 5 s) and then is a 502 plus `forward.failed`; anything B answers is passed through.
+- **`--via`** is the IP A dials when the URL still resolves to A. Under HTTP-01 B has no certificate
+  for `api.<A's domain>` until DNS moves, so use B's own domain there.
+- **B must answer on A's domain** (`PUT /api/domains` or `--extra-domain`) to serve A's preview
+  hostnames.
+- **`migrate`** copies spec, compose and vars when the target lacks a deployment or the source's
+  `updatedAt` is newer, then matches the state: running → `up`, asleep → `up` + `sleep`, down →
+  nothing. A re-run catches up. Exit 1 when any failed. Volumes and databases do not move.
+- **`--sleep-source`** sleeps A's copies once B's are ok, so visitors reaching A are forwarded.
+  Shared and compose-less stacks are left running and listed.
+- **Never `down` A's copies.** `down` runs the axes' `down` hooks, which delete the database branch
+  or DNS record B's copy uses too. Sleep runs no hooks.
+- Share links minted through a forwarding A are B's and verify only on B.
+- `pull config` does not carry the forward setting; re-enter it on a rebuilt host.
+
+The cutover: push config to B → `forward set` on A → `migrate` → switch DNS →
+`migrate --sleep-source` → retire A. Details: the usage guide's
+[Move stacks to another host](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#7f-move-stacks-to-another-host-0460).
+
 ## 1. When to reach for it
 
 | Situation | Use |
@@ -898,6 +939,7 @@ API is the same core with a job queue in front.
 | `POST /api/deployments/:id/verify` | → `202 { job }` |
 | `GET /api/jobs` · `GET /api/jobs/:jobId` | poll for `state` |
 | `GET /api/jobs/:jobId/stream` | SSE: buffered log replayed, then live |
+| `GET`/`PUT`/`DELETE /api/forward` | [forwarding](#moving-stacks-to-another-host): `{ to, via, establishedAt, lastOkAt }` or `null`; set and off are admin |
 
 ```bash
 API=https://api.preview.example.com

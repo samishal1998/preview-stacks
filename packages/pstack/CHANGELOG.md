@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Forwarding: `pstack forward`.** `pstack forward set <B's API URL> [--via <ip[:port]>]` on host A
+  makes A pass every `/api/deployments` and `/api/jobs` request to B, after A's own role check and
+  with B's token in place of the caller's, so CI keeps deploying against A while the jobs run on B.
+  A visitor request for a preview hostname A does not serve goes to B as well; a stack asleep on A is
+  forwarded, not woken. The token is a user token on B, developer or higher, never root, from
+  `PSTACK_FORWARD_TOKEN` only. `set` checks B's `/api/auth/me` first and saves nothing on a failure.
+  A dial failure is tried 3 times in all (2 s, then 5 s apart), then answers 502 and emits `forward.failed`.
+  `X-Pstack-Forwarded-By` stops loops. `GET /api/forward` (maintainer), `PUT`/`DELETE` (admin),
+  `pstack api forward …`, and one line on the Control page in both UIs. `pull config` does not carry
+  it.
+
+- **`pstack migrate --from <API URL> --to <API URL> [<id>...] [--sleep-source]`.** Copies each
+  deployment the target lacks or has older (spec, compose and stored vars, unchanged), then matches
+  the source's state: running → `up`, asleep → `up` then `sleep`, down → nothing. A re-run catches
+  up. `--sleep-source` sleeps each source copy once the target's is ok, so visitors still reaching
+  the source are forwarded. It never runs `down`. Tokens from `PSTACK_FROM_TOKEN` and
+  `PSTACK_TO_TOKEN`. Exit 1 when any failed.
+
+- **Two events**: `forward.changed` (`{ to, via }`, both `null` when turned off) and
+  `forward.failed` (`{ to, error, attempts }`). Neither carries the token.
+
+- The cutover recipe, and why never to `down` a migrated source copy: usage.md §7f.
+
 ## 0.45.0 — 2026-11-02
 
 ### Added

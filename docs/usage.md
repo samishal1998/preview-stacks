@@ -7,7 +7,7 @@ no-state-store decision — read [`../README.md`](../README.md) first; this guid
 Every `pstack` block below was produced by running the command against the code in this repo; the
 output is what it printed. The exceptions, marked where they appear: the CI workflow in section 8
 (GitHub-side, not runnable here), the `init` walkthrough in section 7 (it needs a real host with a
-real domain), and the abridged JSON in section 6.
+real domain), the two-host blocks in section 7f, and the abridged JSON in section 6.
 
 | I want to… | Go to |
 |---|---|
@@ -21,6 +21,7 @@ real domain), and the abridged JSON in section 6.
 | **choose a TLS mode (HTTP-01 or DNS-01)** | [7 → Choose a TLS mode](#choose-a-tls-mode) |
 | shared vs isolated, `requires`, `--force`, submitting deployments | [7. The control plane](#7-the-control-plane) |
 | **give my team accounts that cannot do everything** | [7e. The four roles](#7e-who-can-do-what-the-four-roles-0320) |
+| **move deployments to another host**, forwarding CI and visitors meanwhile | [7f. Move stacks to another host](#7f-move-stacks-to-another-host-0460) |
 | deploy from GitHub Actions | [8. Wire it into CI](#8-wire-it-into-ci) |
 | a nightly leak sweep, orphan hunting | [9. Day-2 operations](#9-day-2-operations) |
 | every flag, route, env var, exit code | [10. Reference](#10-reference) |
@@ -2913,15 +2914,16 @@ is loopback or a private address, for the same reason.
 
 | Travels | Stays behind |
 |---|---|
-| accounts, with their password hashes — people keep the passwords they already have | deployments: they are per-PR and ephemeral, and belong to the host's Docker |
+| accounts, with their password hashes — people keep the passwords they already have | deployments: they are per-PR and ephemeral, and belong to the host's Docker. `pstack migrate` moves them ([7f](#7f-move-stacks-to-another-host-0460)) |
 | API tokens (hashes), so scripts keep working — and a document you author may [name the token itself](#predeclaring-the-tokens-a-rebuilt-host-should-hold-0340) | login sessions and half-finished SSO sign-ins |
 | host variables **and secrets** | notifier delivery history |
 | notifiers, with their signing secrets and URLs | terminal sessions |
 | the SSO providers and their client secrets | Loki's settings and its S3 secret |
-| registry logins, routing files, named specs | |
+| registry logins, routing files, named specs | [forwarding](#7f-move-stacks-to-another-host-0460): applied to the host it points at, it would forward to itself |
 
 Restoring the right-hand column into a *different* host would be wrong, not merely useless — so
-none of it is in the file. Only Loki's settings are named, in `skipped`: re-enter them on the target.
+none of it is in the file. Only Loki's settings and forwarding are named, in `skipped`: re-enter them
+on the target.
 
 #### Predeclaring the tokens a rebuilt host should hold (0.34.0)
 
@@ -3106,6 +3108,8 @@ every account until someone puts it in the table.
 | `PUT`/`DELETE /api/tls/wildcard` | `admin` |
 | `GET`/`PUT /api/logging` | `maintainer` |
 | `PUT /api/logging/storage` | `admin` |
+| `GET /api/forward` | `maintainer` |
+| `PUT`/`DELETE /api/forward` — it decides where every deploy runs | `admin` |
 | `GET /api/sso/config` | `maintainer` |
 | `GET /api/settings` | `viewer` |
 | `PUT /api/settings/max_jobs` | `maintainer` |
@@ -3219,6 +3223,162 @@ namespaces, a credential boundary, a per-tenant Docker — not more rows in this
 grow in if it grows; adding attributes to *these* four tiers without the boundary underneath would
 buy the appearance of isolation and none of it. Until then: one host, one trust level per tier, and
 a developer who can `up` an arbitrary compose file is trusted with the host.
+
+## 7f. Move stacks to another host (0.46.0)
+
+`pull config` and `push config` ([7d](#7d-move-a-hosts-configuration-to-another-host-0300)) move a
+host's configuration and leave its deployments behind. Two commands move the rest, from host **A**
+(the one being retired) to host **B**:
+
+- **`pstack forward`** makes A pass its deploys, and the visitors it no longer serves, to B. CI and
+  visitors keep working whichever host their DNS reaches.
+- **`pstack migrate`** copies A's deployments to B and brings each up in the state it had on A.
+
+The blocks in this section need two hosts, so they are illustrative, not captured.
+
+### Forwarding
+
+```bash
+# against A
+export PSTACK_API_URL=https://api.preview.example.com
+export PSTACK_TOKEN=…                    # admin on A to set or turn off; maintainer to read
+export PSTACK_FORWARD_TOKEN=…            # a user token on B, developer or higher
+pstack forward set https://api.preview-b.example.com
+pstack forward
+```
+```
+Forwarding to https://api.preview-b.example.com · last ok 3m ago
+```
+
+`pstack forward off` prints `Not forwarding.` The token comes from `PSTACK_FORWARD_TOKEN` only,
+never a flag: argv is readable through `ps`. No read returns it.
+
+While it is set, A passes two kinds of request to B:
+
+- **Every request under `/api/deployments` and `/api/jobs`.** A checks the caller at the route's own
+  tier first, so a viewer cannot deploy through A. Then it swaps the caller's credential for B's
+  token and passes the request on. B's answer comes back unchanged: status, body, job id, log
+  stream. Deploys run on B only, and CI's `up` → poll → stream against A reaches B's job. A's own
+  UI lists B's deployments; A's records go stale.
+- **A visitor request for a preview hostname A does not serve.** Previews still running on A keep
+  serving from A. A stack asleep on A is forwarded, not woken: waking it would start a stale copy on
+  the host being retired. One-label hostnames only, like the wake catch-all.
+
+A serves these itself:
+
+- a request carrying `X-Pstack-Forwarded-By`. A adds that header to everything it forwards, so A→B
+  and B→A both on still runs one deploy, on B;
+- a share link's requests;
+- a job A itself holds, such as a `loki-apply`. The job list, `GET /api/jobs`, is B's;
+- the control hostnames (`control.`, `api.`, `loki.`, `grafana.`) and every other route.
+
+**Share links are per host.** `POST …/share` is forwarded, so a link minted through a forwarding A
+is B's: signed with B's `PSTACK_TOKEN`, it verifies only on B, and opened on A before DNS moves it
+answers 401. A link A minted earlier verifies only on A.
+
+**`forward set` checks B before it saves anything:**
+
+1. `GET /api/auth/me` on B with the token answers 200;
+2. the token is an account's, developer or higher, and not B's root `PSTACK_TOKEN`: one host's root
+   credential must not sit on another;
+3. without `--via`, the URL is not A's own API.
+
+Each failure is a 400 naming the check, e.g.
+
+```
+the token on api.preview-b.example.com is viewer: developer or higher
+```
+
+The URL is `https://`, or plain `http://` to a loopback or private address. A redirect from B is a
+refusal.
+
+**`--via <ip[:port]>`** is where A connects. The URL's host stays the Host header and the TLS server
+name, so B's certificate is checked for it. It is for a URL that resolves back to A, which
+`api.<A's domain>` does until DNS moves. With `--via` the own-URL check is skipped: the loop guard
+and B's `/api/auth/me` catch a misconfiguration. Under HTTP-01, B has no certificate for
+`api.<A's domain>` until DNS moves, so use B's own domain's API URL.
+
+**When B does not answer.** A forwarded API request that never reached B (connection refused, a DNS
+failure) is tried 3 times in all, 2 s then 5 s apart. Then A answers **502**
+`forward: api.preview-b.example.com unreachable after 3 attempts` and emits `forward.failed`. A
+failure after the connection, a TLS error included, is not retried, because B may already have
+started a job: **502** `forward: <host>: <error>`. Whatever B answers, a 401, a 409, a 500, reaches
+the caller as B's answer.
+
+A forwarded visitor request is never retried: a retry would hold the visitor's request open. Any
+failure answers A's Down page (503, `retry-after: 5`), which the browser retries, and logs one line.
+`last ok` is the last time B answered, written at most once a minute.
+
+**What B must have.** The preview's domain must be one B answers on: its primary, or one added with
+[`PUT /api/domains` or `--extra-domain`](#serve-more-than-one-domain-0360). Under DNS-01, B's
+wildcard covers it at once. Under HTTP-01, B gets a hostname's certificate only once public DNS
+points at B; until then a forwarded visitor gets A's Down page.
+
+**The setting stays on A.** `pull config` does not carry it, because applied to B it would make B
+forward to itself; the export names it in `skipped`. Over the API it is `GET`/`PUT`/`DELETE
+/api/forward` ([reference](#http-api)) or `pstack api forward …`. The Control page shows the same
+line as `pstack forward`.
+
+### `pstack migrate`
+
+```bash
+export PSTACK_FROM_TOKEN=…               # a token on A
+export PSTACK_TO_TOKEN=…                 # a token on B
+pstack migrate --from https://api.preview.example.com --to https://api.preview-b.example.com
+```
+```
+pr-101  running  copied, up
+pr-102  asleep  copied, up, slept
+pr-103  down  copied
+pr-104  running  unchanged
+```
+
+It runs from a laptop or CI against both APIs; the hosts never call each other for the copy. For
+each deployment on the source, or each `<id>` given:
+
+1. **Copy** its spec, compose and stored variables, unchanged, when the target lacks it or the
+   source's `updatedAt` is newer. A named spec stays named, so the target must have it already
+   (`push config` copies named specs).
+2. **Match the source's state.** Running → `up`. Asleep → `up`, then `sleep`, so it wakes on
+   request as before. Down → nothing. A deployment this run did not copy is only ever brought *up*
+   to the source's state: a newer target that is running stays running.
+3. Wait for the jobs, then print one line each: id, source state, what was done.
+
+Exit 1 when anything failed: a copy, an `up` (a seed failing, an image that will not pull), or a
+source row docker did not answer for (`unknown  skipped (docker did not answer)`).
+
+**Run it again to catch up.** A second run copies only what changed since the first. With
+forwarding on before the first run there is nothing to catch up. Volumes and databases never move:
+each stack on the target runs its own seed.
+
+Without `--sleep-source` it never changes the source. **`--sleep-source`** puts each running source
+copy to sleep once the target's copy is ok, so visitors still reaching A are forwarded to B. Every
+source call carries `X-Pstack-Forwarded-By: migrate`, so a forwarding A answers for itself. A stack
+sleep refuses stays running and is listed, not failed:
+
+```
+pr-105  running  source slept
+pr-106  running  left running (shared)
+```
+
+> **Never `down` A's copies.** `down` runs each axis's `down` hook, and those delete external
+> resources keyed by the stack name, such as a database branch or a DNS record, that B's copy uses
+> too. Sleep removes containers, keeps volumes and runs no hooks. Destroying A's machine runs no
+> hooks either.
+
+### The cutover
+
+1. `pstack pull config` on A, `pstack push config` on B: accounts, registries, routing, settings.
+   B must answer on A's domain.
+2. `pstack forward set <B's API URL>` on A. Every deploy from here runs on B. Use B's own domain's
+   API URL; `--via <B's IP>` only with a URL that resolves to A and a certificate B already has
+   (DNS-01).
+3. `pstack migrate --from <A> --to <B>`.
+4. Switch DNS.
+5. `pstack migrate --from <A> --to <B> --sleep-source`. It copies nothing new and sleeps A's copies,
+   so visitors still reaching A are forwarded to B. It runs after DNS because under HTTP-01 B gets
+   its certificates only then.
+6. When nothing reaches A any more, retire it. **Never `down` A's copies.**
 
 ## 8. Wire it into CI
 
@@ -3610,8 +3770,10 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `route ls\|create\|assign\|unassign\|rm` | list and point [custom routes](#pstack-route): a stable name for whichever stack it is assigned to. Talks to `PSTACK_API_URL`; a held route exits 1 naming its holder and `--force`. | 0 · 1 · 3 |
 | `pull config` | seal this host's whole portable configuration — accounts, tokens, host secrets, notifiers, SSO, registry logins, routing files, named specs — into one `0600` file (`-o`, never stdout). Talks to `PSTACK_API_URL` as the **root token**. | 0 · 1 · 3 |
 | `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
+| `forward [set <url>\|off]` | where the host at `PSTACK_API_URL` [forwards](#7f-move-stacks-to-another-host-0460) its deploys and unserved visitors. `set` checks the target first and needs `PSTACK_FORWARD_TOKEN`; `set` and `off` need an admin. | 0 · 1 · 3 |
+| `migrate` | copy deployments from `--from` to `--to` and match each one's state there; `--sleep-source` then sleeps the source copies. Never `down`. **Exit 1 when any failed**; a re-run catches up. | 0 · 1 · 3 |
 
-`init`, `serve`, `swarm`, `route` and `pull`/`push` are **spec-free**: they act on the host and on the registry, so none of
+`init`, `serve`, `swarm`, `route`, `pull`/`push`, `forward` and `migrate` are **spec-free**: they act on the host and on the registry, so none of
 them loads `preview.yml` or fails because it is absent.
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
@@ -3641,6 +3803,9 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--distro <name>` | `cloud-init` `swarm join` | which Docker install steps the rendered cloud-config uses: `ubuntu` `debian` `fedora` `suse` `arch` `alpine`. Ignored by the other formats. |
 | `-o`, `--out <file>` | `cloud-init` `swarm join` `pull config` | write the rendered file instead of printing it. **Required** for `pull config`, which never writes an export to stdout and creates the file `0600`. |
 | `-i`, `--in <file>` | `push config` | the sealed export to apply. **Required** — there is no stdin form. |
+| `--via <ip[:port]>` | `forward set` | where to connect; the URL's host stays the Host header and TLS name. For a URL that still resolves to this host ([7f](#7f-move-stacks-to-another-host-0460)). |
+| `--from <API URL>` `--to <API URL>` | `migrate` | the source and target hosts. Both **required**. |
+| `--sleep-source` | `migrate` | sleep each source copy once the target's is ok. Never `down`. |
 | `--admin-user <name>` | `cloud-init` | the first UI account, created on first boot. **Prompted** when absent unless `-y`. Its password comes from `--admin-password`, or is generated and printed beside the username |
 | `--admin-password <pw>` | `cloud-init` | that account's password. Refused without `--admin-user`. Never prompted — an absent one is generated, so the value exists nowhere else and can be discarded after the first sign-in |
 | `--api-token <token>` | `cloud-init` | `PSTACK_TOKEN`, written into the rendered file. Omitting it is preferred: `init` then mints one on the host and prints it once into the boot log, keeping it out of instance metadata |
@@ -3670,7 +3835,9 @@ different problems with different owners.
 |---|---|---|---|
 | `PSTACK_TOKEN` | `serve` `init` | *unset* / *generated* | bearer token for mutating routes. **Required** to bind off-loopback. `init` generates one when unset and prints it once. |
 | `PSTACK_PORT` | `serve` | `7878` | listen port |
-| `PSTACK_API_URL` | `pull config` `push config` | — | which pstack to talk to, e.g. `https://api.preview.example.com`. **No default on purpose** — a guess would silently talk to the wrong host. Plain `http://` is refused unless the host is loopback or a private address. |
+| `PSTACK_API_URL` | `pull config` `push config` `forward` | — | which pstack to talk to, e.g. `https://api.preview.example.com`. **No default on purpose** — a guess would silently talk to the wrong host. Plain `http://` is refused unless the host is loopback or a private address. |
+| `PSTACK_FORWARD_TOKEN` | `forward set` | — | a user token on the target, developer or higher, never its root token. **Flag-less on purpose.** |
+| `PSTACK_FROM_TOKEN` · `PSTACK_TO_TOKEN` | `migrate` | — | a token on the source; a token on the target. **Flag-less on purpose.** |
 | `PSTACK_CONFIG_KEY` | `pull config` `push config` `cloud-init` | *prompted* | the passphrase the export is sealed with. Prompted without echo when unset and on a terminal; **flag-less on purpose**, because argv is world-readable through `ps`. |
 | `PSTACK_HOST` | `serve` | `127.0.0.1` | listen address. Forced to `127.0.0.1` without a token; a non-loopback value without a token is refused with exit 3. |
 | `PSTACK_DATA` | `serve` `init` | `/var/lib/pstack` | registry + control-stack config root. The registry lives at `<PSTACK_DATA>/deployments`. |
@@ -3842,10 +4009,13 @@ anything it does not list is the root token's alone.
 | DELETE | `/api/tls/wildcard` | — | **admin** — back to Traefik-native resolution; 404 when none is stored |
 | POST | `/api/tls/redeploy` | — | **maintainer and up** — redeploy every awake stack so labels regenerate; `{ started[], skipped[] }` |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
-| ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping **or waking** stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the wake page. A sleeping one also starts a wake job; a waking one is held until readiness settles ([7b](#sleep-and-wake-on-call)) |
+| ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping **or waking** stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the wake page. A sleeping one also starts a wake job; a waking one is held until readiness settles ([7b](#sleep-and-wake-on-call)). **While forwarding**, checked first: passed to the target with its Host unchanged, never woken here; a failure is the Down page, **503** + `retry-after: 5` ([7f](#7f-move-stacks-to-another-host-0460)) |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |
 | GET | `/api/jobs/:jobId` | — | `{ job }` · 404 |
 | GET | `/api/jobs/:jobId/stream` | — | SSE: buffered log replay, then live, then `{done:true,state}` |
+| GET | `/api/forward` | — | **maintainer and up** — `{ to, via, establishedAt, lastOkAt }` or `null`. Never the token |
+| PUT | `/api/forward` | `{ to, via?, token }` | **admin** — checks the target first ([7f](#7f-move-stacks-to-another-host-0460)), then the same view · 400 naming the failed check, nothing saved. Emits `forward.changed` |
+| DELETE | `/api/forward` | — | **admin** — `{ deleted: true }`; stop forwarding. Emits `forward.changed` when there was a setting |
 | GET | `/` and **any** non-`/api/` path | — | the embedded single-page UI. No filesystem lookup, so a deep link renders rather than 404s |
 
 Status codes: **202** accepted · **400** bad spec or missing variable · **401** unauthorized ·
@@ -3853,6 +4023,10 @@ Status codes: **202** accepted · **400** bad spec or missing variable · **401*
 one (the body names both), a share link outside its views, or an admin at `/api/config` ·
 **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
+
+While [forwarding](#7f-move-stacks-to-another-host-0460) is on, every `/api/deployments…` and `/api/jobs…` route above is the
+target's, answered as the target answers it, after this host's own role check. A job this host
+holds and a share link's requests stay here. **502** is this host failing to reach the target.
 
 Job `state`: `queued` · `running` · `ok` · `failed` · `leaked` · `cancelled` · `superseded` — the
 [seven](#read-a-job), of which only the first two are not final. Job `action`: `up` · `down` ·

@@ -557,6 +557,33 @@ One event per node that reported, `freedBytes: 0` included. A prune that failed 
 | `reason` | `"scheduled"` \| `"pressure"` | Why it ran. |
 | `freedBytes` | number | Bytes freed, as docker reported them (decimal units). |
 
+### `forward.changed` / `forward.failed`
+
+This host's forwarding to another pstack ([usage.md §7f](usage.md#7f-move-stacks-to-another-host-0460)).
+(0.46.0)
+
+`forward.changed` fires when the setting is saved (`PUT /api/forward`) or removed
+(`DELETE /api/forward`). A `DELETE` with nothing set sends nothing.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `to` | string \| null | The target's API URL. `null` when forwarding was turned off. |
+| `via` | string \| null | The address dialled instead of `to`'s host, or `null`. |
+
+Turned off, `data` is `{ "to": null, "via": null }`: an object, never `{}`.
+
+`forward.failed` fires when a forwarded API request (`/api/deployments…`, `/api/jobs…`) did not get
+an answer from the target, as the caller's **502**. Forwarded visitor traffic sends no event: its
+failures are logged.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `to` | string | The target's API URL. |
+| `error` | string | Why, e.g. `dial tcp 10.0.0.2:443: connect: connection refused`. |
+| `attempts` | number | `3`: the target was never reached, every dial failed. `1`: it failed after connecting, which is never retried. |
+
+Never the token.
+
 ---
 
 ## Test deliveries
