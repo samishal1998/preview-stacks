@@ -25,6 +25,7 @@ browser); the version-control rules are in AGENTS.md.
 | Give a team **accounts that cannot do everything** | [`usage.md` §7e](usage.md#7e-who-can-do-what-the-four-roles-0320) |
 | Let people sign in with **GitHub, Google, Okta…** | [`usage.md` §7c](usage.md#7c-sign-in-with-your-identity-provider-0270) |
 | **Copy a host's configuration** onto another host | [`usage.md` §7d](usage.md#7d-move-a-hosts-configuration-to-another-host-0300) |
+| **Move deployments** to another host, with CI and visitors following | [`usage.md` §7f](usage.md#7f-move-stacks-to-another-host-0460) |
 | Send deployed services' logs to **Loki** and read them in **Grafana** | [`usage.md` §7](usage.md#turn-loki-logging-on-or-off-pstack-logging) |
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
 | Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
@@ -54,6 +55,7 @@ the web UI. Then, one section per thing a host grows into:
 | 7c | **single sign-on** — several providers at once, the presets, who gets an account and with which role | 0.27.0 |
 | 7d | **moving a host's configuration** to another host, sealed, including onto a machine that does not exist yet | 0.30.0 |
 | 7e | **the four roles**, what each adds, and what sits outside the ladder | 0.32.0 |
+| 7f | **moving stacks to another host**: forwarding deploys and visitors, `pstack migrate`, the cutover, and why never `down` the source | 0.46.0 |
 | 10 | **runtime settings** — the job cap and the default role, changeable without a restart | 0.33.0 |
 
 ### [`control-plane.md`](control-plane.md) — the architecture (~1500 lines)
@@ -76,10 +78,10 @@ socket-exposure tradeoff, and what to check when the certificate never arrives.
 ### [`webhook-events.md`](webhook-events.md) — every event a notifier receives (~450 lines)
 
 The envelope, headers, and a worked signature-verification receiver. Delivery semantics: at-least-
-once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 32 events** with
+once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 39 events** with
 every payload field — deployments, jobs (including `job.leaked`, the one to page on), specs, routing,
-Loki's settings, readiness, container actions, sleep and wake, share links, and configuration
-import/export.
+Loki's settings, readiness, container actions, sleep and wake, share links, configuration
+import/export, and forwarding.
 
 ### [`tls-challenge.md`](tls-challenge.md) — switching HTTP-01 ↔ DNS-01 on a host that exists
 
@@ -148,11 +150,12 @@ deploys and wakes. Also log caps on the control stack and on previews, scheduled
 `GET /api/stats` and a Stats page. Asked for after a full disk took a host down for 3½ days.
 Shipped in 0.45.0; where the build differs is at the top. The thirteen-task build plan is [`node-pressure-plan.md`](node-pressure-plan.md).
 
-### [`migrate-forward-design.md`](migrate-forward-design.md) — moving stacks between hosts, unbuilt
+### [`migrate-forward-design.md`](migrate-forward-design.md) — moving stacks between hosts
 
 `pstack migrate` copies every deployment from one host to another and restores its state (running,
 asleep, down). Forwarding makes a host pass its deploy API, and visitor requests for previews it no
 longer serves, to another host, so CI and visitors keep working while DNS moves. Written after the 2026-11-02 move of preview.hou-clou.dev was done by hand.
+Built for 0.46.0; where the build differs is at the top. The eight-task build plan is [`migrate-forward-plan.md`](migrate-forward-plan.md).
 
 ### [`swarm-local-testing.md`](swarm-local-testing.md) — a real cluster on a laptop
 

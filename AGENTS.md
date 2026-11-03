@@ -104,8 +104,8 @@ One package per responsibility (43 of them), named as the reference's files were
 
 | File | Responsibility |
 |---|---|
-| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, customroutes, deploy, domains, grafana, logging, openapi, probe, settings, signals, stats, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job, `pressure.go` and `prune.go` the node-pressure guards the stats loop runs. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). `server.go`'s header has no route list and still names the deleted `api.ts` — fix it when you next touch that file. Owns the `:id` → spec-variable binding. |
-| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (97) is a constant a test checks against the lock file. |
+| `api` | HTTP API + UI host. Routes live in `routes_<area>.go` (auth, config, control, customroutes, deploy, domains, forward, grafana, logging, openapi, probe, settings, signals, stats, tls) plus the ordered if-chain in `routes.go`; `principal.go` is the gate, `permissions.go` the role table, `sse.go`/`ws.go` the streams, `loki_apply.go` the Loki settings job, `pressure.go` and `prune.go` the node-pressure guards the stats loop runs, `forward.go` the proxy to another host. **The route inventory is `api/openapi.yaml`** (`openapi_coverage_test.go` fails in both directions) **plus `permissions.go`** (`permissions_test.go` walks the chain). Owns the `:id` → spec-variable binding. |
+| `apicli` | The generated `pstack api` tree (`zz_generated.go`, `oascmd.lock.json`). Regenerate with `go generate ./packages/pstack/internal/apicli`, never with `--on-drift` in an unrelated edit; a deliberate breaking change uses `--on-drift=all` once (apicli.go header). `OperationCount` (100) is a constant a test checks against the lock file. |
 | `cli` + `cmd/pstack` | Arg parsing (`args.go`, the usage text byte for byte), command dispatch (`run.go`), per-command help and completion (`commands.go`, `completion.go`), the init silent-revert guard (`initguard.go`), **exit codes**, the `serve` loopback interlock, `healthcheck`. `main.go` is one call. Logic belongs in the package, not here. |
 | `jobs` | In-memory job registry: one RUNNING job per key plus a queue one deep where the newest supersedes the queued one, a global concurrency cap (`PSTACK_MAX_JOBS`, 4), bounded to 50 transcripts, subscriber fan-out outside the lock, cancellation per job and per stack. `loki-apply` is its one non-deployment action. |
 | `registry` | The deployment registry — a directory of YAML per deployment. Deliberately not a database (invariant 10). |
@@ -136,12 +136,12 @@ One package per responsibility (43 of them), named as the reference's files were
 
 | File | Responsibility |
 |---|---|
-| `store` | SQLite (`<dataDir>/db/pstack.db`) + 10 migrations, 13 tables (migration 7 replaced `sso_config`). Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
+| `store` | SQLite (`<dataDir>/db/pstack.db`) + 11 migrations, 14 tables (migration 7 replaced `sso_config`). Append to `Migrations`; never edit a shipped one. Inside `Tx` use only the handed `Querier` (one pooled connection). |
 | `auth` | Accounts, sessions, personal tokens — and the SSO side of accounts: the stored provider, the `(provider, subject)` links, and `SsoSignIn`. Argon2id with a PHC codec that PARSES m/t/p (`phc.go`); sessions and tokens stored as SHA-256. `SessionHashUser` serves the Grafana cookie. |
 | `sso` | The OIDC/OAuth2 protocol, and only that: presets, discovery (cached per `Client`), PKCE, the token exchange, ID-token verification (RS256/ES256, stdlib), claim mapping, the `TransientStore`. Touches no accounts. |
 | `hostvars` | Host-level `${vars.*}` / `${secrets.*}`. |
 | `registries` | Private-registry credentials for image pulls. |
-| `events` | The domain event bus. `Names` (37) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
+| `events` | The domain event bus. `Names` (39) is a **public contract** — append, never rename, never regroup. Listeners run inline, in registration order; `Data` is marshalled once. |
 | `webhooks` | Notifier registrations + the delivery log. |
 | `notify` | Delivery: the `NotifierType` seam, the per-notifier queue, retries, redelivery. |
 
@@ -213,8 +213,9 @@ unpersisted. Restarting the server loses history, not correctness.
 sessions, tokens, notifier registrations and deliveries, terminal audit, host variables, SSO
 (`sso_config`, `sso_links`, `sso_state`, `sso_providers`), runtime `settings`, `loki_config`
 (one row: what an operator SAVED, not what Loki runs, plus a `previous_*` undo record for one
-apply), and `custom_routes` (which deployment each custom route points at: the operator's mapping,
-not what Traefik serves). Every table is justified in its migration as configuration an operator chose, with no
+apply), `custom_routes` (which deployment each custom route points at: the operator's mapping,
+not what Traefik serves), and `forward_config` (one row: where the operator chose to forward;
+`last_ok_at` is informational, never consulted). Every table is justified in its migration as configuration an operator chose, with no
 source of truth in Docker to contradict. The deployment registry stayed a directory of YAML an
 operator can read and repair over SSH. **If you find yourself adding a table whose rows describe
 what is running, you are about to be wrong.** Whether Loki or Grafana runs is read from docker for
@@ -246,11 +247,12 @@ renaming one silently stops deliveries for everyone subscribed. Same for the del
 fields — receivers verify a signature over those exact bytes.
 
 **15. A secret's value has no read path.** Notifier signing secrets, host secrets, registry
-passwords and the Loki S3 secret go in and never come back out. `Webhooks.get()`/`list()` mask;
+passwords, the Loki S3 secret and the forward token go in and never come back out. `Webhooks.get()`/`list()` mask;
 `rawConfigOf()` does not and is for the delivery path only. Conflating them is how a masked value
 gets POSTed to a masked URL — which happened. The S3 secret is stored unhashed (the probe and Loki
 need it) in `loki_config.secret`; `GET /api/logging` answers `secretSet`, and an empty, omitted or
-masked `secretAccessKey` keeps the stored one.
+masked `secretAccessKey` keeps the stored one. The forward token is stored unhashed too (it is sent to
+the target) in `forward_config.token`; `GET /api/forward` never returns it.
 
 The ONE deliberate exception is `GET /api/config`: every secret and hash in plaintext, to the root
 `PSTACK_TOKEN` **only**, never an admin session (`routes_config.go`'s header — "the inconsistency is
