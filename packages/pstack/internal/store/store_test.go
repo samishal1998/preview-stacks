@@ -253,6 +253,64 @@ func TestOpen(t *testing.T) {
 		}
 	})
 
+	t.Run("migration 11 adds an EMPTY forward_config table and touches nothing else", func(t *testing.T) {
+		// negative control: delete the CREATE TABLE from migration 11's string, leaving the entry (so
+		// user_version still reaches 11 and the failure is about the table, not the version) → the
+		// SELECT COUNT(*) FROM forward_config errors with "no such table" and this fails.
+		//
+		// An empty forward_config means no forwarding, so every host that migrates through this (the
+		// checked-in host fixture included) serves exactly as before.
+		dir := t.TempDir()
+		saved := Migrations
+		Migrations = saved[:10]
+		s, err := Open(dir) // a real v10 database, made by the shipped migrations
+		Migrations = saved
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='forward_config'").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("v10 already has a forward_config table (%d, %v)", n, err)
+		}
+		if _, err := s.DB.Exec("INSERT INTO host_vars (name, value, secret, created_at, updated_at) VALUES ('REGION', 'eu', 0, 1, 1)"); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		s, err = Open(dir) // reopening runs migration 11
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM forward_config").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("forward_config after migration 11: %d rows, %v — it must exist and be empty", n, err)
+		}
+		var v int
+		s.DB.QueryRow("PRAGMA user_version").Scan(&v)
+		if v != len(Migrations) {
+			t.Fatalf("user_version %d, want %d", v, len(Migrations))
+		}
+		var region string
+		if err := s.DB.QueryRow("SELECT value FROM host_vars WHERE name='REGION'").Scan(&region); err != nil || region != "eu" {
+			t.Fatalf("the v10 data did not survive migration 11: %q %v", region, err)
+		}
+	})
+
+	t.Run("forward_config holds one row: a second id violates CHECK (id = 1)", func(t *testing.T) {
+		// negative control: drop `CHECK (id = 1)` from migration 11 → the id = 2 INSERT succeeds and this fails
+		s, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if _, err := s.DB.Exec("INSERT INTO forward_config (id, url, token, established_at, last_ok_at) VALUES (1, 'https://api.b', 't', 1, 1)"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.DB.Exec("INSERT INTO forward_config (id, url, token, established_at, last_ok_at) VALUES (2, 'https://api.b', 't', 1, 1)")
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("a second forward_config row: %v, want a CHECK constraint failure", err)
+		}
+	})
+
 	t.Run("loki_config holds one row: a second id violates CHECK (id = 1)", func(t *testing.T) {
 		// negative control: drop `CHECK (id = 1)` from migration 9 → the id = 2 INSERT succeeds and this fails
 		s, err := Open(t.TempDir())
@@ -291,4 +349,42 @@ func TestOpen(t *testing.T) {
 			t.Fatalf("host_vars after the two transactions: %q", names)
 		}
 	})
+}
+
+func TestForwardRoundTrip(t *testing.T) {
+	// negative control: drop `last_ok_at = ?` from TouchForwardOK's UPDATE → LastOkAt stays 1 and
+	// this fails; make SetForward insert without ON CONFLICT → the second Set errors.
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if f, err := GetForward(s.DB); err != nil || f != nil {
+		t.Fatalf("GetForward on an empty table: %+v, %v — want nil, nil", f, err)
+	}
+	want := Forward{To: "https://api.b", Via: "10.0.0.2", Token: "t", EstablishedAt: 1, LastOkAt: 1}
+	if err := SetForward(s.DB, want); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := GetForward(s.DB); err != nil || f == nil || *f != want {
+		t.Fatalf("GetForward after Set: %+v, %v — want %+v", f, err, want)
+	}
+	// A second Set replaces the one row.
+	want.To = "https://api.c"
+	if err := SetForward(s.DB, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := TouchForwardOK(s.DB, 5); err != nil {
+		t.Fatal(err)
+	}
+	want.LastOkAt = 5
+	if f, err := GetForward(s.DB); err != nil || f == nil || *f != want {
+		t.Fatalf("GetForward after Touch: %+v, %v — want %+v", f, err, want)
+	}
+	if err := DeleteForward(s.DB); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := GetForward(s.DB); err != nil || f != nil {
+		t.Fatalf("GetForward after Delete: %+v, %v — want nil, nil", f, err)
+	}
 }
