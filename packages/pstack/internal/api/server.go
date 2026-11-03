@@ -1,5 +1,6 @@
-// Server: the control plane's remote surface. The route table is api.ts's header comment; the
-// rules that matter are in AGENTS.md.
+// Server: the control plane's remote surface. The route inventory is openapi.yaml plus
+// permissions.go's role table; the rules that matter are in AGENTS.md. While forwarding is on, a
+// preview hostname this host does not serve goes to the other pstack (forward.go), before wake-on-call.
 //
 // THIS API MUST NEVER MANAGE THE STACK IT RUNS IN (invariant 12). VARIABLES are merged from the
 // request's `?query` (and a PUT's `env`) over the process env, once, at resolve time. SECURITY:
@@ -829,6 +830,16 @@ func (s *Server) previewHostname(h string) bool {
 	return !s.routing.IsControlHostname(h, s.opts.Domain)
 }
 
+// downPage is the Down page for h, a preview hostname nothing here serves: 503 with retry-after,
+// which the browser retries.
+func (s *Server) downPage(w http.ResponseWriter, h string) {
+	w.Header().Set("content-type", "text/html; charset=utf-8")
+	w.Header().Set("cache-control", "no-store")
+	w.Header().Set("retry-after", "5")
+	w.WriteHeader(503)
+	_, _ = w.Write([]byte(scheduler.WakePage(h, "", scheduler.Down, "")))
+}
+
 // wakeFor answers a request for a sleeping stack's hostname: starts the wake (once) and answers the
 // page that polls until Traefik routes the hostname to the app again. Returns false when the
 // hostname is nobody's.
@@ -1094,6 +1105,18 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Forwarding before wake-on-call, on purpose: waking a stack asleep here would start a stale copy
+	// on the host being retired; B wakes its own. The row is read only for a preview hostname, so the
+	// console's own requests never touch it. r.Host, for the reason the grafana. check above gives.
+	h := strings.ToLower(portRe.ReplaceAllString(r.Host, ""))
+	preview := s.previewHostname(h)
+	if _, fwd := r.Header[forwardedBy]; preview && !fwd {
+		if f := s.forwardRow(); f != nil {
+			s.forwardTraffic(w, r, f)
+			return
+		}
+	}
+
 	// wake-on-call before the UI and the API: a request that reached this process through the
 	// catch-all router carries a PREVIEW hostname, and if it belongs to a sleeping stack the whole
 	// request is the visitor's. Cheap when nothing sleeps: one lookup.
@@ -1106,13 +1129,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	// Any OTHER preview hostname here came through the same catch-all because its own router is gone:
 	// a container crashed or stopped, or the preview no longer exists. The request is the visitor's,
 	// and answering it with the UI — or, for /api/…, with this API — is the control plane on their
-	// preview's URL. r.Host, not requestHost, for the reason the grafana. check above gives.
-	if h := strings.ToLower(portRe.ReplaceAllString(r.Host, "")); s.previewHostname(h) {
-		w.Header().Set("content-type", "text/html; charset=utf-8")
-		w.Header().Set("cache-control", "no-store")
-		w.Header().Set("retry-after", "5")
-		w.WriteHeader(503)
-		_, _ = w.Write([]byte(scheduler.WakePage(h, "", scheduler.Down, "")))
+	// preview's URL.
+	if preview {
+		s.downPage(w, h)
 		return
 	}
 
