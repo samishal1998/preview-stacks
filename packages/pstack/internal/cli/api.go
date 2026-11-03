@@ -147,6 +147,7 @@ var groupShort = map[string]string{
 	"tls":           "The host's certificate mode, and the bring-your-own wildcard.",
 	"logging":       "Loki's settings: chunks, retention, storage.",
 	"config":        "The whole portable configuration: export it, or apply one.",
+	"forward":       "Where this host forwards deploys and unserved visitors.",
 	"host":          "The host itself — health, the control stack, terminal history, the probe.",
 	"stats":         "Node and stack usage, from each node's pstack-agent.",
 }

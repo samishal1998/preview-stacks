@@ -500,6 +500,17 @@ func Summarize(e events.Event) string {
 		}
 		freed, _ := d["freedBytes"].(float64)
 		return "Pruned " + host + " (" + field(d, "reason") + "): " + decimalBytes(freed) + " freed."
+	case "forward.changed":
+		to, ok := d["to"].(string)
+		if !ok {
+			return "Forwarding off."
+		}
+		if via, ok := d["via"].(string); ok {
+			return "Forwarding to " + to + " via " + via + "."
+		}
+		return "Forwarding to " + to + "."
+	case "forward.failed":
+		return "Forwarding to " + field(d, "to") + " failed after " + field(d, "attempts") + " attempt(s): " + field(d, "error")
 	default:
 		if stack == "" {
 			stack = "this host"

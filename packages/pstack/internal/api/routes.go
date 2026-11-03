@@ -182,6 +182,17 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		return s.domainsPut(w, r)
 	}
 
+	// ---- where this host forwards deploys and visitors (routes_forward.go) ----
+	if path == "/api/forward" && r.Method == http.MethodGet {
+		return s.forwardGet(w)
+	}
+	if path == "/api/forward" && r.Method == http.MethodPut {
+		return s.forwardPut(w, r)
+	}
+	if path == "/api/forward" && r.Method == http.MethodDelete {
+		return s.forwardDelete(w)
+	}
+
 	// ---- the host's certificate mode ----
 	if path == "/api/tls" && r.Method == http.MethodGet {
 		return s.tlsStatus(w)

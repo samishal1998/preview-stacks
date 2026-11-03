@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -236,6 +237,10 @@ type Server struct {
 	// routeView is route name → the hosts its last render served and the ones it lost, which
 	// GET /api/custom-routes reports. renderCustomRoutes fills it. Under wakeMu.
 	routeView map[string]routeServes
+
+	// forwardTLS is the TLS config the forward transport starts from (forward.go): nil in production,
+	// a test CA in tests. Set once after New, like host.
+	forwardTLS *tls.Config
 
 	// followers are the live `compose logs --follow` children, so stopping the server stops them.
 	followMu  sync.Mutex

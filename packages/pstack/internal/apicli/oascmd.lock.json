@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "574c4edccd889275a8fd4439b9bcb46ac2ec0f0e2833e0f4231f526bf17f02d6",
+  "specDigest": "b89090a7d01ec98ef32ea7c72d0ee506ebcb0d9f2efb0ee0ea9339df27ffdf44",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -319,6 +319,18 @@
       ],
       "ext": {},
       "digest": "3ceebce3b0762132"
+    },
+    "deleteForward": {
+      "operationId": "deleteForward",
+      "method": "DELETE",
+      "path": "/api/forward",
+      "command": "forward off",
+      "funcName": "NewForwardOffCommand",
+      "summary": "Stop forwarding. Applies to the next request. Admin.",
+      "ext": {
+        "name": "off"
+      },
+      "digest": "ee34d885c5521bca"
     },
     "deleteHostVar": {
       "operationId": "deleteHostVar",
@@ -727,6 +739,18 @@
         "name": "domains"
       },
       "digest": "8eb642e5d3403244"
+    },
+    "getForward": {
+      "operationId": "getForward",
+      "method": "GET",
+      "path": "/api/forward",
+      "command": "forward get",
+      "funcName": "NewForwardGetCommand",
+      "summary": "Where this host forwards deploys and unserved visitors: { to, via, establishedAt, lastOkAt }, or null when off. Never the token. Maintainer.",
+      "ext": {
+        "name": "get"
+      },
+      "digest": "4eef9306bf96f7a9"
     },
     "getHealth": {
       "operationId": "getHealth",
@@ -1539,6 +1563,44 @@
         "name": "set-default-role"
       },
       "digest": "5c27a683e8479e8d"
+    },
+    "setForward": {
+      "operationId": "setForward",
+      "method": "PUT",
+      "path": "/api/forward",
+      "command": "forward set",
+      "funcName": "NewForwardSetCommand",
+      "summary": "Forward to another pstack (B). Checked first: B's GET /api/auth/me answers 200 for the token, which is not root and is developer or higher; `to` is not this host's own API (unless `via` is given). Any failure is a 400 naming the check, and nothing is saved. Admin: it decides where every deploy runs.",
+      "flags": [
+        {
+          "name": "to",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "B's API URL, e.g. https://api.b.example.com. http:// only to a loopback or private address."
+        },
+        {
+          "name": "token",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "Write-only. A user token on B, developer or higher, never root."
+        },
+        {
+          "name": "via",
+          "source": "body",
+          "type": "string",
+          "description": "B's IP[:port], dialled instead of resolving `to`; Host and the TLS server name stay `to`'s."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "set"
+      },
+      "digest": "7a6900f820e5f351"
     },
     "setImagePruneAfterH": {
       "operationId": "setImagePruneAfterH",
