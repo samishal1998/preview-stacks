@@ -307,8 +307,9 @@ PSTACK_FROM_TOKEN=… PSTACK_TO_TOKEN=… \
 - **`migrate`** copies spec, compose and vars when the target lacks a deployment or the source's
   `updatedAt` is newer, then matches the state: running → `up`, asleep → `up` + `sleep`, down →
   nothing. A re-run catches up. Exit 1 when any failed. Volumes and databases do not move.
-- **`--sleep-source`** sleeps A's copies once B's are ok, so visitors reaching A are forwarded.
-  Shared and compose-less stacks are left running and listed.
+- **`--sleep-source`** is a sleep pass: no copy, no change on B. It sleeps A's running copies that
+  B holds, so visitors reaching A are forwarded. Shared and compose-less stacks, and ones B no
+  longer holds (`not on target`), are left running and listed.
 - **Never `down` A's copies.** `down` runs the axes' `down` hooks, which delete the database branch
   or DNS record B's copy uses too. Sleep runs no hooks.
 - Share links minted through a forwarding A are B's and verify only on B.

@@ -230,8 +230,9 @@ func TestMigrateSecondRunDoesNothing(t *testing.T) {
 }
 
 func TestMigrateSleepSource(t *testing.T) {
-	// negative control: count `left running` as a failure — exit 1 (MF-R18); sleep the source
-	// before checking the target's up — pr-4's source copy is slept although its up failed.
+	// negative control: count `left running` as a failure — exit 1 (MF-R18); copy and `up` under
+	// --sleep-source — the target sees `PUT …/pr-4` and `POST …/pr-4/up`, bringing back a preview CI
+	// deleted on B after forwarding was set.
 	shared := `{"error":"refusing to put \"x\" to sleep: kind is ` + "`shared`" + `.","stack":"x","kind":"shared"}`
 	s, sc := routeAPI(t, map[string]answer{
 		"GET /api/deployments":             migList(migRow("pr-1", 10, "running"), migRow("pr-2", 10, "running"), migRow("pr-3", 10, "running"), migRow("pr-5", 10, "asleep")),
@@ -253,21 +254,28 @@ func TestMigrateSleepSource(t *testing.T) {
 	})
 	sameList(t, "target writes", writes(dc()), nil)
 
-	// The target's up failed: the source copy keeps serving.
+	// The target lacks pr-4 (CI deleted it through the forwarding source) and pr-6 is down there: a
+	// sleep pass copies nothing and brings nothing up on the target.
 	s, sc = routeAPI(t, map[string]answer{
-		"GET /api/deployments":             migList(migRow("pr-4", 10, "running")),
+		"GET /api/deployments":             migList(migRow("pr-4", 10, "running"), migRow("pr-6", 10, "running")),
 		"GET /api/deployments/pr-4/source": migSource("pr-4"),
+		"POST /api/deployments/pr-6/sleep": migJob("s6"),
+		"GET /api/jobs/s6":                 migOK,
 	})
 	d, dc = routeAPI(t, map[string]answer{
-		"GET /api/deployments":          migList(),
+		"GET /api/deployments":          migList(migRow("pr-6", 20, "down")),
 		"PUT /api/deployments/pr-4":     {200, `{}`},
 		"POST /api/deployments/pr-4/up": migJob("j4"),
-		"GET /api/jobs/j4":              {200, `{"job":{"id":"j4","state":"failed","error":"pull access denied"}}`},
+		"POST /api/deployments/pr-6/up": migJob("j6"),
+		"GET /api/jobs/j4":              migOK,
+		"GET /api/jobs/j6":              migOK,
 	})
-	if code, _, _ := runMigrate(t, s.URL, d.URL, "--sleep-source"); code != 1 {
-		t.Fatalf("exit %d", code)
+	code, out, errOut = runMigrate(t, s.URL, d.URL, "--sleep-source")
+	if want := "pr-4  running  not on target\npr-6  running  source slept\n"; code != 0 || out != want {
+		t.Fatalf("exit %d, err %q, got:\n%q\nwant:\n%q", code, errOut, out, want)
 	}
-	sameList(t, "source writes after a failed up", writes(sc()), nil)
+	sameList(t, "target writes in a sleep pass", writes(dc()), nil)
+	sameList(t, "source writes in a sleep pass", writes(sc()), []string{`POST /api/deployments/pr-6/sleep`})
 	for _, c := range append(sc(), dc()...) {
 		if strings.HasSuffix(c.path, "/down") {
 			t.Fatalf("down: %s", c.path)
@@ -533,17 +541,30 @@ func TestMigrateBetweenTwoServers(t *testing.T) {
 	migDo(t, "PUT", a+"/api/forward", "root-a", `{"to":"`+b+`","token":"`+devTok+`"}`, nil)
 
 	env := map[string]string{"PSTACK_FROM_TOKEN": "root-a", "PSTACK_TO_TOKEN": "root-b"}
-	code, out, errOut := runForward(t, env, "migrate", "--from", a, "--to", b, "--sleep-source")
+	// The recipe's steps 3 and 5: copy, then a sleep pass.
+	code, out, errOut := runForward(t, env, "migrate", "--from", a, "--to", b)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	sort.Strings(lines)
 	sameList(t, "lines", lines, []string{
 		"pr-down  down  copied",
-		"pr-run  running  copied, up, source slept",
-		"pr-shared  running  copied, up, left running (shared)",
+		"pr-run  running  copied, up",
+		"pr-shared  running  copied, up",
 		"pr-sleep  asleep  copied, up, slept",
 	})
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	code, out, errOut = runForward(t, env, "migrate", "--from", a, "--to", b, "--sleep-source")
+	lines = strings.Split(strings.TrimSpace(out), "\n")
+	sort.Strings(lines)
+	sameList(t, "sleep-pass lines", lines, []string{
+		"pr-down  down  unchanged",
+		"pr-run  running  source slept",
+		"pr-shared  running  left running (shared)",
+		"pr-sleep  asleep  unchanged",
+	})
+	if code != 0 {
+		t.Fatalf("sleep pass: exit %d: %s", code, errOut)
 	}
 	if got := migStates(t, b, "root-b", nil); !maps.Equal(got, want) {
 		t.Fatalf("B: %v", got)

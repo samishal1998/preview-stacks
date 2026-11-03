@@ -261,6 +261,13 @@ func migrateCmd(args *Parsed, ios IO) *Exit {
 			m.failed = true
 			continue
 		}
+		// A sleep pass copies nothing and changes nothing on the target. It runs after DNS, often
+		// hours after the copy, and by then CI has deleted or downed previews on the target through
+		// the forwarding source, whose own rows went stale. Copying or bringing those up again would
+		// re-run their up hooks for closed pull requests.
+		if args.SleepSource {
+			continue
+		}
 		t, onTarget := targets[m.row.ID]
 		copied := !onTarget || m.row.UpdatedAt > t.UpdatedAt
 		if copied && !m.copyTo(src, dst) {
@@ -305,6 +312,11 @@ func migrateCmd(args *Parsed, ios IO) *Exit {
 		var srcSleeps []*pendingJob
 		for _, m := range all {
 			if m.failed || m.state != "running" {
+				continue
+			}
+			// Gone from the target: CI deleted it there. The source copy is left as it is.
+			if _, ok := targets[m.row.ID]; !ok {
+				m.done = append(m.done, "not on target")
 				continue
 			}
 			p, status, got := m.lifecycle(src, "sleep", "source sleep", "source slept")
