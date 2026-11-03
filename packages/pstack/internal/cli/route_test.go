@@ -11,7 +11,10 @@ import (
 )
 
 // routeCall is one request the fake API saw.
-type routeCall struct{ method, path, body, auth string }
+type routeCall struct {
+	method, path, body, auth string
+	hdr                      http.Header
+}
 
 // routeAPI is a fake /api/custom-routes: each "METHOD path" answers the status and body given.
 // Anything else is a 404, so a wrong path fails the test rather than passing on a default.
@@ -25,7 +28,7 @@ func routeAPI(t *testing.T, answers map[string]struct {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
-		calls = append(calls, routeCall{r.Method, r.URL.EscapedPath(), string(b), r.Header.Get("Authorization")})
+		calls = append(calls, routeCall{r.Method, r.URL.EscapedPath(), string(b), r.Header.Get("Authorization"), r.Header.Clone()})
 		mu.Unlock()
 		a, ok := answers[r.Method+" "+r.URL.EscapedPath()]
 		if !ok {
