@@ -18,9 +18,9 @@
 - **`pstack migrate --from <API URL> --to <API URL> [<id>...] [--sleep-source]`.** Copies each
   deployment the target lacks or has older (spec, compose and stored vars, unchanged), then matches
   the source's state: running → `up`, asleep → `up` then `sleep`, down → nothing. A re-run catches
-  up. `--sleep-source` sleeps each source copy once the target's is ok, so visitors still reaching
-  the source are forwarded. It never runs `down`. Tokens from `PSTACK_FROM_TOKEN` and
-  `PSTACK_TO_TOKEN`. Exit 1 when any failed.
+  up. `--sleep-source` is a sleep pass: it copies nothing, leaves the target alone and sleeps each
+  running source copy the target holds, so visitors still reaching the source are forwarded. It
+  never runs `down`. Tokens from `PSTACK_FROM_TOKEN` and `PSTACK_TO_TOKEN`. Exit 1 when any failed.
 
 - **Two events**: `forward.changed` (`{ to, via }`, both `null` when turned off) and
   `forward.failed` (`{ to, error, attempts }`). Neither carries the token.

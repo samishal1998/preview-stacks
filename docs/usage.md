@@ -3351,14 +3351,18 @@ source row docker did not answer for (`unknown  skipped (docker did not answer)`
 forwarding on before the first run there is nothing to catch up. Volumes and databases never move:
 each stack on the target runs its own seed.
 
-Without `--sleep-source` it never changes the source. **`--sleep-source`** puts each running source
-copy to sleep once the target's copy is ok, so visitors still reaching A are forwarded to B. Every
-source call carries `X-Pstack-Forwarded-By: migrate`, so a forwarding A answers for itself. A stack
-sleep refuses stays running and is listed, not failed:
+Without `--sleep-source` it never changes the source. **`--sleep-source`** is a sleep pass: it copies
+nothing and changes nothing on the target. It puts each running source copy the target holds to
+sleep, so visitors still reaching A are forwarded to B. A deployment the target no longer holds
+(CI deleted it through the forwarding A) is listed as `not on target` and left as it is; a re-copy
+would run its `up` hooks again for a closed pull request. Every source call carries
+`X-Pstack-Forwarded-By: migrate`, so a forwarding A answers for itself. A stack sleep refuses stays
+running and is listed, not failed:
 
 ```
 pr-105  running  source slept
 pr-106  running  left running (shared)
+pr-107  running  not on target
 ```
 
 > **Never `down` A's copies.** `down` runs each axis's `down` hook, and those delete external
@@ -3375,8 +3379,9 @@ pr-106  running  left running (shared)
    (DNS-01).
 3. `pstack migrate --from <A> --to <B>`.
 4. Switch DNS.
-5. `pstack migrate --from <A> --to <B> --sleep-source`. It copies nothing new and sleeps A's copies,
-   so visitors still reaching A are forwarded to B. It runs after DNS because under HTTP-01 B gets
+5. `pstack migrate --from <A> --to <B> --sleep-source`. It copies nothing, leaves B alone and sleeps
+   A's copies that B holds, so visitors still reaching A are forwarded to B. Previews CI closed on B
+   since step 3 stay closed. It runs after DNS because under HTTP-01 B gets
    its certificates only then.
 6. When nothing reaches A any more, retire it. **Never `down` A's copies.**
 
@@ -3771,7 +3776,7 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `pull config` | seal this host's whole portable configuration — accounts, tokens, host secrets, notifiers, SSO, registry logins, routing files, named specs — into one `0600` file (`-o`, never stdout). Talks to `PSTACK_API_URL` as the **root token**. | 0 · 1 · 3 |
 | `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
 | `forward [set <url>\|off]` | where the host at `PSTACK_API_URL` [forwards](#7f-move-stacks-to-another-host-0460) its deploys and unserved visitors. `set` checks the target first and needs `PSTACK_FORWARD_TOKEN`; `set` and `off` need an admin. | 0 · 1 · 3 |
-| `migrate` | copy deployments from `--from` to `--to` and match each one's state there; `--sleep-source` then sleeps the source copies. Never `down`. **Exit 1 when any failed**; a re-run catches up. | 0 · 1 · 3 |
+| `migrate` | copy deployments from `--from` to `--to` and match each one's state there; `--sleep-source` is a sleep pass: no copy, sleeps the source copies the target holds. Never `down`. **Exit 1 when any failed**; a re-run catches up. | 0 · 1 · 3 |
 
 `init`, `serve`, `swarm`, `route`, `pull`/`push`, `forward` and `migrate` are **spec-free**: they act on the host and on the registry, so none of
 them loads `preview.yml` or fails because it is absent.
@@ -3805,7 +3810,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `-i`, `--in <file>` | `push config` | the sealed export to apply. **Required** — there is no stdin form. |
 | `--via <ip[:port]>` | `forward set` | where to connect; the URL's host stays the Host header and TLS name. For a URL that still resolves to this host ([7f](#7f-move-stacks-to-another-host-0460)). |
 | `--from <API URL>` `--to <API URL>` | `migrate` | the source and target hosts. Both **required**. |
-| `--sleep-source` | `migrate` | sleep each source copy once the target's is ok. Never `down`. |
+| `--sleep-source` | `migrate` | a sleep pass: no copy, no change on the target; sleep each running source copy the target holds. Never `down`. |
 | `--admin-user <name>` | `cloud-init` | the first UI account, created on first boot. **Prompted** when absent unless `-y`. Its password comes from `--admin-password`, or is generated and printed beside the username |
 | `--admin-password <pw>` | `cloud-init` | that account's password. Refused without `--admin-user`. Never prompted — an absent one is generated, so the value exists nowhere else and can be discarded after the first sign-in |
 | `--api-token <token>` | `cloud-init` | `PSTACK_TOKEN`, written into the rendered file. Omitting it is preferred: `init` then mints one on the host and prints it once into the boot log, keeping it out of instance metadata |

@@ -37,6 +37,13 @@
 > - **A source sleep refused for `kind: shared` (409) or no compose section (400) is not a failure**
 >   (MF-R18; §3): it prints `left running (shared|no compose)`, so recipe step 5 can exit 0. Cost if wrong:
 >   none.
+> - **`--sleep-source` is a pure sleep pass** (final review, against §3 step 1 and "once the target's
+>   copy is ok"): no copy and no state action on the target; it sleeps each running source copy the
+>   target holds and lists one the target lacks as `not on target`. Recipe step 5 runs hours after
+>   step 3, and by then CI has deleted or downed previews on B through A, whose rows went stale; a
+>   copy or `up` would bring them back and re-run their up hooks. Cost if wrong: a row whose step-3
+>   `up` failed is slept on A and visitors get B's Down page, so re-run step 3 until it exits 0
+>   before step 4.
 > - **`GET /api/forward` returns `via` too** (MF-R26): `{ to, via, establishedAt, lastOkAt }`. It is not a
 >   secret and `forward.changed` carries it. Cost if wrong: none.
 
@@ -207,8 +214,8 @@ catch up.
 
 Without `--sleep-source` it never changes the source's stacks.
 
-**`--sleep-source`** puts each source copy to sleep once the target's copy is ok, so traffic for it
-reaches B (§2). The call carries `X-Pstack-Forwarded-By: migrate`, so A runs it itself instead of
+**`--sleep-source`** is a sleep pass: it copies nothing, leaves B alone and puts each running source
+copy B holds to sleep, so traffic for it reaches B (§2). The call carries `X-Pstack-Forwarded-By: migrate`, so A runs it itself instead of
 forwarding it. Sleep, never `down`: sleep removes containers and keeps volumes and runs no hooks,
 while `down` runs the axis `down` hooks, and those delete external resources keyed by the stack name
 (a database branch, a DNS record) that the copy on B uses too. Stacks sleep refuses (`kind: shared`,

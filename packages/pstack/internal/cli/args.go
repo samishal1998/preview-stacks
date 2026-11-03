@@ -476,7 +476,7 @@ func Usage(version string) string {
 		"",
 		"migrate:    pstack migrate --from <API URL> --to <API URL> [<id>...] [--sleep-source]",
 		"            copy deployments and their state; newest wins, so a re-run catches up",
-		"            --sleep-source   sleep each source copy once the target's is ok",
+		"            --sleep-source   sleep pass: no copy; sleep each source copy the target holds",
 		"            env: PSTACK_FROM_TOKEN · PSTACK_TO_TOKEN",
 		"",
 		"api:        pstack api <group> <command>     every HTTP route as a command, generated from",

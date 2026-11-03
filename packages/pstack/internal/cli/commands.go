@@ -298,7 +298,8 @@ asleep or down. Newest wins, so a re-run catches up. Exit 1 when any failed.
 
       --from <API URL>   the source host
       --to <API URL>     the target host
-      --sleep-source     sleep each source copy once the target's is ok. Never down
+      --sleep-source     copy nothing, change nothing on the target: sleep each running
+                         source copy the target holds. Never down
 
       PSTACK_FROM_TOKEN  a token on the source
       PSTACK_TO_TOKEN    a token on the target`,
