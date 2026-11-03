@@ -198,3 +198,31 @@ func forwardDialAddr(via string, to *url.URL, addr string) string {
 	}
 	return net.JoinHostPort(host, port)
 }
+
+// forwardTraffic passes a visitor's request for a preview hostname this host does not serve to B
+// (spec §2), with its Host and URL host unchanged so B's certificate is checked for that name. Not
+// retried: a retry would hold the visitor's request open. Any failure is A's Down page, which the
+// browser retries, and one log line; no event per request.
+func (s *Server) forwardTraffic(w http.ResponseWriter, r *http.Request, f *store.Forward) {
+	h := strings.ToLower(portRe.ReplaceAllString(r.Host, ""))
+	rp := &httputil.ReverseProxy{
+		Transport: forwardTransport(f, false, s.forwardTLS),
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(&url.URL{Scheme: "https", Host: h}) // dialled at via, or to's host, on 443
+			pr.Out.Host = pr.In.Host
+			pr.Out.Header.Set(forwardedBy, s.opts.Domain)
+		},
+		ModifyResponse: func(*http.Response) error {
+			s.forwardTouch()
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(r.Context().Err(), context.Canceled) {
+				return // the visitor went away; B did not fail
+			}
+			s.opts.Log("forward: " + h + ": " + err.Error())
+			s.downPage(w, h)
+		},
+	}
+	rp.ServeHTTP(w, r)
+}
