@@ -777,6 +777,9 @@ export type TlsRedeploy = {
   note: string;
 };
 
+/** What `GET /api/forward` answers when this host forwards to another pstack; `null` when it does not. Maintainer. */
+export type ForwardStatus = { to: string; via: string | null; establishedAt: number; lastOkAt: number };
+
 /** What `GET /api/domains` answers. Maintainer. */
 export type DomainsStatus = {
   /** The domain `init` rendered onto the container's labels. Cannot be removed from here. */
