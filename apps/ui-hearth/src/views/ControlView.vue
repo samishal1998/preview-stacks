@@ -4,8 +4,9 @@
  * loses in-flight certificate issuance while every container still reads `running`.
  */
 import { computed, ref } from 'vue';
-import { HAlert, HButton, HGrid, HPageHeader, HStack, HStatCard } from '@hearth-ui/vue';
-import { controlApi, poll, why, type ControlRuntime, type DomainsStatus, type TlsStatus } from '../api-control';
+import { HAlert, HButton, HGrid, HPageHeader, HStack, HStatCard, HText } from '@hearth-ui/vue';
+import { controlApi, poll, why, type ControlRuntime, type DomainsStatus, type ForwardStatus, type TlsStatus } from '../api-control';
+import { ago } from '../format';
 import { atLeast, daysLeft, type RoleName } from '../lib/control';
 import { auth } from '../state';
 import ContainersCard from './control/ContainersCard.vue';
@@ -21,6 +22,7 @@ const error = ref('');
 const forbidden = ref(false);
 const domains = ref<DomainsStatus | null>(null);
 const tls = ref<TlsStatus | null>(null);
+const forward = ref<ForwardStatus | null>(null);
 
 async function loadRuntime(): Promise<void> {
   // Below maintainer every call here is a 403: say so without asking (and without logging one every poll).
@@ -48,16 +50,22 @@ async function loadTls(): Promise<void> {
   const r = await controlApi.tls();
   if (r.ok) tls.value = r.body;
 }
+async function loadForward(): Promise<void> {
+  if (!can('maintainer')) return;
+  const r = await controlApi.forward();
+  forward.value = r.ok ? r.body : null;
+}
 const reloadDomains = () => Promise.all([loadDomains(), loadTls()]);
 const refreshing = ref(false);
 async function reloadAll(): Promise<void> {
   refreshing.value = true;
-  await Promise.all([loadRuntime(), loadDomains(), loadTls()]);
+  await Promise.all([loadRuntime(), loadDomains(), loadTls(), loadForward()]);
   refreshing.value = false;
 }
 poll(loadRuntime, 10_000);
 poll(loadDomains, 30_000);
 poll(loadTls, 30_000);
+poll(loadForward, 30_000);
 
 const restarts = computed(() => (runtime.value?.containers ?? []).reduce((n, c) => n + c.restartCount, 0));
 const oomed = computed(() => (runtime.value?.containers ?? []).filter((c) => c.oomKilled).length);
@@ -83,6 +91,7 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
         <HStatCard v-if="days !== null" label="Cert expires" :value="`${days}d`" :tone="days < 21 ? 'danger' : 'neutral'" />
         <HStatCard v-if="domainCount" label="Domains" :value="domainCount" tone="neutral" />
       </HGrid>
+      <HText v-if="forward" tone="muted" class="wrap">Forwarding to <code>{{ forward.to }}</code> · last ok {{ ago(forward.lastOkAt) }}</HText>
 
       <ContainersCard :runtime="runtime" :loaded="loaded" :error="error" :can-restart="can('maintainer')" @reload="loadRuntime" />
       <DomainsCard v-if="domains" :domains="domains" :can-edit="can('maintainer')" @reload="reloadDomains" />
@@ -91,3 +100,10 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
     </template>
   </HStack>
 </template>
+
+<style scoped>
+/* A long `to` URL breaks rather than widening a 320px page. */
+.wrap {
+  overflow-wrap: anywhere;
+}
+</style>

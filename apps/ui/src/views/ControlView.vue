@@ -15,6 +15,7 @@ import { api, problem } from '../api/client';
 import type {
   ControlRuntime,
   DomainsStatus,
+  ForwardStatus,
   JobResponse,
   JobStub,
   LokiSettings,
@@ -105,6 +106,15 @@ async function loadTls(): Promise<void> {
   if (r.ok) tls.value = r.body;
 }
 usePolling(loadTls, 30_000);
+
+// ── where this host forwards its deploys, if anywhere ─────────────────────────────────────────────
+const forward = ref<ForwardStatus | null>(null);
+async function loadForward(): Promise<void> {
+  const r = await api.get<ForwardStatus>('/api/forward');
+  // Not forwarding answers `null`, which the client hands back as `{}`.
+  forward.value = r.ok && r.body.to ? r.body : null;
+}
+usePolling(loadForward, 30_000);
 
 // The two numbers that explain a control plane misbehaving, summed for the strip.
 const restarts = computed(() => (view.value?.containers ?? []).reduce((n, c) => n + c.restartCount, 0));
@@ -312,6 +322,9 @@ async function saveStorage(): Promise<void> {
           <span v-if="daysLeft !== null" :class="daysLeft < 21 ? 'v-fail' : ''">{{ daysLeft }}d cert</span>
           <span v-if="domainCount">{{ domainCount }} domain{{ domainCount > 1 ? 's' : '' }}</span>
         </div>
+        <p v-if="forward" class="mute forward-line">
+          Forwarding to <span class="mono">{{ forward.to }}</span> · last ok {{ ago(forward.lastOkAt) }}
+        </p>
       </div>
       <span class="grow" />
       <RefreshButton :run="load" />
@@ -681,5 +694,11 @@ button[aria-pressed='true'] {
 input:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+/* Under the vitals, as quiet as they are. A long `to` URL breaks rather than widening a 320px page. */
+.forward-line {
+  margin-top: var(--s2);
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
 }
 </style>

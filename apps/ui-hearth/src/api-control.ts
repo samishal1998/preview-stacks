@@ -13,6 +13,8 @@ export type TlsRedeploy = {
   note: string;
 };
 export type DomainsStatus = { primary: string; domains: string[]; mode: string; note: string };
+/** `GET /api/forward`: where this host forwards its deploys; `null` when it does not. */
+export type ForwardStatus = { to: string; via: string | null; establishedAt: number; lastOkAt: number };
 export type LokiSave = { job: JobStub } | { changed: false };
 
 export const controlApi = {
@@ -21,6 +23,7 @@ export const controlApi = {
   domains: () => call<DomainsStatus>('GET', '/api/domains'),
   saveDomains: (domains: string[]) => call<DomainsStatus>('PUT', '/api/domains', { domains }),
   tls: () => call<TlsStatus>('GET', '/api/tls'),
+  forward: () => call<ForwardStatus | null>('GET', '/api/forward'),
   storeWildcard: (cert: string, key: string) => call<{ wildcard: TlsWildcard; note: string }>('PUT', '/api/tls/wildcard', { cert, key }),
   removeWildcard: () => call<{ note: string }>('DELETE', '/api/tls/wildcard'),
   redeploy: () => call<TlsRedeploy>('POST', '/api/tls/redeploy', {}),
