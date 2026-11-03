@@ -81,6 +81,7 @@ func (s *Server) forwardPut(w http.ResponseWriter, r *http.Request) error {
 	if err := store.SetForward(s.store.DB, f); err != nil {
 		return err
 	}
+	s.forwardTouched.Store(0)
 	s.bus.Emit("forward.changed", jsonx.O("to", f.To, "via", nullable(f.Via)))
 	writeJSON(w, 200, forwardView(&f))
 	return nil
@@ -136,6 +137,7 @@ func (s *Server) forwardDelete(w http.ResponseWriter) error {
 	if err := store.DeleteForward(s.store.DB); err != nil {
 		return err
 	}
+	s.forwardTouched.Store(0)
 	if f != nil {
 		// An object, never Emit(nil) (which sends {}): receivers read data.to.
 		s.bus.Emit("forward.changed", jsonx.O("to", nil, "via", nil))

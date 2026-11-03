@@ -51,6 +51,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	if !permit(w, who, r.Method, path) {
 		return nil
 	}
+	// Forwarding (forward.go): the deploy API follows the deploys to B, once A's gate admitted the caller.
+	if s.forwardAPI(w, r, path, who) {
+		return nil
+	}
 	if done, err := s.accountRoutes(w, r, path, who); done || err != nil {
 		return err
 	}
