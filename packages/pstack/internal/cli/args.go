@@ -111,6 +111,11 @@ type Parsed struct {
 	Yes    bool
 	To     string
 	Resume bool
+	// From / Via / SleepSource are migrate's and forward's addressing: per-invocation, so no env
+	// default (route's flags and upgrade --to are the precedent). Their tokens are env-only.
+	From        string
+	Via         string
+	SleepSource bool
 	// JSON is `--json`: print the API's body instead of the terse lines (`route`).
 	JSON bool
 	// Typed records which value flags were spelled on the command line, for the commands that
@@ -224,7 +229,14 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		case "-y", "--yes":
 			p.Yes = true
 		case "--to":
+			p.Typed["--to"] = true
 			p.To = next(&i, p.To)
+		case "--from":
+			p.From = next(&i, p.From)
+		case "--via":
+			p.Via = next(&i, p.Via)
+		case "--sleep-source":
+			p.SleepSource = true
 		case "--resume":
 			p.Resume = true
 		case "--json":
@@ -347,7 +359,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "route", "healthcheck", "api", "completion")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "route", "forward", "migrate", "healthcheck", "api", "completion")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -374,7 +386,7 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|route|serve|api|completion> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|route|forward|migrate|serve|api|completion> [flags]",
 		"",
 		"Any command's own flags: pstack <command> --help",
 		"",
@@ -456,6 +468,16 @@ func Usage(version string) string {
 		"            pstack route unassign <name>",
 		"            pstack route rm <name>",
 		"            --json prints the API's body. env: PSTACK_API_URL · PSTACK_TOKEN",
+		"",
+		"forward:    pstack forward                                where this host forwards, if anywhere",
+		"            pstack forward set <url> [--via <ip[:port]>]  send deploys and unserved visitors there",
+		"            pstack forward off",
+		"            env: PSTACK_API_URL · PSTACK_TOKEN · PSTACK_FORWARD_TOKEN (a user token on <url>)",
+		"",
+		"migrate:    pstack migrate --from <API URL> --to <API URL> [<id>...] [--sleep-source]",
+		"            copy deployments and their state; newest wins, so a re-run catches up",
+		"            --sleep-source   sleep each source copy once the target's is ok",
+		"            env: PSTACK_FROM_TOKEN · PSTACK_TO_TOKEN",
 		"",
 		"api:        pstack api <group> <command>     every HTTP route as a command, generated from",
 		"            packages/pstack/api/openapi.yaml. `pstack api --help` lists the groups.",

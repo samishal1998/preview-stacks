@@ -333,6 +333,12 @@ func run(argv []string, io IO) *Exit {
 	case "route":
 		return routeCmd(args, io)
 
+	case "forward":
+		return forwardCmd(args, io)
+
+	case "migrate":
+		return migrateCmd(args, io)
+
 	case "upgrade":
 		opts := upgrade.Options{DataDir: registry.DataDir(), Target: args.To, Phase: upgrade.Install, Runner: runner, Log: func(l string) { fmt.Fprintln(out, l) }}
 		if args.Resume {
@@ -906,7 +912,7 @@ func privateAddr(host string) bool {
 // apiCall is one authenticated request. A redirect is a FAILURE, never a hop (the same control
 // `notify` uses): following one would resend the bearer token — and, on push, the entire plaintext
 // config — to whatever host the redirect names.
-func apiCall(method, endpoint, token string, body []byte) (int, []byte, error) {
+func apiCall(method, endpoint, token string, body []byte, hdr http.Header) (int, []byte, error) {
 	var r io.Reader
 	if body != nil {
 		r = bytes.NewReader(body)
@@ -914,6 +920,9 @@ func apiCall(method, endpoint, token string, body []byte) (int, []byte, error) {
 	req, err := http.NewRequest(method, endpoint, r)
 	if err != nil {
 		return 0, nil, err
+	}
+	for k, v := range hdr {
+		req.Header[k] = v
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
@@ -972,7 +981,7 @@ func pullConfig(args *Parsed, ios IO) *Exit {
 	if ex != nil {
 		return ex
 	}
-	status, body, err := apiCall("GET", base+"/api/config", token, nil)
+	status, body, err := apiCall("GET", base+"/api/config", token, nil, nil)
 	if err != nil {
 		return &Exit{Code: ExitFailed, Msg: err.Error()}
 	}
@@ -1057,7 +1066,7 @@ func pushConfig(args *Parsed, ios IO) *Exit {
 			return fail("not applied")
 		}
 	}
-	status, body, err := apiCall("POST", base+"/api/config", token, plain)
+	status, body, err := apiCall("POST", base+"/api/config", token, plain, nil)
 	if err != nil {
 		return &Exit{Code: ExitFailed, Msg: err.Error()}
 	}

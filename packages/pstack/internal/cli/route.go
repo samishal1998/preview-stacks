@@ -85,7 +85,7 @@ func routeCmd(args *Parsed, ios IO) *Exit {
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
-	status, got, err := apiCall(method, base+path, token, payload)
+	status, got, err := apiCall(method, base+path, token, payload, nil)
 	if err != nil {
 		return &Exit{Code: ExitFailed, Msg: err.Error()}
 	}
