@@ -148,6 +148,12 @@ deploys and wakes. Also log caps on the control stack and on previews, scheduled
 `GET /api/stats` and a Stats page. Asked for after a full disk took a host down for 3½ days.
 Shipped in 0.45.0; where the build differs is at the top. The thirteen-task build plan is [`node-pressure-plan.md`](node-pressure-plan.md).
 
+### [`migrate-forward-design.md`](migrate-forward-design.md) — moving stacks between hosts, unbuilt
+
+`pstack migrate` copies every deployment from one host to another and restores its state (running,
+asleep, down). Forwarding makes a host pass its deploy API, and visitor requests for previews it no
+longer serves, to another host, so CI and visitors keep working while DNS moves. Written after the 2026-11-02 move of preview.hou-clou.dev was done by hand.
+
 ### [`swarm-local-testing.md`](swarm-local-testing.md) — a real cluster on a laptop
 
 CI has one machine, so placement failures, draining, and a node going down are untested until they
