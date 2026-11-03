@@ -241,6 +241,11 @@ type Server struct {
 	// forwardTLS is the TLS config the forward transport starts from (forward.go): nil in production,
 	// a test CA in tests. Set once after New, like host.
 	forwardTLS *tls.Config
+	// forwardNow is the clock forwardTouch reads: nil (time.Now) in production, set after New in a test.
+	forwardNow func() int64
+	// forwardTouched is when forwardTouch last wrote lastOkAt (unix ms; 0 = not since the setting
+	// changed). Owned by forwardTouch; forwardPut and forwardDelete reset it.
+	forwardTouched atomic.Int64
 
 	// followers are the live `compose logs --follow` children, so stopping the server stops them.
 	followMu  sync.Mutex
