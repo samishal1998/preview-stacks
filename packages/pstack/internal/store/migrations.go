@@ -270,4 +270,25 @@ var Migrations = []string{
     updated_at    INTEGER NOT NULL
   );
   `,
+	// 11 — forwarding: this host (A) passes deploys and visitors to a new host (B).
+	`
+  -- 11 — forwarding. ONE row: a host forwards to at most one other.
+  --
+  -- CONFIGURATION AN OPERATOR CHOSE (invariant 10): where to forward, never whether anything is
+  -- running. last_ok_at is an informational last-contact time, never consulted for a decision, so a
+  -- stale value is harmless. An EMPTY table means no forwarding.
+  CREATE TABLE forward_config (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    -- B's API URL. Its host is the Host header and TLS server name even when via is set.
+    url            TEXT NOT NULL,
+    -- B's IP[:port] to connect to; '' resolves url's host.
+    via            TEXT NOT NULL DEFAULT '',
+    --
+    -- A token on B. STORED, NOT HASHED — A must present it to B. No route returns it; the protection
+    -- is the 0700 db directory and the absence of a read path.
+    token          TEXT NOT NULL,
+    established_at INTEGER NOT NULL,
+    last_ok_at     INTEGER NOT NULL
+  );
+  `,
 }
