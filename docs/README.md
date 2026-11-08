@@ -29,6 +29,7 @@ browser); the version-control rules are in AGENTS.md.
 | Send deployed services' logs to **Loki** and read them in **Grafana** | [`usage.md` §7](usage.md#turn-loki-logging-on-or-off-pstack-logging) |
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
 | Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
+| Let pstack add and remove **worker machines** itself | [`worker-scaler-design.md`](worker-scaler-design.md) |
 | Know what pstack does when a node's **disk, memory or CPU** runs short | [`usage.md` §9](usage.md#node-pressure-0450), [`node-pressure-design.md`](node-pressure-design.md) |
 | Test a **multi-node swarm** on a laptop, because CI has one machine | [`swarm-local-testing.md`](swarm-local-testing.md) |
 | Fix containers stuck in **`New`** on a swarm host (`could not find an available IP`) | [`preview-ingress-address-leak.md`](preview-ingress-address-leak.md) |
@@ -132,6 +133,13 @@ machines. The "what this deliberately does not do" section is the load-bearing h
 draft added up CPU and memory to guess whether a sleeping stack would still fit, and that guess is
 the machine manager's job, not pstack's. Shipped in 0.41.0; the five-task build plan is
 [`node-signals-plan.md`](node-signals-plan.md).
+
+### [`worker-scaler-design.md`](worker-scaler-design.md) — add and remove workers from the signals
+
+An optional `scaler` service in the control stack: it reads `GET /api/signals`, creates a worker
+through OpenTofu when a task is stuck for `insufficient resources`, and drains and destroys one it
+created after it sits empty past a grace period. Presets for Hetzner, AWS, GCP, Azure and DigitalOcean, plus custom ones.
+It only ever touches workers it created; with it off, nothing changes. Not built.
 
 ### [`custom-routes-design.md`](custom-routes-design.md) — custom routes, Grafana links, compact Hearth
 
