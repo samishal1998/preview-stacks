@@ -65,3 +65,7 @@ config-*.json
 /.temp/
 id_hou*
 .env
+
+# OpenTofu working state from a hand run of a scaler preset. The lock file is committed.
+.terraform/
+*.tfstate*
