@@ -7,7 +7,8 @@ no-state-store decision — read [`../README.md`](../README.md) first; this guid
 Every `pstack` block below was produced by running the command against the code in this repo; the
 output is what it printed. The exceptions, marked where they appear: the CI workflow in section 8
 (GitHub-side, not runnable here), the `init` walkthrough in section 7 (it needs a real host with a
-real domain), the two-host blocks in section 7f, and the abridged JSON in section 6.
+real domain), the two-host blocks in section 7f, the cloud blocks in section 7g, and the abridged
+JSON in section 6.
 
 | I want to… | Go to |
 |---|---|
@@ -22,6 +23,7 @@ real domain), the two-host blocks in section 7f, and the abridged JSON in sectio
 | shared vs isolated, `requires`, `--force`, submitting deployments | [7. The control plane](#7-the-control-plane) |
 | **give my team accounts that cannot do everything** | [7e. The four roles](#7e-who-can-do-what-the-four-roles-0320) |
 | **move deployments to another host**, forwarding CI and visitors meanwhile | [7f. Move stacks to another host](#7f-move-stacks-to-another-host-0460) |
+| **let pstack add and remove worker machines** through OpenTofu | [7g. Worker scaler](#7g-worker-scaler-0460) |
 | deploy from GitHub Actions | [8. Wire it into CI](#8-wire-it-into-ci) |
 | a nightly leak sweep, orphan hunting | [9. Day-2 operations](#9-day-2-operations) |
 | every flag, route, env var, exit code | [10. Reference](#10-reference) |
@@ -2391,8 +2393,9 @@ New hosts get that range already. The whole story, including what does not help:
 ### Adding and removing worker machines (0.41.0)
 
 Sleep frees a machine's worth of capacity that nobody turns off, and a busy afternoon needs a
-machine nobody adds. pstack does not create or delete machines — but it is the only thing that can
-say when one is needed or spare, so it says it and leaves the rest to you.
+machine nobody adds. pstack itself does not create or delete machines — but it is the only thing
+that can say when one is needed or spare, so it says it and leaves the rest to you, or to the
+optional [worker scaler](#7g-worker-scaler-0460), which acts on these signals.
 
 ```bash
 curl -s -H "Authorization: Bearer $PSTACK_TOKEN" https://api.<domain>/api/signals | jq
@@ -3110,6 +3113,8 @@ every account until someone puts it in the table.
 | `PUT /api/logging/storage` | `admin` |
 | `GET /api/forward` | `maintainer` |
 | `PUT`/`DELETE /api/forward` — it decides where every deploy runs | `admin` |
+| `GET /api/scaler` · `GET /api/scaler/presets` · `GET /api/scaler/presets/:name` | `maintainer` |
+| `PUT /api/scaler` · `PUT`/`DELETE /api/scaler/presets/:name` — they decide what machines this host pays for, and a preset is code | `admin` |
 | `GET /api/sso/config` | `maintainer` |
 | `GET /api/settings` | `viewer` |
 | `PUT /api/settings/max_jobs` | `maintainer` |
@@ -3120,6 +3125,7 @@ every account until someone puts it in the table.
 | `PUT`/`DELETE /api/sso/config` · `/api/sso/config/:key` | `admin` |
 | `POST /api/config/sealed` | `admin` |
 | `GET`/`POST /api/config` | **root token only** |
+| `GET /api/scaler/config` · `POST /api/scaler/report` — the scaler's own; `config` carries the cloud credentials | **root token only** |
 
 Four of those rows are decisions rather than deductions, and each looks wrong until you hold it
 next to the thing beside it:
@@ -3384,6 +3390,196 @@ pr-107  running  not on target
    since step 3 stay closed. It runs after DNS because under HTTP-01 B gets
    its certificates only then.
 6. When nothing reaches A any more, retire it. **Never `down` A's copies.**
+
+## 7g. Worker scaler (0.46.0)
+
+[Adding and removing worker machines](#adding-and-removing-worker-machines-0410) leaves the buying
+and the deleting to you. The scaler is an optional control-stack service that does it: it creates a
+worker through [OpenTofu](https://opentofu.org) when previews do not fit, and drains and destroys
+one it created after it has sat empty. Swarm only. With it off, nothing in this section exists on
+the host.
+
+> Not captured here: every step needs a real cloud account. Commands and routes are the shipped ones.
+
+### Turn it on
+
+```bash
+pstack init … --scaler on                 # a new host; or PSTACK_SCALER=on
+pstack cloud-init … --scaler on           # passed to init on first boot
+```
+
+On a host that already runs, re-run `pstack init` with the flags it was installed with plus
+`--scaler on`. `init` refuses `--scaler on` with `--orchestrator compose` (exit 3) before it changes
+anything. `pstack upgrade`, `pstack ui` and `pstack logging` keep the scaler; an `init` without
+`--scaler on` on a host that has one is refused (`--scaler on` to keep it, `--scaler off` to remove
+it). Turning it off destroys nothing: the workers it owns keep running and stay on the card.
+
+`init` adds a `scaler` service to the control stack: the same image as `pstack`, command
+`pstack scaler`, no ports, no docker socket, `stop_grace_period: 5m`, and one volume,
+`<PSTACK_DATA>/scaler` → `/state` (`0700`). It talks to pstack at `http://pstack:7878` on a
+private `scaler` network that only the two of them join, with the host's root token. On first start
+it downloads OpenTofu 1.13.9 into `/state/bin`, checked against a pinned sha256 (amd64 and arm64).
+
+Settings and credentials go in afterwards, never in instance user-data: the **Workers** card on the
+Control page (both UIs), or `PUT /api/scaler`. The scaler reads them every 30 s, so a save needs
+no restart.
+
+```json
+{
+  "preset": "hetzner",
+  "vars": { "server_type": "cx32", "location": "fsn1", "ssh_keys": "[\"ops\"]" },
+  "min": 0, "max": 3, "cooldownMin": 5, "graceMin": 15,
+  "credentials": { "HCLOUD_TOKEN": "…" }
+}
+```
+
+```bash
+H="Authorization: Bearer $PSTACK_TOKEN"     # admin to write, maintainer to read
+curl -X PUT -H "$H" https://api.<domain>/api/scaler -d @scaler.json   # a file: argv is world-readable
+```
+
+A `PUT` replaces every setting; an absent one takes its default (`min` 0, `max` 3, `cooldownMin` 5,
+`graceMin` 15). Variable values are strings; one starting with `[` or `{` reaches Tofu as JSON. A
+credential goes in and never comes back out: `GET /api/scaler` answers `{"HCLOUD_TOKEN": true}`.
+Sent empty, omitted or as the mask, a credential keeps its stored value; `null` deletes it.
+`pull config` does not carry any of it (`scaler: host-specific — re-enter it on the target`).
+
+### Presets
+
+A preset is a folder of `.tf` files. Five are built in, read-only, embedded in the binary and in the
+repository at `packages/pstack/internal/scaler/presets/<name>/`. Each pins its provider with a lock
+file for linux amd64 and arm64, and boots amd64 images (an Arm machine type needs a custom preset).
+
+| Preset | Per worker | Shared | Credential | Firewall it creates |
+|---|---|---|---|---|
+| `hetzner` (Debian 12) | `server_type`, `location` | `manager_address`*, `ssh_keys`, `network_id` (optional) | `HCLOUD_TOKEN` | One `hcloud_firewall` applied by the label `pstack-scaler=<host_id>`: 2377/tcp, 7946 tcp/udp, 4789/udp from the manager and the workers, 22 from anywhere, all outbound. |
+| `aws` (Ubuntu LTS) | `instance_type` | `region`, `subnet_id` (the manager's VPC), `key_name` (optional) | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | One security group: 7946 tcp/udp and 4789/udp from every CIDR block of the VPC and from itself; all outbound. |
+| `gcp` (Ubuntu LTS) | `machine_type`, `zone` | `project`, `subnetwork` (the manager's) | `GOOGLE_CREDENTIALS` (service-account JSON) | One rule on the subnetwork's network: the swarm ports from its range to the workers. |
+| `azure` (Ubuntu LTS) | `vm_size` | `resource_group`, `location`, `subnet_id` (the manager's VNet), `admin_ssh_public_key` | `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` | None: `AllowVnetInBound` admits the VNet. |
+| `digitalocean` (Ubuntu LTS) | `size`, `region` | `manager_address`*, `ssh_keys`, `vpc_uuid` (optional) | `DIGITALOCEAN_TOKEN` | One `digitalocean_firewall` on the tag `pstack-scaler-<host_id>`: the swarm ports from the manager and that tag, 22 from anywhere, all outbound. |
+
+\* Filled by the scaler from the manager's swarm advertise address; you never set it. `host_id` (8
+hex characters, generated once, shown on the card) is filled the same way. Every server carries the
+label `pstack-scaler=<host_id>`, or on DigitalOcean the tags `pstack-scaler-<host_id>` and
+`pstack-scaler-<host_id>:<name>`, so you can find it in the provider's console. Two pstack hosts
+in one cloud project never touch each other's workers.
+
+**Custom presets:** `PUT /api/scaler/presets/<name>` with `{ "files": { "main.tf": "…" } }` (admin);
+list, read and delete the same way. The contract:
+
+- `variable "workers"` of type `map(object({ user_data = string, … }))`. Its other attributes are
+  the per-worker variables; every other variable is shared. `manager_address` and `host_id` are
+  filled when declared.
+- One server per entry (`for_each = var.workers`), named after the key, carrying the label or tags
+  above, with `lifecycle { ignore_changes = [...] }` naming the user-data attribute and the image.
+  Otherwise every upgrade, join-token rotation or new image rebuilds every worker.
+- A firewall it creates allows all outbound traffic: a worker must reach the manager's 2377, the
+  Docker repository and the registries before it can join.
+- Credentials come from the provider's own environment variables.
+- No `backend` or `cloud` block: state is local, in `/state/tofu/<preset>/`.
+- `# pstack-distro: <distro>` in any file picks the join cloud-config's distro (default `ubuntu`).
+- Files are `*.tf` and `.terraform.lock.hcl`. Without a lock file providers download unpinned; the
+  card says so.
+
+**A custom preset is code.** Tofu runs it with the root token and the cloud credentials in reach;
+`tofu validate` is not a sandbox. Uploading one is admin-only, the same trust as a spec's hooks.
+
+### Network rules
+
+A worker must reach the manager at its advertise address, and the manager must reach the worker at
+the address the worker advertises. So a worker goes on the manager's provider and, where the
+provider puts only a private address on the interface (AWS, GCP, Azure), in the manager's private
+network: `subnet_id` or `subnetwork` is the manager's. Workers on another provider are not
+supported.
+
+On Hetzner and DigitalOcean a server carries its public address, so a manager advertising its public
+address works anywhere on that provider (the overlay is unencrypted on the provider's network, as for
+a worker you join by hand). `network_id` (a Hetzner Cloud Network) or `vpc_uuid` (a DigitalOcean
+VPC) puts workers in the manager's private network instead; a manager advertising a private address
+needs it, and the scaler refuses without it. The manager must advertise an IPv4 address.
+
+**The manager's own firewall must let workers in:** 2377/tcp, 7946/tcp+udp and 4789/udp. Where
+workers have a range (a VPC, a subnet, a private network), allow that range. On Hetzner and
+DigitalOcean with public addresses there is no range: put the manager under the preset's firewall
+with the label `pstack-scaler=<host_id>` (Hetzner) or the tag `pstack-scaler-<host_id>`
+(DigitalOcean). Both providers add the rules of every firewall that applies.
+
+> **Before you label or tag the manager**, give it a firewall of its own that admits its public
+> ports: 80 and 443, and 22 if you use it. Once any firewall applies to a server, every inbound port
+> no firewall names is denied, so a manager under the preset's firewall alone stops serving previews.
+
+### What it does
+
+Every 30 s, at most one action, one Tofu command at a time:
+
+- **Adds a worker** when owned workers are below `min`, or when a task is stuck with a reason a
+  machine can fix: `no suitable node (…)` whose every clause is `insufficient resources on N nodes`
+  or a drained node. Not while another worker is booting, within `cooldown` of the last one, at
+  `max`, or while an owned worker with the current settings is ready and empty. A reason with any
+  other clause (`scheduling constraints not satisfied`) adds nothing.
+- **Removes a worker** that has been ready, active and empty for `grace`, when owned workers are
+  above `min`, in this order: drain → `tofu apply` without it → wait for its node to be down →
+  `DELETE` the node. A worker whose settings differ from the current ones goes when empty whatever
+  `min` says, so a changed server type replaces the fleet as workers empty.
+- **`max: 0`** removes every owned worker, one per tick, without waiting for `grace`. Draining
+  evicts their tasks; previews with no room elsewhere go pending.
+- **A worker not ready 10 minutes after its apply** never joined: it is removed and counts. After
+  two in a row it adds none until you change the settings.
+- **A new worker that leaves its services stuck** marks them *does not fit* until the settings
+  change: a same-size machine would not fit them either.
+- **A failed apply** retries with backoff (1, 2, 4 … 30 min), kept across restarts.
+- **A server deleted in the console**, or a node not ready for 10 minutes, is removed and never
+  recreated under its old name.
+
+It acts only on workers it created, by name, and only on nodes whose role is `worker`. A manager, or
+a worker you joined by hand, is never touched. Signals unreadable, swarm down, no preset, or a preset
+that fails `tofu validate`: no action, no clock advances, the reason on the card. The scaler cannot
+tell which credentials a preset needs, so a missing one shows as a failed refresh or apply.
+
+**Reservations decide load-based scaling.** Swarm reports `insufficient resources` only against
+reservations, so past `min` the scaler adds workers for load only when previews declare
+`deploy.resources.reservations` (or `mem_reservation`). A cluster with no active node at all (the
+manager drained by `--previews-on workers`, `min: 0`) still gets its first worker: a drained node
+qualifies.
+
+**Settings are frozen per worker.** A worker keeps the per-worker variables it was created with, so
+an edit changes only workers created afterwards. While the scaler owns any worker, the preset and
+its shared variables are locked: `PUT /api/scaler` and the preset routes answer 409. To switch
+preset: `max: 0`, wait for zero workers, then switch. The scaler then runs `tofu destroy` on the old
+preset's shared resources. Credential keys cannot be deleted while it owns workers or that destroy
+is pending.
+
+**After an unclean stop** (a reboot, a kill past the 5-minute grace) Tofu may have created a server
+it did not record. The scaler lists the name as a *possible orphan* on the card, never creates it
+again, and emits `scaler.failed` with `action: orphan`. Tofu has no record of that server, so look
+for the name and the label in the provider's console, delete it there if it exists, then
+**Dismiss** it on the card.
+
+### The Workers card
+
+On the Control page while the scaler runs or still owns workers: the preset and its variables,
+`min`/`max`/`cooldown`/`grace`, the credential keys (write-only, admin), `host_id`, each owned worker
+with its settings and state (`booting`, `ready`, `down`, `lost`, `removing`), the last action and
+error, the next retry, services that do not fit, possible orphans, and a pending old-preset
+destroy. Custom presets are edited there too.
+
+Events: `scaler.created`, `scaler.removed`, `scaler.failed`
+([webhook-events.md](webhook-events.md#scalercreated--scalerremoved--scalerfailed)). None carries
+a credential, the join token or `user_data`; Tofu's output is scrubbed, then cut to its last 20
+lines.
+
+### Bring your own scaler
+
+Nothing here is needed to scale workers another way. Signals, `signal.raised`/`signal.cleared`, the
+drain, undrain and remove routes and `/api/swarm/join` behave the same with the scaler on or off.
+The built-in presets are plain folders: `tofu apply` with a `workers.auto.tfvars.json` works without
+pstack. Two rules:
+
+- **Run it outside the `pstack-control` compose project.** `init`, `upgrade`, `pstack ui` and
+  `pstack logging` run `up --remove-orphans`, which deletes containers in that project that pstack
+  did not render.
+- **Don't run two scalers on one host** unless they own disjoint workers. The built-in one touches
+  only names it created, but two policies reacting to the same stuck task both add a machine.
 
 ## 8. Wire it into CI
 
@@ -3777,8 +3973,9 @@ pstack <up|down|verify|status|validate|init|serve|swarm|…> [flags]
 | `push config` | apply such a file onto the host at `PSTACK_API_URL`. **Creates, never overwrites**; names every registry and notifier URL it would trust and asks first (`-y` to skip the question and the list). Not transactional — a failure leaves what it already wrote. | 0 · 1 · 3 |
 | `forward [set <url>\|off]` | where the host at `PSTACK_API_URL` [forwards](#7f-move-stacks-to-another-host-0460) its deploys and unserved visitors. `set` checks the target first and needs `PSTACK_FORWARD_TOKEN`; `set` and `off` need an admin. | 0 · 1 · 3 |
 | `migrate` | copy deployments from `--from` to `--to` and match each one's state there; `--sleep-source` is a sleep pass: no copy, sleeps the source copies the target holds. Never `down`. **Exit 1 when any failed**; a re-run catches up. | 0 · 1 · 3 |
+| `scaler` | the [worker scaler](#7g-worker-scaler-0460) daemon, run by the control stack's `scaler` container (`init --scaler on`). Configured by environment only. Runs until SIGTERM, finishing a running Tofu command first. **Exit 1** when another `pstack scaler` holds the state directory or OpenTofu cannot be installed; 3 without `PSTACK_TOKEN`. | 0 · 1 · 3 |
 
-`init`, `serve`, `swarm`, `route`, `pull`/`push`, `forward` and `migrate` are **spec-free**: they act on the host and on the registry, so none of
+`init`, `serve`, `swarm`, `route`, `pull`/`push`, `forward`, `migrate` and `scaler` are **spec-free**: they act on the host and on the registry, so none of
 them loads `preview.yml` or fails because it is absent.
 
 Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 2 — a failed
@@ -3802,6 +3999,7 @@ Every teardown step is recorded non-fatally, so `down` in practice returns 0 or 
 | `--dns-provider <lego-code>` | `init` | required for `dns01` only (or `PSTACK_DNS_PROVIDER`); ignored by `http01`. |
 | `--orchestrator swarm\|compose` | `init` `cloud-init` `upgrade` | default **`swarm`** for `init`/`cloud-init` (or `PSTACK_ORCHESTRATOR`); `upgrade` keeps the host's current one unless the flag is typed. |
 | `--logging none\|loki` | `init` `cloud-init` | default **`none`** (or `PSTACK_LOGGING`). `loki` runs Loki in the control stack and ships every deployed service's logs to it; `cloud-init` passes it to `init`. Any other value exits 3. |
+| `--scaler on\|off` | `init` `cloud-init` | default **`off`** (or `PSTACK_SCALER`). `on` adds the [worker scaler](#7g-worker-scaler-0460) to the control stack. Swarm only: with `--orchestrator compose` it exits 3. `upgrade` keeps it; an `init` that would drop it is refused unless `--scaler off` is typed. |
 | `--previews-on workers\|any` | `init` `cloud-init` | swarm only: where previews may run. Not an enum value exits 3; with `--orchestrator compose` it exits 3 too. See [Keeping the manager for the control stack](#keeping-the-manager-for-the-control-stack). |
 | `--ingress-subnet <cidr>` `--shared-subnet <cidr>` | `init` | swarm only: the two networks' ranges, `10.250.0.0/16` and `10.251.0.0/16` by default. Unset keeps an existing network; set and different re-creates it. Not an IPv4 range exits 3. |
 | `--format <shape>` | `swarm join` | `command` (default), `script`, `cloud-config` or `token`. An unknown one exits 3. |
@@ -3838,9 +4036,11 @@ different problems with different owners.
 
 | Variable | Used by | Default | Meaning |
 |---|---|---|---|
-| `PSTACK_TOKEN` | `serve` `init` | *unset* / *generated* | bearer token for mutating routes. **Required** to bind off-loopback. `init` generates one when unset and prints it once. |
+| `PSTACK_TOKEN` | `serve` `init` `scaler` | *unset* / *generated* | bearer token for mutating routes. **Required** to bind off-loopback. `init` generates one when unset and prints it once. `scaler` needs it: it calls the API as root. |
 | `PSTACK_PORT` | `serve` | `7878` | listen port |
 | `PSTACK_API_URL` | `pull config` `push config` `forward` | — | which pstack to talk to, e.g. `https://api.preview.example.com`. **No default on purpose** — a guess would silently talk to the wrong host. Plain `http://` is refused unless the host is loopback or a private address. |
+| `PSTACK_API_URL` | `scaler` | `http://pstack:7878` | where the scaler reaches pstack; the control stack sets it. Env-only, like `serve`'s tuning. |
+| `PSTACK_SCALER_STATE` | `scaler` | `/state` | the scaler's state directory: OpenTofu, Tofu state, `scaler.json`. Locked, so a second `pstack scaler` on it exits 1. Env-only. |
 | `PSTACK_FORWARD_TOKEN` | `forward set` | — | a user token on the target, developer or higher, never its root token. **Flag-less on purpose.** |
 | `PSTACK_FROM_TOKEN` · `PSTACK_TO_TOKEN` | `migrate` | — | a token on the source; a token on the target. **Flag-less on purpose.** |
 | `PSTACK_CONFIG_KEY` | `pull config` `push config` `cloud-init` | *prompted* | the passphrase the export is sealed with. Prompted without echo when unset and on a terminal; **flag-less on purpose**, because argv is world-readable through `ps`. |
@@ -3857,6 +4057,7 @@ different problems with different owners.
 | `PSTACK_NO_OOM_PROTECT` | `init` | *unset* | any value but `0` skips protecting `dockerd` from the OOM killer (below). For a host that manages `docker.service` itself |
 | `PSTACK_AGENT_IMAGE` | `init` | `docker:29.9.2-cli` | the image `pstack-agent` runs in on every node. Not read back: re-export it on every `init` and `upgrade`, or the agent returns to the default. Cloud-init does not pass it |
 | `PSTACK_PREVIEWS_ON` | `init` `cloud-init` | *unset* | same as `--previews-on` |
+| `PSTACK_SCALER` | `init` `cloud-init` | `off` | same as `--scaler` |
 | `PSTACK_INGRESS_SUBNET` `PSTACK_SHARED_SUBNET` | `init` (and `upgrade`, which runs it) | *unset* | same as `--ingress-subnet` / `--shared-subnet`. Set on `pstack upgrade`, it reaches the `init` the upgrade runs — the one-command way to enlarge an existing host's network |
 | `PSTACK_LOKI_PASSWORD` | `init` | *generated* | the Loki push password under `--logging loki`; written to `control/.env` as `LOKI_PUSH_PASSWORD`. **Flag-less on purpose.** |
 | `PSTACK_DOMAIN` | `serve` | — | lets the API build absolute share-link URLs on `control.<domain>`. Set by the control stack. |
@@ -4021,11 +4222,20 @@ anything it does not list is the root token's alone.
 | GET | `/api/forward` | — | **maintainer and up** — `{ to, via, establishedAt, lastOkAt }` or `null`. Never the token |
 | PUT | `/api/forward` | `{ to, via?, token }` | **admin** — checks the target first ([7f](#7f-move-stacks-to-another-host-0460)), then the same view · 400 naming the failed check, nothing saved. Emits `forward.changed` |
 | DELETE | `/api/forward` | — | **admin** — `{ deleted: true }`; stop forwarding. Emits `forward.changed` when there was a setting |
+| GET | `/api/scaler` | — | **maintainer and up** — `{ settings, credentials, report, enabled }` ([7g](#7g-worker-scaler-0460)). `settings` is `{ preset, vars, min, max, cooldownMin, graceMin, dismissed }`; `credentials` is `{ KEY: true }`, never a value; `report` is the scaler's last (`{ at, hostId, workers[], locked, lastAction, lastError, nextRetryAt, doesNotFit[], orphans[], pendingDestroy }`) or `null`; `enabled` is `true`/`false`/`null` (the container runs / does not / docker did not answer) |
+| PUT | `/api/scaler` | `{ preset, vars, min, max, cooldownMin, graceMin, dismissed?, credentials? }` | **admin** — replaces the settings, then the same view. A credential sent empty, omitted or as the mask keeps its value; `null` deletes it · 400 `preset required`, an unknown preset or variable, `want 0 ≤ min ≤ max`, `cooldownMin and graceMin must be ≥ 0`, a credential name that is not an environment variable name, a dismissed name that is not a possible orphan · 409 another preset or a changed shared variable while the scaler owns workers; deleting a credential during a preset switch, while it owns workers, or while an old preset's destroy is pending |
+| GET | `/api/scaler/presets` | — | **maintainer and up** — `[{ name, builtin, preset, locked }]`; `preset` is `{ perWorker[], shared[], distro, hash, lockFile }` |
+| GET | `/api/scaler/presets/:name` | — | **maintainer and up** — the same plus `files` · 404 |
+| PUT | `/api/scaler/presets/:name` | `{ files: { "main.tf": "…" } }` | **admin** — store a custom preset, then the preset · 400 a bad name, a built-in's name, a bad file name, no `workers` variable, a `backend` or `cloud` block · 409 the locked preset with other files |
+| DELETE | `/api/scaler/presets/:name` | — | **admin** — `{ deleted: true }` · 400 a built-in · 409 locked, or the selected preset · 404 |
+| GET | `/api/scaler/config` | — | **root token only** — `{ preset, vars, min, max, cooldownMin, graceMin, dismissed, credentials, files }`: credential **values** and the selected preset's files, for the scaler. An admin session or personal token is 403 |
+| POST | `/api/scaler/report` | the scaler's report, optionally with one `event` | **root token only** — `{ ok: true }`. Keeps the owned workers and the locked config for the 409s above, the rest in memory; emits the event (`scaler.created`, `scaler.removed` or `scaler.failed`) |
 | GET | `/` and **any** non-`/api/` path | — | the embedded single-page UI. No filesystem lookup, so a deep link renders rather than 404s |
 
 Status codes: **202** accepted · **400** bad spec or missing variable · **401** unauthorized ·
 **403** a credential the route admits, doing something it may not — a role below the route's least
-one (the body names both), a share link outside its views, or an admin at `/api/config` ·
+one (the body names both), a share link outside its views, or an admin at `/api/config` or the
+scaler's two root-only routes ·
 **404** unknown deployment/job · **405** wrong method on an action · **409** job in flight for that
 stack, or a `kind: shared` `down` without `force` · **500** unexpected.
 

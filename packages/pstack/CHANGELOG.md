@@ -27,6 +27,37 @@
 
 - The cutover recipe, and why never to `down` a migrated source copy: usage.md §7f.
 
+- **Worker scaler: `pstack init --scaler on`** (env `PSTACK_SCALER`; `cloud-init` passes it).
+  Swarm only. Adds a `scaler` service to the control stack, the same image running `pstack scaler`,
+  on a private `scaler` network with pstack, state in `<PSTACK_DATA>/scaler` (0700). Every 30 s it
+  reads `/api/signals` and runs at most one OpenTofu 1.13.9 command (downloaded on first start,
+  sha256-pinned): it creates a worker when a task is stuck for `insufficient resources` or a
+  drained node, or below `min`, and drains, destroys and forgets one it created after it sits empty
+  past `grace`. Defaults `min` 0, `max` 3, `cooldown` 5 min, `grace` 15 min; `max: 0` removes them
+  all. It acts only on workers it created, never a manager or a worker joined by hand; turning it
+  off destroys nothing. `upgrade`, `pstack ui` and `pstack logging` keep it, and an `init` that
+  would drop it is refused. Scaler off renders byte-identical; two render cells added.
+
+- **Five built-in presets:** `hetzner`, `aws`, `gcp`, `azure`, `digitalocean`, each with a lock
+  file and the firewall its workers need. Custom presets are uploaded as `.tf` files (admin).
+  On Hetzner and DigitalOcean, give the manager its own firewall for 80/443 before putting it under
+  the preset's: usage.md §7g.
+
+- **`/api/scaler`:** `GET` (maintainer) the settings, which credential keys are set, the last report
+  and `enabled`; `PUT` (admin) replaces them. `GET /api/scaler/presets[/:name]` (maintainer),
+  `PUT`/`DELETE /api/scaler/presets/:name` (admin). `GET /api/scaler/config` and
+  `POST /api/scaler/report` are the scaler's own, root token only. While the scaler owns workers the
+  preset and its shared variables answer 409. `pstack api scaler …`. Migration 12 adds
+  `scaler_config` and `scaler_presets`; `pull config` does not carry them.
+
+- **A Workers card** on the Control page in Hearth and the advanced UI: settings, write-only
+  credentials, `host_id`, the owned workers, the last action and error, services that do not fit,
+  possible orphans (with Dismiss), and the custom preset editor.
+
+- **Three events**: `scaler.created` (`{ name, settings }`), `scaler.removed` (`{ name, reason }`)
+  and `scaler.failed` (`{ action, error, attempt }`). None carries a credential, the join token or
+  `user_data`; Tofu's output is scrubbed, then cut to 20 lines.
+
 ## 0.45.0 — 2026-11-02
 
 ### Added

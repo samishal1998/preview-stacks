@@ -8,7 +8,8 @@
 
 pstack runs preview stacks across a swarm: one manager (the primary) and any number of workers. It
 does not create or delete machines, and it is not going to start. Something else does that — a
-script, a person, or Fleet Plane.
+script, a person, Fleet Plane, or the optional [worker scaler](worker-scaler-design.md) (0.46.0),
+a separate service that reads these signals like any other consumer.
 
 That something needs two answers from pstack, and pstack is the only thing that can give them:
 
@@ -96,6 +97,11 @@ next deploy lands. Draining takes it out of the running before you act on it.
   If it wakes and does not fit, its task shows up in `stuck` and the machine manager reacts — the
   same loop, one step later.
 - **No provisioning.** No cloud credentials, ever.
+
+*Amended in 0.46.0.* "No provisioning", "no cloud credentials" and "no settings, no new `init`
+flags" stay true of the signals feature. The optional [worker scaler](worker-scaler-design.md) is a
+separate service that provisions, behind its own `init --scaler on`; its cloud credential is stored
+by pstack like Loki's S3 secret and handed only to the root token (`GET /api/scaler/config`).
 
 ## Caveats worth knowing before you use it
 

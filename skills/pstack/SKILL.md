@@ -319,6 +319,45 @@ The cutover: push config to B → `forward set` on A → `migrate` → switch DN
 `migrate --sleep-source` → retire A. Details: the usage guide's
 [Move stacks to another host](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#7f-move-stacks-to-another-host-0460).
 
+### Worker scaler: pstack adds and removes swarm workers
+
+Opt-in, swarm only. A `scaler` service in the control stack runs OpenTofu: it creates a worker when
+a preview's task is stuck for `insufficient resources` (or a drained node), and drains and destroys
+one it created after it sits empty past `grace`.
+
+```bash
+pstack init … --scaler on        # or PSTACK_SCALER=on; cloud-init takes it too. Compose: exit 3
+curl -X PUT -H "Authorization: Bearer $T" https://api.<domain>/api/scaler -d @scaler.json
+                                 # admin; or the Workers card. A file, not argv: it holds the credential
+```
+
+```json
+{ "preset": "hetzner", "vars": { "server_type": "cx32", "location": "fsn1" },
+  "min": 0, "max": 3, "cooldownMin": 5, "graceMin": 15,
+  "credentials": { "HCLOUD_TOKEN": "…" } }
+```
+
+- **Presets:** `hetzner`, `aws`, `gcp`, `azure`, `digitalocean` built in; custom ones through
+  `PUT /api/scaler/presets/:name` (admin; a preset is code Tofu runs with the credentials in reach).
+- **A `PUT` replaces every setting.** Credentials are write-only (`{ KEY: true }` on read); empty or
+  the mask keeps one, `null` deletes it.
+- **It touches only workers it created**, never a manager or a worker joined by hand. Turning it off
+  destroys nothing.
+- **Load scaling needs reservations:** swarm says `insufficient resources` only against
+  `deploy.resources.reservations` (or `mem_reservation`). Without them only `min` adds workers.
+- **Locked while it owns workers:** the preset and its shared variables answer 409. To switch:
+  `max: 0`, wait for zero, then switch.
+- **Workers go on the manager's provider and network.** The manager's firewall must admit 2377/tcp,
+  7946 tcp+udp and 4789/udp from them. On Hetzner/DigitalOcean, give the manager its own firewall
+  for 80/443 **before** labelling it `pstack-scaler=<host_id>` (tag `pstack-scaler-<host_id>`) to
+  put it under the preset's firewall: once any firewall applies, every other inbound port is denied.
+- **Your own scaler instead:** run it outside the `pstack-control` compose project (`init` runs
+  `up --remove-orphans`), and not beside the built-in one unless they own disjoint workers.
+- Events: `scaler.created`, `scaler.removed`, `scaler.failed`. `pull config` does not carry it.
+
+Details: the usage guide's
+[Worker scaler](https://github.com/samishal1998/preview-stacks/blob/main/docs/usage.md#7g-worker-scaler-0460).
+
 ## 1. When to reach for it
 
 | Situation | Use |
@@ -941,6 +980,8 @@ API is the same core with a job queue in front.
 | `GET /api/jobs` · `GET /api/jobs/:jobId` | poll for `state` |
 | `GET /api/jobs/:jobId/stream` | SSE: buffered log replayed, then live |
 | `GET`/`PUT`/`DELETE /api/forward` | [forwarding](#moving-stacks-to-another-host): `{ to, via, establishedAt, lastOkAt }` or `null`; set and off are admin |
+| `GET`/`PUT /api/scaler` | the [worker scaler](#worker-scaler-pstack-adds-and-removes-swarm-workers)'s settings, credential keys (never values), last report and `enabled`; `PUT` is admin and replaces every setting |
+| `GET /api/scaler/presets[/:name]` · `PUT`/`DELETE /api/scaler/presets/:name` | built-in and custom Tofu presets; writes are admin, built-ins read-only |
 
 ```bash
 API=https://api.preview.example.com

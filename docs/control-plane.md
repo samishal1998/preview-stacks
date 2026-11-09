@@ -1517,7 +1517,8 @@ idle worker is exactly where the next deploy lands while a consumer is deciding 
 the remove is refused until docker reports the node `down`, because a node that has merely lost the
 network still holds everything it was running.
 
-See [node-signals-design.md](node-signals-design.md) for the contract and its caveats.
+See [node-signals-design.md](node-signals-design.md) for the contract and its caveats. The
+optional worker scaler (below) is a consumer of these signals, not a change to them.
 
 ## Node pressure: an agent beside the control stack (0.45.0)
 
@@ -1559,6 +1560,49 @@ wake-on-request, TLS redeploys and queued jobs all pass through it.
 
 See [node-pressure-design.md](node-pressure-design.md) for the design and where the build differs
 from it.
+
+## The worker scaler: a separate service that provisions (0.46.0)
+
+Signals stop at reporting. The scaler is the opt-in consumer that acts on them: it creates a worker
+through OpenTofu when a task does not fit and destroys one it created after it has sat empty. Using
+it: [usage.md §7g](usage.md#7g-worker-scaler-0460).
+
+**It is a client of the API, not part of it.** `pstack scaler` is the same binary in its own
+control-stack container (`init --scaler on`), and `internal/scaler` imports neither `internal/api`
+nor `internal/cli`. Every 30 s it reads `GET /api/scaler/config`, `/api/signals` and `/api/swarm`,
+runs at most one Tofu command, and posts `POST /api/scaler/report`. Whatever it decides, it decides
+from the outside, with the same routes an operator's own script would use. So the API still
+provisions nothing and runs no loop over the fleet.
+
+**Its network is private.** It calls pstack with the host's root token, so it reaches pstack on a
+`scaler` network that only the two join, like Loki's `logs`. On `preview-ingress` any preview could
+answer to the name `pstack`. Turning it on adds `scaler` to pstack's `networks:` line and declares
+it at the top level, by checked anchors (`ScalerWiring`, as `LokiWiring`), and the service rides
+the existing `#__ADVANCED_UI_SERVICE__` marker (`ScalerService`). Off renders byte-identical
+(invariant 20). It has no docker socket, so running it as root (`user: "0:0"`, for its 0700 volume)
+gains nothing, and no port. `healthcheck: disable: true`, because the image's check polls an API
+this container does not serve.
+
+**Its own state is the authority on what it owns.** `/state/scaler.json` (written `.next` + fsync +
+rename) holds the owned workers, the locked config, backoff and the never-joined count; each decision
+is saved before the Tofu command it leads to, so a crash anywhere resumes. Tofu state is per preset
+in `/state/tofu/<preset>/`, local, with `workers.auto.tfvars.json` at 0600 and nothing on argv. pstack
+stores only what an operator chose (`scaler_config`, `scaler_presets`, migration 12) plus a mirror
+of the scaler's ownership and lock record, so `PUT /api/scaler` can answer 409 across a pstack
+restart. The rest of a report (worker state, last error, orphans) is memory, as with node stats
+(invariant 10).
+
+**Ownership is the safety model.** It acts only on names in its own `scaler.json`, and only on nodes
+whose role is `worker`. A manager, or a worker added by hand, is never drained, removed or destroyed.
+Turning it off destroys nothing.
+
+**Its credential has one read path.** The cloud credential is stored unhashed, because Tofu needs
+it. `GET /api/scaler` answers which keys are set, and only `GET /api/scaler/config`, to the root
+token and never an admin session, returns the values: invariant 15's second deliberate exception,
+on `GET /api/config`'s terms. Tofu's output is scrubbed of every credential value, the string leaves
+of a JSON credential and the join token before it reaches a report, an event or a log.
+
+See [worker-scaler-design.md](worker-scaler-design.md) for the design and where the build differs.
 
 ---
 

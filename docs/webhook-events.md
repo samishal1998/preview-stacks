@@ -584,6 +584,40 @@ failures are logged.
 
 Never the token.
 
+### `scaler.created` / `scaler.removed` / `scaler.failed`
+
+The [worker scaler](usage.md#7g-worker-scaler-0460) added or removed a worker, or something it
+tried failed. Swarm hosts with `--scaler on`. (0.46.0)
+
+The scaler sends each one with its report, so an event can arrive up to 30 s after the fact, and
+several from one tick arrive in order.
+
+`scaler.created` fires once the `tofu apply` that creates the worker succeeded. The machine is
+still booting; it joins the swarm a minute or two later.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `name` | string | The worker, `pstack-<6 hex>`: the server's name and the node's hostname. Never reused. |
+| `settings` | object | The preset's per-worker variables it was created with, e.g. `{ "server_type": "cx32", "location": "fsn1" }`. |
+
+`scaler.removed` fires once the worker is gone from Tofu's state and has no swarm node.
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `name` | string | The worker. |
+| `reason` | string | `empty`: empty past `grace`, above `min`. `replaced`: empty, and created with other settings. `max`: `max` is 0, or `max` was lowered below a create that never applied. `lost`: deleted in the provider's console, or its node not ready for 10 minutes. `never-joined`: not ready 10 minutes after its apply. `orphan`: a possible orphan after an unclean stop. |
+
+`scaler.failed`:
+
+| `data.` field | Type | Meaning |
+|---|---|---|
+| `action` | string | `apply`, `refresh`, `destroy` (an old preset's shared resources after a switch), `never-joined`, `does-not-fit` (a new worker left these services stuck; no more are bought for them until the settings change), `orphan` (a name Tofu has no record of after an unclean stop: check the provider's console), `max` (tasks stuck at `max`, once per episode). |
+| `error` | string | What failed. For a Tofu command, the last 20 lines of its output. |
+| `attempt` | number | The consecutive failure count for `apply`, `refresh` and `destroy` (it sets the backoff: 1, 2, 4 … 30 min) and for `never-joined` (at 2 the scaler stops adding workers until the settings change); `1` otherwise. |
+
+Never a credential value, a string from a JSON credential, the join token (`SWMTKN-…`) or a
+worker's `user_data`: Tofu's output is scrubbed whole, then cut.
+
 ---
 
 ## Test deliveries

@@ -1,8 +1,66 @@
 # Worker scaler — add and remove swarm workers from the signals
 
-**Status:** design, approved in conversation 2026-11-08. Not built. Two adversarial reviews (50 and 29
-findings, each checked by a skeptic) are folded in; their record is outside the repo in
-`~/.claude/projects/-home-samimishal-projects-go-preview-stacks/scaler-artifacts/`.
+> **Design, approved in conversation 2026-11-08. Built for 0.46.0.** Using it:
+> [usage.md §7g](usage.md#7g-worker-scaler-0460). Two adversarial reviews (50 and 29 findings, each
+> checked by a skeptic) are folded in; their record is outside the repo in
+> `~/.claude/projects/-home-samimishal-projects-go-preview-stacks/scaler-artifacts/`. The build plan
+> is [worker-scaler-plan.md](worker-scaler-plan.md). The spec below is kept as approved. Where the
+> build differs from it:
+>
+> - **"Lost" applies only to applied workers** (P-R1, W-R1). A worker gets `appliedAt` when an apply
+>   that includes it succeeds. Missing from state with no `appliedAt` is a failed create, retried
+>   with backoff; the never-joined 10 min count from `appliedAt`. A first-tick orphan is a
+>   non-removing worker absent from state whose apply was cut off (`applyingAt` still set), not one
+>   whose apply failed. Cost if wrong: none found.
+> - **Tofu refreshes before every apply, not every tick** (P-R2): `apply -refresh-only`, then
+>   `state list`. Between applies a console deletion is caught by the 10-min not-`ready` rule. Cost
+>   if wrong: one extra provider read per apply.
+> - **pstack persists only the ownership and lock record** (W-R2, overruling plan P-R3), as the
+>   spec says: `hostId`, each worker's name, vars, `createdAt` and `removing`, `locked` and
+>   `pendingDestroy`. State, last action, last error, next retry, does-not-fit and orphans are in
+>   memory, and `GET /api/scaler` merges them over the stored record. A report of zero workers clears
+>   the lock. Cost if wrong: the card shows no last error for up to 30 s after a pstack restart.
+> - **Per-worker variables are the attribute names inside the `workers` object type**, read by regex,
+>   inline or one per line (P-R4, W-R10). A preset names its distro with a `# pstack-distro: <distro>`
+>   line in any `.tf` file, default `ubuntu`; the spec names no source for a custom preset's distro.
+>   Cost if wrong: a custom preset with a nested object type in `workers` is refused with a clear error.
+> - **No credential key can be deleted while the last report shows owned workers or a pending
+>   old-preset destroy** (P-R5, W-R33), nor by the PUT that switches preset. The spec (`PUT
+>   /api/scaler`) refuses only keys the old preset still needs, but the API cannot know which keys a
+>   preset needs. A second PUT in the ~30 s before the scaler reports the destroy pending can still
+>   delete one: a known gap. Cost if wrong: a stale key stays until the fleet is at zero.
+> - **Variable values are strings;** one starting with `[` or `{` is written to tfvars as JSON
+>   (P-R6). Cost if wrong: a string variable whose value starts with `[`.
+> - **"Shipped as a plain folder"** is `packages/pstack/internal/scaler/presets/<name>/` and
+>   `GET /api/scaler/presets/:name` (P-R7). No release artifact.
+> - **Tofu's environment is exactly** `PATH`, `HOME=<state dir>`, `TF_IN_AUTOMATION=1`, `TF_INPUT=0`,
+>   `TF_PLUGIN_CACHE_DIR=<state dir>/plugins` and the credential map, never `PSTACK_TOKEN` (P-R8,
+>   W-R7). The state dir is `/state` in the container, `PSTACK_SCALER_STATE` by hand.
+> - **The scaler container sets `healthcheck: disable: true`** (P-R9, W-R29): the image's check
+>   polls an API this container does not serve.
+> - **Events are queued in `scaler.json` and posted one report each**, in order, at the end of the
+>   tick (W-R4), since a report carries one event and a tick can produce several. `scaler.created`
+>   goes out after the apply that creates the worker succeeds, never with the pre-apply report that
+>   takes the lock.
+> - **Dismissing an orphan** is `dismissed: [<name>]` in `PUT /api/scaler` (admin), each name one of
+>   the current report's orphans (W-R18). It is held in memory and cleared once the report no longer
+>   lists the name. The card has a Dismiss button per orphan.
+> - **`scaler.removed` has a sixth reason, `orphan`** (W-R20), and `scaler.failed`'s `action` also
+>   takes `apply`, `refresh` and `never-joined`.
+> - **"Credential unset" is not detected** (W-R21): the scaler cannot know which keys a preset needs,
+>   so it shows as a failed refresh or apply. A preset that fails `tofu init` or `validate` is
+>   reported, nothing is applied, and no backoff or clock advances.
+> - **A files-hash change alone is not refused** (W-R35), against the spec's "refuses to apply a
+>   pulled config that differs". A built-in preset changed by a pstack upgrade keeps the old files in
+>   `/state/tofu/<preset>/` for removals and scale-ups; the new ones are synced once owned workers
+>   reach zero. A changed preset name or shared variable is still refused.
+> - **The manager must advertise IPv4** (W-R37): the built-in firewalls write
+>   `manager_address/32`. Otherwise no action, and the reason is reported.
+> - **Slice 2's decisions** (W-R38): a never-applied create takes the current per-worker settings on
+>   retry (only its name and `user_data` repeat), against the spec's "a retry repeats the same
+>   intent"; a never-applied worker above `max` is dropped before the next apply; a failed old-preset
+>   destroy backs off on its own clock; under `max: 0` the never-applied workers leave in the same
+>   tick as one applied worker; and a drained owned worker is not ready-and-empty room.
 
 ## Why
 
