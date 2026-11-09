@@ -19,7 +19,8 @@ type RunOptions struct {
 
 // Run is the daemon: lock the state dir, make sure Tofu is there, then tick at once and every
 // Tick until ctx is done. ctx is read only between ticks, so a tick in progress — an apply —
-// finishes first (spec, SIGTERM row). A tick's error is logged, not fatal: the next tick retries.
+// finishes first, and none starts after cancel (spec, SIGTERM row): an apply longer than Tick
+// leaves t.C ready beside ctx.Done(), and select picks either. A tick's error is logged, not fatal: the next tick retries.
 func Run(ctx context.Context, o RunOptions) error {
 	if o.Log == nil {
 		o.Log = io.Discard
@@ -43,6 +44,9 @@ func Run(ctx context.Context, o RunOptions) error {
 	t := time.NewTicker(Tick)
 	defer t.Stop()
 	for {
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err := l.Tick(); err != nil {
 			fmt.Fprintf(o.Log, "scaler: %s\n", l.scrub(err.Error()))
 		}
