@@ -1,4 +1,5 @@
 import type { Job } from '@samyx/preview-stacks-client';
+import type { ScalerInput, ScalerPreset, ScalerReport, ScalerSettings, ScalerView } from '../api-control';
 
 const ROLES = ['viewer', 'developer', 'maintainer', 'admin'] as const;
 export type RoleName = (typeof ROLES)[number];
@@ -54,3 +55,25 @@ export function supersededBy(job: Job, jobs: Job[]): Job | null {
 }
 
 export const isTerminal = (state: string): boolean => !['queued', 'running'].includes(state);
+
+/** The Workers card shows while the scaler is on (or docker did not say) or still owns workers. */
+export const scalerShown = (v: ScalerView): boolean => v.enabled !== false || (v.report?.workers.length ?? 0) > 0;
+
+/** The preset and its shared vars are fixed while the scaler owns any worker (the API's 409). */
+export const scalerLocked = (r: ScalerReport | null): boolean => !!r?.locked && r.workers.length > 0;
+
+/** Possible orphans not dismissed yet: the report lists a dismissed name until the scaler's next pull. */
+export const openOrphans = (v: ScalerView): string[] => (v.report?.orphans ?? []).filter((n) => !v.settings.dismissed.includes(n));
+
+/**
+ * `PUT /api/scaler` replaces every setting: vars only the preset declares (any other is a 400),
+ * `dismissed` echoed (else a save un-dismisses), typed credentials only (empty keeps).
+ */
+export function scalerBody(s: ScalerSettings, p: ScalerPreset['preset'] | undefined, orphans: string[], creds: Record<string, string> = {}): ScalerInput {
+  const names = [...(p?.perWorker ?? []), ...(p?.shared ?? [])];
+  const vars = Object.fromEntries(names.filter((k) => s.vars[k]).map((k) => [k, s.vars[k]!]));
+  const typed = Object.fromEntries(Object.entries(creds).filter(([k, v]) => k.trim() && v));
+  const body: ScalerInput = { ...s, vars, dismissed: s.dismissed.filter((n) => orphans.includes(n)) };
+  if (Object.keys(typed).length) body.credentials = typed;
+  return body;
+}

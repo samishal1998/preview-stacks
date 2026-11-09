@@ -780,6 +780,43 @@ export type TlsRedeploy = {
 /** What `GET /api/forward` answers when this host forwards to another pstack; `null` when it does not. Maintainer. */
 export type ForwardStatus = { to: string; via: string | null; establishedAt: number; lastOkAt: number };
 
+// ── the worker scaler ─────────────────────────────────────────────────────────────────────────────
+
+/** The scaler's settings as saved. `dismissed` names possible orphans an admin dismissed. */
+export type ScalerSettings = {
+  preset: string;
+  vars: Record<string, string>;
+  min: number;
+  max: number;
+  cooldownMin: number;
+  graceMin: number;
+  dismissed: string[];
+};
+export type ScalerWorker = { name: string; vars: Record<string, string>; state: string; createdAt: number; removing: boolean };
+/** The scaler's last report; times in ms, `nextRetryAt` 0 when nothing waits. */
+export type ScalerReport = {
+  at: number;
+  hostId: string;
+  workers: ScalerWorker[];
+  locked: { preset: string; filesHash: string; shared: Record<string, string> } | null;
+  lastAction: string;
+  lastError: string;
+  nextRetryAt: number;
+  doesNotFit: string[];
+  orphans: string[];
+  pendingDestroy: string;
+};
+/** What `GET /api/scaler` answers. Credentials are key names only; `enabled` is null when docker did not answer. Maintainer. */
+export type ScalerView = { settings: ScalerSettings; credentials: Record<string, true>; report: ScalerReport | null; enabled: boolean | null };
+/** One Tofu preset; `files` only from `GET /api/scaler/presets/:name`. */
+export type ScalerPreset = {
+  name: string;
+  builtin: boolean;
+  files?: Record<string, string>;
+  preset: { perWorker: string[]; shared: string[]; distro: string; hash: string; lockFile: boolean };
+  locked: boolean;
+};
+
 /** What `GET /api/domains` answers. Maintainer. */
 export type DomainsStatus = {
   /** The domain `init` rendered onto the container's labels. Cannot be removed from here. */
