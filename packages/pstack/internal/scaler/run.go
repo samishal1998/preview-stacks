@@ -15,6 +15,7 @@ type RunOptions struct {
 	API      Client
 	StateDir string
 	Log      io.Writer
+	tick     time.Duration // zero: Tick; tests shorten it so an apply outlasts it
 }
 
 // Run is the daemon: lock the state dir, make sure Tofu is there, then tick at once and every
@@ -41,7 +42,10 @@ func Run(ctx context.Context, o RunOptions) error {
 	if err != nil {
 		return err
 	}
-	t := time.NewTicker(Tick)
+	if o.tick == 0 {
+		o.tick = Tick
+	}
+	t := time.NewTicker(o.tick)
 	defer t.Stop()
 	for {
 		if ctx.Err() != nil {
