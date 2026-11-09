@@ -225,10 +225,21 @@ func TestScalerLockedConfig(t *testing.T) {
 		want               int
 	}{
 		{"shared var changed", "", `{"preset":"hetzner","vars":{"ssh_keys":"[\"other\"]"}}`, 409},
+		// negative control: loop over lock.Shared only → 200.
+		{"unset shared var added", "", `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]","network_id":"123"}}`, 409},
 		{"preset changed", "", `{"preset":"aws"}`, 409},
 		{"credential deleted", "", `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"credentials":{"HCLOUD_TOKEN":null}}`, 409},
 		{"locked values restored, new min and per-worker var", "", `{"preset":"hetzner","min":1,"vars":{"ssh_keys":"[\"k\"]","server_type":"cx32"}}`, 200},
 		{"stale files hash, max 0", stale, `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"max":0}`, 200},
+		// Zero workers, the old preset's destroy pending: its credential is kept.
+		// negative control: drop the `|| rep.PendingDestroy != ""` clause → 200.
+		// A shared var an upgrade dropped from the built-in: omitting it saves.
+		// negative control: loop over lock.Shared as well → 409.
+		{"locked var the preset no longer declares", `{"hostId":"ab12cd34","workers":[{"name":"pstack-abc123","vars":{},"createdAt":1,"removing":false}],` +
+			`"locked":{"preset":"hetzner","filesHash":"` + hetznerHash(t) + `","shared":{"ssh_keys":"[\"k\"]","dropped_var":"x"}}}`,
+			`{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"}}`, 200},
+		{"credential deleted, destroy pending", `{"hostId":"ab12cd34","workers":[],"locked":null,"pendingDestroy":"hetzner"}`,
+			`{"preset":"aws","credentials":{"HCLOUD_TOKEN":null}}`, 409},
 	}
 	check := func(s *Server, label string) {
 		t.Helper()
@@ -308,6 +319,12 @@ func TestScalerPresetRoutes(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400 naming %q", c.name, code, out, c.want)
 		}
 	}
+	// negative control: drop the selected-preset check in scalerPresetDelete → 200.
+	scCall(t, s, "t0ken", "PUT", "/api/scaler", `{"preset":"team-a"}`)
+	if code, out := scCall(t, s, "t0ken", "DELETE", "/api/scaler/presets/team-a", ""); code != 409 || !strings.Contains(out, "selected") {
+		t.Fatalf("DELETE the selected team-a: %d %s, want 409", code, out)
+	}
+	scCall(t, s, "t0ken", "PUT", "/api/scaler", `{"preset":"hetzner"}`)
 	if code, _ := scCall(t, s, "t0ken", "DELETE", "/api/scaler/presets/team-a", ""); code != 200 {
 		t.Fatalf("DELETE team-a: %d", code)
 	}
