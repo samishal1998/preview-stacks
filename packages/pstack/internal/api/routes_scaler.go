@@ -258,8 +258,14 @@ func (s *Server) scalerPut(w http.ResponseWriter, r *http.Request) error {
 	for k, v := range body.Credentials {
 		switch {
 		case v == nil:
-			// P-R5: the API cannot know which keys the old preset still needs.
-			if _, ok := creds[k]; ok && rep != nil && (len(rep.Workers) > 0 || rep.PendingDestroy != "") {
+			// P-R5: the API cannot know which keys the old preset still needs. A PUT that switches
+			// preset comes before the scaler reports the old one's destroy pending.
+			_, ok := creds[k]
+			switch {
+			case ok && set.Preset != row.Preset:
+				writeError(w, 409, fmt.Sprintf("%s is kept through a preset switch", k))
+				return nil
+			case ok && rep != nil && (len(rep.Workers) > 0 || rep.PendingDestroy != ""):
 				writeError(w, 409, fmt.Sprintf("%s is kept while the scaler owns workers or a destroy is pending", k))
 				return nil
 			}

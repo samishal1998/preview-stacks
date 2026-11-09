@@ -240,6 +240,10 @@ func TestScalerLockedConfig(t *testing.T) {
 			`{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"}}`, 200},
 		{"credential deleted, destroy pending", `{"hostId":"ab12cd34","workers":[],"locked":null,"pendingDestroy":"hetzner"}`,
 			`{"preset":"aws","credentials":{"HCLOUD_TOKEN":null}}`, 409},
+		// Zero workers, no destroy pending yet: the switch itself must keep the old preset's credential.
+		// negative control: drop the `set.Preset != row.Preset` arm → 200.
+		{"credential deleted with the switch", `{"hostId":"ab12cd34","workers":[],"locked":null}`,
+			`{"preset":"aws","credentials":{"HCLOUD_TOKEN":null}}`, 409},
 	}
 	check := func(s *Server, label string) {
 		t.Helper()
