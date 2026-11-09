@@ -291,4 +291,39 @@ var Migrations = []string{
     last_ok_at     INTEGER NOT NULL
   );
   `,
+	// 12 — the worker scaler: its settings and the Tofu presets it applies.
+	`
+  -- 12 — the worker scaler. ONE scaler_config row: one scaler per host.
+  --
+  -- CONFIGURATION AN OPERATOR CHOSE (invariant 10): which preset, its vars and the bounds, never
+  -- which workers exist. An EMPTY table means the scaler's defaults, and no preset.
+  CREATE TABLE scaler_config (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    preset       TEXT NOT NULL DEFAULT '',
+    -- JSON object of string vars for the preset.
+    vars         TEXT NOT NULL DEFAULT '{}',
+    min          INTEGER NOT NULL DEFAULT 0,
+    max          INTEGER NOT NULL DEFAULT 3,
+    cooldown_min INTEGER NOT NULL DEFAULT 5,
+    grace_min    INTEGER NOT NULL DEFAULT 15,
+    --
+    -- credentials: STORED, NOT HASHED — the scaler hands them to Tofu. Only GET /api/scaler/config
+    -- (root) returns them; the protection is the 0700 db directory.
+    credentials  TEXT NOT NULL DEFAULT '{}',
+    --
+    -- The scaler's ownership and lock record, mirrored for the 409; /state/scaler.json is the
+    -- authority. JSON from the last report: hostId, workers (name, vars, createdAt, removing),
+    -- locked, pendingDestroy. Nothing else in a report is stored. '' means no report yet.
+    report       TEXT NOT NULL DEFAULT ''
+  );
+  --
+  -- CONFIGURATION AN OPERATOR CHOSE (invariant 10): custom Tofu presets. Built-ins are embedded in
+  -- the binary, never stored here. An EMPTY table means built-ins only.
+  CREATE TABLE scaler_presets (
+    name       TEXT PRIMARY KEY,
+    -- JSON object: file name → contents.
+    files      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 }
