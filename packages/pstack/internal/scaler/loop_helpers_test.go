@@ -46,6 +46,9 @@ type fakeAPI struct {
 	nodeCalls   []string
 	reports     []postedReport
 	tofuDir     string
+	sigReads    int
+	// afterSignals runs after each GET /api/signals is answered: the next read sees its change.
+	afterSignals func(a *fakeAPI)
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +73,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		asJSON(f.cfg)
 	case r.Method == "GET" && path == "/api/signals":
+		f.sigReads++
 		asJSON(f.sig)
+		if f.afterSignals != nil {
+			f.afterSignals(f)
+		}
 	case r.Method == "GET" && path == "/api/swarm":
 		asJSON(map[string]*string{"managerAddr": f.managerAddr})
 	case r.Method == "GET" && path == "/api/swarm/join":
@@ -78,7 +85,24 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		io.WriteString(w, testJoin)
 	case strings.HasPrefix(path, "/api/swarm/nodes/"):
+		// As routes_signals.go: drain is idempotent, DELETE wants down and drained, 404 for no node.
 		f.nodeCalls = append(f.nodeCalls, r.Method+" "+path)
+		id, action, _ := strings.Cut(strings.TrimPrefix(path, "/api/swarm/nodes/"), "/")
+		i := slices.IndexFunc(f.sig.Nodes, func(n sigNode) bool { return n.ID == id })
+		switch {
+		case i < 0:
+			w.WriteHeader(404)
+			io.WriteString(w, `{"error":"no such node: `+id+`"}`)
+			return
+		case r.Method == "POST" && action == "drain":
+			f.sig.Nodes[i].Availability = "drain"
+		case r.Method == "DELETE" && action == "" && f.sig.Nodes[i].State == "down" && f.sig.Nodes[i].Availability == "drain":
+			f.sig.Nodes = slices.Delete(f.sig.Nodes, i, i+1)
+		default:
+			w.WriteHeader(409)
+			io.WriteString(w, `{"error":"refusing"}`)
+			return
+		}
 		asJSON(map[string]bool{"ok": true})
 	case r.Method == "POST" && path == "/api/scaler/report":
 		b, _ := io.ReadAll(r.Body)
@@ -210,6 +234,23 @@ func (h *harness) node(name, state string, tasks int, emptyFor time.Duration) {
 		a.sig.Nodes = slices.DeleteFunc(a.sig.Nodes, func(x sigNode) bool { return x.Hostname == name })
 		a.sig.Nodes = append(a.sig.Nodes, n)
 	})
+}
+
+// setNode changes a node in signals in place (availability kept unless f changes it).
+func (h *harness) setNode(name string, f func(n *sigNode)) {
+	h.with(func(a *fakeAPI) {
+		for i := range a.sig.Nodes {
+			if a.sig.Nodes[i].Hostname == name {
+				f(&a.sig.Nodes[i])
+			}
+		}
+	})
+}
+
+func (h *harness) nodeCalls() []string {
+	h.api.mu.Lock()
+	defer h.api.mu.Unlock()
+	return slices.Clone(h.api.nodeCalls)
 }
 
 func (h *harness) applies() int { return countApplies(h.tofuDir) }

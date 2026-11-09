@@ -104,6 +104,7 @@ func TestTofuEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	tf := Tofu{Bin: bin, Dir: work, StateDir: state, Creds: map[string]string{"HCLOUD_TOKEN": "hc-secret-123"}}
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte("[]"), 0o600) // `state list` needs one
 	if _, err := tf.Run("state", "list"); err != nil {
 		t.Fatal(err)
 	}
