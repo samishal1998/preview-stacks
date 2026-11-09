@@ -372,6 +372,9 @@ func run(argv []string, io IO) *Exit {
 	case "healthcheck":
 		return Healthcheck(io.Env)
 
+	case "scaler":
+		return scalerCmd(args, io)
+
 	case "serve":
 		return Serve(ServeOptions{UIHTML: io.UIHTML, ShareHTML: io.ShareHTML, OpenAPISpec: io.OpenAPISpec, Stdout: out, Stderr: errOut, Env: io.Env})
 	}
