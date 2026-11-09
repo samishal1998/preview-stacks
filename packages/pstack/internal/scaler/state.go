@@ -29,6 +29,11 @@ type OwnedWorker struct {
 	// ReadySince is the first tick of the current ready-and-active run; 0 while the node is not.
 	// The does-not-fit window starts here, not at the first ready.
 	ReadySince int64 `json:"readySince"`
+	// NotReadySince is the first tick a once-ready worker's node was absent or not ready; 0
+	// while it is ready. LostAfter past it, the worker is lost (step 3).
+	NotReadySince int64 `json:"notReadySince"`
+	// OutOfState: removing, and an apply without it succeeded, so Tofu no longer holds it.
+	OutOfState bool `json:"outOfState"`
 }
 
 // State is /state/scaler.json: the scaler's own record and the authority on what it owns.

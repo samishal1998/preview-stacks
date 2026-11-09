@@ -264,11 +264,17 @@ func TestNeverJoined(t *testing.T) {
 		t.Errorf("events = %+v", ev)
 	}
 
-	// It counts toward the backoff: a second one after 1 min.
-	h.advance(time.Minute)
+	// It counts toward the backoff: removed after 1 min, then a second one.
+	creates := func() int { h.api.mu.Lock(); defer h.api.mu.Unlock(); return len(h.api.joinQueries) }
 	h.tick()
-	if h.applies() != 2 {
-		t.Fatalf("applies = %d, want 2", h.applies())
+	if creates() != 1 || h.applies() != 1 {
+		t.Fatalf("inside the backoff: creates %d, applies %d", creates(), h.applies())
+	}
+	h.advance(time.Minute)
+	h.tick() // removes the first
+	h.step()
+	if creates() != 2 || len(h.state().Workers) != 1 {
+		t.Fatalf("creates = %d, workers %+v", creates(), h.state().Workers)
 	}
 	h.advance(BootTimeout)
 	h.tick()
@@ -277,16 +283,16 @@ func TestNeverJoined(t *testing.T) {
 	}
 	h.advance(time.Hour)
 	h.tick()
-	if h.applies() != 2 || !strings.Contains(h.last().LastAction, "2 workers never joined") {
-		t.Fatalf("applies = %d, lastAction %q", h.applies(), h.last().LastAction)
+	h.step()
+	if creates() != 2 || !strings.Contains(h.last().LastAction, "2 workers never joined") {
+		t.Fatalf("creates = %d, lastAction %q", creates(), h.last().LastAction)
 	}
 
 	// A settings change resets the count.
 	h.with(func(a *fakeAPI) { a.cfg.Vars["server_type"] = "cx32" })
-	h.advance(Tick)
-	h.tick()
-	if h.applies() != 3 || h.state().NeverJoined != 0 {
-		t.Errorf("applies = %d, count %d", h.applies(), h.state().NeverJoined)
+	h.step()
+	if creates() != 3 || h.state().NeverJoined != 0 {
+		t.Errorf("creates = %d, count %d", creates(), h.state().NeverJoined)
 	}
 }
 
@@ -316,7 +322,7 @@ func TestDoesNotFit(t *testing.T) {
 		t.Errorf("report doesNotFit = %v", got)
 	}
 	h.advance(time.Hour)
-	h.node(name, "ready", 0, time.Hour)
+	h.node(name, "ready", 0, 10*time.Minute) // inside grace: not scaled down
 	h.tick()
 	if h.applies() != 1 {
 		t.Fatalf("bought a second worker for a service that does not fit")

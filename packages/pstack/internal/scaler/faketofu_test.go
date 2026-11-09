@@ -20,8 +20,8 @@ func TestMain(m *testing.M) {
 }
 
 // fakeTofu writes a wrapper that runs this test binary as Tofu with <dir> as its record:
-// calls.log (one argv per line), env.log (the environment of each call), state.json (the names
-// in state). Knobs: <dir>/deleted (names a refresh drops), <dir>/fail (apply prints it and exits
+// calls.log (one argv per line), env.log (the environment of each call), dirs.log (cwd, then
+// argv), state.json (the names in state; `state list` without it fails as real tofu does). Knobs: <dir>/deleted (names a refresh drops), <dir>/fail (apply prints it and exits
 // 1), <dir>/fail-<init|validate|apply|destroy|refresh> (that subcommand does; refresh is
 // `apply -refresh-only`). GORACE=atexit_sleep_ms=0 drops the race runtime's 1 s exit sleep from
 // every call.
@@ -43,6 +43,8 @@ func fakeTofu(t *testing.T) (path, dir string) {
 func fakeTofuMain(dir string, args []string) int {
 	appendFile(filepath.Join(dir, "calls.log"), strings.Join(args, " ")+"\n")
 	appendFile(filepath.Join(dir, "env.log"), strings.Join(os.Environ(), "\n")+"\n--\n")
+	cwd, _ := os.Getwd()
+	appendFile(filepath.Join(dir, "dirs.log"), cwd+" "+strings.Join(args, " ")+"\n")
 	sub := ""
 	if len(args) > 0 {
 		sub = args[0]
@@ -88,6 +90,10 @@ func fakeTofuMain(dir string, args []string) int {
 	case "destroy":
 		names = nil
 	case "state":
+		if _, err := os.Stat(statePath); err != nil {
+			fmt.Println("No state file was found!") // as real tofu, before any apply wrote one
+			return 1
+		}
 		for _, n := range names {
 			fmt.Printf("hcloud_server.worker[%q]\n", n)
 		}

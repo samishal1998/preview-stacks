@@ -72,6 +72,11 @@ type createdData struct {
 	Settings map[string]string `json:"settings"`
 }
 
+type removedData struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
 // Loop is the scaler. One goroutine calls Tick; nothing here is shared.
 type Loop struct {
 	o Options
@@ -91,6 +96,8 @@ type Loop struct {
 	note     string
 	failed   bool
 	logged   string
+	tofuRan  bool // an init or apply ran this tick: no old-preset destroy (W-R19)
+	checked  bool // the orphan check ran in this process
 }
 
 // New loads <StateDir>/scaler.json (creating it with a fresh host id).
@@ -137,7 +144,7 @@ func (l *Loop) Tick() error {
 		elapsed = now - l.s.SeenAt
 	}
 	l.s.SeenAt = now
-	l.action, l.note, l.failed = "", "", false
+	l.action, l.note, l.failed, l.tofuRan = "", "", false, false
 
 	live, err := l.step(now)
 	if err != nil {
@@ -163,10 +170,23 @@ func (l *Loop) step(now int64) (bool, error) {
 	if !l.read() || !l.prepare() {
 		return false, nil
 	}
+	l.s.Orphans = slices.DeleteFunc(l.s.Orphans, func(n string) bool { return slices.Contains(l.cfg.Dismissed, n) })
+	if !l.checked && !l.orphans() {
+		return false, nil
+	}
 	l.settings()
 	l.observe(now)
-	// Task 7: finish removals (step 2), lost after LostAfter not ready (step 3), scale down (5–6).
-	return true, l.scaleUp(now)
+	acted, err := l.removals(now)
+	if err == nil && !acted {
+		err = l.scaleUp(now)
+	}
+	if err == nil {
+		l.scaleDown(now)
+	}
+	if err == nil && !acted {
+		err = l.destroyOld(now)
+	}
+	return true, err
 }
 
 // read is step 1: config, signals, swarm.
@@ -235,6 +255,18 @@ func (l *Loop) prepare() bool {
 	}
 	l.dir = filepath.Join(l.o.StateDir, "tofu", cfg.Preset)
 	l.tofu = Tofu{Bin: l.o.Tofu, Dir: l.dir, StateDir: l.o.StateDir, Creds: cfg.Credentials}
+	if l.s.PendingDestroy == cfg.Preset {
+		// Switched back before the destroy: its shared resources are wanted again, and destroyed
+		// on the next switch away.
+		l.s.PendingDestroy = ""
+		if l.s.LastPreset == "" {
+			l.s.LastPreset = cfg.Preset
+		}
+	}
+	if len(l.s.Workers) == 0 && l.s.PendingDestroy == "" && l.s.LastPreset != "" && l.s.LastPreset != cfg.Preset {
+		// A switch: the old preset's shared resources go once nothing else runs (destroyOld).
+		l.s.PendingDestroy, l.s.LastPreset = l.s.LastPreset, ""
+	}
 	if l.s.Inited[cfg.Preset] != want.Hash {
 		if len(l.s.Workers) > 0 {
 			// W-R35: owned workers keep the files they were made with.
@@ -285,6 +317,7 @@ func (l *Loop) initPreset(hash string) bool {
 		l.fail("preset " + l.cfg.Preset + ": " + err.Error())
 		return false
 	}
+	l.tofuRan = true
 	for _, args := range [][]string{{"init", "-input=false", "-no-color"}, {"validate", "-no-color"}} {
 		if _, err := l.tofu.Run(args...); err != nil {
 			l.fail(args[0] + ": " + err.Error())
@@ -401,6 +434,16 @@ func (l *Loop) observe(now int64) {
 		case w.ReadySince == 0:
 			w.ReadySince = now
 		}
+		// Step 3: a worker that was ready and has not been for LostAfter is lost.
+		switch {
+		case w.ReadyAt == 0 || ok && n.State == "ready":
+			w.NotReadySince = 0
+		case w.NotReadySince == 0:
+			w.NotReadySince = now
+		case now-w.NotReadySince >= LostAfter.Milliseconds():
+			w.Removing, w.Reason = true, "lost"
+			continue
+		}
 		if w.AppliedAt > 0 && w.ReadyAt == 0 && now-w.AppliedAt >= BootTimeout.Milliseconds() {
 			w.Removing, w.Reason = true, "never-joined"
 			l.s.NeverJoined++
@@ -427,6 +470,193 @@ func (l *Loop) observe(now int64) {
 	}
 }
 
+// orphans is the check after an unclean stop, on the first tick that can run Tofu (W-R1): a worker
+// whose create apply was cut off (ApplyingAt still set, never applied) and that Tofu's state does
+// not hold may exist in the provider unrecorded. It becomes removing, so it is never created twice.
+func (l *Loop) orphans() bool {
+	var cut []*OwnedWorker
+	for i := range l.s.Workers {
+		if w := &l.s.Workers[i]; !w.Removing && w.AppliedAt == 0 && w.ApplyingAt != 0 {
+			cut = append(cut, w)
+		}
+	}
+	if len(cut) > 0 {
+		list, err := l.tofu.Run("state", "list", "-no-color")
+		if err != nil {
+			if !strings.Contains(err.Error(), "No state file was found") {
+				l.fail("state: " + err.Error())
+				return false
+			}
+			list = "" // the cut-off apply never wrote one
+		}
+		for _, w := range cut {
+			if !strings.Contains(list, `["`+w.Name+`"]`) {
+				w.Removing, w.Reason = true, "orphan"
+				l.s.Orphans = append(l.s.Orphans, w.Name)
+				l.queueFailed("orphan", w.Name+" not in Tofu state", 1)
+			}
+		}
+	}
+	for i := range l.s.Workers {
+		l.s.Workers[i].ApplyingAt = 0
+	}
+	l.checked = true
+	return true
+}
+
+// removals is step 2. One action per tick, in order: drain a node that still takes tasks, apply
+// without the removing workers, DELETE a node that is down. true: it acted (or waits on backoff),
+// so no apply follows this tick. Waiting for a node to go down is not an action.
+func (l *Loop) removals(now int64) (bool, error) {
+	l.forget()
+	var rm []*OwnedWorker
+	for i := range l.s.Workers {
+		if l.s.Workers[i].Removing {
+			rm = append(rm, &l.s.Workers[i])
+		}
+	}
+	if len(rm) == 0 {
+		return false, nil
+	}
+	// The removing mark is on disk before anything acts on it.
+	if err := l.save(); err != nil {
+		return false, err
+	}
+	for _, w := range rm {
+		if n, ok := l.node(w.Name); ok && n.Availability != "drain" {
+			l.action = "draining " + w.Name
+			if err := l.o.API.Do("POST", "/api/swarm/nodes/"+url.PathEscape(n.ID)+"/drain", nil, nil); err != nil && !noNode(err) {
+				l.fail("drain " + w.Name + ": " + err.Error())
+			}
+			return true, nil
+		}
+	}
+	var in []string
+	for _, w := range rm {
+		if !w.OutOfState {
+			in = append(in, w.Name)
+		}
+	}
+	if len(in) > 0 {
+		if now < l.s.NextTryAt {
+			l.action = "backoff: remove " + strings.Join(in, ", ")
+			return true, nil
+		}
+		err := l.apply(now, "removed "+strings.Join(in, ", ")+" from Tofu")
+		l.forget()
+		return true, err
+	}
+	for _, w := range rm {
+		n, ok := l.node(w.Name)
+		if !ok || n.State != "down" {
+			continue
+		}
+		l.action = "removing node " + w.Name
+		if err := l.o.API.Do("DELETE", "/api/swarm/nodes/"+url.PathEscape(n.ID), nil, nil); err != nil && !noNode(err) {
+			l.fail("remove node " + w.Name + ": " + err.Error())
+			return true, nil
+		}
+		l.sig.Nodes = slices.DeleteFunc(l.sig.Nodes, func(x sigNode) bool { return x.ID == n.ID })
+		l.forget()
+		return true, nil
+	}
+	return false, nil
+}
+
+// noNode is the node routes' 404: the node is already gone, which is what drain and DELETE wanted.
+func noNode(err error) bool { return strings.HasPrefix(err.Error(), "no such node") }
+
+// forget drops removing workers that are out of Tofu state and have no swarm node.
+func (l *Loop) forget() {
+	l.s.Workers = slices.DeleteFunc(l.s.Workers, func(w OwnedWorker) bool {
+		if _, ok := l.node(w.Name); !w.Removing || !w.OutOfState || ok {
+			return false
+		}
+		l.queue("scaler.removed", removedData{Name: w.Name, Reason: w.Reason})
+		return true
+	})
+}
+
+// scaleDown is steps 5 and 6: at most one worker becomes removing per tick. max 0 takes any,
+// one never applied first; otherwise one ready, active and empty past grace, above min or with
+// stale settings, still so on a re-read of signals.
+func (l *Loop) scaleDown(now int64) {
+	owned := slices.IndexFunc(l.s.Workers, func(w OwnedWorker) bool { return !w.Removing })
+	if owned < 0 {
+		return
+	}
+	mark := func(w *OwnedWorker, reason string) {
+		w.Removing, w.Reason = true, reason
+		l.action = "removing " + w.Name
+	}
+	if l.cfg.Max == 0 {
+		if i := slices.IndexFunc(l.s.Workers, func(w OwnedWorker) bool { return !w.Removing && w.AppliedAt == 0 }); i >= 0 {
+			owned = i
+		}
+		mark(&l.s.Workers[owned], "max")
+		return
+	}
+	count := 0
+	for _, w := range l.s.Workers {
+		if !w.Removing {
+			count++
+		}
+	}
+	cur := l.current()
+	grace := int64(l.cfg.GraceMin) * time.Minute.Milliseconds()
+	for i := range l.s.Workers {
+		w := &l.s.Workers[i]
+		n, ok := l.node(w.Name)
+		if w.Removing || !ok || n.State != "ready" || n.Availability != "active" || n.Tasks > 0 || n.EmptySince == nil || now-*n.EmptySince < grace {
+			continue
+		}
+		stale := !maps.Equal(w.Vars, cur)
+		if count <= l.cfg.Min && !stale {
+			continue
+		}
+		var again sigView
+		if err := l.o.API.Do("GET", "/api/signals", nil, &again); err != nil {
+			return
+		}
+		j := slices.IndexFunc(again.Nodes, func(x sigNode) bool { return x.ID == n.ID })
+		if j < 0 || again.Nodes[j].Tasks > 0 || again.Nodes[j].EmptySince == nil || *again.Nodes[j].EmptySince != *n.EmptySince {
+			continue
+		}
+		if stale {
+			mark(w, "replaced")
+		} else {
+			mark(w, "empty")
+		}
+		return
+	}
+}
+
+// destroyOld runs `tofu destroy` in a switched-from preset's directory, on a tick that ran no
+// other Tofu command, with the shared backoff (W-R19). A failure keeps the directory and retries.
+func (l *Loop) destroyOld(now int64) error {
+	old := l.s.PendingDestroy
+	if old == "" || l.tofuRan || now < l.s.NextTryAt {
+		return nil
+	}
+	if err := l.save(); err != nil {
+		return err
+	}
+	t := l.tofu
+	t.Dir = filepath.Join(l.o.StateDir, "tofu", old)
+	if _, err := t.Run("destroy", "-auto-approve", "-input=false", "-no-color"); err != nil {
+		l.applyFailed(now, "destroy", err)
+		return nil
+	}
+	if err := os.RemoveAll(t.Dir); err != nil {
+		l.fail("destroy " + old + ": " + err.Error())
+		return nil
+	}
+	delete(l.s.Inited, old)
+	l.s.PendingDestroy, l.s.Failures, l.s.NextTryAt = "", 0, 0
+	l.action = "destroyed " + old
+	return nil
+}
+
 // scaleUp is step 4: retry a create whose apply failed, or create a worker when every guard holds.
 func (l *Loop) scaleUp(now int64) error {
 	owned := 0
@@ -444,8 +674,9 @@ func (l *Loop) scaleUp(now int64) error {
 			booting = w
 		}
 	}
-	// A failed create is retried as it was: desired state is the workers map (P-R1).
-	if pending != nil {
+	// A failed create is retried as it was: desired state is the workers map (P-R1). Not past
+	// max: step 6 makes it removing instead.
+	if pending != nil && owned <= l.cfg.Max {
 		if now < l.s.NextTryAt {
 			l.action = "backoff: retry " + pending.Name
 			return nil
@@ -534,6 +765,7 @@ func (l *Loop) create(now int64, services []string) error {
 			shared[k] = l.cfg.Vars[k] // every declared one, empty included (W-R36)
 		}
 		l.s.Locked = &Locked{Preset: l.cfg.Preset, FilesHash: l.s.Inited[l.cfg.Preset], Shared: shared}
+		l.s.LastPreset = l.cfg.Preset // its shared resources exist from this apply on
 	}
 	if err := l.save(); err != nil {
 		return err
@@ -569,8 +801,10 @@ func (l *Loop) newName() string {
 }
 
 // apply refreshes, marks applied workers missing from state as lost (step 3), and applies the
-// workers map: every owned worker not removing.
+// workers map: every owned worker not removing. removals runs first and takes the tick while a
+// removing worker's node is not drained, so no apply destroys a server swarm still schedules on.
 func (l *Loop) apply(now int64, did string) error {
+	l.tofuRan = true
 	if err := l.writeVars(); err != nil {
 		return err
 	}
@@ -596,10 +830,10 @@ func (l *Loop) apply(now int64, did string) error {
 		w.ApplyingAt = now
 		in = append(in, w)
 	}
-	if err := l.save(); err != nil {
+	if err := l.writeVars(); err != nil {
 		return err
 	}
-	if err := l.writeVars(); err != nil {
+	if err := l.save(); err != nil {
 		return err
 	}
 	_, err = l.tofu.Run("apply", "-auto-approve", "-input=false", "-no-color")
@@ -614,6 +848,11 @@ func (l *Loop) apply(now int64, did string) error {
 		if w.AppliedAt == 0 {
 			w.AppliedAt = now
 			l.queue("scaler.created", createdData{Name: w.Name, Settings: nonNilVars(w.Vars)})
+		}
+	}
+	for i := range l.s.Workers {
+		if l.s.Workers[i].Removing {
+			l.s.Workers[i].OutOfState = true
 		}
 	}
 	l.s.Failures, l.s.NextTryAt, l.s.LastError = 0, 0, ""
@@ -690,8 +929,12 @@ func (l *Loop) freeze(d int64) {
 		l.s.NextTryAt += d
 	}
 	for i := range l.s.Workers {
-		if l.s.Workers[i].AppliedAt > 0 {
-			l.s.Workers[i].AppliedAt += d
+		w := &l.s.Workers[i]
+		if w.AppliedAt > 0 {
+			w.AppliedAt += d
+		}
+		if w.NotReadySince > 0 {
+			w.NotReadySince += d
 		}
 	}
 }
