@@ -13,6 +13,7 @@ import ContainersCard from './control/ContainersCard.vue';
 import CertificatesCard from './control/CertificatesCard.vue';
 import DomainsCard from './control/DomainsCard.vue';
 import LoggingCard from './control/LoggingCard.vue';
+import WorkersCard from './control/WorkersCard.vue';
 
 const can = (min: RoleName) => atLeast(auth.root, auth.role, min);
 
@@ -76,7 +77,7 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
 
 <template>
   <HStack :gap="4" direction="column">
-    <HPageHeader title="Control stack" eyebrow="Host" description="Containers, hostnames, certificates and logging." actions-placement="end">
+    <HPageHeader title="Control stack" eyebrow="Host" description="Containers, hostnames, certificates, logging and workers." actions-placement="end">
       <template #actions>
         <HButton variant="secondary" icon="arrow" label="Refresh" :loading="refreshing" @click="reloadAll" />
       </template>
@@ -97,6 +98,7 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
       <DomainsCard v-if="domains" :domains="domains" :can-edit="can('maintainer')" @reload="reloadDomains" />
       <CertificatesCard v-if="tls" :tls="tls" :can-admin="can('admin')" @reload="loadTls" />
       <LoggingCard v-if="can('maintainer')" :can-admin="can('admin')" />
+      <WorkersCard v-if="can('maintainer')" :can-admin="can('admin')" />
     </template>
   </HStack>
 </template>

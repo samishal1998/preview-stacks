@@ -20,6 +20,9 @@ import type {
   JobStub,
   LokiSettings,
   LokiStorageInput,
+  ScalerPreset,
+  ScalerSettings,
+  ScalerView,
   TlsRedeploy,
   TlsStatus,
 } from '../api/types';
@@ -301,6 +304,152 @@ async function saveStorage(): Promise<void> {
     cutover: l.storage.s3?.cutover ?? l.limits.earliestCutover, // the date the confirm named
   };
   await saveLogging('/api/logging/storage', body);
+}
+
+// ── the worker scaler ─────────────────────────────────────────────────────────────────────────────
+const scaler = ref<ScalerView | null>(null);
+const presets = ref<ScalerPreset[]>([]);
+const scalerError = ref('');
+const savingScaler = ref(false);
+const scalerDraft = ref<{ preset: string; vars: Record<string, string>; min: Box; max: Box; cooldownMin: Box; graceMin: Box }>({
+  preset: '',
+  vars: {},
+  min: '',
+  max: '',
+  cooldownMin: '',
+  graceMin: '',
+});
+const credDrafts = ref<Record<string, string>>({});
+const newCredKey = ref('');
+const newCredValue = ref('');
+
+// Refill only when the SAVED values change: the poll must not wipe typing (a dismissal is not one).
+watch(
+  () => scaler.value && JSON.stringify(scaler.value.settings, ['preset', 'vars', 'min', 'max', 'cooldownMin', 'graceMin']),
+  () => {
+    const s = scaler.value?.settings;
+    if (!s) return;
+    scalerDraft.value = { preset: s.preset, vars: { ...s.vars }, min: s.min, max: s.max, cooldownMin: s.cooldownMin, graceMin: s.graceMin };
+    credDrafts.value = {};
+  },
+);
+
+async function loadScaler(): Promise<void> {
+  if (!can('maintainer')) return;
+  const [r, p] = await Promise.all([api.get<ScalerView>('/api/scaler'), api.get<ScalerPreset[]>('/api/scaler/presets')]);
+  if (r.ok) scaler.value = r.body;
+  if (p.ok && Array.isArray(p.body)) presets.value = p.body;
+}
+usePolling(loadScaler, 10_000);
+
+const scalerReport = computed(() => scaler.value?.report ?? null);
+/** Shown while the scaler is on (or docker did not say) or still owns workers. */
+const scalerShown = computed(() => !!scaler.value && (scaler.value.enabled !== false || (scalerReport.value?.workers.length ?? 0) > 0));
+/** The preset and its shared vars are fixed while the scaler owns any worker (the API's 409). */
+const scalerLocked = computed(() => !!scalerReport.value?.locked && scalerReport.value.workers.length > 0);
+const presetOf = (name: string) => presets.value.find((p) => p.name === name);
+const chosenPreset = computed(() => presetOf(scalerDraft.value.preset));
+const scalerVars = computed(() => [
+  ...(chosenPreset.value?.preset.perWorker ?? []).map((name) => ({ name, shared: false })),
+  ...(chosenPreset.value?.preset.shared ?? []).map((name) => ({ name, shared: true })),
+]);
+const credKeys = computed(() => Object.keys(scaler.value?.credentials ?? {}).sort());
+/** The report lists a dismissed name until the scaler's next pull. */
+const openOrphans = computed(() => (scalerReport.value?.orphans ?? []).filter((n) => !scaler.value?.settings.dismissed.includes(n)));
+
+/**
+ * PUT replaces every setting: vars only the preset declares (any other is a 400), `dismissed`
+ * echoed (else a save un-dismisses), typed credentials only (empty keeps).
+ */
+async function putScaler(s: ScalerSettings, creds: Record<string, string> = {}): Promise<boolean> {
+  const p = presetOf(s.preset)?.preset;
+  const vars = Object.fromEntries([...(p?.perWorker ?? []), ...(p?.shared ?? [])].filter((k) => s.vars[k]).map((k) => [k, s.vars[k]]));
+  const typed = Object.fromEntries(Object.entries(creds).filter(([k, v]) => k && v));
+  const orphans = scalerReport.value?.orphans ?? [];
+  const body = { ...s, vars, dismissed: s.dismissed.filter((n) => orphans.includes(n)), ...(Object.keys(typed).length ? { credentials: typed } : {}) };
+  savingScaler.value = true;
+  const r = await api.put<ScalerView>('/api/scaler', body);
+  savingScaler.value = false;
+  if (!r.ok) {
+    scalerError.value = problem(r, 'save the scaler');
+    return false;
+  }
+  scalerError.value = '';
+  scaler.value = r.body;
+  return true;
+}
+async function saveScaler(): Promise<void> {
+  const d = scalerDraft.value;
+  const key = newCredKey.value.trim();
+  const creds = { ...credDrafts.value, ...(key ? { [key]: newCredValue.value } : {}) };
+  const s = { ...d, min: Number(d.min), max: Number(d.max), cooldownMin: Number(d.cooldownMin), graceMin: Number(d.graceMin), dismissed: scaler.value?.settings.dismissed ?? [] };
+  if (!(await putScaler(s, creds))) return;
+  credDrafts.value = {};
+  newCredKey.value = newCredValue.value = '';
+  toast('ok', 'Saved.');
+}
+async function dismissOrphan(name: string): Promise<void> {
+  const s = scaler.value?.settings;
+  if (s && (await putScaler({ ...s, dismissed: [...s.dismissed, name] }))) toast('ok', `Dismissed ${name}.`);
+}
+
+// Custom presets (admin). Built-ins open read-only.
+const editing = ref(''); // '' = a new preset
+const editName = ref('');
+const presetFiles = ref<Record<string, string>>({ 'main.tf': '' });
+const newFile = ref('');
+const editBuiltin = ref(false);
+const editLocked = ref(false);
+const savingPreset = ref(false);
+const presetReadOnly = computed(() => editBuiltin.value || editLocked.value);
+watch(editing, async (name) => {
+  if (!name) {
+    editName.value = '';
+    presetFiles.value = { 'main.tf': '' };
+    editBuiltin.value = editLocked.value = false;
+    return;
+  }
+  const r = await api.get<ScalerPreset>(`/api/scaler/presets/${encodeURIComponent(name)}`);
+  if (editing.value !== name) return;
+  if (!r.ok) {
+    toast('error', problem(r, `read ${name}`));
+    return;
+  }
+  editName.value = name;
+  presetFiles.value = { ...(r.body.files ?? {}) };
+  editBuiltin.value = r.body.builtin;
+  editLocked.value = r.body.locked;
+});
+function addFile(): void {
+  const f = newFile.value.trim();
+  if (f && !(f in presetFiles.value)) presetFiles.value = { ...presetFiles.value, [f]: '' };
+  newFile.value = '';
+}
+async function savePreset(): Promise<void> {
+  const name = editName.value.trim();
+  savingPreset.value = true;
+  const r = await api.put<ScalerPreset>(`/api/scaler/presets/${encodeURIComponent(name)}`, { files: presetFiles.value });
+  savingPreset.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, `save ${name}`));
+    return;
+  }
+  toast('ok', `Saved ${name}.`);
+  await loadScaler();
+  editing.value = name;
+}
+async function deletePreset(): Promise<void> {
+  const name = editing.value;
+  savingPreset.value = true;
+  const r = await api.del<{ deleted: true }>(`/api/scaler/presets/${encodeURIComponent(name)}`);
+  savingPreset.value = false;
+  if (!r.ok) {
+    toast('error', problem(r, `delete ${name}`));
+    return;
+  }
+  toast('ok', `Deleted ${name}.`);
+  editing.value = '';
+  await loadScaler();
 }
 </script>
 
@@ -681,6 +830,195 @@ async function saveStorage(): Promise<void> {
         </template>
       </template>
     </section>
+
+    <!-- ============================ the worker scaler ============================ -->
+    <!-- Hidden when the scaler is off and owns nothing. -->
+    <section v-if="can('maintainer') && scaler && scalerShown" class="panel settings-form">
+      <div class="phead">
+        <h2 class="section">Workers</h2>
+      </div>
+
+      <p v-if="scaler.enabled === null" class="mute">Docker did not answer.</p>
+      <ul class="kvlist" style="margin: var(--s3) 0">
+        <li>
+          <span class="k">Host ID</span>
+          <span class="v mono">{{ scalerReport?.hostId || '—' }}</span>
+        </li>
+        <li v-if="scalerReport?.lastAction">
+          <span class="k">Last action</span>
+          <span class="v">{{ scalerReport.lastAction }}</span>
+        </li>
+        <li v-if="scalerReport?.lastError">
+          <span class="k">Last error</span>
+          <span class="v s-failed wrap">{{ scalerReport.lastError }}</span>
+        </li>
+        <li v-if="scalerReport?.nextRetryAt">
+          <span class="k">Next retry</span>
+          <span class="v">{{ stamp(scalerReport.nextRetryAt) }}</span>
+        </li>
+        <li v-if="scalerReport?.doesNotFit.length">
+          <span class="k">Does not fit</span>
+          <span class="v mono">{{ scalerReport.doesNotFit.join(', ') }}</span>
+        </li>
+        <li v-if="scalerReport?.pendingDestroy">
+          <span class="k">Pending destroy</span>
+          <span class="v mono">{{ scalerReport.pendingDestroy }}</span>
+        </li>
+      </ul>
+
+      <table v-if="scalerReport?.workers.length" role="table" class="cards">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">Name</th>
+            <th role="columnheader">Settings</th>
+            <th role="columnheader">State</th>
+            <th role="columnheader">Created</th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          <tr v-for="w in scalerReport.workers" :key="w.name" role="row">
+            <td role="cell" class="name mono" data-label="name">{{ w.name }}</td>
+            <td role="cell" class="mono mute" data-label="settings">
+              {{ Object.entries(w.vars).map(([k, v]) => `${k}=${v}`).join(' ') || '—' }}
+            </td>
+            <td role="cell" data-label="state">
+              <span :class="w.state === 'ready' ? 's-ok' : w.state === 'lost' || w.state === 'down' ? 's-failed' : ''">{{ sentence(w.state) }}</span>
+            </td>
+            <td role="cell" class="mute" data-label="created">{{ ago(w.createdAt) }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="mute">No workers.</p>
+
+      <table v-if="openOrphans.length" role="table" class="cards" style="margin-top: var(--s4)">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">Possible orphan</th>
+            <th role="columnheader"></th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          <tr v-for="o in openOrphans" :key="o" role="row">
+            <td role="cell" class="name mono" data-label="orphan">{{ o }}</td>
+            <td role="cell" class="row-actions" data-label="">
+              <ActionButton v-if="can('admin')" variant="ghost" :pending="savingScaler" @click="dismissOrphan(o)">Dismiss</ActionButton>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <ErrorNote v-if="scalerError" :text="scalerError" />
+      <p v-if="!can('admin')" class="hint">Admin only.</p>
+
+      <div class="field" style="margin-top: var(--s4)">
+        <label for="scaler-preset">Preset</label>
+        <SelectMenu
+          id="scaler-preset"
+          v-model="scalerDraft.preset"
+          label="Preset"
+          placeholder="Choose a preset"
+          :options="presets.map((p) => ({ value: p.name, label: p.builtin ? p.name : `${p.name} (custom)` }))"
+          :disabled="scalerLocked || !can('admin')"
+        />
+        <p v-if="scalerLocked" class="hint">Locked while workers exist.</p>
+        <p v-if="chosenPreset && !chosenPreset.preset.lockFile" class="hint">No lock file: providers download unpinned.</p>
+      </div>
+      <div v-for="v in scalerVars" :key="v.name" class="field">
+        <label :for="`scaler-var-${v.name}`" class="mono">{{ v.name }}</label>
+        <input
+          :id="`scaler-var-${v.name}`"
+          v-model="scalerDraft.vars[v.name]"
+          type="text"
+          class="mono"
+          spellcheck="false"
+          :disabled="!can('admin') || (v.shared && scalerLocked)"
+        />
+        <p class="hint">{{ v.shared ? 'Shared.' : 'Per worker.' }}</p>
+      </div>
+      <div class="row wrap" style="margin-top: var(--s4); gap: var(--s4)">
+        <div class="field">
+          <label for="scaler-min">Min</label>
+          <input id="scaler-min" v-model="scalerDraft.min" type="number" min="0" step="1" inputmode="numeric" style="width: 6rem" :disabled="!can('admin')" />
+        </div>
+        <div class="field">
+          <label for="scaler-max">Max</label>
+          <input id="scaler-max" v-model="scalerDraft.max" type="number" min="0" step="1" inputmode="numeric" style="width: 6rem" :disabled="!can('admin')" />
+        </div>
+        <div class="field">
+          <label for="scaler-cooldown">Cooldown (min)</label>
+          <input id="scaler-cooldown" v-model="scalerDraft.cooldownMin" type="number" min="0" step="1" inputmode="numeric" style="width: 6rem" :disabled="!can('admin')" />
+        </div>
+        <div class="field">
+          <label for="scaler-grace">Grace (min)</label>
+          <input id="scaler-grace" v-model="scalerDraft.graceMin" type="number" min="0" step="1" inputmode="numeric" style="width: 6rem" :disabled="!can('admin')" />
+        </div>
+      </div>
+
+      <template v-if="can('admin')">
+        <div v-for="k in credKeys" :key="k" class="field" style="margin-top: var(--s4)">
+          <label :for="`scaler-cred-${k}`" class="mono">{{ k }}</label>
+          <input :id="`scaler-cred-${k}`" v-model="credDrafts[k]" type="password" spellcheck="false" autocomplete="new-password" />
+          <p class="hint">Write-only. Leave empty to keep.</p>
+        </div>
+        <div class="field" style="margin-top: var(--s4)">
+          <label for="scaler-cred-new">New credential</label>
+          <input id="scaler-cred-new" v-model="newCredKey" type="text" class="mono" spellcheck="false" autocomplete="off" placeholder="HCLOUD_TOKEN" />
+        </div>
+        <div v-if="newCredKey.trim()" class="field">
+          <label for="scaler-cred-new-value" class="mono">{{ newCredKey.trim() }}</label>
+          <input id="scaler-cred-new-value" v-model="newCredValue" type="password" spellcheck="false" autocomplete="new-password" />
+          <p class="hint">Write-only.</p>
+        </div>
+        <div class="row" style="margin-top: var(--s4)">
+          <ActionButton variant="primary" :pending="savingScaler" :disabled="!scalerDraft.preset" @click="saveScaler">Save</ActionButton>
+        </div>
+
+        <h3 class="section" style="margin-top: var(--s6)">Presets</h3>
+        <div class="field">
+          <label for="scaler-edit">Edit</label>
+          <SelectMenu
+            id="scaler-edit"
+            v-model="editing"
+            label="Edit"
+            :options="[{ value: '', label: 'New preset' }, ...presets.map((p) => ({ value: p.name, label: p.builtin ? `${p.name} (built-in)` : p.name }))]"
+          />
+        </div>
+        <div v-if="!editing" class="field">
+          <label for="scaler-edit-name">Name</label>
+          <input id="scaler-edit-name" v-model="editName" type="text" class="mono" spellcheck="false" autocomplete="off" />
+        </div>
+        <p v-if="editBuiltin" class="hint">Built-in: read-only.</p>
+        <p v-else-if="editLocked" class="hint">Locked while workers exist.</p>
+        <p v-if="!('.terraform.lock.hcl' in presetFiles)" class="hint">No lock file: providers download unpinned.</p>
+        <div v-for="(_, f) in presetFiles" :key="f" class="field">
+          <label :for="`scaler-file-${f}`" class="mono">{{ f }}</label>
+          <textarea
+            :id="`scaler-file-${f}`"
+            v-model="presetFiles[f]"
+            rows="8"
+            class="mono"
+            spellcheck="false"
+            wrap="off"
+            :readonly="presetReadOnly"
+          ></textarea>
+        </div>
+        <template v-if="!presetReadOnly">
+          <div class="row" style="margin-top: var(--s4); gap: var(--s3); flex-wrap: wrap">
+            <div class="field inline" style="flex: 1 1 14rem">
+              <label for="scaler-new-file">File name</label>
+              <input id="scaler-new-file" v-model="newFile" class="mono" spellcheck="false" placeholder="network.tf" @keyup.enter="addFile" />
+            </div>
+            <ActionButton :disabled="!newFile.trim()" @click="addFile">Add file</ActionButton>
+          </div>
+          <div class="row" style="margin-top: var(--s4)">
+            <ActionButton variant="primary" :pending="savingPreset" :disabled="!editName.trim()" @click="savePreset">Save preset</ActionButton>
+            <ActionButton v-if="editing" variant="danger" :pending="savingPreset" :confirm="`Delete ${editing}?`" @run="deletePreset">
+              Delete
+            </ActionButton>
+          </div>
+        </template>
+      </template>
+    </section>
   </div>
 </template>
 
@@ -694,6 +1032,10 @@ button[aria-pressed='true'] {
 input:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+/* A long Tofu error breaks rather than widening a 320px page. */
+.wrap {
+  overflow-wrap: anywhere;
 }
 /* Under the vitals, as quiet as they are. A long `to` URL breaks rather than widening a 320px page. */
 .forward-line {
