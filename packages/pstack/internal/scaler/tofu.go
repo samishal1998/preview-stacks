@@ -90,6 +90,9 @@ func extract(f *zip.File, path string) error {
 	}
 	defer os.Remove(tmp.Name()) // a no-op after the rename
 	_, err = io.Copy(tmp, src)
+	if err == nil {
+		err = tmp.Sync() // a power loss past the rename never leaves a short 0755 binary
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
