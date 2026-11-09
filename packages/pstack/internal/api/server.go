@@ -44,6 +44,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registries"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scaler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/scheduler"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/settings"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
@@ -275,6 +276,12 @@ type Server struct {
 	lokiRunner func(ctx context.Context) exec.Runner
 	lokiPoll   time.Duration
 	lokiNow    func() time.Time
+
+	// scalerMu owns the scaler's in-memory half (routes_scaler.go): the last report and the
+	// dismissed orphans. Never held across a docker call or an Emit (Go rule 14).
+	scalerMu        sync.Mutex
+	scalerLast      *scaler.Report
+	scalerDismissed []string
 }
 
 // New wires a server. Nothing listens until Start.

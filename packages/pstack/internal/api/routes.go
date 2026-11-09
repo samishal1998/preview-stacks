@@ -39,7 +39,8 @@ var (
 	// expands this shape into three paths (/nodes/{id}, …/drain, …/undrain) and collapses any other.
 	swarmNodeRe = regexp.MustCompile(`^/api/swarm/nodes/([^/]+)(?:/(drain|undrain))?$`)
 	// Spelled like swarmNodeRe, so openapi_coverage_test expands it into /{name} and /{name}/assignment.
-	customRouteRe = regexp.MustCompile(`^/api/custom-routes/([^/]+)(?:/(assignment))?$`)
+	customRouteRe  = regexp.MustCompile(`^/api/custom-routes/([^/]+)(?:/(assignment))?$`)
+	scalerPresetRe = regexp.MustCompile(`^/api/scaler/presets/([^/]+)$`)
 )
 
 // routes is the gated route table, in api.ts order. An ordered if-chain over precompiled
@@ -195,6 +196,33 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 	}
 	if path == "/api/forward" && r.Method == http.MethodDelete {
 		return s.forwardDelete(w)
+	}
+
+	// ---- the worker scaler (routes_scaler.go); config and report are root's, gated twice ----
+	if path == "/api/scaler" && r.Method == http.MethodGet {
+		return s.scalerGet(w)
+	}
+	if path == "/api/scaler" && r.Method == http.MethodPut {
+		return s.scalerPut(w, r)
+	}
+	if path == "/api/scaler/presets" && r.Method == http.MethodGet {
+		return s.scalerPresetList(w)
+	}
+	if m := scalerPresetRe.FindStringSubmatch(path); m != nil {
+		switch r.Method {
+		case http.MethodGet:
+			return s.scalerPresetGet(w, m[1])
+		case http.MethodPut:
+			return s.scalerPresetPut(w, r, m[1])
+		case http.MethodDelete:
+			return s.scalerPresetDelete(w, m[1])
+		}
+	}
+	if path == "/api/scaler/config" && r.Method == http.MethodGet {
+		return s.scalerConfigGet(w, who)
+	}
+	if path == "/api/scaler/report" && r.Method == http.MethodPost {
+		return s.scalerReportPost(w, r, who)
 	}
 
 	// ---- the host's certificate mode ----

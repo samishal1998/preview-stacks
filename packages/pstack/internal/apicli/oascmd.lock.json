@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "b89090a7d01ec98ef32ea7c72d0ee506ebcb0d9f2efb0ee0ea9339df27ffdf44",
+  "specDigest": "3cbe7f2d03b0e576a1fa28e72958bc6478086ccb13265a74dbeece9dfeb44936",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -407,6 +407,26 @@
         "name": "delete"
       },
       "digest": "3ac0bec3dbfeb00c"
+    },
+    "deleteScalerPreset": {
+      "operationId": "deleteScalerPreset",
+      "method": "DELETE",
+      "path": "/api/scaler/presets/{name}",
+      "command": "scaler preset-delete",
+      "funcName": "NewScalerPresetDeleteCommand",
+      "summary": "Delete a custom preset. 409 on the locked preset. Admin.",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "preset-delete"
+      },
+      "digest": "13e0a14ab6518451"
     },
     "deleteSpec": {
       "operationId": "deleteSpec",
@@ -880,6 +900,50 @@
       },
       "digest": "ec785e0671eb0ce1"
     },
+    "getScaler": {
+      "operationId": "getScaler",
+      "method": "GET",
+      "path": "/api/scaler",
+      "command": "scaler get",
+      "funcName": "NewScalerGetCommand",
+      "summary": "The scaler settings, credential keys as { KEY: true } (never a value), the last report or null, and enabled (true/false, null when docker did not answer). Maintainer.",
+      "ext": {
+        "name": "get"
+      },
+      "digest": "8c2daa7a123eac7c"
+    },
+    "getScalerConfig": {
+      "operationId": "getScalerConfig",
+      "method": "GET",
+      "path": "/api/scaler/config",
+      "command": "scaler config",
+      "funcName": "NewScalerConfigCommand",
+      "summary": "Everything the scaler needs: settings, credential values and the preset's files. Root only (PSTACK_TOKEN), never an admin session.",
+      "ext": {
+        "name": "config"
+      },
+      "digest": "5e5c883293f2dad6"
+    },
+    "getScalerPreset": {
+      "operationId": "getScalerPreset",
+      "method": "GET",
+      "path": "/api/scaler/presets/{name}",
+      "command": "scaler preset",
+      "funcName": "NewScalerPresetCommand",
+      "summary": "One preset with its files: { name, builtin, files, preset, locked }. Maintainer.",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "ext": {
+        "name": "preset"
+      },
+      "digest": "35aaa1846e129dab"
+    },
     "getSignals": {
       "operationId": "getSignals",
       "method": "GET",
@@ -1113,6 +1177,18 @@
       },
       "digest": "1a3baa1436445e43"
     },
+    "listScalerPresets": {
+      "operationId": "listScalerPresets",
+      "method": "GET",
+      "path": "/api/scaler/presets",
+      "command": "scaler presets",
+      "funcName": "NewScalerPresetsCommand",
+      "summary": "Every preset, built-in and custom: [{ name, builtin, preset, locked }]. Maintainer.",
+      "ext": {
+        "name": "presets"
+      },
+      "digest": "4185e95aab5dd255"
+    },
     "listSettings": {
       "operationId": "listSettings",
       "method": "GET",
@@ -1163,6 +1239,22 @@
       "funcName": "NewUsersListCommand",
       "ext": {},
       "digest": "aaaa2196fa31020c"
+    },
+    "postScalerReport": {
+      "operationId": "postScalerReport",
+      "method": "POST",
+      "path": "/api/scaler/report",
+      "command": "scaler report",
+      "funcName": "NewScalerReportCommand",
+      "summary": "The scaler's status, and at most one scaler.* event to emit. Owned workers and the locked config are stored; the rest is kept in memory. Root only.",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "report"
+      },
+      "digest": "4c5b03d1899f1f53"
     },
     "postTlsRedeploy": {
       "operationId": "postTlsRedeploy",
@@ -1351,6 +1443,30 @@
         "name": "put"
       },
       "digest": "e3bd58b43c3ecc0f"
+    },
+    "putScalerPreset": {
+      "operationId": "putScalerPreset",
+      "method": "PUT",
+      "path": "/api/scaler/presets/{name}",
+      "command": "scaler preset-set",
+      "funcName": "NewScalerPresetSetCommand",
+      "summary": "Store a custom preset: main.tf (more .tf files allowed) and an optional .terraform.lock.hcl. Built-ins are read-only. 409 on the locked preset unless the files are unchanged. Admin.",
+      "flags": [
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "preset-set"
+      },
+      "digest": "4b3310d7ad3c98d7"
     },
     "putSpec": {
       "operationId": "putSpec",
@@ -1836,6 +1952,22 @@
         "name": "set-pressure-sleep-idle-min"
       },
       "digest": "b2144f0ce75f70a8"
+    },
+    "setScaler": {
+      "operationId": "setScaler",
+      "method": "PUT",
+      "path": "/api/scaler",
+      "command": "scaler set",
+      "funcName": "NewScalerSetCommand",
+      "summary": "Replace the scaler settings. Absent fields take the defaults (min 0, max 3, cooldownMin 5, graceMin 15). A credential sent empty, omitted or as the mask keeps its value; null deletes it. 409 while the scaler owns workers and the change differs from the locked preset, files or shared vars, or deletes a credential. Admin.",
+      "body": {
+        "flat": false,
+        "required": true
+      },
+      "ext": {
+        "name": "set"
+      },
+      "digest": "fdb2ffd6867721ac"
     },
     "setUserPassword": {
       "operationId": "setUserPassword",
