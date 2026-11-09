@@ -3551,7 +3551,8 @@ is pending.
 
 **After an unclean stop** (a reboot, a kill past the 5-minute grace) Tofu may have created a server
 it did not record. The scaler lists the name as a *possible orphan* on the card, never creates it
-again, and emits `scaler.failed` with `action: orphan`. Tofu has no record of that server, so look
+again, and emits `scaler.failed` with `action: orphan`, then `scaler.removed` with reason `orphan`
+once it drops the name. Tofu has no record of that server, so look
 for the name and the label in the provider's console, delete it there if it exists, then
 **Dismiss** it on the card.
 
