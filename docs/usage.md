@@ -3565,7 +3565,8 @@ error, the next retry, services that do not fit, possible orphans, and a pending
 destroy. Custom presets are edited there too.
 
 Events: `scaler.created`, `scaler.removed`, `scaler.failed`
-([webhook-events.md](webhook-events.md#scalercreated--scalerremoved--scalerfailed)). None carries
+([webhook-events.md](webhook-events.md#scalercreated--scalerremoved--scalerfailed)).
+`scaler.removed` reasons: `empty`, `replaced`, `max`, `lost`, `never-joined`, `orphan`. None carries
 a credential, the join token or `user_data`; Tofu's output is scrubbed, then cut to its last 20
 lines.
 
