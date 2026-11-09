@@ -91,7 +91,7 @@ func TestEnvelopeAndSign(t *testing.T) {
 // negative control: delete `case "forward.changed"` → got "forward.changed on this host."; drop its
 // `via` branch → the via line loses " via 10.0.0.2". Delete `case "forward.failed"` → its line differs.
 // negative control: delete `case "scaler.failed"` → got "scaler.failed on this host."; drop its empty-
-// error branch → "Scaler max failed: ." (W-R17); drop the TrimRight → "…exceeded..".
+// error branch → "Scaler max failed: ." (W-R17); drop the TrimRight → "…exceeded.\n.".
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	pressureData := func(kinds string, disk, memory, cpu float64) string {
