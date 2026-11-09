@@ -359,7 +359,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 var SpecCommands = []string{"up", "down", "verify", "status", "validate"}
 
 // Commands in usage order.
-var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "route", "forward", "migrate", "healthcheck", "api", "completion")
+var Commands = append(append([]string{}, SpecCommands...), "init", "serve", "build-image", "cloud-init", "dockerfile", "upgrade", "ui", "logging", "swarm", "pull", "push", "route", "forward", "migrate", "scaler", "healthcheck", "api", "completion")
 
 // IsCommand reports whether name is a known command.
 func IsCommand(name string) bool {
@@ -386,7 +386,7 @@ func Usage(version string) string {
 	return strings.Join([]string{
 		"pstack " + version + " — declarative lifecycle for ephemeral preview stacks",
 		"",
-		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|route|forward|migrate|serve|api|completion> [flags]",
+		"Usage: pstack <up|down|verify|status|validate|cloud-init|dockerfile|build-image|init|upgrade|ui|logging|swarm|pull|push|route|forward|migrate|scaler|serve|api|completion> [flags]",
 		"",
 		"Any command's own flags: pstack <command> --help",
 		"",
@@ -489,6 +489,9 @@ func Usage(version string) string {
 		"            PSTACK_READINESS_POLL_MS · PSTACK_READINESS_TIMEOUT_MS · PSTACK_READINESS_RESTART_LOOP",
 		"            PSTACK_SSO_STATE_TTL_S · PSTACK_SSO_DISCOVERY_TTL_S",
 		"            PSTACK_MAX_JOBS (4) — lifecycle jobs running at once, across every stack",
+		"",
+		"scaler env: PSTACK_TOKEN (required, root) · PSTACK_API_URL (http://pstack:7878) · PSTACK_SCALER_STATE (/state)",
+		"            the worker scaler, in the control stack's scaler container (pstack init --scaler on)",
 		"",
 		"healthcheck: GET /api/health on PSTACK_PORT, exit 0 or 1 — the container HEALTHCHECK.",
 		"",

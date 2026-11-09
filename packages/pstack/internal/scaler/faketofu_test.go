@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMain doubles as the fake `tofu` when PSTACK_FAKE_TOFU=<dir> is set. It must act before
@@ -23,7 +24,7 @@ func TestMain(m *testing.M) {
 // calls.log (one argv per line), env.log (the environment of each call), dirs.log (cwd, then
 // argv), state.json (the names in state; `state list` without it fails as real tofu does). Knobs: <dir>/deleted (names a refresh drops), <dir>/fail (apply prints it and exits
 // 1), <dir>/fail-<init|validate|apply|destroy|refresh> (that subcommand does; refresh is
-// `apply -refresh-only`). GORACE=atexit_sleep_ms=0 drops the race runtime's 1 s exit sleep from
+// `apply -refresh-only`), <dir>/sleep (a duration the apply sleeps first). GORACE=atexit_sleep_ms=0 drops the race runtime's 1 s exit sleep from
 // every call.
 func fakeTofu(t *testing.T) (path, dir string) {
 	t.Helper()
@@ -63,6 +64,10 @@ func fakeTofuMain(dir string, args []string) int {
 	}
 	switch sub {
 	case "apply":
+		if b, err := os.ReadFile(filepath.Join(dir, "sleep")); err == nil {
+			d, _ := time.ParseDuration(strings.TrimSpace(string(b)))
+			time.Sleep(d)
+		}
 		if b, err := os.ReadFile(filepath.Join(dir, "fail")); err == nil {
 			fmt.Print(string(b))
 			return 1

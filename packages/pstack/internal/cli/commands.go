@@ -173,6 +173,18 @@ Reads its configuration from the environment, never flags, because the control s
 Full list: pstack --help.`,
 		flags: globalFlags,
 	},
+	"scaler": {
+		summary: "add and remove swarm workers",
+		body: `pstack scaler
+
+Runs inside the control stack's scaler container (pstack init --scaler on). Reads its
+configuration from the environment, never flags, because the control stack sets it:
+
+      PSTACK_TOKEN          required — the host's root token
+      PSTACK_API_URL        http://pstack:7878
+      PSTACK_SCALER_STATE   /state`,
+		flags: []string{"--help"},
+	},
 	"healthcheck": {
 		summary: "GET /api/health, exit 0 or 1 (the container HEALTHCHECK)",
 		body:    "pstack healthcheck\n\nOne request to /api/health on PSTACK_PORT. Exit 0 healthy, 1 not. Takes no flags.",
