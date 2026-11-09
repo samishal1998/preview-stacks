@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestOpen(t *testing.T) {
 		}
 		// Every table the migrations declare exists — the multi-statement Exec ran to the end.
 		// sso_config is deliberately absent: migration 7 replaced it with sso_providers.
-		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state", "settings", "loki_config", "custom_routes"} {
+		for _, tbl := range []string{"users", "sessions", "tokens", "notifiers", "deliveries", "terminal_sessions", "host_vars", "sso_providers", "sso_links", "sso_state", "settings", "loki_config", "custom_routes", "forward_config", "scaler_config", "scaler_presets"} {
 			var n int
 			if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n); err != nil || n != 1 {
 				t.Fatalf("table %s missing", tbl)
@@ -311,6 +312,66 @@ func TestOpen(t *testing.T) {
 		}
 	})
 
+	t.Run("migration 12 adds EMPTY scaler_config and scaler_presets tables and touches nothing else", func(t *testing.T) {
+		// negative control: delete either CREATE TABLE from migration 12's string, leaving the entry (so
+		// user_version still reaches 12 and the failure is about the table, not the version) → its
+		// SELECT COUNT(*) errors with "no such table" and this fails.
+		//
+		// An empty scaler_config means the scaler is off, so every host that migrates through this (the
+		// checked-in host fixture included) serves exactly as before.
+		dir := t.TempDir()
+		saved := Migrations
+		Migrations = saved[:11]
+		s, err := Open(dir) // a real v11 database, made by the shipped migrations
+		Migrations = saved
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := s.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('scaler_config', 'scaler_presets')").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("v11 already has a scaler table (%d, %v)", n, err)
+		}
+		if _, err := s.DB.Exec("INSERT INTO host_vars (name, value, secret, created_at, updated_at) VALUES ('REGION', 'eu', 0, 1, 1)"); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		s, err = Open(dir) // reopening runs migration 12
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		for _, tbl := range []string{"scaler_config", "scaler_presets"} {
+			if err := s.DB.QueryRow("SELECT COUNT(*) FROM " + tbl).Scan(&n); err != nil || n != 0 {
+				t.Fatalf("%s after migration 12: %d rows, %v — it must exist and be empty", tbl, n, err)
+			}
+		}
+		var v int
+		s.DB.QueryRow("PRAGMA user_version").Scan(&v)
+		if v != len(Migrations) {
+			t.Fatalf("user_version %d, want %d", v, len(Migrations))
+		}
+		var region string
+		if err := s.DB.QueryRow("SELECT value FROM host_vars WHERE name='REGION'").Scan(&region); err != nil || region != "eu" {
+			t.Fatalf("the v11 data did not survive migration 12: %q %v", region, err)
+		}
+	})
+
+	t.Run("scaler_config holds one row: a second id violates CHECK (id = 1)", func(t *testing.T) {
+		// negative control: drop `CHECK (id = 1)` from migration 12 → the id = 2 INSERT succeeds and this fails
+		s, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if _, err := s.DB.Exec("INSERT INTO scaler_config (id) VALUES (1)"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.DB.Exec("INSERT INTO scaler_config (id) VALUES (2)")
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("a second scaler_config row: %v, want a CHECK constraint failure", err)
+		}
+	})
+
 	t.Run("loki_config holds one row: a second id violates CHECK (id = 1)", func(t *testing.T) {
 		// negative control: drop `CHECK (id = 1)` from migration 9 → the id = 2 INSERT succeeds and this fails
 		s, err := Open(t.TempDir())
@@ -386,5 +447,126 @@ func TestForwardRoundTrip(t *testing.T) {
 	}
 	if f, err := GetForward(s.DB); err != nil || f != nil {
 		t.Fatalf("GetForward after Delete: %+v, %v — want nil, nil", f, err)
+	}
+}
+
+func TestScalerConfigRoundTrip(t *testing.T) {
+	// negative control: add `report = excluded.report` to SetScalerSettings' ON CONFLICT → the report
+	// set before it is wiped and this fails; change the SQL DEFAULT for max to 4 → the row
+	// SetScalerReport creates reads back Max 4, not the Go default 3.
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	defaults := ScalerConfig{Vars: map[string]string{}, Max: 3, CooldownMin: 5, GraceMin: 15, Credentials: map[string]string{}}
+	c, err := GetScalerConfig(s.DB)
+	if err != nil || c == nil || !reflect.DeepEqual(*c, defaults) || c.Vars == nil || c.Credentials == nil {
+		t.Fatalf("GetScalerConfig on an empty table: %+v, %v — want %+v with non-nil maps", c, err, defaults)
+	}
+
+	// A report alone creates the row from the SQL DEFAULTs; they must equal the Go defaults.
+	if err := SetScalerReport(s.DB, `{"x":1}`); err != nil {
+		t.Fatal(err)
+	}
+	want := defaults
+	want.Report = `{"x":1}`
+	if c, err := GetScalerConfig(s.DB); err != nil || !reflect.DeepEqual(*c, want) {
+		t.Fatalf("GetScalerConfig after a report on an empty table: %+v, %v — want %+v", c, err, want)
+	}
+
+	// Settings leave the report unchanged.
+	want = ScalerConfig{Preset: "hetzner", Vars: map[string]string{"location": "fsn1"}, Min: 1, Max: 5, CooldownMin: 2,
+		GraceMin: 9, Credentials: map[string]string{"HCLOUD_TOKEN": "tok"}, Report: `{"x":1}`}
+	in := want
+	in.Report = "ignored"
+	if err := SetScalerSettings(s.DB, in); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := GetScalerConfig(s.DB); err != nil || !reflect.DeepEqual(*c, want) {
+		t.Fatalf("GetScalerConfig after SetScalerSettings: %+v, %v — want %+v", c, err, want)
+	}
+
+	// A report leaves the settings unchanged.
+	if err := SetScalerReport(s.DB, `{"y":2}`); err != nil {
+		t.Fatal(err)
+	}
+	want.Report = `{"y":2}`
+	if c, err := GetScalerConfig(s.DB); err != nil || !reflect.DeepEqual(*c, want) {
+		t.Fatalf("GetScalerConfig after SetScalerReport: %+v, %v — want %+v", c, err, want)
+	}
+
+	// Nil maps are stored as {} and read back non-nil.
+	if err := SetScalerSettings(s.DB, ScalerConfig{Max: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := GetScalerConfig(s.DB); err != nil || c.Vars == nil || c.Credentials == nil {
+		t.Fatalf("GetScalerConfig after nil maps: %+v, %v — want non-nil maps", c, err)
+	}
+}
+
+func TestScalerPresetRoundTrip(t *testing.T) {
+	// negative control: drop `ORDER BY name` from ListScalerPresets → rows come back in insert order
+	// (b, a) and this fails; return true unconditionally from DeleteScalerPreset → the second Delete
+	// reports true.
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b := ScalerPreset{Name: "b", Files: map[string]string{"main.tf": "b"}, UpdatedAt: 2}
+	a := ScalerPreset{Name: "a", Files: map[string]string{"main.tf": "a", "vars.tf": "v"}, UpdatedAt: 1}
+	for _, p := range []ScalerPreset{b, a} {
+		if err := PutScalerPreset(s.DB, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A second Put replaces the row.
+	b.Files["main.tf"], b.UpdatedAt = "b2", 3
+	if err := PutScalerPreset(s.DB, b); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := ListScalerPresets(s.DB); err != nil || !reflect.DeepEqual(l, []ScalerPreset{a, b}) {
+		t.Fatalf("ListScalerPresets: %+v, %v — want [a b]", l, err)
+	}
+	if p, err := GetScalerPreset(s.DB, "a"); err != nil || p == nil || !reflect.DeepEqual(*p, a) {
+		t.Fatalf("GetScalerPreset(a): %+v, %v — want %+v", p, err, a)
+	}
+	if p, err := GetScalerPreset(s.DB, "absent"); err != nil || p != nil {
+		t.Fatalf("GetScalerPreset(absent): %+v, %v — want nil, nil", p, err)
+	}
+	if ok, err := DeleteScalerPreset(s.DB, "a"); err != nil || !ok {
+		t.Fatalf("first DeleteScalerPreset: %v, %v — want true", ok, err)
+	}
+	if ok, err := DeleteScalerPreset(s.DB, "a"); err != nil || ok {
+		t.Fatalf("second DeleteScalerPreset: %v, %v — want false", ok, err)
+	}
+}
+
+func TestScalerConfigSet(t *testing.T) {
+	// negative control: drop the scaler_presets EXISTS from ScalerConfigSet → a db holding only a
+	// preset reports false and this fails.
+	for _, tc := range []struct {
+		name string
+		set  func(q Querier) error
+		want bool
+	}{
+		{"empty", func(Querier) error { return nil }, false},
+		{"a scaler_config row", func(q Querier) error { return SetScalerReport(q, "") }, true},
+		{"a preset only", func(q Querier) error { return PutScalerPreset(q, ScalerPreset{Name: "p", UpdatedAt: 1}) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if err := tc.set(s.DB); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := ScalerConfigSet(s.DB); err != nil || got != tc.want {
+				t.Fatalf("ScalerConfigSet: %v, %v — want %v", got, err, tc.want)
+			}
+		})
 	}
 }
