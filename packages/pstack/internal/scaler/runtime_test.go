@@ -128,6 +128,18 @@ func TestTofuEnv(t *testing.T) {
 	}
 }
 
+func TestTofuRunRefusesEmptyStateDir(t *testing.T) {
+	// negative control: drop the StateDir guard in Tofu.Run → the fake runs, calls.log exists and this fails
+	bin, dir := fakeTofu(t)
+	_, err := Tofu{Bin: bin, Dir: dir}.Run("validate")
+	if err == nil || err.Error() != "scaler: Tofu.StateDir is unset" {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "calls.log")); !os.IsNotExist(err) {
+		t.Errorf("calls.log stat = %v, want not exist", err)
+	}
+}
+
 func TestTofuRunErrorIsScrubbedTail(t *testing.T) {
 	// negative control: return the raw output as the error in Tofu.Run → the credential appears and this fails
 	bin, dir := fakeTofu(t)
