@@ -205,3 +205,60 @@ func TestPresetErrorsAreSpecsErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinPresets(t *testing.T) {
+	cases := []struct {
+		name              string
+		perWorker, shared []string
+		distro            string
+		ignore            []string // inside lifecycle { ignore_changes = [...] }
+		text              []string // anywhere in main.tf
+	}{
+		// negative control: drop `location` from hetzner's workers object → PerWorker differs and the row fails
+		{"hetzner", []string{"location", "server_type"}, []string{"network_id", "ssh_keys"}, "debian",
+			[]string{"user_data", "image"}, []string{`"pstack-scaler" = var.host_id`}},
+		// negative control: drop `egress` from the aws security group → the text check fails
+		{"aws", []string{"instance_type"}, []string{"key_name", "region", "subnet_id"}, "ubuntu",
+			[]string{"user_data", "ami"}, []string{`"pstack-scaler" = var.host_id`, "egress", `"0.0.0.0/0"`, "cidr_block_associations", `"099720109477"`}},
+		// negative control: ignore `metadata` whole instead of `metadata["user-data"]` → the ignore check fails
+		{"gcp", []string{"machine_type", "zone"}, []string{"project", "subnetwork"}, "ubuntu",
+			[]string{`metadata["user-data"]`, "boot_disk[0].initialize_params[0].image"}, []string{`"pstack-scaler" = var.host_id`, "ubuntu-os-cloud/ubuntu-2404-lts-amd64"}},
+		// negative control: custom_data = each.value.user_data (not base64) → the text check fails
+		{"azure", []string{"vm_size"}, []string{"admin_ssh_public_key", "location", "resource_group", "subnet_id"}, "ubuntu",
+			[]string{"custom_data", "source_image_reference"}, []string{`"pstack-scaler" = var.host_id`, "base64encode(each.value.user_data)", `"ubuntu-24_04-lts"`}},
+		// negative control: drop the digitalocean_tag resource (tag by string) → the text check fails
+		{"digitalocean", []string{"region", "size"}, []string{"ssh_keys", "vpc_uuid"}, "ubuntu",
+			[]string{"user_data", "image"}, []string{`"pstack-scaler-${var.host_id}"`, `"pstack-scaler-${var.host_id}:${each.key}"`, "outbound_rule", `resource "digitalocean_tag"`, `"ubuntu-24-04-x64"`}},
+	}
+	ignoreRe := regexp.MustCompile(`ignore_changes\s*=\s*\[((?:[^\[\]]|\[[^\]]*\])*)\]`)
+	b := Builtins()
+	if len(b) != len(cases) {
+		t.Errorf("%d built-in presets, want %d", len(b), len(cases))
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := ParsePreset(b[c.name])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(p.PerWorker, c.perWorker) || !slices.Equal(p.Shared, c.shared) || p.Distro != c.distro || !p.LockFile {
+				t.Errorf("PerWorker = %v, Shared = %v, Distro = %q, LockFile = %v", p.PerWorker, p.Shared, p.Distro, p.LockFile)
+			}
+			src := b[c.name]["main.tf"]
+			m := ignoreRe.FindStringSubmatch(src)
+			if m == nil {
+				t.Fatal("no ignore_changes list")
+			}
+			for _, want := range c.ignore {
+				if !strings.Contains(m[1], want) {
+					t.Errorf("ignore_changes = [%s], want %s", m[1], want)
+				}
+			}
+			for _, want := range c.text {
+				if !strings.Contains(src, want) {
+					t.Errorf("main.tf has no %s", want)
+				}
+			}
+		})
+	}
+}

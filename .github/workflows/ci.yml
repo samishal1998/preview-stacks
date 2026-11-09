@@ -68,6 +68,21 @@ jobs:
           path: packages/pstack/bin/pstack
           retention-days: 1
 
+  # ── the built-in scaler presets: each inits from its own lock file and validates ──────────────
+  presets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.13.9
+      - name: init, validate
+        run: |
+          for d in packages/pstack/internal/scaler/presets/*/; do
+            (cd "$d" && tofu init -backend=false -lockfile=readonly && tofu validate) || exit 1
+          done
+
   # ── the bun half: the UI and the client SDK ───────────────────────────────────────────────────
   web:
     runs-on: ubuntu-latest
@@ -198,7 +213,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     if: always()
-    needs: [go, web, conformance, image, lint, generated]
+    needs: [go, presets, web, conformance, image, lint, generated]
     steps:
       # Through an env var, and the QUOTES are the reason — this workflow's first run failed before
       # a single job started, with no logs and no line number, only "a workflow file issue".
