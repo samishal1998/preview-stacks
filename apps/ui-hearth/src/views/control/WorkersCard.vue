@@ -89,8 +89,13 @@ const typed = computed(() => ({ ...creds.value, ...(newKey.value.trim() ? { [new
 const dirty = computed(() => savedKey(draft.value) !== savedKey(saved.value) || Object.values(typed.value).some((v) => v));
 
 async function put(s: ScalerSettings, typedCreds: Record<string, string> = {}): Promise<boolean> {
+  const body = scalerBody(s, presetOf(s.preset)?.preset, report.value?.orphans ?? [], typedCreds);
+  if (!body) {
+    saveError.value = 'Preset not loaded.';
+    return false;
+  }
   saving.value = true;
-  const r = await controlApi.saveScaler(scalerBody(s, presetOf(s.preset)?.preset, report.value?.orphans ?? [], typedCreds));
+  const r = await controlApi.saveScaler(body);
   saving.value = false;
   if (!r.ok) {
     saveError.value = why(r, 'Save');

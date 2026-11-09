@@ -77,7 +77,8 @@ test('scaler save body', async () => {
   expect(body.dismissed).toEqual(['pstack-aaaaaa']);
   expect('credentials' in body).toBe(false);
   expect(scalerBody(s, p, [], { A: '', B: 'v', '': 'x' }).credentials).toEqual({ B: 'v' });
-  expect(scalerBody(s, undefined, []).vars).toEqual({});
+  // negative control: building a body without the preset sends vars {}, and PUT wipes every stored var.
+  expect(scalerBody(s, undefined, [])).toBeNull();
   const v = { settings: s, report: { orphans: ['pstack-aaaaaa', 'pstack-bbbbbb'] } } as never;
   expect(openOrphans(v)).toEqual(['pstack-bbbbbb']);
 });

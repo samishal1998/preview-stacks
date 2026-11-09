@@ -68,9 +68,11 @@ export const openOrphans = (v: ScalerView): string[] => (v.report?.orphans ?? []
 /**
  * `PUT /api/scaler` replaces every setting: vars only the preset declares (any other is a 400),
  * `dismissed` echoed (else a save un-dismisses), typed credentials only (empty keeps).
+ * Null without the preset: the filter would send vars {} and wipe every stored var.
  */
-export function scalerBody(s: ScalerSettings, p: ScalerPreset['preset'] | undefined, orphans: string[], creds: Record<string, string> = {}): ScalerInput {
-  const names = [...(p?.perWorker ?? []), ...(p?.shared ?? [])];
+export function scalerBody(s: ScalerSettings, p: ScalerPreset['preset'] | undefined, orphans: string[], creds: Record<string, string> = {}): ScalerInput | null {
+  if (!p) return null;
+  const names = [...p.perWorker, ...p.shared];
   const vars = Object.fromEntries(names.filter((k) => s.vars[k]).map((k) => [k, s.vars[k]!]));
   const typed = Object.fromEntries(Object.entries(creds).filter(([k, v]) => k.trim() && v));
   const body: ScalerInput = { ...s, vars, dismissed: s.dismissed.filter((n) => orphans.includes(n)) };

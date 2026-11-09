@@ -26,7 +26,7 @@ import type {
   TlsRedeploy,
   TlsStatus,
 } from '../api/types';
-import { scalerSavedKey } from '../composables/scaler';
+import { scalerNumbersProblem, scalerSavedKey, type Box } from '../composables/scaler';
 import { usePolling } from '../composables/usePolling';
 import { can } from '../composables/useAuth';
 import { state } from '../composables/useControlPlane';
@@ -192,7 +192,6 @@ const savingLogging = ref(false);
 const applyingJob = ref<string | null>(null);
 
 /** `type="number"` hands back a number once the box parses and '' while it is empty (useJobQueue.ts:64-71). */
-type Box = number | string;
 const draft = ref<{ retentionDays: Box; idlePeriodMinutes: Box; maxAgeMinutes: Box; targetSizeKiB: Box; encoding: string }>({
   retentionDays: '',
   idlePeriodMinutes: '',
@@ -363,8 +362,13 @@ const openOrphans = computed(() => (scalerReport.value?.orphans ?? []).filter((n
  * echoed (else a save un-dismisses), typed credentials only (empty keeps).
  */
 async function putScaler(s: ScalerSettings, creds: Record<string, string> = {}): Promise<boolean> {
+  // Without the preset the filter would send vars {}, and PUT replaces them all.
   const p = presetOf(s.preset)?.preset;
-  const vars = Object.fromEntries([...(p?.perWorker ?? []), ...(p?.shared ?? [])].filter((k) => s.vars[k]).map((k) => [k, s.vars[k]]));
+  if (!p) {
+    scalerError.value = 'Preset not loaded.';
+    return false;
+  }
+  const vars = Object.fromEntries([...p.perWorker, ...p.shared].filter((k) => s.vars[k]).map((k) => [k, s.vars[k]]));
   const typed = Object.fromEntries(Object.entries(creds).filter(([k, v]) => k && v));
   const orphans = scalerReport.value?.orphans ?? [];
   const body = { ...s, vars, dismissed: s.dismissed.filter((n) => orphans.includes(n)), ...(Object.keys(typed).length ? { credentials: typed } : {}) };
@@ -381,6 +385,11 @@ async function putScaler(s: ScalerSettings, creds: Record<string, string> = {}):
 }
 async function saveScaler(): Promise<void> {
   const d = scalerDraft.value;
+  const bad = scalerNumbersProblem(d);
+  if (bad) {
+    scalerError.value = bad;
+    return;
+  }
   const key = newCredKey.value.trim();
   const creds = { ...credDrafts.value, ...(key ? { [key]: newCredValue.value } : {}) };
   const s = { ...d, min: Number(d.min), max: Number(d.max), cooldownMin: Number(d.cooldownMin), graceMin: Number(d.graceMin), dismissed: scaler.value?.settings.dismissed ?? [] };
