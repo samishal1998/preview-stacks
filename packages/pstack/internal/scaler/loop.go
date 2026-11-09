@@ -305,7 +305,7 @@ func (l *Loop) prepare() bool {
 }
 
 // promote queues a switched-from preset's destroy (destroyOld) once nothing else runs. One waits
-// at a time: a later switch leaves LastPreset set, and scaleUp creates nothing until it moves.
+// at a time: a later switch leaves LastPreset set, and create refuses until it moves.
 func (l *Loop) promote() {
 	if len(l.s.Workers) == 0 && l.s.PendingDestroy == "" && l.s.LastPreset != "" && l.s.LastPreset != l.cfg.Preset {
 		l.s.PendingDestroy, l.s.LastPreset = l.s.LastPreset, ""
@@ -733,9 +733,6 @@ func (l *Loop) scaleUp(now int64) error {
 		l.action = booting.Name + " is booting"
 	case l.s.NeverJoined >= 2:
 		l.action = fmt.Sprintf("%d workers never joined: change the settings to retry", l.s.NeverJoined)
-	case l.s.LastPreset != "" && l.s.LastPreset != cfg.Preset:
-		// A create would overwrite LastPreset and leak its shared resources.
-		l.action = l.s.PendingDestroy + " destroy pending"
 	case now < l.s.NextTryAt:
 		l.action = "backoff"
 	default:
@@ -746,6 +743,11 @@ func (l *Loop) scaleUp(now int64) error {
 
 // create records a new worker, reports its name (so the API's lock holds), then applies.
 func (l *Loop) create(now int64, services []string) error {
+	if l.s.LastPreset != "" && l.s.LastPreset != l.cfg.Preset {
+		// It waits behind PendingDestroy; the LastPreset write below would leak its shared resources.
+		l.action = l.s.PendingDestroy + " destroy pending"
+		return nil
+	}
 	name := l.newName()
 	distro := l.preset.Distro
 	if distro == "" {

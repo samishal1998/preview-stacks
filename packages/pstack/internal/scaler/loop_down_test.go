@@ -548,7 +548,7 @@ func TestLostNotReady(t *testing.T) {
 }
 
 func TestPresetSwitchedTwice(t *testing.T) {
-	// negative control: drop the scaleUp guard on LastPreset → gcp's create overwrites aws, which is never destroyed, and this fails
+	// negative control: drop the create() guard on LastPreset → gcp's create overwrites aws, which is never destroyed, and this fails
 	h := newHarness(t)
 	failDestroy := filepath.Join(h.tofuDir, "fail-destroy")
 	os.WriteFile(failDestroy, []byte("Error: firewall in use\n"), 0o600)
