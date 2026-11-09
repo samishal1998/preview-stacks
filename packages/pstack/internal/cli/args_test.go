@@ -544,3 +544,36 @@ func TestPreviewsOnFlag(t *testing.T) {
 		t.Fatalf("third word: %+v", p)
 	}
 }
+
+func TestScalerFlag(t *testing.T) {
+	// negative control: drop the on|off check after the walk — `--scaler yes` parses, and init renders
+	// a host without the scaler without saying so.
+	p, e := ParseArgs([]string{"init", "--scaler", "on"}, noEnv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.Scaler != "on" || !p.Typed["--scaler"] {
+		t.Errorf("--scaler on: %+v", p)
+	}
+	def, _ := ParseArgs([]string{"init"}, noEnv)
+	if def.Scaler != "off" || def.Typed["--scaler"] {
+		t.Errorf("default: %+v", def)
+	}
+	if _, e := ParseArgs([]string{"init", "--scaler", "yes"}, noEnv); e == nil || e.Code != ExitUsage || e.Msg != `--scaler must be on or off, got "yes"` {
+		t.Errorf("bad --scaler: %+v", e)
+	}
+	env := func(v string) func(string) (string, bool) {
+		return func(k string) (string, bool) { return v, k == "PSTACK_SCALER" }
+	}
+	if fromEnv, _ := ParseArgs([]string{"init"}, env("on")); fromEnv.Scaler != "on" || fromEnv.Typed["--scaler"] {
+		t.Errorf("PSTACK_SCALER: %+v", fromEnv)
+	}
+	if _, e := ParseArgs([]string{"init"}, env("yes")); e == nil || e.Code != ExitUsage {
+		t.Errorf("bad PSTACK_SCALER: %+v", e)
+	}
+	for _, cmd := range []string{"init", "cloud-init"} {
+		if _, e := ParseArgs([]string{cmd, "--orchestrator", "compose", "--scaler", "on"}, noEnv); e == nil || e.Msg != "--scaler needs swarm: under compose there is one node and no workers" {
+			t.Errorf("%s on compose: %+v", cmd, e)
+		}
+	}
+}

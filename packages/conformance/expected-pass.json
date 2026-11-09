@@ -28,7 +28,7 @@
     "test/api-webhooks-delivery.test.ts": 19,
     "test/api-webhooks-registration.test.ts": 6,
     "test/cli-api.test.ts": 6,
-    "test/cli-goldens.test.ts": 100,
+    "test/cli-goldens.test.ts": 107,
     "test/cli-surface.test.ts": 5,
     "test/harness.test.ts": 3,
     "test/host-fixture.test.ts": 34

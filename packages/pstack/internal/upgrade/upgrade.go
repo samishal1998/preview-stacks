@@ -91,6 +91,9 @@ type ControlState struct {
 	// token's reason: `init` mints a new one when PSTACK_LOKI_PASSWORD is unset, and every running
 	// container keeps pushing with the old one — 401, never retried, logs gone until it is redeployed.
 	LokiPassword string
+	// Scaler is true when the generated compose has the scaler service. Read back from there, for
+	// Logging's reason.
+	Scaler bool
 }
 
 var (
@@ -99,6 +102,7 @@ var (
 	advancedSvc  = regexp.MustCompile(`(?m)^\s{2}advanced-ui:`)
 	hearthImage  = regexp.MustCompile(`\$\{PSTACK_UI_HEARTH_IMAGE\}`)
 	lokiSvc      = regexp.MustCompile(`(?m)^\s{2}loki:`)
+	scalerSvc    = regexp.MustCompile(`(?m)^\s{2}scaler:`)
 	semverRe     = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
 )
 
@@ -210,6 +214,8 @@ func ReadControlState(dataDir string) (*ControlState, error) {
 	if lokiSvc.MatchString(compose) {
 		s.Logging = initctl.Loki
 	}
+	// The service and the top-level `scaler: {}` network both match; both exist only with --scaler on.
+	s.Scaler = scalerSvc.MatchString(compose)
 	if env["PSTACK_ORCHESTRATOR"] == "swarm" {
 		s.Orchestrator = spec.Swarm
 	}
@@ -281,6 +287,9 @@ func initFlags(state *ControlState) string {
 	flags = append(flags, "--orchestrator "+string(state.Orchestrator))
 	if state.Logging == initctl.Loki {
 		flags = append(flags, "--logging loki")
+	}
+	if state.Scaler {
+		flags = append(flags, "--scaler on")
 	}
 	return strings.Join(flags, " ")
 }

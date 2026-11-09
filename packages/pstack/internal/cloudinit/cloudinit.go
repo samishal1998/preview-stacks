@@ -211,6 +211,9 @@ type Answers struct {
 	Logging string
 	// PreviewsOn is `workers` or `any`; passed to `pstack init --previews-on` only when set. Swarm only.
 	PreviewsOn string
+	// Scaler is "on" or "off"; on adds `--scaler on` to the init call. Swarm only. Its settings and
+	// credentials are entered on the host afterwards, never here.
+	Scaler string
 }
 
 // Error is a refused input or a template that did not render. The CLI prints its message and exits 3.
@@ -246,6 +249,9 @@ var (
 func validate(a Answers) error {
 	if a.PreviewsOn != "" && a.Orchestrator == "compose" {
 		return &Error{"--previews-on needs swarm: under compose there is one node and no workers"}
+	}
+	if a.Scaler == "on" && a.Orchestrator == "compose" {
+		return &Error{"--scaler needs swarm: under compose there is one node and no workers"}
 	}
 	if !domainRe.MatchString(a.Domain) {
 		return &Error{`domain "` + a.Domain + `" does not look like a hostname`}
@@ -396,6 +402,9 @@ func RenderCloudInit(a Answers) (string, error) {
 	}
 	if a.PreviewsOn != "" {
 		initFlags = append(initFlags, "--previews-on "+a.PreviewsOn)
+	}
+	if a.Scaler == "on" {
+		initFlags = append(initFlags, "--scaler on")
 	}
 
 	// Omit the key list entirely rather than emit an empty one: cloud-init would accept

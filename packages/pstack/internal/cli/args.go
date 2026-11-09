@@ -52,6 +52,7 @@ type Parsed struct {
 	Challenge    string // http01 | dns01
 	Orchestrator string // swarm | compose
 	Logging      string // none | loki
+	Scaler       string // on | off
 	// IngressSubnet / SharedSubnet are the two networks' address ranges under swarm. "" = nobody
 	// asked: init keeps an existing network and gives a new one the default. Normalised CIDR.
 	IngressSubnet string
@@ -157,6 +158,7 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 		Tag:          get("PSTACK_IMAGE", "pstack:local"),
 		UI:           or("PSTACK_UI", "basic"),
 		Logging:      or("PSTACK_LOGGING", "none"),
+		Scaler:       or("PSTACK_SCALER", "off"),
 		// Empty counts as unset: an exported-but-empty variable is not a request to recreate a network.
 		IngressSubnet: or("PSTACK_INGRESS_SUBNET", ""),
 		SharedSubnet:  or("PSTACK_SHARED_SUBNET", ""),
@@ -289,6 +291,9 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 				return nil, fail(fmt.Sprintf(`--logging must be none or loki, got "%s"`, l))
 			}
 			p.Logging = l
+		case "--scaler":
+			p.Typed["--scaler"] = true
+			p.Scaler = next(&i, "")
 		case "--set":
 			kv := next(&i, "")
 			eq := strings.IndexByte(kv, '=')
@@ -335,6 +340,12 @@ func ParseArgs(argv []string, env func(string) (string, bool)) (*Parsed, *Exit) 
 	}
 	if p.PreviewsOn != "" && (p.Cmd == "init" || p.Cmd == "cloud-init") && p.Orchestrator == "compose" {
 		return nil, fail("--previews-on needs swarm: under compose there is one node and no workers")
+	}
+	if p.Scaler != "on" && p.Scaler != "off" {
+		return nil, fail(fmt.Sprintf(`--scaler must be on or off, got "%s"`, p.Scaler))
+	}
+	if p.Scaler == "on" && (p.Cmd == "init" || p.Cmd == "cloud-init") && p.Orchestrator == "compose" {
+		return nil, fail("--scaler needs swarm: under compose there is one node and no workers")
 	}
 	// Checked after the walk so the environment's values get the same check as the flags'. Docker
 	// would refuse a bad range too — but only after init had already taken the control stack down.
@@ -418,13 +429,14 @@ func Usage(version string) string {
 		"                                            A path, never the token: argv is world-readable.",
 		"            --orchestrator swarm|compose    (default swarm — one manager; workers join from the Swarm page)",
 		"            --logging none|loki             (default none — Loki log shipping)",
+		"            --scaler on|off                 (default off — swarm: add and remove workers)",
 		"            --ingress-subnet <cidr>         swarm: preview-ingress's range (default 10.250.0.0/16)",
 		"            --shared-subnet <cidr>          swarm: preview-shared's range (default 10.251.0.0/16). Given, a",
 		"                                            network with another range is re-created — previews must be off it.",
 		"            --previews-on workers|any       swarm: workers drains this manager, so it runs only the control",
 		"                                            stack and every preview lands on a worker. Unset keeps it as is.",
 		"",
-		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator] [--logging] [--previews-on]",
+		"cloud-init: --domain --acme-email [--distro ubuntu|debian|fedora|suse|arch|alpine] [--ssh-key] [--password] [--challenge] [--ui] [--orchestrator] [--logging] [--previews-on] [--scaler]",
 		"            [--config-repo <git-url>]  [-o file]  [-y]   (-y = never prompt)",
 		"            --admin-user <name> [--admin-password <pw>]  the first UI account, created on first boot",
 		"            --api-token <PSTACK_TOKEN>   default: `init` generates one on the host and prints it once",
