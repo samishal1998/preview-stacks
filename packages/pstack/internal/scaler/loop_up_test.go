@@ -118,6 +118,20 @@ func TestScaleUpOnStuck(t *testing.T) {
 	})
 }
 
+// negative control: drop `n.Availability == "active"` from the ready-and-empty guard → no apply.
+func TestDrainedOwnedWorkerDoesNotBlock(t *testing.T) {
+	h := newHarness(t)
+	h.own("pstack-aaaaaa")
+	h.node("pstack-aaaaaa", "ready", 0, 0)
+	h.setNode("pstack-aaaaaa", func(n *sigNode) { n.Availability = "drain" })
+	h.stuck("pr-42_api", "no suitable node (1 node not available for new tasks)")
+	h.advance(Tick)
+	h.tick()
+	if h.applies() != 1 {
+		t.Errorf("applies = %d, want 1: a drained owned worker is no room", h.applies())
+	}
+}
+
 func TestMinFill(t *testing.T) {
 	// negative control: drop the booting guard → the second tick creates a second worker and this fails
 	h := newHarness(t)
@@ -147,12 +161,12 @@ func TestMinFill(t *testing.T) {
 	}
 }
 
+// negative control (each row): remove that guard → an apply happens and the row fails
 func TestScaleUpGuards(t *testing.T) {
 	cases := []struct {
 		name, want string
 		setup      func(h *harness)
 	}{
-		// negative control (each row): remove that guard → an apply happens and the row fails
 		{"cooldown", "cooldown", func(h *harness) {
 			h.own("pstack-aaaaaa")
 			h.node("pstack-aaaaaa", "ready", 2, 0)
@@ -183,7 +197,7 @@ func TestScaleUpGuards(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// negative control: see the table's comment
+			// negative control: remove this row's guard from scaleUp → an apply happens and this fails
 			h := newHarness(t)
 			c.setup(h)
 			h.stuck("pr-42_api", fits)
@@ -480,6 +494,44 @@ func TestFailedApplyRetries(t *testing.T) {
 		t.Errorf("%d lock reports before %d applies", lockReports, h.calls("apply -auto"))
 	}
 	h.noSecrets()
+}
+
+func TestPendingCreateTakesNewSettings(t *testing.T) {
+	// negative control: drop observe's `w.Vars = cur` refresh → the retry applies cx22 and this fails
+	retry := func(t *testing.T, joined bool) (*harness, string) {
+		h := newHarness(t)
+		failPath := filepath.Join(h.tofuDir, "fail")
+		os.WriteFile(failPath, []byte("Error: server type cx22 not offered in fsn1\n"), 0o600)
+		h.stuck("pr-42_api", fits)
+		h.tick()
+		name := h.owned()[0]
+		if joined {
+			h.node(name, "ready", 1, 0)
+		}
+		h.with(func(a *fakeAPI) { a.cfg.Vars["server_type"] = "cx32" })
+		os.Remove(failPath)
+		h.advance(time.Hour)
+		h.tick()
+		var workers map[string]map[string]any
+		if err := json.Unmarshal(h.tfvars()["workers"], &workers); err != nil || len(workers) != 1 {
+			t.Fatalf("workers %v: %v", workers, err)
+		}
+		if w := h.worker(name); w.AppliedAt != h.ms() || workers[name]["server_type"] != w.Vars["server_type"] {
+			t.Fatalf("worker %+v, map %v", w, workers)
+		}
+		return h, workers[name]["server_type"].(string)
+	}
+	h, got := retry(t, false)
+	if ev := h.events("scaler.created"); got != "cx32" || len(ev) != 1 || !strings.Contains(string(ev[0].Data), `"server_type":"cx32"`) {
+		t.Errorf("server_type %s, scaler.created %+v", got, ev)
+	}
+
+	t.Run("a node joined under it", func(t *testing.T) {
+		// negative control: refresh the vars whether or not a node joined → its server is replaced with cx32 and this fails
+		if _, got := retry(t, true); got != "cx22" {
+			t.Errorf("server_type %s, want cx22 kept", got)
+		}
+	})
 }
 
 func TestFailedValidateBlocks(t *testing.T) {

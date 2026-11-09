@@ -211,7 +211,7 @@ func TestScaleDown(t *testing.T) {
 		"a task appeared":  func(n *sigNode) { n.Tasks, n.EmptySince = 1, nil },
 	} {
 		t.Run(name, func(t *testing.T) {
-			// negative control: see the test's comment
+			// negative control: skip the re-read before marking removing → this row marks it and fails
 			h := setup(t)
 			h.with(func(a *fakeAPI) {
 				a.afterSignals = func(a *fakeAPI) { change(&a.sig.Nodes[1]); a.afterSignals = nil }
@@ -322,7 +322,7 @@ func TestMaxZero(t *testing.T) {
 	})
 
 	t.Run("a failed create is not retried", func(t *testing.T) {
-		// negative control: retry the pending create whatever max is → an apply buys the server and this fails
+		// negative control: drop observe's never-applied-above-max mark → only scaleDown marks it, it is still owned after the tick and this fails
 		h := newHarness(t)
 		os.WriteFile(filepath.Join(h.tofuDir, "fail"), []byte("Error: quota\n"), 0o600)
 		h.stuck("pr-42_api", fits)
@@ -332,10 +332,72 @@ func TestMaxZero(t *testing.T) {
 		h.with(func(a *fakeAPI) { a.cfg.Max = 0 })
 		h.advance(time.Hour)
 		h.tick()
-		if w := h.worker(name); !w.Removing || w.Reason != "max" || w.AppliedAt != 0 || len(h.events("scaler.created")) != 0 {
-			t.Errorf("worker = %+v", w)
+		ev := h.events("scaler.removed")
+		if len(h.state().Workers) != 0 || len(h.events("scaler.created")) != 0 || len(ev) != 1 || string(ev[0].Data) != `{"name":"`+name+`","reason":"max"}` {
+			t.Errorf("workers %+v, removed %+v, created %d", h.state().Workers, ev, len(h.events("scaler.created")))
 		}
 	})
+}
+
+func TestPendingAboveMax(t *testing.T) {
+	// negative control: drop observe's never-applied-above-max mark → aaaaaa's removal apply carries cccccc's create and this fails
+	setup := func(t *testing.T, max int) *harness {
+		h := newHarness(t)
+		h.own("pstack-aaaaaa", "pstack-bbbbbb")
+		h.node("pstack-bbbbbb", "ready", 2, 0)
+		h.edit(func(s *State) {
+			s.Workers[0].Removing, s.Workers[0].Reason = true, "never-joined"
+			// A create that failed a minute ago, in backoff.
+			s.Workers = append(s.Workers, OwnedWorker{Name: "pstack-cccccc", Vars: map[string]string{"server_type": "cx22", "location": "fsn1"}, CreatedAt: h.ms()})
+			s.Failures, s.NextTryAt = 1, h.ms()+time.Minute.Milliseconds()
+		})
+		h.with(func(a *fakeAPI) { a.cfg.Max, a.cfg.Vars["server_type"] = max, "cx32" })
+		h.advance(time.Minute)
+		h.tick()
+		return h
+	}
+	h := setup(t, 1)
+	if len(h.events("scaler.created")) != 0 || slices.Contains(h.workerNames(), "pstack-cccccc") {
+		t.Fatalf("bought above max: created %+v, map %v", h.events("scaler.created"), h.workerNames())
+	}
+	if got := h.owned(); !slices.Equal(got, []string{"pstack-bbbbbb"}) || len(h.state().Workers) != 1 {
+		t.Errorf("owned %v, workers %+v", got, h.state().Workers)
+	}
+	if ev := h.events("scaler.removed"); !slices.ContainsFunc(ev, func(e Event) bool { return string(e.Data) == `{"name":"pstack-cccccc","reason":"max"}` }) {
+		t.Errorf("scaler.removed = %+v", ev)
+	}
+
+	t.Run("within max", func(t *testing.T) {
+		// negative control: mark every never-applied worker removing → cccccc is never created and this fails
+		// negative control: refresh a pending worker's vars in scaleUp only → aaaaaa's removal apply creates it with cx22
+		h := setup(t, 3)
+		if ev := h.events("scaler.created"); len(ev) != 1 || !strings.Contains(string(ev[0].Data), "pstack-cccccc") || !strings.Contains(string(ev[0].Data), `"server_type":"cx32"`) {
+			t.Errorf("scaler.created = %+v", ev)
+		}
+	})
+}
+
+func TestRemovalPastAFailingApply(t *testing.T) {
+	// negative control: set OutOfState only after a successful apply → aaaaaa stays removing, its node is never DELETEd and this fails
+	h := newHarness(t)
+	h.own("pstack-aaaaaa")
+	h.node("pstack-aaaaaa", "ready", 0, time.Hour)
+	h.removing("pstack-aaaaaa", "empty")
+	os.WriteFile(filepath.Join(h.tofuDir, "fail"), []byte("Error: creating server pstack-bbbbbb: quota\n"), 0o600)
+	h.step() // drain
+	h.step() // the apply fails
+	// It destroyed aaaaaa before failing on another worker.
+	os.WriteFile(filepath.Join(h.tofuDir, "state.json"), []byte(`[]`), 0o600)
+	h.advance(time.Minute) // past the backoff
+	h.tick()
+	if w := h.worker("pstack-aaaaaa"); !w.OutOfState || h.last().LastAction != "apply failed" {
+		t.Fatalf("worker %+v, action %q", w, h.last().LastAction)
+	}
+	h.setNode("pstack-aaaaaa", func(n *sigNode) { n.State = "down" })
+	h.step()
+	if got := h.nodeCalls(); len(got) != 2 || got[1] != "DELETE /api/swarm/nodes/id-pstack-aaaaaa" || len(h.state().Workers) != 0 {
+		t.Errorf("node calls %v, workers %+v", got, h.state().Workers)
+	}
 }
 
 func TestOwnershipOnly(t *testing.T) {
@@ -480,7 +542,7 @@ func TestPresetSwitch(t *testing.T) {
 	}
 
 	t.Run("destroy fails", func(t *testing.T) {
-		// negative control: block the new preset on the failed destroy → no aws apply and this fails
+		// negative control: give the destroy the shared NextTryAt again → aws waits out its backoff and this fails
 		h := toAWS(t, true)
 		ev := h.events("scaler.failed")
 		if len(ev) != 1 || !strings.HasPrefix(string(ev[0].Data), `{"action":"destroy","error":"Error: firewall in use`) {
@@ -490,10 +552,19 @@ func TestPresetSwitch(t *testing.T) {
 			t.Errorf("dir %v, pendingDestroy %q", err, h.last().PendingDestroy)
 		}
 		h.stuck("pr-42_api", fits)
-		h.advance(5 * time.Minute) // past the backoff and the hetzner worker's cooldown
-		h.tick()
+		h.with(func(a *fakeAPI) { a.cfg.CooldownMin = 0 })
+		h.step() // inside the destroy's 1 min backoff
 		if _, err := os.Stat(filepath.Join(h.stateDir, "tofu", "aws", "workers.auto.tfvars.json")); err != nil || len(h.owned()) != 1 {
-			t.Errorf("aws did not proceed: %v, owned %v", err, h.owned())
+			t.Fatalf("aws did not proceed: %v, owned %v, action %q", err, h.owned(), h.last().LastAction)
+		}
+		// negative control: clear LastError on every successful apply → the destroy's error vanishes.
+		// negative control: report only NextTryAt → nextRetryAt is 0.
+		if r, s := h.last(), h.state(); !strings.Contains(r.LastError, "firewall in use") || r.NextRetryAt != s.DestroyNextTryAt {
+			t.Errorf("after aws's apply: lastError %q, nextRetryAt %d, want the destroy's %d", r.LastError, r.NextRetryAt, s.DestroyNextTryAt)
+		}
+		h.step() // the destroy's backoff is over; the aws worker boots, so no other Tofu runs
+		if s := h.state(); h.calls("destroy") != 2 || s.DestroyFailures != 2 || s.DestroyNextTryAt != h.ms()+2*time.Minute.Milliseconds() || s.Failures != 0 {
+			t.Errorf("destroys %d, state %+v", h.calls("destroy"), s)
 		}
 	})
 }
@@ -520,6 +591,10 @@ func TestPresetSwitchedBack(t *testing.T) {
 	h.advance(time.Hour)
 	h.tick()
 	h.step()
+	// negative control: keep the old destroy's backoff on switch-back → DestroyFailures stays 1.
+	if s := h.state(); s.DestroyFailures != 0 || s.DestroyNextTryAt != 0 {
+		t.Errorf("switch-back kept the destroy backoff: %d failures, next %d", s.DestroyFailures, s.DestroyNextTryAt)
+	}
 	if s := h.state(); s.PendingDestroy != "" || s.LastPreset != "hetzner" || h.calls("destroy") != destroys {
 		t.Errorf("pendingDestroy %q, lastPreset %q, destroys %d (was %d)", s.PendingDestroy, s.LastPreset, h.calls("destroy"), destroys)
 	}

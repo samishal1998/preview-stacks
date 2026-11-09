@@ -52,6 +52,9 @@ type State struct {
 	DoesNotFit     []string          `json:"doesNotFit"`
 	Orphans        []string          `json:"orphans"`
 	PendingDestroy string            `json:"pendingDestroy"`
+	// The old-preset destroy's own backoff: its failures never hold up the new preset.
+	DestroyFailures  int   `json:"destroyFailures"`
+	DestroyNextTryAt int64 `json:"destroyNextTryAt"`
 	// SeenAt is the last tick's wall time: a tick that takes no action shifts the clocks
 	// (LastScaleUp, NextTryAt, AppliedAt) by the time since, so they do not advance.
 	SeenAt int64 `json:"seenAt"`

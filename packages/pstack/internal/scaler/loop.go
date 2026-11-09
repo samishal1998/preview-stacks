@@ -152,7 +152,7 @@ func (l *Loop) Tick() error {
 	}
 	if !live {
 		l.freeze(elapsed)
-	} else if !l.failed && l.s.NextTryAt <= now {
+	} else if !l.failed && l.s.NextTryAt <= now && l.s.DestroyNextTryAt <= now {
 		l.s.LastError = ""
 	}
 	if len(l.s.Workers) == 0 {
@@ -259,6 +259,8 @@ func (l *Loop) prepare() bool {
 		// Switched back before the destroy: its shared resources are wanted again, and destroyed
 		// on the next switch away. A preset used in between takes its place in the queue.
 		l.s.PendingDestroy, l.s.LastPreset = l.s.LastPreset, cfg.Preset
+		// Another preset now waits for its destroy: it starts without the old one's backoff.
+		l.s.DestroyFailures, l.s.DestroyNextTryAt = 0, 0
 	}
 	l.promote()
 	if l.s.Inited[cfg.Preset] != want.Hash {
@@ -417,6 +419,7 @@ func (l *Loop) stuckServices(keep func(sigStuck) bool) []string {
 // observe records workers becoming ready, and marks never-joined and does-not-fit.
 func (l *Loop) observe(now int64) {
 	stuck := l.stuckServices(func(sigStuck) bool { return true })
+	cur := l.current()
 	for i := range l.s.Workers {
 		w := &l.s.Workers[i]
 		if w.Removing {
@@ -425,6 +428,11 @@ func (l *Loop) observe(now int64) {
 		n, ok := l.node(w.Name)
 		if ok {
 			w.NodeID = n.ID
+		}
+		if w.AppliedAt == 0 && !ok {
+			// A create never applied has no server to replace: it takes the settings as they are now,
+			// before removals' apply could write it into the map. Not once a node joined under it.
+			w.Vars = cur
 		}
 		if ok && n.State == "ready" && w.ReadyAt == 0 {
 			w.ReadyAt = now
@@ -468,6 +476,20 @@ func (l *Loop) observe(now int64) {
 			}
 			w.StuckServices = nil
 			l.queueFailed("does-not-fit", strings.Join(still, ", ")+" does not fit a new worker", 1)
+		}
+	}
+	// Step 6 for a create never applied: it has no server, so above max it goes now, before
+	// removals' apply would write it into the map and buy it.
+	over := -l.cfg.Max
+	for _, w := range l.s.Workers {
+		if !w.Removing {
+			over++
+		}
+	}
+	for i := range l.s.Workers {
+		if w := &l.s.Workers[i]; over > 0 && !w.Removing && w.AppliedAt == 0 {
+			w.Removing, w.Reason = true, "max"
+			over--
 		}
 	}
 }
@@ -579,8 +601,8 @@ func (l *Loop) forget() {
 	})
 }
 
-// scaleDown is steps 5 and 6: at most one worker becomes removing per tick. max 0 takes any,
-// one never applied first; otherwise one ready, active and empty past grace, above min or with
+// scaleDown is steps 5 and 6: at most one worker becomes removing per tick (observe already took
+// the never-applied ones above max). max 0 takes any; otherwise one ready, active and empty past grace, above min or with
 // stale settings, still so on a re-read of signals.
 func (l *Loop) scaleDown(now int64) {
 	owned := slices.IndexFunc(l.s.Workers, func(w OwnedWorker) bool { return !w.Removing })
@@ -592,9 +614,6 @@ func (l *Loop) scaleDown(now int64) {
 		l.action = "removing " + w.Name
 	}
 	if l.cfg.Max == 0 {
-		if i := slices.IndexFunc(l.s.Workers, func(w OwnedWorker) bool { return !w.Removing && w.AppliedAt == 0 }); i >= 0 {
-			owned = i
-		}
 		mark(&l.s.Workers[owned], "max")
 		return
 	}
@@ -634,10 +653,11 @@ func (l *Loop) scaleDown(now int64) {
 }
 
 // destroyOld runs `tofu destroy` in a switched-from preset's directory, on a tick that ran no
-// other Tofu command, with the shared backoff (W-R19). A failure keeps the directory and retries.
+// other Tofu command, with its own backoff so the new preset proceeds (spec; amends W-R19's shared
+// one). A failure keeps the directory and retries.
 func (l *Loop) destroyOld(now int64) error {
 	old := l.s.PendingDestroy
-	if old == "" || l.tofuRan || now < l.s.NextTryAt {
+	if old == "" || l.tofuRan || now < l.s.DestroyNextTryAt {
 		return nil
 	}
 	if err := l.save(); err != nil {
@@ -646,7 +666,11 @@ func (l *Loop) destroyOld(now int64) error {
 	t := l.tofu
 	t.Dir = filepath.Join(l.o.StateDir, "tofu", old)
 	if _, err := t.Run("destroy", "-auto-approve", "-input=false", "-no-color"); err != nil {
-		l.applyFailed(now, "destroy", err)
+		l.s.DestroyFailures++
+		l.s.DestroyNextTryAt = now + delay(l.s.DestroyFailures)
+		l.fail(err.Error())
+		l.action = "destroy failed"
+		l.queueFailed("destroy", err.Error(), l.s.DestroyFailures)
 		return nil
 	}
 	if err := os.RemoveAll(t.Dir); err != nil {
@@ -654,7 +678,7 @@ func (l *Loop) destroyOld(now int64) error {
 		return nil
 	}
 	delete(l.s.Inited, old)
-	l.s.PendingDestroy, l.s.Failures, l.s.NextTryAt = "", 0, 0
+	l.s.PendingDestroy, l.s.DestroyFailures, l.s.DestroyNextTryAt = "", 0, 0
 	l.promote() // in this report, so the API keeps the next one's credentials
 	l.action = "destroyed " + old
 	return nil
@@ -677,8 +701,8 @@ func (l *Loop) scaleUp(now int64) error {
 			booting = w
 		}
 	}
-	// A failed create is retried as it was: desired state is the workers map (P-R1). Not past
-	// max: step 6 makes it removing instead.
+	// A failed create is retried under its name: desired state is the workers map (P-R1). observe
+	// gave it the current settings, and made it removing past max.
 	if pending != nil && owned <= l.cfg.Max {
 		if now < l.s.NextTryAt {
 			l.action = "backoff: retry " + pending.Name
@@ -698,7 +722,7 @@ func (l *Loop) scaleUp(now int64) error {
 	var readyEmpty *OwnedWorker
 	for i := range l.s.Workers {
 		w := &l.s.Workers[i]
-		if n, ok := l.node(w.Name); ok && !w.Removing && n.State == "ready" && n.Tasks == 0 && maps.Equal(w.Vars, cur) {
+		if n, ok := l.node(w.Name); ok && !w.Removing && n.State == "ready" && n.Availability == "active" && n.Tasks == 0 && maps.Equal(w.Vars, cur) {
 			readyEmpty = w
 			break
 		}
@@ -827,6 +851,12 @@ func (l *Loop) apply(now int64, did string) error {
 	}
 	var in []*OwnedWorker
 	for i := range l.s.Workers {
+		// Gone from state already: a partial apply destroyed it before failing on something else.
+		if w := &l.s.Workers[i]; w.Removing && !strings.Contains(list, `["`+w.Name+`"]`) {
+			w.OutOfState = true
+		}
+	}
+	for i := range l.s.Workers {
 		w := &l.s.Workers[i]
 		if w.Removing {
 			continue
@@ -863,7 +893,10 @@ func (l *Loop) apply(now int64, did string) error {
 			l.s.Workers[i].OutOfState = true
 		}
 	}
-	l.s.Failures, l.s.NextTryAt, l.s.LastError = 0, 0, ""
+	l.s.Failures, l.s.NextTryAt = 0, 0
+	if l.s.DestroyNextTryAt == 0 {
+		l.s.LastError = "" // a failed old-preset destroy keeps its error until it retries
+	}
 	l.action = did
 	return l.save()
 }
@@ -878,11 +911,15 @@ func (l *Loop) applyFailed(now int64, action string, err error) {
 // backoff counts a failure: the next try in 1, 2, 4 … 30 min.
 func (l *Loop) backoff(now int64) {
 	l.s.Failures++
-	d := BackoffMax
-	if l.s.Failures <= 6 {
-		d = min(time.Minute<<(l.s.Failures-1), BackoffMax)
+	l.s.NextTryAt = now + delay(l.s.Failures)
+}
+
+// delay is the wait in ms after n failures in a row.
+func delay(n int) int64 {
+	if n > 6 {
+		return BackoffMax.Milliseconds()
 	}
-	l.s.NextTryAt = now + d.Milliseconds()
+	return min(time.Minute<<(n-1), BackoffMax).Milliseconds()
 }
 
 // writeVars writes the workers map and the shared and filled variables the preset declares.
@@ -935,6 +972,9 @@ func (l *Loop) freeze(d int64) {
 	}
 	if l.s.NextTryAt > 0 {
 		l.s.NextTryAt += d
+	}
+	if l.s.DestroyNextTryAt > 0 {
+		l.s.DestroyNextTryAt += d
 	}
 	for i := range l.s.Workers {
 		w := &l.s.Workers[i]
@@ -1018,8 +1058,10 @@ func (l *Loop) report(now int64, ev *Event) Report {
 		DoesNotFit: append([]string{}, l.s.DoesNotFit...), Orphans: append([]string{}, l.s.Orphans...),
 		PendingDestroy: l.s.PendingDestroy, Event: ev,
 	}
-	if l.s.NextTryAt > now {
-		r.NextRetryAt = l.s.NextTryAt
+	for _, t := range []int64{l.s.NextTryAt, l.s.DestroyNextTryAt} {
+		if t > now && (r.NextRetryAt == 0 || t < r.NextRetryAt) {
+			r.NextRetryAt = t
+		}
 	}
 	for _, w := range l.s.Workers {
 		r.Workers = append(r.Workers, Worker{Name: w.Name, Vars: nonNilVars(w.Vars), State: l.workerState(w), CreatedAt: w.CreatedAt, Removing: w.Removing})
