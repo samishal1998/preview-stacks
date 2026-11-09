@@ -113,6 +113,9 @@ type Tofu struct {
 // The combined output comes back scrubbed; on failure the error is its last 20 lines. No context:
 // a started command runs to its end (spec, SIGTERM row).
 func (t Tofu) Run(args ...string) (string, error) {
+	if t.StateDir == "" {
+		return "", errors.New("scaler: Tofu.StateDir is unset")
+	}
 	plugins := filepath.Join(t.StateDir, "plugins")
 	if err := os.MkdirAll(plugins, 0o700); err != nil {
 		return "", err

@@ -23,7 +23,8 @@ func TestMain(m *testing.M) {
 // calls.log (one argv per line), env.log (the environment of each call), state.json (the names
 // in state). Knobs: <dir>/deleted (names a refresh drops), <dir>/fail (apply prints it and exits
 // 1), <dir>/fail-<init|validate|apply|destroy|refresh> (that subcommand does; refresh is
-// `apply -refresh-only`).
+// `apply -refresh-only`). GORACE=atexit_sleep_ms=0 drops the race runtime's 1 s exit sleep from
+// every call.
 func fakeTofu(t *testing.T) (path, dir string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -32,7 +33,7 @@ func fakeTofu(t *testing.T) (path, dir string) {
 		t.Fatal(err)
 	}
 	path = filepath.Join(t.TempDir(), "tofu")
-	script := fmt.Sprintf("#!/bin/sh\nPSTACK_FAKE_TOFU=%q exec %q \"$@\"\n", dir, self)
+	script := fmt.Sprintf("#!/bin/sh\nGORACE=atexit_sleep_ms=0 PSTACK_FAKE_TOFU=%q exec %q \"$@\"\n", dir, self)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
