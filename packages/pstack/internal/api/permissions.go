@@ -201,6 +201,20 @@ var permissions = []perm{
 	{path: "/api/forward", methods: mGet, min: auth.Maintainer},
 	{path: "/api/forward", methods: mPutDelete, min: auth.Admin},
 
+	// ── worker scaler ───────────────────────────────────────────────────────────────────────────
+	// The reads are host configuration and never carry a credential. The writes are ADMIN for BLAST
+	// RADIUS, the wildcard argument above: a save decides what machines this host pays for, and a
+	// custom preset is code that runs with the cloud credentials in reach. config and report have no
+	// tier: root, and root alone — the scaler's own token. scalerConfigGet and scalerReportPost
+	// check mayMoveConfig a second time, as /api/config does.
+	{path: "/api/scaler", methods: mGet, min: auth.Maintainer},
+	{path: "/api/scaler", methods: mPut, min: auth.Admin},
+	{path: "/api/scaler/presets", methods: mGet, min: auth.Maintainer},
+	{re: scalerPresetRe, methods: mGet, min: auth.Maintainer},
+	{re: scalerPresetRe, methods: mPutDelete, min: auth.Admin},
+	{path: "/api/scaler/config", methods: mGet},
+	{path: "/api/scaler/report", methods: mPost},
+
 	// ── the swarm ───────────────────────────────────────────────────────────────────────────────
 	{path: "/api/swarm", methods: mGet, min: auth.Viewer},
 	// The cluster's shape carries no credential, so it reads like the swarm panel does.

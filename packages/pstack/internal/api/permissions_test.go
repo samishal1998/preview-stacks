@@ -45,6 +45,7 @@ func required(method, path string) auth.Role {
 // Also: give the customRouteRe row auth.Viewer → the three custom-route write cases fail. Run.
 // Also: give the /api/settings/pressure_disk_pct row auth.Maintainer → its case fails. Run.
 // Also: give the /api/forward PUT/DELETE row auth.Maintainer → its two cases fail. Run.
+// Also: give the /api/scaler/config row min: auth.Admin → its GET case fails. Run.
 func TestPermissionTableIsTheSpecification(t *testing.T) {
 	cases := []struct {
 		method, path string
@@ -138,6 +139,18 @@ func TestPermissionTableIsTheSpecification(t *testing.T) {
 		{"PUT", "/api/forward", auth.Admin},
 		{"DELETE", "/api/forward", auth.Admin},
 		{"POST", "/api/forward", rootOnly},
+
+		// the worker scaler: reads with host configuration, writes admin, the scaler's own two root's
+		{"GET", "/api/scaler", auth.Maintainer},
+		{"PUT", "/api/scaler", auth.Admin},
+		{"DELETE", "/api/scaler", rootOnly},
+		{"GET", "/api/scaler/presets", auth.Maintainer},
+		{"GET", "/api/scaler/presets/team-a", auth.Maintainer},
+		{"PUT", "/api/scaler/presets/team-a", auth.Admin},
+		{"DELETE", "/api/scaler/presets/team-a", auth.Admin},
+		{"GET", "/api/scaler/config", rootOnly},
+		{"PUT", "/api/scaler/config", rootOnly},
+		{"POST", "/api/scaler/report", rootOnly},
 
 		// logs, source, containers, the shell, runtime, readiness
 		{"GET", "/api/deployments/pr-1/logs", auth.Viewer},
@@ -264,6 +277,7 @@ var matchers = map[string]*regexp.Regexp{
 	"tokenRe":        tokenRe,
 	"ssoProviderRe":  ssoProviderRe,
 	"customRouteRe":  customRouteRe,
+	"scalerPresetRe": scalerPresetRe,
 }
 
 var (

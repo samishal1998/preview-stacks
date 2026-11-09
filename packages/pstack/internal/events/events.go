@@ -124,6 +124,12 @@ var Names = []string{
 	// `forward.failed`: a forwarded request never reached B ({to, error, attempts}). Never the token.
 	"forward.changed",
 	"forward.failed",
+	// The worker scaler (internal/scaler), relayed by POST /api/scaler/report. Appended, like the
+	// ones above. `scaler.created` {name, settings}, `scaler.removed` {name, reason}, `scaler.failed`
+	// {action, error, attempt}. Never a credential, never the join token, never user_data.
+	"scaler.created",
+	"scaler.removed",
+	"scaler.failed",
 }
 
 // IsEventName is `typeof v === 'string' && EVENTS.includes(v)` — v is the decoded JSON value a

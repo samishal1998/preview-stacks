@@ -274,6 +274,11 @@ func (s Sources) Assemble() (*Document, error) {
 	} else if row != nil {
 		d.Skipped = append(d.Skipped, "forward: host-specific — re-enter it on the target")
 	}
+	if set, err := store.ScalerConfigSet(s.Store.DB); err != nil {
+		d.Skipped = append(d.Skipped, "scaler: "+err.Error())
+	} else if set {
+		d.Skipped = append(d.Skipped, "scaler: host-specific — re-enter it on the target")
+	}
 	if d.Specs, d.Skipped, err = s.specList(d.Skipped); err != nil {
 		return nil, err
 	}

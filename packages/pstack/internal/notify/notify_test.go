@@ -90,6 +90,8 @@ func TestEnvelopeAndSign(t *testing.T) {
 // binary units → "11.5 GB" instead of "12.3 GB".
 // negative control: delete `case "forward.changed"` → got "forward.changed on this host."; drop its
 // `via` branch → the via line loses " via 10.0.0.2". Delete `case "forward.failed"` → its line differs.
+// negative control: delete `case "scaler.failed"` → got "scaler.failed on this host."; drop its empty-
+// error branch → "Scaler max failed: ." (W-R17).
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	pressureData := func(kinds string, disk, memory, cpu float64) string {
@@ -130,6 +132,10 @@ func TestSummarize(t *testing.T) {
 		"Forwarding to https://api.b via 10.0.0.2.":                                                  Summarize(ev("forward.changed", `{"to":"https://api.b","via":"10.0.0.2"}`)),
 		"Forwarding off.": Summarize(ev("forward.changed", `{"to":null,"via":null}`)),
 		"Forwarding to https://api.b failed after 3 attempt(s): refused": Summarize(ev("forward.failed", `{"to":"https://api.b","error":"refused","attempts":3}`)),
+		"Worker pstack-abc123 created.":                                  Summarize(ev("scaler.created", `{"name":"pstack-abc123","settings":{"server_type":"cx22"}}`)),
+		"Worker pstack-abc123 removed (never-joined).":                   Summarize(ev("scaler.removed", `{"name":"pstack-abc123","reason":"never-joined"}`)),
+		"Scaler apply failed: quota exceeded.":                           Summarize(ev("scaler.failed", `{"action":"apply","error":"quota exceeded","attempt":2}`)),
+		"Scaler max failed.":                                             Summarize(ev("scaler.failed", `{"action":"max","error":"","attempt":1}`)),
 		"Loki settings changed by alice: retention, storage.":            Summarize(ev("logging.changed", `{"by":"alice","job":"j1","changed":["retention","storage"],"storage":"s3","cutover":"2026-10-01","retentionDays":14}`)),
 	}
 	for want, got := range cases {

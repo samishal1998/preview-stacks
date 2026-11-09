@@ -197,6 +197,12 @@ const TABLE: Row[] = [
   { method: 'GET', path: '/api/forward', min: 'maintainer', ok: 200 },
   { method: 'PUT', path: '/api/forward', body: {}, min: 'admin', ok: 400 },
   { method: 'DELETE', path: '/api/forward', min: 'admin', ok: 200 },
+  // The worker scaler. The read is host configuration and never carries a credential; the write is
+  // admin, and an empty body is the handler's 400 (`preset required`).
+  // negative control: give the /api/scaler PUT row auth.Maintainer in permissions.go — the
+  // maintainer cell goes 403 → 400 and the matrix test reports it.
+  { method: 'GET', path: '/api/scaler', min: 'maintainer', ok: 200 },
+  { method: 'PUT', path: '/api/scaler', body: {}, min: 'admin', ok: 400 },
   // Reading the SSO configuration is a maintainer's — it returns a mask, never the client secret.
   // Writing it is two rows down, and admin, for a reason worth reading there.
   { method: 'GET', path: '/api/sso/config', min: 'maintainer', ok: 200 },
@@ -233,6 +239,8 @@ const TABLE: Row[] = [
   // ── root: the whole host, portable, in plaintext ────────────────────────────────────────────
   { method: 'GET', path: '/api/config', min: 'root', ok: 200 },
   { method: 'POST', path: '/api/config', body: {}, min: 'root', ok: 400 },
+  // The scaler's own config: its cloud credentials in plaintext. Root only, like /api/config.
+  { method: 'GET', path: '/api/scaler/config', min: 'root', ok: 200 },
 ];
 
 /** What `caller` must get for `row`. The only formula in this file. */

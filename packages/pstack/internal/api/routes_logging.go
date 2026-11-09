@@ -79,14 +79,8 @@ type loggingS3View struct {
 }
 
 // lokiEnabled is GET's `enabled` and step 1 of both PUTs: nil when docker did not answer, else
-// whether the control stack has a loki container. The lookup is the apply's own (lokiContainer).
-func lokiEnabled(view inspect.ControlView) *bool {
-	if !view.Reachable {
-		return nil
-	}
-	_, on := lokiContainer(view)
-	return &on
-}
+// whether the control stack has a loki container.
+func lokiEnabled(view inspect.ControlView) *bool { return controlServiceOn(view, lokiService) }
 
 func (s *Server) loggingGet(w http.ResponseWriter) error {
 	row, err := loki.Read(s.store)

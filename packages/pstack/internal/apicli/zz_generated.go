@@ -96,6 +96,14 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("routing").AddCommand(NewRoutingDeleteCommand(exec))
 	group("routing").AddCommand(NewRoutingGetCommand(exec))
 	group("routing").AddCommand(NewRoutingPutCommand(exec))
+	group("scaler").AddCommand(NewScalerGetCommand(exec))
+	group("scaler").AddCommand(NewScalerSetCommand(exec))
+	group("scaler").AddCommand(NewScalerConfigCommand(exec))
+	group("scaler").AddCommand(NewScalerPresetsCommand(exec))
+	group("scaler").AddCommand(NewScalerPresetDeleteCommand(exec))
+	group("scaler").AddCommand(NewScalerPresetCommand(exec))
+	group("scaler").AddCommand(NewScalerPresetSetCommand(exec))
+	group("scaler").AddCommand(NewScalerReportCommand(exec))
 	group("settings").AddCommand(NewSettingsListCommand(exec))
 	group("settings").AddCommand(NewSettingsSetDefaultRoleCommand(exec))
 	group("settings").AddCommand(NewSettingsSetImagePruneAfterHCommand(exec))
@@ -2229,6 +2237,248 @@ func NewRoutingPutCommand(exec oascmd.ExecOptions) *cobra.Command {
 		if cmd.Flags().Changed("content") {
 			body["content"] = bodyContent
 		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerGetCommand returns the "scaler get" command (GET /api/scaler).
+func NewScalerGetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get",
+		Short: "The scaler settings, credential keys as { KEY: true } (never a value), the last report or null, and enabled (true/false, null when docker did not answer). Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/scaler",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerSetCommand returns the "scaler set" command (PUT /api/scaler).
+func NewScalerSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagData string
+	)
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "Replace the scaler settings. Absent fields take the defaults (min 0, max 3, cooldownMin 5, graceMin 15). A credential sent empty, omitted or as the mask keeps its value; null deletes it. 409 while the scaler owns workers and the change differs from the locked preset, files or shared vars, or deletes a credential. Admin.",
+	}
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "PUT",
+			Path:   "/api/scaler",
+		}
+		body := map[string]any{}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerConfigCommand returns the "scaler config" command (GET
+// /api/scaler/config).
+func NewScalerConfigCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Everything the scaler needs: settings, credential values and the preset's files. Root only (PSTACK_TOKEN), never an admin session.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/scaler/config",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerPresetsCommand returns the "scaler presets" command (GET
+// /api/scaler/presets).
+func NewScalerPresetsCommand(exec oascmd.ExecOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "presets",
+		Short: "Every preset, built-in and custom: [{ name, builtin, preset, locked }]. Maintainer.",
+	}
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "GET",
+			Path:   "/api/scaler/presets",
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerPresetDeleteCommand returns the "scaler preset-delete" command
+// (DELETE /api/scaler/presets/{name}).
+func NewScalerPresetDeleteCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName string
+	)
+	cmd := &cobra.Command{
+		Use:   "preset-delete",
+		Short: "Delete a custom preset. 409 on the locked preset. Admin.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "DELETE",
+			Path:       "/api/scaler/presets/{name}",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerPresetCommand returns the "scaler preset" command (GET
+// /api/scaler/presets/{name}).
+func NewScalerPresetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName string
+	)
+	cmd := &cobra.Command{
+		Use:   "preset",
+		Short: "One preset with its files: { name, builtin, files, preset, locked }. Maintainer.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "GET",
+			Path:       "/api/scaler/presets/{name}",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerPresetSetCommand returns the "scaler preset-set" command (PUT
+// /api/scaler/presets/{name}).
+func NewScalerPresetSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName string
+		flagData string
+	)
+	cmd := &cobra.Command{
+		Use:   "preset-set",
+		Short: "Store a custom preset: main.tf (more .tf files allowed) and an optional .terraform.lock.hcl. Built-ins are read-only. 409 on the locked preset unless the files are unchanged. Admin.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "PUT",
+			Path:       "/api/scaler/presets/{name}",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		body := map[string]any{}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewScalerReportCommand returns the "scaler report" command (POST
+// /api/scaler/report).
+func NewScalerReportCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagData string
+	)
+	cmd := &cobra.Command{
+		Use:   "report",
+		Short: "The scaler's status, and at most one scaler.* event to emit. Owned workers and the locked config are stored; the rest is kept in memory. Root only.",
+	}
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method: "POST",
+			Path:   "/api/scaler/report",
+		}
+		body := map[string]any{}
 		switch {
 		case flagData != "":
 			req.RawBody = []byte(flagData)

@@ -83,6 +83,8 @@ tags:
     description: 'The whole portable configuration: export it, apply one.'
   - name: forward
     description: 'Where this host forwards deploys and unserved visitors, while it is being retired.'
+  - name: scaler
+    description: 'The worker scaler: its settings, credential keys, Tofu presets and last report.'
   - name: host
     description: 'The host itself — health, the control stack, terminal history, the probe.'
   - name: stats
@@ -1167,6 +1169,101 @@ paths:
       x-cli-name: 'off'
       summary: 'Stop forwarding. Applies to the next request. Admin.'
       responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  # ── worker scaler ───────────────────────────────────────────────────────────────────────────────
+  /api/scaler:
+    get:
+      tags: [scaler]
+      operationId: getScaler
+      x-cli-name: get
+      summary: 'The scaler settings, credential keys as { KEY: true } (never a value), the last report or null, and enabled (true/false, null when docker did not answer). Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+    put:
+      tags: [scaler]
+      operationId: setScaler
+      x-cli-name: set
+      summary: 'Replace the scaler settings. Absent fields take the defaults (min 0, max 3, cooldownMin 5, graceMin 15). A credential sent empty, omitted or as the mask keeps its value; null deletes it. 409 while the scaler owns workers and the change differs from the locked preset, files or shared vars, or deletes a credential. Admin.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preset]
+              properties:
+                preset: { type: string }
+                vars: { type: object, additionalProperties: { type: string }, description: 'Per-worker and shared preset variables. A value starting with [ or { reaches Tofu as JSON.' }
+                min: { type: integer }
+                max: { type: integer }
+                cooldownMin: { type: integer }
+                graceMin: { type: integer }
+                dismissed: { type: array, items: { type: string }, description: 'Possible orphans to stop listing; each must be in the last report.' }
+                credentials: { type: object, description: 'Write-only. Provider environment variables, e.g. HCLOUD_TOKEN.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
+
+  /api/scaler/presets:
+    get:
+      tags: [scaler]
+      operationId: listScalerPresets
+      x-cli-name: presets
+      summary: 'Every preset, built-in and custom: [{ name, builtin, preset, locked }]. Maintainer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /api/scaler/presets/{name}:
+    get:
+      tags: [scaler]
+      operationId: getScalerPreset
+      x-cli-name: preset
+      summary: 'One preset with its files: { name, builtin, files, preset, locked }. Maintainer.'
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [scaler]
+      operationId: putScalerPreset
+      x-cli-name: preset-set
+      summary: 'Store a custom preset: main.tf (more .tf files allowed) and an optional .terraform.lock.hcl. Built-ins are read-only. 409 on the locked preset unless the files are unchanged. Admin.'
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files: { type: object, additionalProperties: { type: string }, description: 'File name → contents.' }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
+    delete:
+      tags: [scaler]
+      operationId: deleteScalerPreset
+      x-cli-name: preset-delete
+      summary: 'Delete a custom preset. 409 on the locked preset. Admin.'
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+
+  /api/scaler/config:
+    get:
+      tags: [scaler]
+      operationId: getScalerConfig
+      x-cli-name: config
+      summary: 'Everything the scaler needs: settings, credential values and the preset''s files. Root only (PSTACK_TOKEN), never an admin session.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '403': { $ref: '#/components/responses/Forbidden' } }
+
+  /api/scaler/report:
+    post:
+      tags: [scaler]
+      operationId: postScalerReport
+      x-cli-name: report
+      summary: 'The scaler''s status, and at most one scaler.* event to emit. Owned workers and the locked config are stored; the rest is kept in memory. Root only.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' }, '403': { $ref: '#/components/responses/Forbidden' } }
 
 components:
   parameters:

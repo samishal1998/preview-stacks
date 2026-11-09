@@ -500,6 +500,40 @@ func TestAssembleSkipsTheForwardRow(t *testing.T) {
 	}
 }
 
+// negative control: delete the scaler block in Assemble → a stored row goes unnamed and the second
+// check fails. (Appending the line whether or not a row exists fails the first check instead.)
+func TestAssembleSkipsTheScalerRow(t *testing.T) {
+	const line = "scaler: host-specific — re-enter it on the target"
+	h := newHost(t)
+	before := assemble(t, h).Skipped
+	for _, s := range before {
+		if strings.HasPrefix(s, "scaler:") {
+			t.Fatalf("an empty scaler_config table was named: %v", before)
+		}
+	}
+	if err := store.SetScalerSettings(h.Store.DB, store.ScalerConfig{Preset: "hetzner", Max: 3,
+		Credentials: map[string]string{"HCLOUD_TOKEN": "hcloud-secret-value"}}); err != nil {
+		t.Fatal(err)
+	}
+	doc := assemble(t, h)
+	n := 0
+	for _, s := range doc.Skipped {
+		if s == line {
+			n++
+		}
+	}
+	if n != 1 || len(doc.Skipped) != len(before)+1 {
+		t.Fatalf("skipped after a save: %v — want exactly one more line, %q", doc.Skipped, line)
+	}
+	body, err := jsonx.MarshalIndent(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "hcloud-secret-value") {
+		t.Fatal("the export carries the scaler credential")
+	}
+}
+
 // negative control: drop the `d.Version != FormatVersion` check in Parse — the unknown document
 // parses, nothing names the writer, and this fails.
 func TestParseRefusesADocumentVersionItDoesNotUnderstand(t *testing.T) {

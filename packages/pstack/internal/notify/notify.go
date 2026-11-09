@@ -511,6 +511,15 @@ func Summarize(e events.Event) string {
 		return "Forwarding to " + to + "."
 	case "forward.failed":
 		return "Forwarding to " + field(d, "to") + " failed after " + field(d, "attempts") + " attempt(s): " + field(d, "error")
+	case "scaler.created":
+		return "Worker " + field(d, "name") + " created."
+	case "scaler.removed":
+		return "Worker " + field(d, "name") + " removed (" + field(d, "reason") + ")."
+	case "scaler.failed":
+		if msg := field(d, "error"); msg != "" {
+			return "Scaler " + field(d, "action") + " failed: " + msg + "."
+		}
+		return "Scaler " + field(d, "action") + " failed."
 	default:
 		if stack == "" {
 			stack = "this host"
