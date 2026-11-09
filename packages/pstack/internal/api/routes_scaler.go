@@ -241,8 +241,10 @@ func (s *Server) scalerPut(w http.ResponseWriter, r *http.Request) error {
 			writeError(w, 409, "the scaler owns workers on preset "+lock.Preset+": set max 0, wait for zero, then switch")
 			return nil
 		}
-		for k, v := range lock.Shared {
-			if set.Vars[k] != v {
+		// Every shared var the preset declares now: one unset at lock time cannot be added (a missing
+		// key reads as ""), and one an upgrade dropped from a built-in no longer blocks a save.
+		for _, k := range preset.Shared {
+			if set.Vars[k] != lock.Shared[k] {
 				writeError(w, 409, fmt.Sprintf("%s is locked while the scaler owns workers", k))
 				return nil
 			}
@@ -396,6 +398,13 @@ func (s *Server) scalerPresetDelete(w http.ResponseWriter, name string) error {
 	}
 	if lock := scalerLock(rep); lock != nil && lock.Preset == name {
 		writeError(w, 409, "preset "+name+" is locked while the scaler owns workers")
+		return nil
+	}
+	// The selected preset stays: without it the scaler would be served no files.
+	if row, err := store.GetScalerConfig(s.store.DB); err != nil {
+		return err
+	} else if row.Preset == name {
+		writeError(w, 409, "preset "+name+" is selected: choose another first")
 		return nil
 	}
 	deleted, err := store.DeleteScalerPreset(s.store.DB, name)
