@@ -3552,9 +3552,8 @@ is pending.
 **After an unclean stop** (a reboot, a kill past the 5-minute grace) Tofu may have created a server
 it did not record. The scaler lists the name as a *possible orphan* on the card, never creates it
 again, and emits `scaler.failed` with `action: orphan`, then `scaler.removed` with reason `orphan`
-once it drops the name. Tofu has no record of that server, so look
-for the name and the label in the provider's console, delete it there if it exists, then
-**Dismiss** it on the card.
+once it drops the worker record. Tofu has no record of that server, so look for the name and the
+label in the provider's console, delete it there if it exists, then **Dismiss** it on the card.
 
 ### The Workers card
 
@@ -3566,9 +3565,9 @@ destroy. Custom presets are edited there too.
 
 Events: `scaler.created`, `scaler.removed`, `scaler.failed`
 ([webhook-events.md](webhook-events.md#scalercreated--scalerremoved--scalerfailed)).
-`scaler.removed` reasons: `empty`, `replaced`, `max`, `lost`, `never-joined`, `orphan`. None carries
-a credential, the join token or `user_data`; Tofu's output is scrubbed, then cut to its last 20
-lines.
+None carries a credential, the join token or `user_data`; Tofu's output is scrubbed, then cut to
+its last 20 lines. `scaler.removed` reasons: `empty`, `replaced`, `max`, `lost`, `never-joined`,
+`orphan`.
 
 ### Bring your own scaler
 
