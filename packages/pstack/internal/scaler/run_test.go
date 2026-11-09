@@ -69,6 +69,43 @@ func TestRunStartsNoTickAfterCancel(t *testing.T) {
 	}
 }
 
+func TestRunStartsNoTickAfterAnApplyLongerThanTheTick(t *testing.T) {
+	// negative control: drop the ctx.Err() check at the top of Run's loop → when the apply ends,
+	// t.C and ctx.Done() are both ready, select picks t.C about half the time, a second tick reads
+	// /api/signals, and this fails. Eight runs miss that 1 time in 256.
+	for i := range 8 {
+		h := newHarness(t)
+		h.stuck("pr-42_api", fits)
+		if err := os.WriteFile(filepath.Join(h.tofuDir, "sleep"), []byte("300ms"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, opts := runOptions(t, h)
+		opts.tick = 20 * time.Millisecond
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- Run(ctx, opts) }()
+		deadline := time.Now().Add(30 * time.Second)
+		for h.applies() == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("no apply started")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		var reads int
+		h.with(func(a *fakeAPI) { reads = a.sigReads })
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		h.with(func(a *fakeAPI) {
+			if a.sigReads != reads {
+				t.Errorf("run %d: signals read %d more times after cancel, want 0 (a new tick)", i, a.sigReads-reads)
+			}
+		})
+	}
+}
+
 // runOptions places the fake where EnsureTofu looks, so it never downloads (W-R26), and serves
 // the harness API.
 func runOptions(t *testing.T, h *harness) (string, RunOptions) {
