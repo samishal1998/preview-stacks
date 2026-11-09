@@ -546,3 +546,78 @@ func TestLostNotReady(t *testing.T) {
 		t.Errorf("worker = %+v", w)
 	}
 }
+
+func TestPresetSwitchedTwice(t *testing.T) {
+	// negative control: drop the scaleUp guard on LastPreset → gcp's create overwrites aws, which is never destroyed, and this fails
+	h := newHarness(t)
+	failDestroy := filepath.Join(h.tofuDir, "fail-destroy")
+	os.WriteFile(failDestroy, []byte("Error: firewall in use\n"), 0o600)
+	until := func(what string, ok func(s *State) bool) {
+		t.Helper()
+		for range 10 {
+			if ok(h.state()) {
+				return
+			}
+			h.advance(time.Hour)
+			h.tick()
+		}
+		t.Fatalf("%s: state %+v, last %+v", what, h.state(), h.last())
+	}
+	drain := func() {
+		h.with(func(a *fakeAPI) { a.sig.Stuck, a.cfg.Max = nil, 0 })
+		until("workers gone", func(s *State) bool { return len(s.Workers) == 0 })
+	}
+	h.stuck("pr-42_api", fits)
+	h.tick() // a worker under hetzner
+	drain()
+	h.with(func(a *fakeAPI) {
+		a.cfg.Preset, a.cfg.Files, a.cfg.Max = "aws", Builtins()["aws"], 3
+		a.cfg.Vars = map[string]string{"instance_type": "t3.small", "region": "eu-central-1", "subnet_id": "subnet-1", "key_name": "k"}
+	})
+	h.stuck("pr-42_api", fits)
+	until("a worker under aws", func(s *State) bool { return len(s.Workers) == 1 && s.Workers[0].AppliedAt > 0 })
+	drain()
+	if s := h.state(); s.PendingDestroy != "hetzner" || s.LastPreset != "aws" {
+		t.Fatalf("pendingDestroy %q, lastPreset %q", s.PendingDestroy, s.LastPreset)
+	}
+
+	h.with(func(a *fakeAPI) {
+		a.cfg.Preset, a.cfg.Files, a.cfg.Max = "gcp", Builtins()["gcp"], 3
+		a.cfg.Vars = map[string]string{"project": "p", "zone": "europe-west3-a", "machine_type": "e2-small"}
+	})
+	h.stuck("pr-42_api", fits)
+	h.advance(time.Hour)
+	h.tick() // inits gcp: no destroy this tick
+	if a := h.last().LastAction; a != "hetzner destroy pending" {
+		t.Errorf("action %q", a)
+	}
+	h.advance(time.Hour)
+	h.tick() // the destroy fails again
+	if s := h.state(); len(s.Workers) != 0 || s.LastPreset != "aws" {
+		t.Fatalf("created behind a pending destroy: workers %+v, lastPreset %q", s.Workers, s.LastPreset)
+	}
+
+	os.Remove(failDestroy)
+	until("hetzner destroyed", func(s *State) bool { return s.PendingDestroy != "hetzner" })
+	if h.last().PendingDestroy != "aws" {
+		t.Errorf("aws not queued in the destroying report: %q", h.last().PendingDestroy)
+	}
+	until("a worker under gcp", func(s *State) bool { return len(s.Workers) == 1 && s.LastPreset == "gcp" })
+	until("aws destroyed", func(s *State) bool { return s.PendingDestroy == "" })
+	b, _ := os.ReadFile(filepath.Join(h.tofuDir, "dirs.log"))
+	for _, p := range []string{"hetzner", "aws"} {
+		if !strings.Contains(string(b), filepath.Join(h.stateDir, "tofu", p)+" destroy -auto-approve") {
+			t.Errorf("no destroy in tofu/%s:\n%s", p, b)
+		}
+	}
+
+	t.Run("switched back past a later preset", func(t *testing.T) {
+		// negative control: clear PendingDestroy without taking LastPreset → aws is forgotten and this fails
+		h := newHarness(t)
+		h.edit(func(s *State) { s.PendingDestroy, s.LastPreset = "hetzner", "aws" })
+		h.tick()
+		if s := h.state(); s.PendingDestroy != "aws" || s.LastPreset != "hetzner" {
+			t.Errorf("pendingDestroy %q, lastPreset %q", s.PendingDestroy, s.LastPreset)
+		}
+	})
+}

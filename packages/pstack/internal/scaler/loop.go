@@ -257,16 +257,10 @@ func (l *Loop) prepare() bool {
 	l.tofu = Tofu{Bin: l.o.Tofu, Dir: l.dir, StateDir: l.o.StateDir, Creds: cfg.Credentials}
 	if l.s.PendingDestroy == cfg.Preset {
 		// Switched back before the destroy: its shared resources are wanted again, and destroyed
-		// on the next switch away.
-		l.s.PendingDestroy = ""
-		if l.s.LastPreset == "" {
-			l.s.LastPreset = cfg.Preset
-		}
+		// on the next switch away. A preset used in between takes its place in the queue.
+		l.s.PendingDestroy, l.s.LastPreset = l.s.LastPreset, cfg.Preset
 	}
-	if len(l.s.Workers) == 0 && l.s.PendingDestroy == "" && l.s.LastPreset != "" && l.s.LastPreset != cfg.Preset {
-		// A switch: the old preset's shared resources go once nothing else runs (destroyOld).
-		l.s.PendingDestroy, l.s.LastPreset = l.s.LastPreset, ""
-	}
+	l.promote()
 	if l.s.Inited[cfg.Preset] != want.Hash {
 		if len(l.s.Workers) > 0 {
 			// W-R35: owned workers keep the files they were made with.
@@ -308,6 +302,14 @@ func (l *Loop) prepare() bool {
 		}
 	}
 	return true
+}
+
+// promote queues a switched-from preset's destroy (destroyOld) once nothing else runs. One waits
+// at a time: a later switch leaves LastPreset set, and scaleUp creates nothing until it moves.
+func (l *Loop) promote() {
+	if len(l.s.Workers) == 0 && l.s.PendingDestroy == "" && l.s.LastPreset != "" && l.s.LastPreset != l.cfg.Preset {
+		l.s.PendingDestroy, l.s.LastPreset = l.s.LastPreset, ""
+	}
 }
 
 // initPreset writes the pulled files into the preset directory, then init and validate. A
@@ -653,6 +655,7 @@ func (l *Loop) destroyOld(now int64) error {
 	}
 	delete(l.s.Inited, old)
 	l.s.PendingDestroy, l.s.Failures, l.s.NextTryAt = "", 0, 0
+	l.promote() // in this report, so the API keeps the next one's credentials
 	l.action = "destroyed " + old
 	return nil
 }
@@ -730,6 +733,9 @@ func (l *Loop) scaleUp(now int64) error {
 		l.action = booting.Name + " is booting"
 	case l.s.NeverJoined >= 2:
 		l.action = fmt.Sprintf("%d workers never joined: change the settings to retry", l.s.NeverJoined)
+	case l.s.LastPreset != "" && l.s.LastPreset != cfg.Preset:
+		// A create would overwrite LastPreset and leak its shared resources.
+		l.action = l.s.PendingDestroy + " destroy pending"
 	case now < l.s.NextTryAt:
 		l.action = "backoff"
 	default:
