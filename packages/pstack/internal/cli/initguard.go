@@ -14,6 +14,7 @@
 //	  the weekly rate limit and cannot be undone by re-running.
 //	· a run without `--logging loki` on a Loki host removes Loki; one without PSTACK_LOKI_PASSWORD
 //	  mints a new push password, and every running container's pushes are refused until redeployed.
+//	· a run without `--scaler on` on a scaler host removes the scaler, stranding the workers it owns.
 //
 // Every one of those is an OMISSION, never a wrong value: the operator did not ask for the change
 // and is not told about it. So that is exactly what this refuses, and nothing else.
@@ -112,6 +113,13 @@ func initReverts(state *upgrade.ControlState, dataDir string, p *Parsed, hasToke
 		out = append(out, revert{
 			what: "Loki logging", from: "loki", to: orNone(p.Logging),
 			fix: "--logging loki",
+		})
+	}
+	// Only a host that HAS the scaler can lose it; dropping it strands the workers it owns.
+	if !typed("--scaler") && state.Scaler && p.Scaler != "on" {
+		out = append(out, revert{
+			what: "the worker scaler", from: "on", to: "off",
+			fix: "--scaler on",
 		})
 	}
 	return out

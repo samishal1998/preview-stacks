@@ -247,7 +247,7 @@ func run(argv []string, io IO) *Exit {
 		err := initctl.Init(initctl.Options{
 			DataDir: dataDir, Domain: args.Domain, AcmeEmail: args.AcmeEmail, DNSProvider: args.DNSProvider,
 			Challenge: initctl.Challenge(args.Challenge), UI: initctl.UI(args.UI), Orchestrator: spec.Orchestrator(args.Orchestrator),
-			Logging: initctl.Logging(args.Logging), Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
+			Logging: initctl.Logging(args.Logging), Scaler: args.Scaler == "on", Token: token, DryRun: args.DryRun, Runner: runner, Out: out,
 			IngressSubnet: args.IngressSubnet, SharedSubnet: args.SharedSubnet, PreviewsOn: args.PreviewsOn,
 			NoOOMProtect: envOn(io.Env, "PSTACK_NO_OOM_PROTECT"), AgentImage: agentImage,
 		})
@@ -588,7 +588,7 @@ func cloudInit(args *Parsed, io IO) *Exit {
 	}
 	yaml, err := cloudinit.RenderCloudInit(cloudinit.Answers{
 		Domain: domain, AcmeEmail: acmeEmail, SSHKey: sshKey, DashboardPassword: dashboardPassword,
-		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator, Logging: args.Logging, PreviewsOn: args.PreviewsOn,
+		Challenge: args.Challenge, DNSProvider: args.DNSProvider, UI: args.UI, Orchestrator: args.Orchestrator, Logging: args.Logging, PreviewsOn: args.PreviewsOn, Scaler: args.Scaler,
 		AdminUser: adminUser, AdminPassword: adminPassword, Token: apiToken, DNSToken: dnsToken,
 		ExtraDomains: args.ExtraDomains,
 		ConfigRepo:   configRepo, Distro: args.Distro,

@@ -41,6 +41,17 @@ const LOKI_CELLS: Cell[] = [
   { challenge: 'dns01', ui: 'advanced', orchestrator: 'swarm' },
 ];
 
+/**
+ * `--scaler on` on two swarm cells (compose refuses it). The second has Loki too: `scaler: {}` lands
+ * between `preview-shared` and Loki's `logs`.
+ */
+// negative control: in initctl.ScalerWiring, drop the pstack networks entry and rebuild —
+// both init-<cell>-scaler goldens fail on docker-compose.yml.
+const SCALER_CELLS: (Cell & { loki?: true })[] = [
+  { challenge: 'http01', ui: 'basic', orchestrator: 'swarm' },
+  { challenge: 'dns01', ui: 'advanced', orchestrator: 'swarm', loki: true },
+];
+
 /** Arms for a docker that lets `init` finish: the health wait sees `healthy`, this node is swarm node n1 (so the agent service gets its constraint), everything else succeeds silently. */
 export const INIT_SHIM = [
   `  "compose -p pstack-control ps -q pstack") printf '%s\\n' 'c0ffee' ;;`,
@@ -116,6 +127,7 @@ export const CASES: Case[] = [
   })),
   { name: 'cloud-init-dns01-advanced-swarm', argv: [...CLOUD_INIT, '--challenge', 'dns01', '--dns-provider', 'cloudflare', '--ui', 'advanced', '--orchestrator', 'swarm', '--config-repo', 'https://github.com/example/previews.git'], env: { PSTACK_DNS_TOKEN: DNS_TOKEN } },
   { name: 'cloud-init-loki', argv: [...CLOUD_INIT, '--logging', 'loki'] },
+  { name: 'cloud-init-scaler', argv: [...CLOUD_INIT, '--scaler', 'on'] },
   { name: 'cloud-init-bad-distro', argv: [...CLOUD_INIT, '--distro', 'plan9'] },
   { name: 'cloud-init-bad-challenge', argv: [...CLOUD_INIT, '--challenge', 'tls-alpn'] },
   ...CELLS.flatMap((c) => {
@@ -147,6 +159,18 @@ export const CASES: Case[] = [
       { name: `init-${name}`, argv, env, shim: INIT_SHIM, freshData: true, render: { dir: `control/${name}`, files: ['control/docker-compose.yml', 'control/.env', 'control/dns.env', 'control/loki/config.yaml', 'control/grafana/datasources/loki.yaml'] } } as Case,
       { name: `upgrade-plan-${name}`, argv: ['upgrade', '-n', '--to', '0.29.1'], env: { PSTACK_DATA: DATA_DIR, PSTACK_INSTALL_DIR: '/usr/local/bin' }, after: `init-${name}` } as Case,
       { name: `logging-off-dry-${name}`, argv: ['logging', 'off', '-n'], env: { PSTACK_DATA: DATA_DIR }, after: `init-${name}` } as Case,
+    ];
+  }),
+  ...SCALER_CELLS.flatMap((c) => {
+    const name = `${cellName(c)}${c.loki ? '-loki' : ''}-scaler`;
+    const argv = [...initArgv(c), ...(c.loki ? ['--logging', 'loki'] : []), '--scaler', 'on'];
+    const env = { ...initEnv(c), ...(c.loki ? { PSTACK_LOKI_PASSWORD: LOKI_PASSWORD } : {}) };
+    return [
+      { name: `init-dry-${name}`, argv: [...argv, '-n'], env, shim: INIT_SHIM, freshData: true } as Case,
+      // No .env: --scaler adds nothing to it, so it is the scaler-off cell's golden byte for byte.
+      { name: `init-${name}`, argv, env, shim: INIT_SHIM, freshData: true, render: { dir: `control/${name}`, files: ['control/docker-compose.yml', 'control/dns.env'] } } as Case,
+      // negative control: drop the `--scaler on` append from upgrade's initFlags and rebuild — the plan's init line differs.
+      { name: `upgrade-plan-${name}`, argv: ['upgrade', '-n', '--to', '0.29.1'], env: { PSTACK_DATA: DATA_DIR, PSTACK_INSTALL_DIR: '/usr/local/bin' }, after: `init-${name}` } as Case,
     ];
   }),
   { name: 'init-generated-token', argv: ['init', '--domain', 'preview.example.com', '--acme-email', 'ops@example.com'], env: { PSTACK_DATA: DATA_DIR }, shim: INIT_SHIM, freshData: true },

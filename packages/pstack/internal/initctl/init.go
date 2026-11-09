@@ -203,6 +203,8 @@ type Options struct {
 	//         plugin on this node; a push password in .env. Deploys give every service without its
 	//         own `logging:` the loki driver.
 	Logging Logging
+	// Scaler adds the worker scaler service, its `scaler` network and <data>/scaler (0700). Swarm only.
+	Scaler bool
 	// DNSProvider is the lego DNS-01 provider code, e.g. `cloudflare`. Required for, and only used by, `dns01`.
 	DNSProvider string
 	// Token is the DNS-01 API token, and ONLY that — it is written to `dns.env` for Traefik and
@@ -311,6 +313,10 @@ func Init(opts Options) error {
 	} else if len(lokiPassword) != 32 || strings.Trim(lokiPassword, "0123456789abcdef") != "" {
 		return errors.New("PSTACK_LOKI_PASSWORD must be 32 lowercase hex characters, like LOKI_PUSH_PASSWORD in control/.env")
 	}
+	// Before anything runs or is made: a compose host must not get a 0700 scaler dir it cannot use.
+	if opts.Scaler && orchestrator != spec.Swarm {
+		return errors.New("--scaler needs swarm: under compose there is one node and no workers")
+	}
 
 	// ── 0. Preconditions ────────────────────────────────────────────────────────────────────────
 	// Same shape and same reason as a spec's `requires:` — fail immediately, by name, before
@@ -400,6 +406,12 @@ func Init(opts Options) error {
 	// and crash-loops. Matches the deliberate 0644 on config.yaml itself.
 	if err := ensureDir(out, filepath.Join(controlDir, "loki"), dryRun, 0o755); err != nil {
 		return err
+	}
+	// The scaler's /state: Tofu state and the join token sit here, so 0700 like db/.
+	if opts.Scaler {
+		if err := ensureDir(out, filepath.Join(dataDir, "scaler"), dryRun, 0o700); err != nil {
+			return err
+		}
 	}
 	// Grafana's provisioned datasources, a directory mount for the same reason, and 0755 for the same
 	// reason: Grafana runs as uid 472.
@@ -568,12 +580,16 @@ func Init(opts Options) error {
 	template = strings.Replace(template, "      #__CONTROL_UI_SERVICE__", ControlUIService(ui), 1)
 	template = strings.Replace(template, "      #__SWARM_PROVIDER__", SwarmProviderArgs(orchestrator), 1)
 	template = strings.Replace(template, "      #__WAKE_ROUTER__", WakeRouterLabels(domain), 1)
-	// Loki and Grafana ride on the last marker instead of adding one: every marker leaves a line behind
-	// when off, so a new marker would change every existing host's file (and the 8 render goldens). The
-	// other edits are anchors that LokiWiring checks before replacing. All are no-ops unless logging is loki.
-	template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui)+LokiService(logging, challenge, lokiPassword)+GrafanaService(logging, challenge), 1)
+	// Loki, Grafana and the scaler ride on the last marker instead of adding one: every marker leaves a
+	// line behind when off, so a new marker would change every existing host's file (and the 8 render
+	// goldens). The other edits are anchors that LokiWiring and ScalerWiring check before replacing. All
+	// are no-ops when off. Loki's wiring first: the scaler's network then lands before `logs`.
+	template = strings.Replace(template, "#__ADVANCED_UI_SERVICE__", AdvancedUIService(ui)+LokiService(logging, challenge, lokiPassword)+GrafanaService(logging, challenge)+ScalerService(opts.Scaler), 1)
 	template, err := LokiWiring(template, logging)
 	if err != nil {
+		return err
+	}
+	if template, err = ScalerWiring(template, opts.Scaler); err != nil {
 		return err
 	}
 	if err := write(out, composePath, template, 0o644, dryRun); err != nil {
@@ -1167,8 +1183,13 @@ func GrafanaService(logging Logging, challenge Challenge) string {
 // advanced UI's own networks line (AdvancedUIService), which sits later in the file. Scoping the
 // check to Traefik's own block means a template edit that removes ONLY Traefik's copy fails by name,
 // instead of the advanced UI's copy silently standing in for it.
-func traefikBlock(template string) string {
-	start := strings.Index(template, "  traefik:\n")
+func traefikBlock(template string) string { return blockOf(template, "traefik") }
+
+// pstackBlock is traefikBlock for the "  pstack:" service: ScalerWiring's networks anchor.
+func pstackBlock(template string) string { return blockOf(template, "pstack") }
+
+func blockOf(template, key string) string {
+	start := strings.Index(template, "  "+key+":\n")
 	if start < 0 {
 		return ""
 	}
@@ -1212,6 +1233,59 @@ func LokiWiring(template string, logging Logging) (string, error) {
 	} {
 		if !strings.Contains(e.haystack(template), e.anchor) {
 			return "", fmt.Errorf("the control template has no %s (%q) for --logging loki to extend", e.what, e.anchor)
+		}
+		template = strings.Replace(template, e.anchor, e.with, 1)
+	}
+	return template, nil
+}
+
+// ScalerService is the opt-in worker scaler, appended after Grafana at the same marker. Omitted entirely
+// when off, so every host without it renders byte-identical.
+func ScalerService(on bool) string {
+	if !on {
+		return ""
+	}
+	return strings.Join([]string{
+		"",
+		"  # Worker scaler, opt-in (`pstack init --scaler on`). Adds and removes swarm workers through",
+		"  # OpenTofu (docs/worker-scaler-design.md). No docker socket, no ports.",
+		"  scaler:",
+		"    image: ${PSTACK_IMAGE}",
+		`    command: ["pstack", "scaler"]`,
+		`    user: "0:0"`,
+		"    restart: unless-stopped",
+		"    stop_grace_period: 5m",
+		controlLogCap,
+		"    # Only pstack shares this network: the scaler sends the root token to pstack, and any preview",
+		"    # on preview-ingress could answer to that name.",
+		"    networks: [scaler]",
+		"    environment:",
+		"      PSTACK_API_URL: http://pstack:7878",
+		"      PSTACK_TOKEN: ${PSTACK_TOKEN}",
+		"    volumes:",
+		"      - ${DATA_DIR}/scaler:/state",
+		"    healthcheck:",
+		"      disable: true   # the image's check polls an API this container does not serve",
+		"",
+	}, "\n")
+}
+
+// ScalerWiring is LokiWiring for the scaler: pstack joins the `scaler` network and the file declares
+// it. Run after LokiWiring, so `scaler: {}` lands between `preview-shared` and `logs`. The networks
+// anchor is checked inside pstack's own block, for traefikBlock's reason.
+func ScalerWiring(template string, on bool) (string, error) {
+	if !on {
+		return template, nil
+	}
+	for _, e := range []struct {
+		what, anchor, with string
+		haystack           func(string) string
+	}{
+		{"pstack networks line", "    networks: [preview-ingress, preview-shared]\n", "    networks: [preview-ingress, preview-shared, scaler]\n", pstackBlock},
+		{"preview-shared network", "  preview-shared:\n    external: true\n", "  preview-shared:\n    external: true\n  scaler: {}\n", identity},
+	} {
+		if !strings.Contains(e.haystack(template), e.anchor) {
+			return "", fmt.Errorf("the control template has no %s (%q) for --scaler on to extend", e.what, e.anchor)
 		}
 		template = strings.Replace(template, e.anchor, e.with, 1)
 	}

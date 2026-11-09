@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -969,4 +970,37 @@ func TestCloudInitPortableConfig(t *testing.T) {
 			t.Error("a config step rendered into a file that was given none")
 		}
 	})
+}
+
+func TestScalerNeedsSwarm(t *testing.T) {
+	// negative control: drop the Scaler check from validate — compose with --scaler on renders.
+	a := base
+	a.Orchestrator, a.Scaler = "compose", "on"
+	if _, err := RenderCloudInit(a); err == nil || err.Error() != "--scaler needs swarm: under compose there is one node and no workers" {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestScalerCloudInit(t *testing.T) {
+	// negative control: drop the Scaler branch of initFlags — the init call has no --scaler on.
+	off := base
+	off.Orchestrator = "swarm"
+	on := off
+	on.Scaler = "on"
+	got := render(t, on)
+	if !strings.Contains(initCall(t, got), "--scaler on") {
+		t.Fatalf("--scaler on missing from the init call: %q", initCall(t, got))
+	}
+	// Settings and credentials go in afterwards, never in user-data: the flag is the whole difference.
+	lines := strings.Split(got, "\n")
+	i := slices.IndexFunc(lines, func(l string) bool { return strings.TrimSpace(l) == "--scaler on" })
+	if i < 0 || strings.Join(slices.Delete(lines, i, i+1), "\n") != render(t, off) {
+		t.Errorf("--scaler on adds more than its own line:\n%s", got)
+	}
+	for _, o := range []string{"", "off"} {
+		on.Scaler = o
+		if strings.Contains(initCall(t, render(t, on)), "--scaler") {
+			t.Errorf("Scaler %q carries --scaler", o)
+		}
+	}
 }

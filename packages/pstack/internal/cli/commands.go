@@ -107,6 +107,7 @@ healthcheck. Idempotent: re-running it IS the upgrade path.
       --ui basic|advanced|hearth default basic (embedded, no extra container)
       --orchestrator swarm|compose
       --logging none|loki        Loki log shipping (default none)
+      --scaler on|off            swarm: add and remove workers (default off)
       --previews-on workers|any  swarm: workers drains this manager, so it runs only the control
                                  stack and every preview lands on a worker. Unset leaves it as is
       --force                    proceed even though this run would change something you did
@@ -122,7 +123,7 @@ Also reads PSTACK_TOKEN: absent on an existing host, a NEW machine token is mint
 job holding the old one starts getting 401s. PSTACK_LOKI_PASSWORD likewise, for Loki's pushes.`,
 		flags: []string{
 			"--domain", "--acme-email", "--challenge", "--dns-provider", "--dns-token-file",
-			"--extra-domain", "--ui", "--orchestrator", "--logging", "--previews-on", "--force", "--dry-run", "--help",
+			"--extra-domain", "--ui", "--orchestrator", "--logging", "--scaler", "--previews-on", "--force", "--dry-run", "--help",
 		},
 	},
 	"upgrade": {
@@ -225,6 +226,7 @@ Prompts for anything missing unless -y.
       --config-repo <git-url>   cloned to /opt/preview/config
       --logging none|loki       passed to init (default none)
       --previews-on workers|any passed to init: workers keeps this manager to the control stack
+      --scaler on|off           passed to init (default off); its settings go in afterwards
   -o <file>                     write it out instead of stdout
   -y                            never prompt
 
@@ -234,7 +236,7 @@ when it carries any.`,
 		flags: []string{
 			"--domain", "--acme-email", "--distro", "--ssh-key", "--password", "--admin-user",
 			"--admin-password", "--api-token", "--dns-token-file", "--challenge", "--dns-provider",
-			"--ui", "--orchestrator", "--logging", "--previews-on", "--config", "--config-url", "--config-repo", "--help",
+			"--ui", "--orchestrator", "--logging", "--previews-on", "--scaler", "--config", "--config-url", "--config-repo", "--help",
 		},
 	},
 	"swarm": {

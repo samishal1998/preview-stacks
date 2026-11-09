@@ -224,3 +224,26 @@ func TestTheHostsOwnInitLinesPassTheGuard(t *testing.T) {
 		passes(t, steps[0])
 	})
 }
+
+func TestAScalerHostRefusesDroppingTheScaler(t *testing.T) {
+	// negative control: delete the `state.Scaler` row from initReverts — the bare re-run passes and
+	// removes the scaler from a host whose workers it owns.
+	host := &upgrade.ControlState{Token: "t", Challenge: initctl.Challenge("http01"), UI: initctl.UI("basic"), Orchestrator: spec.Orchestrator("swarm"), Scaler: true}
+	got := initReverts(host, "/var/lib/pstack", bareInit(), true, false, false)
+	if len(got) != 1 || got[0].what != "the worker scaler" || got[0].fix != "--scaler on" {
+		t.Fatalf("expected the scaler revert alone: %+v", got)
+	}
+	if msg := initRevertRefusal(got); !strings.Contains(msg, "on  →  off") || !strings.Contains(msg, "keep it with:  --scaler on") {
+		t.Errorf("refusal:\n%s", msg)
+	}
+	off := bareInit()
+	off.Scaler, off.Typed["--scaler"] = "off", true
+	if got := initReverts(host, "/var/lib/pstack", off, true, false, false); len(got) != 0 {
+		t.Errorf("--scaler off was asked for: %+v", got)
+	}
+	on := bareInit()
+	on.Scaler = "on"
+	if got := initReverts(host, "/var/lib/pstack", on, true, false, false); len(got) != 0 {
+		t.Errorf("PSTACK_SCALER=on keeps it: %+v", got)
+	}
+}

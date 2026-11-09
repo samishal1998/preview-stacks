@@ -1948,3 +1948,212 @@ func TestInitAgentFailureIsANote(t *testing.T) {
 		}
 	})
 }
+
+// scalerServiceSpecLines is the ScalerService block from docs/worker-scaler-plan.md Task 9, with
+// controlLogCap expanded and the healthcheck comment as W-R29 has it. Copied for lokiConfigSpecLines'
+// reason: the render golden is generated from the binary, so only an independent copy catches a line
+// transcribed wrong.
+var scalerServiceSpecLines = []string{
+	"",
+	"  # Worker scaler, opt-in (`pstack init --scaler on`). Adds and removes swarm workers through",
+	"  # OpenTofu (docs/worker-scaler-design.md). No docker socket, no ports.",
+	"  scaler:",
+	"    image: ${PSTACK_IMAGE}",
+	`    command: ["pstack", "scaler"]`,
+	`    user: "0:0"`,
+	"    restart: unless-stopped",
+	"    stop_grace_period: 5m",
+	"    logging:",
+	"      driver: json-file",
+	"      options:",
+	"        max-size: 50m",
+	`        max-file: "3"`,
+	"    # Only pstack shares this network: the scaler sends the root token to pstack, and any preview",
+	"    # on preview-ingress could answer to that name.",
+	"    networks: [scaler]",
+	"    environment:",
+	"      PSTACK_API_URL: http://pstack:7878",
+	"      PSTACK_TOKEN: ${PSTACK_TOKEN}",
+	"    volumes:",
+	"      - ${DATA_DIR}/scaler:/state",
+	"    healthcheck:",
+	"      disable: true   # the image's check polls an API this container does not serve",
+	"",
+}
+
+func TestScalerService(t *testing.T) {
+	// negative control: return the block from ScalerService(false) too — the off check fails.
+	t.Run("on renders the spec's block byte for byte; off renders nothing", func(t *testing.T) {
+		// negative control: drop `stop_grace_period: 5m` from ScalerService — the block differs.
+		if got, want := initctl.ScalerService(true), strings.Join(scalerServiceSpecLines, "\n"); got != want {
+			t.Errorf("ScalerService(true) differs\n--- got\n%s\n--- want\n%s", got, want)
+		}
+		if got := initctl.ScalerService(false); got != "" {
+			t.Errorf("off rendered:\n%s", got)
+		}
+	})
+
+	t.Run("the service parses: pstack's image, the scaler network only, /state mounted", func(t *testing.T) {
+		// negative control: render `networks: [preview-ingress, scaler]` in ScalerService — the list has two entries.
+		v, err := yamlx.ParseString("services:\n" + initctl.ScalerService(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := v.(*omap.Map).GetMap("services").GetMap("scaler")
+		if s.GetString("image") != "${PSTACK_IMAGE}" || s.GetString("user") != "0:0" || s.GetString("stop_grace_period") != "5m" {
+			t.Errorf("scaler %v", s)
+		}
+		if n := fmt.Sprint(s.GetSlice("networks")); n != "[scaler]" {
+			t.Errorf("networks %s", n)
+		}
+		if m := fmt.Sprint(s.GetSlice("volumes")); m != "[${DATA_DIR}/scaler:/state]" {
+			t.Errorf("volumes %s", m)
+		}
+		if s.Has("ports") || s.Has("labels") {
+			t.Errorf("scaler publishes something: %v", s.Keys())
+		}
+	})
+}
+
+func TestScalerWiring(t *testing.T) {
+	// negative control: drop the preview-shared entry from ScalerWiring — every on subtest finds no scaler network.
+	const pw = "0123456789abcdef0123456789abcdef"
+	on := func(t *testing.T, ui initctl.UI) *omap.Map {
+		t.Helper()
+		s, err := initctl.ScalerWiring(substituted(initctl.HTTP01, ui, initctl.ScalerService(true)), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := yamlx.ParseString(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.(*omap.Map)
+	}
+
+	t.Run("pstack joins scaler, and the file declares it", func(t *testing.T) {
+		// negative control: drop the pstack networks entry from ScalerWiring — pstack's list has no scaler.
+		for _, ui := range []initctl.UI{initctl.Basic, initctl.Advanced} {
+			d := on(t, ui)
+			svcs := d.GetMap("services")
+			if n := fmt.Sprint(svcs.GetMap("pstack").GetSlice("networks")); n != "[preview-ingress preview-shared scaler]" {
+				t.Errorf("%s: pstack networks %s", ui, n)
+			}
+			if n := fmt.Sprint(svcs.GetMap("traefik").GetSlice("networks")); n != "[preview-ingress]" {
+				t.Errorf("%s: traefik networks %s", ui, n)
+			}
+			if !d.GetMap("networks").Has("scaler") || svcs.GetMap("scaler") == nil {
+				t.Errorf("%s: the scaler service or network is missing", ui)
+			}
+		}
+	})
+
+	t.Run("with Loki on, scaler follows preview-shared and precedes logs", func(t *testing.T) {
+		// negative control: call ScalerWiring before LokiWiring in Init — logs precedes scaler.
+		t.Setenv("PSTACK_LOKI_PASSWORD", pw)
+		_, yaml := render(t, func(o *initctl.Options) {
+			o.Orchestrator, o.UI, o.Logging, o.Scaler = spec.Swarm, initctl.Advanced, initctl.Loki, true
+		})
+		if want := "  preview-shared:\n    external: true\n  scaler: {}\n  logs: {}\n"; strings.Count(yaml, want) != 1 {
+			t.Errorf("no %q in\n%s", want, yaml)
+		}
+		v, err := yamlx.ParseString(yaml)
+		if err != nil {
+			t.Fatal(err)
+		}
+		svcs := v.(*omap.Map).GetMap("services")
+		if n := fmt.Sprint(svcs.GetMap("traefik").GetSlice("networks")); n != "[preview-ingress logs]" {
+			t.Errorf("traefik networks %s", n)
+		}
+		if n := fmt.Sprint(svcs.GetMap("pstack").GetSlice("networks")); n != "[preview-ingress preview-shared scaler]" {
+			t.Errorf("pstack networks %s", n)
+		}
+	})
+
+	t.Run("off returns the template byte-identical", func(t *testing.T) {
+		// negative control: drop the `!on` early return — the file gains the scaler network.
+		in := substituted(initctl.HTTP01, initctl.Basic, "")
+		if got, err := initctl.ScalerWiring(in, false); err != nil || got != in {
+			t.Errorf("off changed the template (err %v)", err)
+		}
+	})
+
+	for _, c := range []struct{ what, anchor string }{
+		{"pstack networks line", "    networks: [preview-ingress, preview-shared]\n"},
+		{"preview-shared network", "  preview-shared:\n    external: true\n"},
+	} {
+		t.Run("a template without the "+c.what+" fails by name", func(t *testing.T) {
+			// negative control: skip the strings.Contains check in ScalerWiring — no error.
+			in := strings.ReplaceAll(substituted(initctl.HTTP01, initctl.Basic, initctl.ScalerService(true)), c.anchor, "")
+			_, err := initctl.ScalerWiring(in, true)
+			if want := fmt.Sprintf("the control template has no %s (%q) for --scaler on to extend", c.what, c.anchor); err == nil || err.Error() != want {
+				t.Fatalf("got %v, want %q", err, want)
+			}
+		})
+	}
+
+	t.Run("pstack's own networks line counts, not a copy outside its block", func(t *testing.T) {
+		// negative control: change the pstack entry's haystack from pstackBlock to identity — the copy
+		// in the traefik block stands in for pstack's removed one, and no error is returned.
+		const anchor = "    networks: [preview-ingress, preview-shared]\n"
+		in := strings.Replace(substituted(initctl.HTTP01, initctl.Basic, initctl.ScalerService(true)), anchor, "", 1)
+		in = strings.Replace(in, "    networks: [preview-ingress]\n", anchor, 1)
+		if _, err := initctl.ScalerWiring(in, true); err == nil || !strings.Contains(err.Error(), "pstack networks line") {
+			t.Fatalf("got %v, want an error naming the pstack networks line", err)
+		}
+	})
+}
+
+// initScaler runs a live init with the scaler on or off and returns the data dir and the fake runner.
+func initScaler(t *testing.T, o spec.Orchestrator, on bool) (string, *exec.Fake, error) {
+	t.Helper()
+	dir := t.TempDir()
+	f := okRunner("active", "overlay\n")
+	err := initctl.Init(initctl.Options{
+		DataDir: dir, Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+		UI: initctl.Basic, Orchestrator: o, Runner: f, Out: &bytes.Buffer{}, NoOOMProtect: true, Scaler: on,
+	})
+	return dir, f, err
+}
+
+func TestInitScalerDir(t *testing.T) {
+	// negative control: drop the ensureDir(<data>/scaler, 0o700) call from Init — the stat fails.
+	t.Setenv("PSTACK_TOKEN", goldenToken)
+	dir, _, err := initScaler(t, spec.Swarm, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onEnv := mask(read(t, filepath.Join(dir, "control", ".env")), dir)
+	if st, err := os.Stat(filepath.Join(dir, "scaler")); err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatalf("scaler dir: %v %v", st, err)
+	}
+	yaml := read(t, filepath.Join(dir, "control", "docker-compose.yml"))
+	if !strings.Contains(yaml, strings.Join(scalerServiceSpecLines, "\n")) || !strings.Contains(yaml, "    networks: [preview-ingress, preview-shared, scaler]\n") {
+		t.Errorf("compose has no scaler wiring:\n%s", yaml)
+	}
+	dir, _, err = initScaler(t, spec.Swarm, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "scaler")); !os.IsNotExist(err) {
+		t.Errorf("off made the scaler dir: %v", err)
+	}
+	if yaml := read(t, filepath.Join(dir, "control", "docker-compose.yml")); strings.Contains(yaml, "scaler") {
+		t.Errorf("off rendered the scaler")
+	}
+	// The scaler render goldens carry no .env on this promise.
+	if offEnv := mask(read(t, filepath.Join(dir, "control", ".env")), dir); onEnv != offEnv {
+		t.Errorf(".env differs with the scaler on\n--- on\n%s\n--- off\n%s", onEnv, offEnv)
+	}
+}
+
+func TestInitScalerNeedsSwarm(t *testing.T) {
+	// negative control: move the compose refusal after the state directories — the data dir is not empty.
+	dir, f, err := initScaler(t, spec.Compose, true)
+	if err == nil || err.Error() != "--scaler needs swarm: under compose there is one node and no workers" {
+		t.Fatalf("err %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 || len(f.Commands()) != 0 {
+		t.Errorf("refused init left %v and ran %v", entries, f.Commands())
+	}
+}

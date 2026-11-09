@@ -753,3 +753,69 @@ func TestUpgradeGoldens(t *testing.T) {
 		}
 	}
 }
+
+// scalerControl is a swarm control directory from the REAL init with `--scaler on` (W-R28): the
+// detector must read what ScalerService and ScalerWiring emit, not what a fixture guesses.
+func scalerControl(t *testing.T) string {
+	t.Helper()
+	dataDir := t.TempDir()
+	if err := initctl.Init(initctl.Options{
+		DataDir: dataDir, Domain: "preview.example.com", AcmeEmail: "ops@example.com",
+		Challenge: initctl.HTTP01, UI: initctl.Basic, Orchestrator: spec.Swarm, Scaler: true,
+		Runner: healthyRunner(), Out: &bytes.Buffer{}, NoOOMProtect: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return dataDir
+}
+
+func TestScalerUpgrade(t *testing.T) {
+	// negative control: drop the scalerSvc match in ReadControlState — Scaler reads false and every
+	// command below loses --scaler on.
+	os.Unsetenv("PSTACK_TOKEN")
+	os.Unsetenv("PSTACK_IMAGE")
+	os.Unsetenv("PSTACK_UI_IMAGE")
+	os.Unsetenv("PSTACK_LOKI_PASSWORD")
+	const flags = "pstack init --domain 'preview.example.com' --acme-email 'ops@example.com' --challenge http01 "
+
+	t.Run("a scaler host reads on and the upgrade keeps --scaler on", func(t *testing.T) {
+		// negative control: drop the `--scaler on` append from initFlags — the command differs.
+		s := mustRead(t, scalerControl(t))
+		if !s.Scaler {
+			t.Fatal("Scaler reads false")
+		}
+		init := find(PlanUpgrade(PlanArgs{Phase: Resume, Target: "x", State: s}), "pstack init")
+		if init == nil || init.Cmd != flags+"--orchestrator swarm --scaler on" {
+			t.Errorf("init step: %+v", init)
+		}
+	})
+
+	t.Run("an off host reads off and plans no --scaler", func(t *testing.T) {
+		// negative control: match `scaler` anywhere in ReadControlState — the off host reads on.
+		s := mustRead(t, realControl(t, initctl.Basic, initctl.HTTP01))
+		if s.Scaler {
+			t.Error("Scaler reads true")
+		}
+		if init := find(PlanUpgrade(PlanArgs{Phase: Resume, Target: "x", State: s}), "pstack init"); strings.Contains(init.Cmd, "--scaler") {
+			t.Errorf("cmd: %s", init.Cmd)
+		}
+	})
+
+	t.Run("pstack logging loki and pstack ui keep it", func(t *testing.T) {
+		// negative control: reset state.Scaler in SwitchLogging — the command has no --scaler on.
+		_, steps, err := SwitchLogging(SwitchLoggingOptions{DataDir: scalerControl(t), Logging: initctl.Loki, Runner: quiet(), Log: func(string) {}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{flags + "--orchestrator swarm --logging loki --scaler on"}; !reflect.DeepEqual(cmds(steps), want) {
+			t.Errorf("logging: got %v", cmds(steps))
+		}
+		_, steps, err = SwitchUI(SwitchUIOptions{DataDir: scalerControl(t), UI: initctl.Advanced, Runner: quiet(), Log: func(string) {}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if init := find(steps, "pstack init"); init == nil || init.Cmd != flags+"--ui advanced --orchestrator swarm --scaler on" {
+			t.Errorf("ui: %+v", init)
+		}
+	})
+}
