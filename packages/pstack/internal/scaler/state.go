@@ -26,6 +26,9 @@ type OwnedWorker struct {
 	// ApplyingAt is set before every apply that includes the worker and cleared when it returns
 	// (W-R1): still set on start means the apply was cut off.
 	ApplyingAt int64 `json:"applyingAt"`
+	// ReadySince is the first tick of the current ready-and-active run; 0 while the node is not.
+	// The does-not-fit window starts here, not at the first ready.
+	ReadySince int64 `json:"readySince"`
 }
 
 // State is /state/scaler.json: the scaler's own record and the authority on what it owns.

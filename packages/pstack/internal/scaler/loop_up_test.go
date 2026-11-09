@@ -331,6 +331,71 @@ func TestDoesNotFit(t *testing.T) {
 	}
 }
 
+func TestDoesNotFitNeedsAReadyTick(t *testing.T) {
+	// negative control: measure from emptySince alone (or ignore state) → marked on the first ready tick, or while down
+	notMarked := func(t *testing.T, h *harness, when string) {
+		t.Helper()
+		if got := h.state().DoesNotFit; len(got) != 0 {
+			t.Fatalf("%s: DoesNotFit = %v", when, got)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(h *harness, name string)
+	}{
+		{"empty before ready", func(h *harness, name string) {
+			h.node(name, "down", 0, 0)
+			h.advance(2 * Tick)
+			h.tick()
+		}},
+		{"down after ready", func(h *harness, name string) {
+			h.node(name, "ready", 0, 0)
+			h.tick()
+			h.node(name, "down", 0, Tick/2)
+			h.advance(Tick)
+			h.tick()
+			notMarked(h.t, h, "down")
+			h.advance(Tick)
+			h.tick()
+		}},
+		{"drained after ready", func(h *harness, name string) {
+			h.node(name, "ready", 0, 0)
+			h.tick()
+			h.with(func(a *fakeAPI) { a.sig.Nodes[len(a.sig.Nodes)-1].Availability = "drain" })
+			h.advance(Tick)
+			h.tick()
+			notMarked(h.t, h, "drained")
+			h.advance(Tick)
+			h.tick()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.stuck("pr-42_api", fits)
+			h.tick()
+			name := h.workerNames()[0]
+			h.advance(Tick)
+			tc.setup(h, name)
+			notMarked(h.t, h, "before ready")
+			// Back to ready and active: swarm's empty clock is old, the ready run is new.
+			h.with(func(a *fakeAPI) {
+				for i := range a.sig.Nodes {
+					if a.sig.Nodes[i].Hostname == name {
+						a.sig.Nodes[i].State, a.sig.Nodes[i].Availability = "ready", "active"
+					}
+				}
+			})
+			h.tick()
+			notMarked(h.t, h, "first ready tick")
+			h.advance(Tick)
+			h.tick()
+			if got := h.state().DoesNotFit; len(got) != 1 || got[0] != "pr-42_api" {
+				t.Fatalf("after a ready tick: DoesNotFit = %v", got)
+			}
+		})
+	}
+}
+
 func TestFailedApplyRetries(t *testing.T) {
 	// negative control: treat a missing, never-applied worker as lost → it becomes removing and a new name is created
 	// negative control: retry with apply instead of applyNew → fewer lock reports than applies

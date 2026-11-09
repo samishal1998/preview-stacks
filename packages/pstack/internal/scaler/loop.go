@@ -395,6 +395,12 @@ func (l *Loop) observe(now int64) {
 			w.ReadyAt = now
 			l.s.NeverJoined = 0 // "in a row"
 		}
+		switch {
+		case !ok || n.State != "ready" || n.Availability != "active":
+			w.ReadySince = 0
+		case w.ReadySince == 0:
+			w.ReadySince = now
+		}
 		if w.AppliedAt > 0 && w.ReadyAt == 0 && now-w.AppliedAt >= BootTimeout.Milliseconds() {
 			w.Removing, w.Reason = true, "never-joined"
 			l.s.NeverJoined++
@@ -407,7 +413,9 @@ func (l *Loop) observe(now int64) {
 			w.StuckServices = nil
 			continue
 		}
-		if ok && w.ReadyAt > 0 && n.Tasks == 0 && n.EmptySince != nil && now-*n.EmptySince >= Tick.Milliseconds() {
+		// Swarm's empty clock runs while the node is down too, so the window starts at the later
+		// of empty and ready: a full tick that swarm could have placed the services and did not.
+		if w.ReadySince > 0 && n.Tasks == 0 && n.EmptySince != nil && now-max(*n.EmptySince, w.ReadySince) >= Tick.Milliseconds() {
 			for _, s := range still {
 				if !slices.Contains(l.s.DoesNotFit, s) {
 					l.s.DoesNotFit = append(l.s.DoesNotFit, s)
