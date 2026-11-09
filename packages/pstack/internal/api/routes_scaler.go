@@ -237,7 +237,7 @@ func (s *Server) scalerPut(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	if lock := scalerLock(rep); lock != nil {
-		if set.Preset != lock.Preset || preset.Hash != lock.FilesHash {
+		if set.Preset != lock.Preset {
 			writeError(w, 409, "the scaler owns workers on preset "+lock.Preset+": set max 0, wait for zero, then switch")
 			return nil
 		}

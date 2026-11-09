@@ -2284,7 +2284,7 @@ func NewScalerSetCommand(exec oascmd.ExecOptions) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "set",
-		Short: "Replace the scaler settings. Absent fields take the defaults (min 0, max 3, cooldownMin 5, graceMin 15). A credential sent empty, omitted or as the mask keeps its value; null deletes it. 409 while the scaler owns workers and the change differs from the locked preset, files or shared vars, or deletes a credential. Admin.",
+		Short: "Replace the scaler settings. Absent fields take the defaults (min 0, max 3, cooldownMin 5, graceMin 15). A credential sent empty, omitted or as the mask keeps its value; null deletes it. 409 while the scaler owns workers and the change differs from the locked preset or shared vars, or deletes a credential. Admin.",
 	}
 	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
 	cmd.Flags().Bool("json", false, "print the raw JSON response")

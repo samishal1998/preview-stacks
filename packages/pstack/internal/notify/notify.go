@@ -516,7 +516,7 @@ func Summarize(e events.Event) string {
 	case "scaler.removed":
 		return "Worker " + field(d, "name") + " removed (" + field(d, "reason") + ")."
 	case "scaler.failed":
-		if msg := field(d, "error"); msg != "" {
+		if msg := strings.TrimRight(field(d, "error"), ". \n"); msg != "" {
 			return "Scaler " + field(d, "action") + " failed: " + msg + "."
 		}
 		return "Scaler " + field(d, "action") + " failed."

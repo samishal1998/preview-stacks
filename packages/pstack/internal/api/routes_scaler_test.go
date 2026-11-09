@@ -255,6 +255,14 @@ func TestScalerLockedConfig(t *testing.T) {
 	if code, out := scCall(t, fresh, "t0ken", "PUT", "/api/scaler", cases[0].body); code != 200 {
 		t.Fatalf("after the lock cleared: %d %s", code, out)
 	}
+
+	// An upgrade changed the locked built-in's files: max 0 is still accepted.
+	// negative control: restore the `|| preset.Hash != lock.FilesHash` clause → 409.
+	scReport(t, fresh, `{"hostId":"ab12cd34","workers":[{"name":"pstack-abc123","vars":{},"createdAt":1,"removing":false}],`+
+		`"locked":{"preset":"hetzner","filesHash":"stale","shared":{"ssh_keys":"[\"k\"]"}}}`)
+	if code, out := scCall(t, fresh, "t0ken", "PUT", "/api/scaler", `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"max":0}`); code != 200 {
+		t.Fatalf("stale files hash, max 0: %d %s", code, out)
+	}
 }
 
 // negative control: drop the lock check in scalerPresetPut — the locked team-a PUT answers 200.
