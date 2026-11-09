@@ -23,6 +23,9 @@ type OwnedWorker struct {
 	Reason        string            `json:"reason"`
 	NodeID        string            `json:"nodeId"`
 	StuckServices []string          `json:"stuckServices"`
+	// ApplyingAt is set before every apply that includes the worker and cleared when it returns
+	// (W-R1): still set on start means the apply was cut off.
+	ApplyingAt int64 `json:"applyingAt"`
 }
 
 // State is /state/scaler.json: the scaler's own record and the authority on what it owns.
@@ -41,6 +44,13 @@ type State struct {
 	DoesNotFit     []string          `json:"doesNotFit"`
 	Orphans        []string          `json:"orphans"`
 	PendingDestroy string            `json:"pendingDestroy"`
+	// SeenAt is the last tick's wall time: a tick that takes no action shifts the clocks
+	// (LastScaleUp, NextTryAt, AppliedAt) by the time since, so they do not advance.
+	SeenAt int64 `json:"seenAt"`
+	// MaxReported: scaler.failed {action: max} went out for the current stuck episode.
+	MaxReported bool    `json:"maxReported"`
+	LastError   string  `json:"lastError"`
+	Events      []Event `json:"events"` // queued, posted one per report (W-R4)
 }
 
 const stateFile = "scaler.json"
