@@ -29,7 +29,7 @@ browser); the version-control rules are in AGENTS.md.
 | Send deployed services' logs to **Loki** and read them in **Grafana** | [`usage.md` §7](usage.md#turn-loki-logging-on-or-off-pstack-logging) |
 | Know how **Loki logging** works as built, before changing it | [`loki-logging-as-built.md`](loki-logging-as-built.md) |
 | Add and remove **worker machines** from what pstack reports | [`node-signals-design.md`](node-signals-design.md) |
-| Let pstack add and remove **worker machines** itself | [`worker-scaler-design.md`](worker-scaler-design.md) |
+| Let pstack add and remove **worker machines** itself | [`usage.md` §7g](usage.md#7g-worker-scaler-0460), [`worker-scaler-design.md`](worker-scaler-design.md) |
 | Know what pstack does when a node's **disk, memory or CPU** runs short | [`usage.md` §9](usage.md#node-pressure-0450), [`node-pressure-design.md`](node-pressure-design.md) |
 | Test a **multi-node swarm** on a laptop, because CI has one machine | [`swarm-local-testing.md`](swarm-local-testing.md) |
 | Fix containers stuck in **`New`** on a swarm host (`could not find an available IP`) | [`preview-ingress-address-leak.md`](preview-ingress-address-leak.md) |
@@ -57,6 +57,7 @@ the web UI. Then, one section per thing a host grows into:
 | 7d | **moving a host's configuration** to another host, sealed, including onto a machine that does not exist yet | 0.30.0 |
 | 7e | **the four roles**, what each adds, and what sits outside the ladder | 0.32.0 |
 | 7f | **moving stacks to another host**: forwarding deploys and visitors, `pstack migrate`, the cutover, and why never `down` the source | 0.46.0 |
+| 7g | **the worker scaler**: `init --scaler on`, the five presets and custom ones, the network and firewall rules, what it adds and removes, and the two rules for running your own | 0.46.0 |
 | 10 | **runtime settings** — the job cap and the default role, changeable without a restart | 0.33.0 |
 
 ### [`control-plane.md`](control-plane.md) — the architecture (~1500 lines)
@@ -67,7 +68,8 @@ hold, the job model, the delivery rules for notifiers, and (§5e) why the sleep 
 registry, activity is in memory, the control stack stays a compose project under swarm, and a share
 link is a JWT with no table; and (§5g/§5h, 0.40.0) how Loki is discovered from docker, where the
 driver block is injected, the `loki-apply` job with its rollback and resume, and Grafana sign-in
-through forwardAuth. Read this before proposing a structural change — most "obvious" restructurings
+through forwardAuth; and (0.46.0) why the worker scaler is a separate client of the API with its
+own state. Read this before proposing a structural change — most "obvious" restructurings
 are refused here with a reason.
 
 ### [`bootstrap.md`](bootstrap.md) — from nothing to a running host (~1100 lines)
@@ -79,10 +81,10 @@ socket-exposure tradeoff, and what to check when the certificate never arrives.
 ### [`webhook-events.md`](webhook-events.md) — every event a notifier receives (~450 lines)
 
 The envelope, headers, and a worked signature-verification receiver. Delivery semantics: at-least-
-once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 39 events** with
+once, the retry schedule, per-notifier queueing, and redelivery. Then a catalogue of **all 42 events** with
 every payload field — deployments, jobs (including `job.leaked`, the one to page on), specs, routing,
 Loki's settings, readiness, container actions, sleep and wake, share links, configuration
-import/export, and forwarding.
+import/export, forwarding, and the worker scaler.
 
 ### [`tls-challenge.md`](tls-challenge.md) — switching HTTP-01 ↔ DNS-01 on a host that exists
 
@@ -139,7 +141,9 @@ the machine manager's job, not pstack's. Shipped in 0.41.0; the five-task build 
 An optional `scaler` service in the control stack: it reads `GET /api/signals`, creates a worker
 through OpenTofu when a task is stuck for `insufficient resources`, and drains and destroys one it
 created after it sits empty past a grace period. Presets for Hetzner, AWS, GCP, Azure and DigitalOcean, plus custom ones.
-It only ever touches workers it created; with it off, nothing changes. Not built.
+It only ever touches workers it created; with it off, nothing changes. Built for 0.46.0; where the
+build differs is at the top. The eleven-task build plan is
+[`worker-scaler-plan.md`](worker-scaler-plan.md).
 
 ### [`custom-routes-design.md`](custom-routes-design.md) — custom routes, Grafana links, compact Hearth
 

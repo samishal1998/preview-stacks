@@ -115,6 +115,8 @@ A host runs previews one of two ways:
 - **Swarm** — the host is a swarm manager, and previews spread across worker machines that join
   it. pstack converts each Compose file to what `docker stack deploy` accepts and names every change
   it makes.
+  An optional worker scaler adds a worker through OpenTofu when previews do not fit, and removes
+  one it added once it sits empty.
 
 On either, a preview can **sleep** after a period without traffic: its containers are taken down,
 its volumes and axes stay, and the next request to its hostname, or to a custom route pointed at
