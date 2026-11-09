@@ -215,22 +215,32 @@ func TestScalerLockedConfig(t *testing.T) {
 		`"locked":{"preset":"hetzner","filesHash":"` + hetznerHash(t) + `","shared":{"ssh_keys":"[\"k\"]"}},"lastError":"boom"}`
 	scReport(t, s, locked)
 
+	// An upgrade changed the locked built-in's files: max 0 is still accepted.
+	// negative control: restore the `|| preset.Hash != lock.FilesHash` clause → 409.
+	stale := `{"hostId":"ab12cd34","workers":[{"name":"pstack-abc123","vars":{},"createdAt":1,"removing":false}],` +
+		`"locked":{"preset":"hetzner","filesHash":"stale","shared":{"ssh_keys":"[\"k\"]"}}}`
+
 	cases := []struct {
-		name, body string
-		want       int
+		name, report, body string
+		want               int
 	}{
-		{"shared var changed", `{"preset":"hetzner","vars":{"ssh_keys":"[\"other\"]"}}`, 409},
-		{"preset changed", `{"preset":"aws"}`, 409},
-		{"credential deleted", `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"credentials":{"HCLOUD_TOKEN":null}}`, 409},
-		{"locked values restored, new min and per-worker var", `{"preset":"hetzner","min":1,"vars":{"ssh_keys":"[\"k\"]","server_type":"cx32"}}`, 200},
+		{"shared var changed", "", `{"preset":"hetzner","vars":{"ssh_keys":"[\"other\"]"}}`, 409},
+		{"preset changed", "", `{"preset":"aws"}`, 409},
+		{"credential deleted", "", `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"credentials":{"HCLOUD_TOKEN":null}}`, 409},
+		{"locked values restored, new min and per-worker var", "", `{"preset":"hetzner","min":1,"vars":{"ssh_keys":"[\"k\"]","server_type":"cx32"}}`, 200},
+		{"stale files hash, max 0", stale, `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"max":0}`, 200},
 	}
 	check := func(s *Server, label string) {
 		t.Helper()
 		for _, c := range cases {
+			if c.report != "" {
+				scReport(t, s, c.report)
+			}
 			if code, out := scCall(t, s, "t0ken", "PUT", "/api/scaler", c.body); code != c.want {
 				t.Errorf("%s, %s: %d %s, want %d", label, c.name, code, out, c.want)
 			}
 		}
+		scReport(t, s, locked) // undo any row's report
 	}
 	check(s, "live")
 
@@ -254,14 +264,6 @@ func TestScalerLockedConfig(t *testing.T) {
 	scReport(t, fresh, `{"hostId":"ab12cd34","workers":[],"locked":null}`)
 	if code, out := scCall(t, fresh, "t0ken", "PUT", "/api/scaler", cases[0].body); code != 200 {
 		t.Fatalf("after the lock cleared: %d %s", code, out)
-	}
-
-	// An upgrade changed the locked built-in's files: max 0 is still accepted.
-	// negative control: restore the `|| preset.Hash != lock.FilesHash` clause → 409.
-	scReport(t, fresh, `{"hostId":"ab12cd34","workers":[{"name":"pstack-abc123","vars":{},"createdAt":1,"removing":false}],`+
-		`"locked":{"preset":"hetzner","filesHash":"stale","shared":{"ssh_keys":"[\"k\"]"}}}`)
-	if code, out := scCall(t, fresh, "t0ken", "PUT", "/api/scaler", `{"preset":"hetzner","vars":{"ssh_keys":"[\"k\"]"},"max":0}`); code != 200 {
-		t.Fatalf("stale files hash, max 0: %d %s", code, out)
 	}
 }
 
