@@ -26,6 +26,7 @@ import type {
   TlsRedeploy,
   TlsStatus,
 } from '../api/types';
+import { scalerSavedKey } from '../composables/scaler';
 import { usePolling } from '../composables/usePolling';
 import { can } from '../composables/useAuth';
 import { state } from '../composables/useControlPlane';
@@ -325,7 +326,7 @@ const newCredValue = ref('');
 
 // Refill only when the SAVED values change: the poll must not wipe typing (a dismissal is not one).
 watch(
-  () => scaler.value && JSON.stringify(scaler.value.settings, ['preset', 'vars', 'min', 'max', 'cooldownMin', 'graceMin']),
+  () => scaler.value && scalerSavedKey(scaler.value.settings),
   () => {
     const s = scaler.value?.settings;
     if (!s) return;
