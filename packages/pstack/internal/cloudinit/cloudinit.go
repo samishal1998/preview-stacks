@@ -300,14 +300,14 @@ func validate(a Answers) error {
 	if a.AdminUser != "" && js.Len(a.AdminPassword) < 8 {
 		return &Error{"admin password must be at least 8 characters"}
 	}
-	// Both values travel through a single-quoted shell assignment in the boot script and then into
+	// These values travel through a single-quoted shell assignment in the boot script and then into
 	// control/.env, which Compose interpolates — so `'` ends the quoting and `$` silently becomes
 	// something else by the time the container reads it. A newline is worse than either: the init
 	// call is a YAML folded scalar, where one becomes a space, so the credential the container gets
 	// is not the credential the operator was shown. That is precisely the failure this feature exists
 	// to remove, so the three are refused rather than escaped. (The generated password is hex for the
 	// same reason, and so is `init`'s generated token.)
-	for _, s := range []struct{ what, value string }{{"admin password", a.AdminPassword}, {"PSTACK_TOKEN", a.Token}} {
+	for _, s := range []struct{ what, value string }{{"admin password", a.AdminPassword}, {"PSTACK_TOKEN", a.Token}, {"PSTACK_DNS_TOKEN", a.DNSToken}} {
 		if strings.ContainsAny(s.value, "'$\n\r") {
 			return &Error{s.what + " must be one line with no single quote and no `$`: it is shell-quoted into this file and expanded by Compose on the host"}
 		}
@@ -328,7 +328,7 @@ func validate(a Answers) error {
 		// The passphrase and the fetch URL go through exactly the same ordered ReplaceAll, so they
 		// belong in this list and not in a second one beside it. The sealed PAYLOAD does not: it is
 		// base64-encoded before it is placed, and `{` is not in that alphabet.
-		{"config passphrase", a.ConfigKey}, {"config URL", a.ConfigURL},
+		{"config passphrase", a.ConfigKey}, {"config URL", a.ConfigURL}, {"PSTACK_DNS_TOKEN", a.DNSToken},
 	} {
 		if strings.Contains(s.value, "{{") {
 			return &Error{s.what + " must not contain `{{`: this file is rendered by substitution, so a marker inside a credential is replaced and the host gets a different credential than you were shown"}

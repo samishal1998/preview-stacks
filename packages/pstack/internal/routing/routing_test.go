@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -223,4 +224,29 @@ func TestTraefikDynamicConfig(t *testing.T) {
 		_, err = s.Remove("m.yml")
 		wantErr(t, err, "no such routing file")
 	})
+}
+
+func TestConcurrentWritesOfOneNameEachSucceed(t *testing.T) {
+	// negative control: drop tmpSeq from write's temp name — two writers share one temp file and a rename fails.
+	s := store(t)
+	content := valid(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.Write("same.yml", content); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(s.Dir, "same.yml")); err != nil || string(b) != content {
+		t.Fatalf("got %q %v", b, err)
+	}
 }

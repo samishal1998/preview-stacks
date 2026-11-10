@@ -554,8 +554,9 @@ func (r *Registry) fanout(id string, e log.Event) {
 // and a third REPLACES the queued one (depth one, last write wins) — the replaced record reaches
 // `superseded` under its own id, because its caller was handed that id and is polling it.
 //
-// ok=false means the stack is HELD by a route mutating the deployment (Hold), which the caller
-// surfaces as 409 — the one remaining refusal.
+// ok=false is one of two refusals: the stack is HELD by a route mutating the deployment (Hold), or
+// a preempting job (a `down`) is queued and this action does not preempt — see start. StartFor's
+// onlyIfIdle adds a third.
 //
 // The returned stub says `running` when the job went straight out (an idle stack and a free slot,
 // the common case) and `queued` when it is waiting. `scrub` is applied to every string that lands
@@ -564,14 +565,14 @@ func (r *Registry) Start(stackName string, action Action, work Work, scrub func(
 	return r.start("", stackName, action, work, scrub, false)
 }
 
-// StartFor is Start (or StartIfIdle, with onlyIfIdle) for a job that acts on a deployment, recording
-// which one. The api package's startLifecycle is its one caller.
+// StartFor is Start for a job that acts on a deployment, recording which one; with onlyIfIdle it
+// refuses unless the stack is idle. The api package's startLifecycle is its one caller.
 func (r *Registry) StartFor(deployment, stackName string, action Action, work Work, scrub func(string) string, onlyIfIdle bool) (Job, bool) {
 	return r.start(deployment, stackName, action, work, scrub, onlyIfIdle)
 }
 
-// StartIfIdle is Start for a caller that wants the OLD refuse-don't-queue rule: ok=false unless the
-// stack has nothing running, nothing queued and no hold.
+// start's onlyIfIdle is the OLD refuse-don't-queue rule: ok=false unless the stack has nothing
+// running, nothing queued and no hold.
 //
 // It exists because two callers were built on `Start` refusing a busy stack, and queueing silently
 // broke both. `wakeFor` checked IsBusy and then started, with a registry read in between — harmless
@@ -581,12 +582,7 @@ func (r *Registry) StartFor(deployment, stackName string, action Action, work Wo
 // and its consequence is worse: a `sleep` that used to be refused for racing an operator's deploy now
 // QUEUES behind it and tears the compose project down the moment that deploy finishes.
 //
-// The fix is not another check-then-act. It is one atomic accept-or-refuse under the same mutex,
-// named for what those callers actually mean.
-func (r *Registry) StartIfIdle(stackName string, action Action, work Work, scrub func(string) string) (Job, bool) {
-	return r.start("", stackName, action, work, scrub, true)
-}
-
+// The fix is not another check-then-act. It is one atomic accept-or-refuse under the same mutex.
 func (r *Registry) start(deployment, stackName string, action Action, work Work, scrub func(string) string, onlyIfIdle bool) (Job, bool) {
 	if scrub == nil {
 		scrub = func(s string) string { return s }

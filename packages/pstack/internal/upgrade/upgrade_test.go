@@ -246,6 +246,16 @@ func TestUpgrade(t *testing.T) {
 		}
 	})
 
+	t.Run("an http01 host whose .env names a DNS provider keeps it", func(t *testing.T) {
+		// negative control: restore `state.Challenge == initctl.DNS01 &&` in initFlags — the flag is dropped and initguard refuses the re-init.
+		dataDir, _ := control(t, "DOMAIN=p.example.com\nACME_EMAIL=o@example.com\nDNS_PROVIDER=cloudflare\nPSTACK_TOKEN=tok-abcdefghijklmnop", "")
+		got := cmds(PlanUpgrade(PlanArgs{Phase: Resume, Target: "latest", State: mustRead(t, dataDir), BinPath: "/usr/local/bin/pstack"}))
+		want := "pstack init --domain 'p.example.com' --acme-email 'o@example.com' --challenge http01 --dns-provider 'cloudflare' --orchestrator compose"
+		if len(got) == 0 || got[len(got)-1] != want {
+			t.Errorf("got %v\nwant last %q", got, want)
+		}
+	})
+
 	t.Run("an advanced-UI, dns01 host rebuilds both images and keeps its challenge mode", func(t *testing.T) {
 		// negative control: drop `--dns-provider` from initFlags — the exact command differs.
 		dataDir, _ := control(t, "DOMAIN=p.example.com\nACME_EMAIL=o@example.com\nDNS_PROVIDER=cloudflare\nPSTACK_TOKEN=tok-abcdefghijklmnop", dnsAdvCompose)

@@ -466,11 +466,12 @@ func Summarize(e events.Event) string {
 		what := "a worker went empty"
 		if field(d, "type") == "stuck" {
 			what = field(d, "service") + " cannot be placed"
-			if r := field(d, "reason"); r != "" {
-				what += ": " + r
+			// truthy, not field != "": field renders an absent key as "undefined".
+			if truthy(d["reason"]) {
+				what += ": " + field(d, "reason")
 			}
-		} else if h := field(d, "hostname"); h != "" {
-			what = h + " is empty"
+		} else if truthy(d["hostname"]) {
+			what = field(d, "hostname") + " is empty"
 		}
 		if e.Event == "signal.cleared" {
 			return "Resolved — " + what + "."

@@ -62,9 +62,8 @@ func uiPackage(app string) string {
 // compose plugin lifted from the official image.
 //
 // Pinned to the running CLI's version so the image and the CLI that rendered it cannot disagree.
-// The context must hold the Linux binary of that version as `pstack` — `build-image` assembles it
-// from the running binary; by hand, download `pstack_linux_<arch>` from the release page into an
-// empty directory under that name.
+// The context is empty: the Dockerfile installs this version with the release's install.sh.
+// localControlDockerfile is the variant that COPYs a binary from the context instead.
 func ControlDockerfile(ver string) string {
 	if ver == "" {
 		ver = version.Get()
@@ -194,9 +193,9 @@ type BuildOptions struct {
 	UIApp string
 	// UIDist is an explicit path to a built UI `dist/`, for when the package is installed somewhere unusual.
 	UIDist string
-	// Binary is the Linux binary to put in the context as `pstack`. Default: the running
-	// executable (Linux only — see Build). A test passes any file; an operator on macOS passes a
-	// cross-built one.
+	// Binary is a Linux binary to COPY into the image instead of installing the release
+	// (PSTACK_BINARY). Default: none — the Dockerfile installs this version itself. A test passes
+	// any file.
 	Binary string
 	// Out is where progress lines go (stdout when nil).
 	Out io.Writer

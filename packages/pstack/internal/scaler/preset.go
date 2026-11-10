@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -75,7 +76,7 @@ func ParsePreset(files map[string]string) (Preset, error) {
 		if name == "workers" {
 			workersAt = m[1]
 		}
-		if !filled[name] && !contains(p.Shared, name) {
+		if !filled[name] && !slices.Contains(p.Shared, name) {
 			p.Shared = append(p.Shared, name)
 		}
 	}
@@ -93,7 +94,7 @@ func ParsePreset(files map[string]string) (Preset, error) {
 			case m == nil:
 			case m[1] == "user_data":
 				userData = true
-			case !contains(p.PerWorker, m[1]):
+			case !slices.Contains(p.PerWorker, m[1]):
 				p.PerWorker = append(p.PerWorker, m[1])
 			}
 		}
@@ -147,15 +148,6 @@ func splitTop(s string) []string {
 		}
 	}
 	return append(out, s[last:])
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ValidPresetName applies the spec-name rule and refuses a built-in name.

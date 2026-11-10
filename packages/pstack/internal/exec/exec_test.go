@@ -101,10 +101,3 @@ func TestCaptureOutputs(t *testing.T) {
 		t.Error("keys must never be nil")
 	}
 }
-
-func TestMaskSecrets(t *testing.T) {
-	// negative control: drop the length guard — "ab" masks every line.
-	if got := MaskSecrets("token=supersecret12 short=ab", []string{"supersecret12", "ab", ""}); got != "token=*** short=ab" {
-		t.Errorf("got %q", got)
-	}
-}

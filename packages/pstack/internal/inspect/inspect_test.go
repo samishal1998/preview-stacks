@@ -196,6 +196,32 @@ func TestFindings(t *testing.T) {
 			t.Errorf("got %+v", rt)
 		}
 	})
+	t.Run(`a failed docker inspect reports unreachable, never "nothing running"`, func(t *testing.T) {
+		// negative control: in inspectIDsChecked return ok=true on !res.OK — Reachable:true with the "Nothing is running" finding.
+		failInspect := func(stdout string) exec.Runner {
+			f := exec.NewFake(nil, "")
+			f.Answer = func(cmd string) (exec.Result, bool) {
+				if strings.HasPrefix(cmd, "docker ps -aq") {
+					return exec.Result{OK: true, Stdout: "abc123"}, true
+				}
+				if strings.HasPrefix(cmd, "docker inspect") {
+					return exec.Result{OK: false, Code: 1, Stdout: stdout, Stderr: "Error: No such object"}, true
+				}
+				return exec.Result{OK: true}, true
+			}
+			return f
+		}
+		rt := DeploymentRuntime(RuntimeArgs{Stack: "pr-1", Runner: failInspect(""), Challenge: HTTP01})
+		if rt.Reachable || len(rt.Containers) != 0 || len(rt.Findings) != 0 {
+			t.Errorf("got %+v", rt)
+		}
+		// What a failed inspect still printed is used: one container gone since `docker ps` is not the
+		// whole stack unknown.
+		b, _ := json.Marshal([]any{container(nil, nil)})
+		if rt := DeploymentRuntime(RuntimeArgs{Stack: "pr-1", Runner: failInspect(string(b)), Challenge: HTTP01}); !rt.Reachable || len(rt.Containers) != 1 {
+			t.Errorf("partial answer: got %+v", rt)
+		}
+	})
 	t.Run("the container environment is never included, and label values are redacted", func(t *testing.T) {
 		// negative control: copy raw.Config.Env into ContainerInfo — the blob carries the token.
 		c := container(map[string]string{"traefik.enable": "true", "traefik.http.middlewares.a.basicauth.users": "admin:PLAINTEXT_PASSWORD_TOKEN=abcdefgh"}, nil)

@@ -92,6 +92,7 @@ func TestEnvelopeAndSign(t *testing.T) {
 // `via` branch → the via line loses " via 10.0.0.2". Delete `case "forward.failed"` → its line differs.
 // negative control: delete `case "scaler.failed"` → got "scaler.failed on this host."; drop its empty-
 // error branch → "Scaler max failed: ." (W-R17); drop the TrimRight → "…exceeded.\n.".
+// negative control: guard the signal's reason/hostname with `field(...) != ""` → "undefined is empty.".
 func TestSummarize(t *testing.T) {
 	ev := func(name, data string) events.Event { return events.Event{Event: name, Data: json.RawMessage(data)} }
 	pressureData := func(kinds string, disk, memory, cpu float64) string {
@@ -118,6 +119,8 @@ func TestSummarize(t *testing.T) {
 		"Loki settings started on pstack-control.":                                                   Summarize(ev("job.started", `{"stack":"pstack-control","action":"loki-apply"}`)),
 		"pr-42_api cannot be placed: no suitable node (insufficient resources on 2 nodes).":          Summarize(ev("signal.raised", `{"id":"stuck/pr-42_api","type":"stuck","service":"pr-42_api","reason":"no suitable node (insufficient resources on 2 nodes)"}`)),
 		"Resolved — worker-3 is empty.":                                                              Summarize(ev("signal.cleared", `{"id":"empty/xk3f","type":"empty","hostname":"worker-3"}`)),
+		"a worker went empty.":                                                                       Summarize(ev("signal.raised", `{"id":"empty/xk3f","type":"empty"}`)),
+		"pr-42_api cannot be placed.":                                                                Summarize(ev("signal.raised", `{"id":"stuck/pr-42_api","type":"stuck","service":"pr-42_api"}`)),
 		"Route checkout now points at myapp-pr-2 (moved from pr-1).":                                 Summarize(ev("route.assigned", `{"route":"checkout","deployment":"pr-2","stack":"myapp-pr-2","previous":"pr-1"}`)),
 		"Route checkout now points at myapp-pr-2.":                                                   Summarize(ev("route.assigned", `{"route":"checkout","deployment":"pr-2","stack":"myapp-pr-2"}`)),
 		"Route checkout no longer points at myapp-pr-1 (forgotten).":                                 Summarize(ev("route.unassigned", `{"route":"checkout","deployment":"pr-1","stack":"myapp-pr-1","reason":"forgotten"}`)),

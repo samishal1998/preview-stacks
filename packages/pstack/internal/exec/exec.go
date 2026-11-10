@@ -239,31 +239,18 @@ func CaptureOutputs(stdout string) (keys []string, values map[string]string) {
 	return keys, values
 }
 
-// MaskSecrets replaces values that look like credentials with ***. Best-effort, not a security
-// boundary: only values of 8+ characters, so a short token does not shred every log line.
-func MaskSecrets(text string, secrets []string) string {
-	out := text
-	for _, s := range secrets {
-		if s != "" && len(s) >= 8 {
-			out = strings.ReplaceAll(out, s, "***")
-		}
-	}
-	return out
-}
-
 // Fake is the test runner: records every command, answers from a script, never spawns.
 //
 // Owner: the test. The mutex is only there so a job goroutine and the asserting test may touch Log.
 type Fake struct {
-	mu      sync.Mutex
-	Log     []string
-	Fail    func(cmd string) bool
-	Stdout  string
-	Answer  func(cmd string) (Result, bool)
-	dryRun  bool
-	cwd     string
-	ctx     context.Context
-	Verbose bool
+	mu     sync.Mutex
+	Log    []string
+	Fail   func(cmd string) bool
+	Stdout string
+	Answer func(cmd string) (Result, bool)
+	dryRun bool
+	cwd    string
+	ctx    context.Context
 }
 
 // NewFake returns a runner whose every command succeeds with `stdout`, except those `fail` names.
