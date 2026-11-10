@@ -29,6 +29,7 @@
 import type {
   CancelStack,
   DeliveryRow,
+  DeploymentDetail,
   DeploymentRow,
   Health,
   HostSettings,
@@ -163,7 +164,7 @@ export function createClient(opts: ClientOptions) {
 
     deployments: {
       list: (vars?: Vars) => get<{ deployments: DeploymentRow[] }>(`/api/deployments${qs(vars)}`).then((r) => r.deployments),
-      get: (id: string, vars?: Vars) => get<DeploymentRow & { spec?: unknown }>(`/api/deployments/${enc(id)}${qs(vars)}`),
+      get: (id: string, vars?: Vars) => get<DeploymentDetail>(`/api/deployments/${enc(id)}${qs(vars)}`),
 
       /**
        * Submit or replace. `spec` is an inline spec file; `specName` references a stored one — one
@@ -325,9 +326,10 @@ export function createClient(opts: ClientOptions) {
 
     specs: {
       list: () => get<{ specs: SpecMeta[] }>('/api/specs').then((r) => r.specs),
-      get: (name: string) => get<SpecMeta & { spec?: string; compose?: string }>(`/api/specs/${enc(name)}`),
+      /** `source` is the spec text; an unauthenticated caller gets `sourceWithheld: true` instead. */
+      get: (name: string) => get<SpecMeta & { source?: string; sourceWithheld?: true }>(`/api/specs/${enc(name)}`),
       put: (name: string, body: { spec: string; compose?: string; description?: string }) =>
-        put<{ name: string; replaced: boolean }>(`/api/specs/${enc(name)}`, body),
+        put<{ spec: SpecMeta }>(`/api/specs/${enc(name)}`, body).then((r) => r.spec),
       /** Refused while a deployment still references it. */
       remove: (name: string) => del<{ deleted: string }>(`/api/specs/${enc(name)}`),
     },
@@ -340,7 +342,8 @@ export function createClient(opts: ClientOptions) {
       setEnabled: (id: number, enabled: boolean) =>
         request<{ notifier: NotifierRow }>('PATCH', `/api/notifiers/${id}`, { enabled }),
       remove: (id: number) => del<{ deleted: number }>(`/api/notifiers/${id}`),
-      test: (id: number) => post<{ ok: boolean }>(`/api/notifiers/${id}/test`),
+      test: (id: number) =>
+        post<{ result: { ok: boolean; status?: number; error?: string } }>(`/api/notifiers/${id}/test`).then((r) => r.result),
       deliveries: (id: number) => get<{ deliveries: DeliveryRow[]; queued: number }>(`/api/notifiers/${id}/deliveries`),
       /** Replay a past delivery: same event id, fresh signature, `x-pstack-redelivery: 1`. */
       redeliver: (id: number, deliveryId: number) =>
@@ -431,8 +434,11 @@ export function createClient(opts: ClientOptions) {
      */
     async waitForReady(id: string, o: { vars?: Vars; timeoutMs?: number } = {}): Promise<Readiness> {
       const deadline = Date.now() + (o.timeoutMs ?? 10 * 60_000);
+      // The server holds each poll open for `wait` seconds, so it must fit inside the per-request
+      // `timeoutMs` or every poll aborts.
+      const wait = opts.timeoutMs ? Math.max(1, Math.min(30, Math.floor(opts.timeoutMs / 1000) - 1)) : 30;
       for (;;) {
-        const r = await client.deployments.readiness(id, { wait: 30, vars: o.vars });
+        const r = await client.deployments.readiness(id, { wait, vars: o.vars });
         if (r.state !== 'watching') return r;
         if (Date.now() > deadline) {
           throw new PstackError(0, id, { error: `${id} was still converging after the wait timeout` });

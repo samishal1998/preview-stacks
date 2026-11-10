@@ -110,9 +110,12 @@ describe('the client speaks the real API', () => {
   }, 30_000);
 
   test('specs, host variables and notifiers round-trip', async () => {
-    await client.specs.put('shopfront', { spec: SPEC, description: 'the demo' });
+    // negative control: drop `.then((r) => r.spec)` from specs.put; `.name` is undefined.
+    expect((await client.specs.put('shopfront', { spec: SPEC, description: 'the demo' })).name).toBe('shopfront');
     expect((await client.specs.list()).map((s) => s.name)).toContain('shopfront');
-    expect((await client.specs.get('shopfront')).kind).toBe('isolated');
+    const stored = await client.specs.get('shopfront');
+    expect(stored.kind).toBe('isolated');
+    expect(stored.source).toBe(SPEC);
     await client.specs.remove('shopfront');
 
     await client.hostVars.put('REGION', 'eu-central');
@@ -126,6 +129,12 @@ describe('the client speaks the real API', () => {
     const meta = await client.notifiers.meta();
     expect(meta.events).toContain('job.leaked');
     expect(meta.types.map((t) => t.kind)).toContain('webhook');
+
+    // A dead port: the delivery fails, and `ok` says so rather than being undefined.
+    // negative control: drop `.then((r) => r.result)` from notifiers.test; `.ok` is undefined.
+    const { notifier } = await client.notifiers.create({ name: 'tap', type: 'webhook', events: ['*'], config: { url: 'http://127.0.0.1:1/hook' } });
+    expect((await client.notifiers.test(notifier.id)).ok).toBe(false);
+    await client.notifiers.remove(notifier.id);
   });
 
   test('waitForReady returns a terminal readiness rather than looping on "watching"', async () => {
@@ -135,6 +144,19 @@ describe('the client speaks the real API', () => {
     const r = await client.deployments.readiness('pr-ready', { timeout: 1, wait: 5 });
     expect(['watching', 'ready', 'failed', 'timedout']).toContain(r.state);
     expect(Array.isArray(r.containers)).toBe(true);
+  }, 20_000);
+
+  test('waitForReady long-polls inside the per-request timeout', async () => {
+    const urls: string[] = [];
+    const short = createClient({
+      baseUrl: server.base,
+      token: TOKEN,
+      timeoutMs: 3000,
+      fetch: (u: string, i?: RequestInit) => (urls.push(u), fetch(u, i)),
+    });
+    // negative control: pass `wait: 30` in waitForReady again; the poll aborts at 3s and the URL says wait=30.
+    await short.waitForReady('pr-ready', { timeoutMs: 1 }).catch(() => {});
+    expect(urls[0]).toContain('wait=2');
   }, 20_000);
 });
 
@@ -153,6 +175,7 @@ describe('0.26.0: sleep/wake, share links, the swarm', () => {
     const woke = await client.waitForJob(w.id, { intervalMs: 10 });
     const d = await client.deployments.get('pr-nap');
     expect(d.orchestrator).toBe('compose');
+    expect(Array.isArray(d.axes)).toBe(true);
     expect(d.sleep).toBeNull();
     // A wake that could not bring the project up (no docker here) leaves the record — the next
     // request to its hostname tries again. One that did clears it.

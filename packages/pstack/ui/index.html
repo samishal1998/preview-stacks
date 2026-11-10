@@ -19,7 +19,7 @@
     --line: #272d36;
     --fg: #e6e9ee;
     --fg-dim: #9aa4b2;
-    --fg-mute: #6b7480;
+    --fg-mute: #858f9c;
     --ok: #3fb950;
     --fail: #f85149;
     --leak: #e3922a;
@@ -229,9 +229,8 @@
         fetch: the point is to leave this origin for their consent screen, and to come back to
         /api/auth/sso/callback with a session cookie already set.
       -->
-      <button v-if="health.sso && health.sso.enabled" @click="signInWithProvider">
-        sign in with {{ health.sso.label }}
-      </button>
+      <button v-for="p in (health.sso && health.sso.providers) || []" :key="p.key"
+              @click="signInWithProvider(p.key)">sign in with {{ p.label || p.key }}</button>
       <input type="text" v-model.trim="loginUser" placeholder="username"
              autocomplete="username" style="width:110px">
       <input type="password" v-model="loginPass" placeholder="password"
@@ -479,8 +478,8 @@
             <div v-for="d in unresolvedRows" :key="'u-' + d.id" class="banner warn" style="margin-top:12px">
               <b>{{ d.id }}</b> could not be resolved: <span class="mono">{{ d.unresolved }}</span>
               <p style="margin:6px 0 0">
-                This listing resolves every spec with the <em>same</em> (empty) variable set, so a
-                spec with a <code>${VAR}</code> in it will always show up here.
+                This listing resolves every spec with its stored variables only, so a spec whose
+                <code>${VAR}</code> was never stored shows up here.
                 <a :href="'#/deployments/' + encodeURIComponent(d.id) + '/config'">Set its variables</a>
                 and the detail view will resolve.
               </p>
@@ -595,12 +594,10 @@
             <div class="banner warn">
               <b>The same variables must accompany <code>down</code> as accompanied <code>up</code>.</b>
               <p style="margin:6px 0 0">
-                Variables are <em>not</em> stored with the deployment. They are sent as query
-                parameters on every call, so <code>up</code> with <code>PR=7</code> and
-                <code>down</code> without it target two different stacks &mdash; and the teardown
-                quietly misses everything the deploy created. These pairs are kept in this browser
-                (<code>localStorage</code>, keyed by deployment id) so they stay matched here, but a
-                different browser, a CI job, or the CLI must pass the same ones itself.
+                Variables submitted as <code>vars</code> (CLI, advanced UI) are stored with the
+                deployment; this page does not store them. It sends the pairs below on every call,
+                and they override stored ones, so <code>up</code> and <code>down</code> must see the
+                same set.
               </p>
             </div>
 
@@ -815,9 +812,10 @@
             </p>
 
             <template v-else>
-              <div v-if="health.authEnforced === true && !token" class="banner warn">
-                <b>no token set.</b> Every action below is a mutating request and will be refused
-                with <code>401</code>. Put <code>PSTACK_TOKEN</code> in the header field.
+              <div v-if="health.authEnforced === true && !token && !me" class="banner warn">
+                <b>not signed in and no token set.</b> Every action below is a mutating request and
+                will be refused with <code>401</code>. Sign in, or put <code>PSTACK_TOKEN</code> in
+                the header field.
               </div>
 
               <div class="row">
@@ -851,9 +849,8 @@
                 as does <code>wake</code> here.
               </p>
               <p class="hint" v-if="detail.busy === true">
-                A job is in flight for <b>{{ detail.stack }}</b>. One job per stack, deliberately not
-                queued &mdash; a <code>down</code> racing an <code>up</code> over the same database
-                branch is corruption, not contention.
+                A job is in flight for <b>{{ detail.stack }}</b>. Another action queues behind it
+                (one deep, newest wins); <code>down</code> preempts it.
               </p>
               <p class="hint">
                 Sent with <span class="mono">{{ varsQuery || 'no variables' }}</span>.
@@ -1127,17 +1124,21 @@
           </p>
 
           <!--
-            The API has no route that returns a stored spec, so this form cannot pre-fill one — and
-            a `PUT` REPLACES the whole record. Say that out loud: a half-remembered spec pasted here
-            is valid YAML, so the server will accept it and the axes the original declared simply
-            stop existing as far as the control plane knows.
+            The form is pre-filled from GET /api/deployments/:id/source when it can be, and a `PUT`
+            REPLACES the whole record. Say that out loud: a half-remembered spec pasted here is valid
+            YAML, so the server will accept it and the axes the original declared simply stop
+            existing as far as the control plane knows. A deployment that references a stored spec
+            is never pre-filled: PUT back inline, it would lose the reference.
           -->
           <div v-if="route.id" class="banner warn">
             <b>Replacing <span class="mono">{{ route.id }}</span>.</b>
-            This starts <em>empty</em>: the API has no route that hands back a stored spec, so
-            nothing here was loaded from disk. Paste the <b>complete</b> spec you want stored &mdash;
-            <code>PUT</code> replaces the record outright, and axes you leave out stop being tracked
-            while whatever they created keeps running.
+            <template v-if="sourceLoaded === route.id">Loaded the stored spec.</template>
+            <template v-else-if="sourceRef">Not loaded: it references the stored spec
+              <span class="mono">{{ sourceRef }}</span>, and an inline spec here replaces that.</template>
+            <template v-else>Not loaded.</template>
+            Paste the <b>complete</b> spec you want stored &mdash; <code>PUT</code> replaces the
+            record outright, and axes you leave out stop being tracked while whatever they created
+            keeps running.
           </div>
 
           <div class="row" style="margin-bottom:12px">
@@ -1175,7 +1176,7 @@
           </div>
           <button class="small" @click="form.env.push({ k: '', v: '' })">+ variable</button>
           <p class="hint">
-            These validate the spec now; they are <b>not</b> stored with it. On success they are
+            These validate the spec now; they are <b>not</b> stored by this page. On success they are
             saved as this deployment's variables <em>in this browser</em>, so the later
             <code>up</code>/<code>down</code> from this page use the same ones.
           </p>
@@ -1260,7 +1261,7 @@
               <li><span class="dim" style="width:100px">action</span><span class="mono stretch">{{ job.action }}</span></li>
               <li><span class="dim" style="width:100px">stack</span><span class="name stretch">{{ job.stack }}</span></li>
               <li><span class="dim" style="width:100px">started</span><span class="mono stretch">{{ stamp(job.startedAt) }}</span></li>
-              <li><span class="dim" style="width:100px">ended</span><span class="mono stretch">{{ job.endedAt ? stamp(job.endedAt) : '— still running' }}</span></li>
+              <li><span class="dim" style="width:100px">ended</span><span class="mono stretch">{{ job.endedAt ? stamp(job.endedAt) : job.state === 'queued' ? '— not started' : '— still running' }}</span></li>
               <li><span class="dim" style="width:100px">took</span><span class="mono stretch">{{ took(job) }}</span></li>
             </ul>
           </div>
@@ -1292,6 +1293,10 @@
               <b>FAILED.</b>
               {{ job.error || 'a step exited non-zero — see the steps below.' }}
             </div>
+            <div v-else-if="job.state === 'cancelled'" class="banner leaked">
+              <b>CANCELLED</b><span v-if="job.cancelledBy"> by {{ job.cancelledBy }}</span>.
+              Whatever ran before was not undone &mdash; run <code>verify</code>.
+            </div>
             <div v-else-if="job.state === 'ok'" class="banner ok">
               <b>OK.</b>
               <span v-if="unverifiableSteps">
@@ -1313,9 +1318,8 @@
             <pre class="log" ref="logEl" @scroll="onLogScroll"><template v-for="l in lines" :key="l.seq"><span class="t">{{ hhmmss(l.at) }}</span> <span :class="'lv-' + l.level">{{ l.message }}</span>
 </template><span v-if="!lines.length" class="muted">no log lines</span></pre>
             <p class="hint" v-if="streamDropped">
-              The live stream dropped without a completion frame (a restart, a proxy timeout, or a
-              job longer than the server's 240s idle window). The job record above was re-fetched,
-              so the state is current even though the tail of the log may be missing.
+              No live stream &mdash; a bearer token cannot open one (sign in for it), or the
+              connection dropped. The record and its log are re-read until the job ends.
             </p>
           </div>
 
@@ -1350,6 +1354,9 @@
           </p>
           <p v-else-if="job.state === 'superseded'" class="muted">
             Never started: a newer job for this stack replaced it.
+          </p>
+          <p v-else-if="job.state === 'cancelled'" class="muted">
+            Cancelled before any step produced a result.
           </p>
           <p v-else-if="job.state !== 'running'" class="muted">
             This job produced no step results &mdash; it failed before the first step ran.
@@ -1499,6 +1506,8 @@ createApp({
       // ---- submit ----
       form: { id: '', spec: '', compose: '', env: [{ k: '', v: '' }] },
       submitting: false, submitError: '', submitResult: null,
+      // Which deployment's stored spec the form was pre-filled from, or the spec name it references.
+      sourceLoaded: '', sourceRef: '',
 
       poll: 0,
       defaultControlNote:
@@ -1583,10 +1592,12 @@ createApp({
     this.loadDeployments();
     this.onRoute(this.route, null);
     // The whole point of `busy` is being current, and the server holds the lock — not us. Only the
-    // views that display it poll, and never the log (SSE) or compose logs (expensive).
+    // views that display it poll, and never the log (SSE) or compose logs (expensive). A detail
+    // page polls only while busy, so its disabled buttons come back when the job ends.
     this.poll = setInterval(() => {
       if (this.route.view === 'overview') { this.loadDeployments(); this.loadJobs(); }
       else if (this.route.view === 'list') this.loadDeployments();
+      else if (this.route.view === 'detail' && this.detail && this.detail.busy === true) this.loadDetail();
       else if (this.route.view === 'jobs') this.loadJobs();
       // Every other tick: the swarm panel polls at 10s, and the join token is never part of it.
       else if (this.route.view === 'swarm' && Date.now() - this.swarmAt >= 9500) this.loadSwarm();
@@ -1674,9 +1685,9 @@ createApp({
      * read. `next` is a same-origin path — the server refuses anything else. A `?next=` on the page
      * (Grafana's sign-in sends one) wins over the page's own path.
      */
-    signInWithProvider() {
+    signInWithProvider(key) {
       const next = new URLSearchParams(location.search).get('next') || '';
-      location.assign('/api/auth/sso/start?next=' + encodeURIComponent(next.startsWith('/') ? next : (location.pathname === '/login' ? '/' : location.pathname + location.hash)));
+      location.assign('/api/auth/sso/start?provider=' + encodeURIComponent(key) + '&next=' + encodeURIComponent(next.startsWith('/') ? next : (location.pathname === '/login' ? '/' : location.pathname + location.hash)));
     },
     async signIn() {
       this.loginError = '';
@@ -2036,9 +2047,9 @@ createApp({
         this.scrollLog();
       };
       es.onerror = () => {
-        // A stream can end without a `done` frame: server restart, proxy timeout, or a job that
-        // outlived the server's 240s idle window. Fall back to the record rather than leaving the
-        // page pinned on "running" forever.
+        // No stream, or one that ended without a `done` frame: a bearer token (EventSource cannot
+        // send the header, so the stream 401s), a server restart, or a proxy timeout. Fall back to
+        // polling the record rather than leaving the page pinned on "running" forever.
         this.closeStream();
         this.streamDropped = true;
         this.settle(id);
@@ -2051,16 +2062,28 @@ createApp({
       this.following = false;
     },
 
-    /** The job is over: re-read the record for `outcome`, and refresh what the lock made stale. */
+    /**
+     * The stream is over: re-read the record for `outcome`, and refresh what the lock made stale.
+     * A job still queued or running here had no stream to finish it, so re-read it every 3s until
+     * it ends.
+     */
     async settle(id) {
+      clearTimeout(this.settleTimer);
       const r = await this.get(`/api/jobs/${enc(id)}`);
       if (this.route.view !== 'job' || this.route.jobId !== id) return;
+      if (this.following) return; // a Re-follow owns the page now
       if (r.ok && r.body.job) this.job = r.body.job;
       else if (this.job) {
         this.job = {
           ...this.job, state: 'failed',
           error: 'lost the job record — the server restarted? Job history is in memory only.',
         };
+      }
+      // No stream finished this job, so the record's log is the whole log, final lines included.
+      if (this.streamDropped && this.job) { this.lines = this.job.log || []; this.scrollLog(); }
+      if (this.job && (this.job.state === 'queued' || this.job.state === 'running')) {
+        this.settleTimer = setTimeout(() => this.settle(id), 3000);
+        return;
       }
       // The stack lock is released, so both of these are stale the moment the job ends.
       this.loadDeployments();
@@ -2082,16 +2105,17 @@ createApp({
     },
 
     // ---- submit ------------------------------------------------------------------------
-    prepareSubmit(id) {
+    async prepareSubmit(id) {
       this.submitError = '';
       this.submitResult = null;
-      // Arriving to replace a DIFFERENT deployment must not carry the previous one's spec across.
-      // There is no route that returns a stored spec, so this form can never pre-fill the body —
-      // and a leftover body is the dangerous case: it is a perfectly valid spec, so a PUT would
-      // replace the wrong deployment's spec and nothing on the server could catch it.
+      // Arriving to replace a DIFFERENT deployment must not carry the previous one's spec across:
+      // a leftover body is a perfectly valid spec, so a PUT would replace the wrong deployment's
+      // spec and nothing on the server could catch it.
       if (id && id !== this.form.id) {
         this.form.spec = '';
         this.form.compose = '';
+        this.sourceLoaded = '';
+        this.sourceRef = '';
       }
       if (id) {
         this.form.id = id;
@@ -2101,6 +2125,16 @@ createApp({
         if (saved.some((e) => e.k)) this.form.env = saved.map((e) => ({ ...e }));
       }
       if (!this.form.env.length) this.form.env = [{ k: '', v: '' }];
+      if (!id || this.form.spec) return;
+      const r = await this.get(`/api/deployments/${enc(id)}/source`);
+      // Navigated away, or typed into the form, while this was in flight.
+      if (this.route.view !== 'submit' || this.route.id !== id || this.form.spec) return;
+      if (!r.ok) return;
+      if (r.body.specName) { this.sourceRef = r.body.specName; return; }
+      if (typeof r.body.spec !== 'string') return;
+      this.form.spec = r.body.spec;
+      this.form.compose = typeof r.body.compose === 'string' ? r.body.compose : '';
+      this.sourceLoaded = id;
     },
 
     fillExample() {

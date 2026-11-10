@@ -102,6 +102,20 @@ export type DeploymentRow = {
   updatedAt?: number;
 };
 
+/**
+ * `GET /api/deployments/:id`. Resolves or errors, so `stack` is always set; it carries no `running`
+ * (ask `readiness` or `containers`) and adds what the spec declares.
+ */
+export type DeploymentDetail = Omit<DeploymentRow, 'running' | 'unresolved' | 'vars' | 'specName' | 'stack'> & {
+  stack: string;
+  compose: { file: string; profiles: string[]; overlays: string[]; subdomains: unknown } | null;
+  requires: Array<{ name: string; hint: string | null }>;
+  /** `verifiable` is false for an axis with no `assert_gone`: `verify` cannot prove it clean. */
+  axes: Array<{ name: string; hooks: string[]; verifiable: boolean }>;
+  /** Masked values arrive masked; `length` is the real value's length. */
+  env: Array<{ key: string; value: string; visibility: string; length: number }>;
+};
+
 export type SwarmNode = {
   id: string;
   hostname: string;
