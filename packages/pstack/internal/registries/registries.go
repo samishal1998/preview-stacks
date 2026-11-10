@@ -53,6 +53,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
@@ -129,10 +130,12 @@ type RegistryState struct {
 	Helpers []string `json:"helpers"`
 }
 
-// RegistryAuthStore manages config.json in a DOCKER_CONFIG directory. Stateless apart from Dir;
-// safe to share. No lock: the write is whole-file and atomic, last one wins.
+// RegistryAuthStore manages config.json in a DOCKER_CONFIG directory. Safe to share: mu is held
+// across Put's and Remove's read-modify-write, so two concurrent saves neither lose a credential
+// nor share the one temp file.
 type RegistryAuthStore struct {
 	Dir string
+	mu  sync.Mutex
 }
 
 // New returns the store over dir.
@@ -232,6 +235,8 @@ func (s *RegistryAuthStore) Put(registryInput, username, password string) (strin
 		return "", &Error{fmt.Sprintf("the registry credential directory is not writable from here (%s). The control stack mounts it into the API from 0.7.0 onward — re-run `pstack init` on the host.", s.Dir)}
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	cfg := s.read()
 	// cfg.auths = { ...(cfg.auths ?? {}) }: an existing `auths` keeps its place, a new one appends.
 	auths := cfg.GetMap("auths")
@@ -257,6 +262,8 @@ func (s *RegistryAuthStore) Remove(registryInput string) (bool, error) {
 	if !s.Writable() {
 		return false, &Error{fmt.Sprintf("the registry credential directory is not writable from here (%s).", s.Dir)}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	cfg := s.read()
 	auths := cfg.GetMap("auths")
 	if auths == nil || !auths.Has(registry) {

@@ -668,6 +668,9 @@ func (s Sources) applyUsers(d *Document, sum *Summary) error {
 		case !argon2Re.MatchString(u.PasswordHash):
 			sum.skip(what, "its password hash is not an argon2 PHC string")
 			continue
+		case !auth.UsableHash(u.PasswordHash):
+			sum.skip(what, "its password hash asks for more argon2 memory, passes or threads than login allows")
+			continue
 		}
 		var id int64
 		err := s.Store.DB.QueryRow("SELECT id FROM users WHERE username = ?", u.Username).Scan(&id)
@@ -684,6 +687,12 @@ func (s Sources) applyUsers(d *Document, sum *Summary) error {
 		role := strings.TrimSpace(u.Role)
 		if role == "" {
 			return &Error{"account " + strconv.Quote(u.Username) + " has no role"}
+		}
+		// The INSERT below bypasses createUser's check, and an unrankable role is an account that
+		// passes no gate.
+		if !auth.ValidRole(role) {
+			sum.skip(what, "role must be one of: "+auth.RolesText)
+			continue
 		}
 		var email sql.NullString
 		if u.Email != nil && *u.Email != "" {
@@ -896,6 +905,11 @@ func (s Sources) applySSO(d *Document, sum *Summary) error {
 		cfg, err := sso.ParseConfig(v)
 		if err != nil {
 			sum.skip(what, err.Error())
+			continue
+		}
+		// Only the API's save checks this; a bad one would fail every first-time sign-in.
+		if cfg.DefaultRole != "" && !auth.ValidRole(cfg.DefaultRole) {
+			sum.skip(what, "defaultRole must be one of: "+auth.RolesText)
 			continue
 		}
 		if err := s.Auth.SetSsoProvider(p.Key, cfg, p.ClientSecret); err != nil {

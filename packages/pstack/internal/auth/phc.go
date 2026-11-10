@@ -39,56 +39,90 @@ func HashPassword(password string) string {
 		"$" + rawStd.EncodeToString(salt) + "$" + rawStd.EncodeToString(key)
 }
 
-// VerifyPassword is `Bun.password.verify(password, encoded)`: the parameters come from the string,
-// the compare is constant-time, and anything unparsable is simply false.
-func VerifyPassword(password, encoded string) bool {
-	// $argon2id$v=19$m=65536,t=2,p=1$salt$hash
+// The most a STORED hash may ask VerifyPassword to spend. The parameters come from the string, and
+// login is unauthenticated, so without a ceiling one imported row pins the host: m is KiB (1 GiB,
+// config's kdfMemoryCeiling), t is passes, and p over 255 truncates to uint8 0, which argon2 panics on.
+const (
+	maxHashMemory  = 1 << 20
+	maxHashTime    = 16
+	maxHashThreads = 255
+)
+
+// phc is a parsed argon2 PHC string.
+type phc struct {
+	id        bool // argon2id, else argon2i
+	m, t, p   uint64
+	salt, key []byte
+}
+
+// parsePHC reads `$argon2id$v=19$m=65536,t=2,p=1$salt$hash`; false for anything unparsable or over
+// the ceilings above.
+func parsePHC(encoded string) (h phc, ok bool) {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" {
-		return false
+		return h, false
 	}
 	variant := parts[1]
 	if variant != "argon2id" && variant != "argon2i" {
-		return false
+		return h, false
 	}
+	h.id = variant == "argon2id"
 	if parts[2] != "v=19" {
-		return false
+		return h, false
 	}
-	var m, t, p uint64
 	var err error
 	for _, kv := range strings.Split(parts[3], ",") {
 		k, v, _ := strings.Cut(kv, "=")
 		var n uint64
 		if n, err = strconv.ParseUint(v, 10, 32); err != nil {
-			return false
+			return h, false
 		}
 		switch k {
 		case "m":
-			m = n
+			h.m = n
 		case "t":
-			t = n
+			h.t = n
 		case "p":
-			p = n
+			h.p = n
 		default:
-			return false
+			return h, false
 		}
 	}
-	if m == 0 || t == 0 || p == 0 {
-		return false
+	if h.m == 0 || h.t == 0 || h.p == 0 {
+		return h, false
 	}
-	salt, err := rawStd.DecodeString(strings.TrimRight(parts[4], "="))
-	if err != nil {
-		return false
+	if h.m > maxHashMemory || h.t > maxHashTime || h.p > maxHashThreads {
+		return h, false
 	}
-	want, err := rawStd.DecodeString(strings.TrimRight(parts[5], "="))
-	if err != nil || len(want) == 0 {
+	if h.salt, err = rawStd.DecodeString(strings.TrimRight(parts[4], "=")); err != nil {
+		return h, false
+	}
+	h.key, err = rawStd.DecodeString(strings.TrimRight(parts[5], "="))
+	if err != nil || len(h.key) == 0 {
+		return h, false
+	}
+	return h, true
+}
+
+// UsableHash is whether VerifyPassword could ever accept a password for this stored hash. Config
+// import checks it so it never stores an account nobody can log into.
+func UsableHash(encoded string) bool {
+	_, ok := parsePHC(encoded)
+	return ok
+}
+
+// VerifyPassword is `Bun.password.verify(password, encoded)`: the parameters come from the string,
+// the compare is constant-time, and anything unparsable is simply false.
+func VerifyPassword(password, encoded string) bool {
+	h, ok := parsePHC(encoded)
+	if !ok {
 		return false
 	}
 	var got []byte
-	if variant == "argon2id" {
-		got = argon2.IDKey([]byte(password), salt, uint32(t), uint32(m), uint8(p), uint32(len(want)))
+	if h.id {
+		got = argon2.IDKey([]byte(password), h.salt, uint32(h.t), uint32(h.m), uint8(h.p), uint32(len(h.key)))
 	} else {
-		got = argon2.Key([]byte(password), salt, uint32(t), uint32(m), uint8(p), uint32(len(want)))
+		got = argon2.Key([]byte(password), h.salt, uint32(h.t), uint32(h.m), uint8(h.p), uint32(len(h.key)))
 	}
-	return subtle.ConstantTimeCompare(got, want) == 1
+	return subtle.ConstantTimeCompare(got, h.key) == 1
 }

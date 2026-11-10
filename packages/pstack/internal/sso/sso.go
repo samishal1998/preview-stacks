@@ -577,13 +577,13 @@ func ParseConfig(input any) (*Config, error) {
 		if discoveryURL == "" {
 			return nil, errorf("issuer or discoveryUrl is required for OIDC")
 		}
-		if strings.Contains(discoveryURL, "<") {
-			return nil, errorf(`discoveryUrl "` + discoveryURL + `" still carries a <placeholder> — replace it with your own value (your tenant, domain or realm) before saving`)
-		}
 		// "<" marks a template placeholder (okta's "<your-domain>", microsoft's "<tenant-id>" — see
 		// Preset.DiscoveryURL): the provider has no single issuer, and saving the template verbatim
 		// would fail every login at discovery. Checked BEFORE httpsURL, whose "must be an absolute
 		// URL" answer would send the operator to fix the wrong thing.
+		if strings.Contains(discoveryURL, "<") {
+			return nil, errorf(`discoveryUrl "` + discoveryURL + `" still carries a <placeholder> — replace it with your own value (your tenant, domain or realm) before saving`)
+		}
 		// The TypeScript computed the label (`new URL(discoveryUrl).hostname`) before validating the
 		// URL, so an unparsable issuer with no label surfaced as a TypeError; here it is the *Error
 		// httpsURL produces either way.
@@ -782,8 +782,11 @@ func PKCE() (verifier, challenge string) {
 // redirect, which is the textbook open-redirect shape: `//evil.example` and `https://evil.example`
 // are both absolute to a browser. The UI only ever sends `to.fullPath`, so nothing is lost. An
 // absent parameter is the empty string here (null in the TypeScript) and lands on `/` the same way.
+// A control byte is refused too: a browser strips tab/CR/LF before parsing, so `/\t/evil.example`
+// is `//evil.example` to it.
 func SafeNext(raw string) string {
-	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, `\`) {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, `\`) ||
+		strings.ContainsFunc(raw, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return "/"
 	}
 	return raw
@@ -1035,7 +1038,7 @@ func GroupNamesOf(payload any, key string) []string {
 	return out
 }
 
-// hasScope is whether an OAuth scope string already asks for `want`. Space-delimited per RFC 6749;
+// hasAnyScope is whether an OAuth scope string already asks for any of `sufficient`. Space-delimited per RFC 6749;
 // commas are tolerated because GitHub accepts a comma-separated list and operators paste one.
 func hasAnyScope(scopes string, sufficient []string) bool {
 	for _, s := range strings.FieldsFunc(scopes, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r' }) {

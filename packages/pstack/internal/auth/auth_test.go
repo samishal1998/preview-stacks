@@ -750,3 +750,59 @@ func TestSessionHashUser(t *testing.T) {
 		t.Fatalf("expired, SessionHashUser: %+v %v", u, err)
 	}
 }
+
+func TestLoginCostAndSessionSweep(t *testing.T) {
+	t.Run("an unknown username pays the same argon2 derivation a known one does", func(t *testing.T) {
+		// negative control: restore `if row == nil || !verifyPassword(...)` in Login — zero calls for the unknown name.
+		a := open(t)
+		if _, err := a.CreateUser("sami", "correct-horse", CreateOpts{}); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		real := verifyPassword
+		verifyPassword = func(p, h string) bool { calls++; return real(p, h) }
+		defer func() { verifyPassword = real }()
+		if _, _, err := a.Login("nobody", "correct-horse"); err == nil || err.Error() != "invalid username or password" {
+			t.Fatalf("unknown user: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("%d derivations for an unknown username, want 1", calls)
+		}
+	})
+	t.Run("minting a session deletes the expired ones", func(t *testing.T) {
+		// negative control: drop the DELETE in mintSession — the expired row is still there.
+		a := open(t)
+		u, err := a.CreateUser("sami", "correct-horse", CreateOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.store.DB.Exec("INSERT INTO sessions (id_hash, user_id, created_at, expires_at) VALUES ('stale', ?, 1, 2)", u.ID); err != nil {
+			t.Fatal(err)
+		}
+		session, _, err := a.Login("sami", "correct-horse")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := a.store.DB.QueryRow("SELECT COUNT(*) FROM sessions WHERE id_hash = 'stale'").Scan(&n); err != nil || n != 0 {
+			t.Fatalf("expired row survived: %d %v", n, err)
+		}
+		if got, err := a.SessionUser(session); err != nil || got == nil || got.ID != u.ID {
+			t.Fatalf("new session: %+v %v", got, err)
+		}
+	})
+}
+
+func TestVerifyPasswordRefusesHostileCosts(t *testing.T) {
+	// negative control: drop `h.p > maxHashThreads` in parsePHC — p=256 truncates to 0 and argon2 panics.
+	const tail = "$c2FsdHNhbHRzYWx0c2E$aGFzaGhhc2hoYXNoaGFzaA"
+	for _, params := range []string{"m=65536,t=2,p=256", "m=4194304,t=2,p=1", "m=8,t=1000,p=1"} {
+		h := "$argon2id$v=19$" + params + tail
+		if VerifyPassword("x", h) || UsableHash(h) {
+			t.Errorf("%s accepted", params)
+		}
+	}
+	if !UsableHash(HashPassword("x")) {
+		t.Error("a hash this package wrote is unusable")
+	}
+}

@@ -637,6 +637,38 @@ func TestApplyRefusesMalformedAccountRows(t *testing.T) {
 	}
 }
 
+// An import writes users with its own INSERT and providers through SetSsoProvider, neither of which
+// checks a role, so Apply must: "Admin" ranks 0 and is an account that passes no gate, and a bad
+// defaultRole fails every first-time SSO sign-in. A hash whose argon2 cost login refuses is an
+// account nobody can log into.
+func TestApplySkipsUnusableRolesAndHashes(t *testing.T) {
+	// negative control: drop the ValidRole check in applyUsers — "erin" is created.
+	// negative control: drop the DefaultRole check in applySSO — "sso provider corp" is created.
+	// negative control: drop the UsableHash case in applyUsers — "frank" is created.
+	h := newHost(t)
+	doc := &Document{
+		Version: FormatVersion,
+		Users: []auth.ExportUser{
+			{Username: "erin", Role: "Admin", PasswordHash: goodHash, CreatedAt: 1},
+			{Username: "frank", Role: "viewer", PasswordHash: "$argon2id$v=19$m=65536,t=2,p=256$c2FsdHNhbHRzYWx0c2E$aGFzaGhhc2hoYXNoaGFzaA", CreatedAt: 1},
+		},
+		SSOProviders: []SSOProvider{{Key: "corp", Config: &sso.Config{DefaultRole: "superuser", DiscoveryURL: "https://idp.corp.example", ClientID: "cid"}, ClientSecret: "shh"}},
+	}
+	sum, err := h.Apply(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Created) != 0 || len(sum.Skipped) != 3 {
+		t.Fatalf("created %v skipped %v", sum.Created, sum.Skipped)
+	}
+	if users, _ := h.Auth.ListUsers(); len(users) != 0 {
+		t.Fatalf("users %+v", users)
+	}
+	if row, _ := h.Auth.SsoProvider("corp"); row != nil {
+		t.Fatalf("provider stored: %+v", row)
+	}
+}
+
 // base64Of is the `auth` blob docker stores: base64("user:password").
 func base64Of(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
