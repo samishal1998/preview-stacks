@@ -410,7 +410,7 @@ func validate(args *Parsed, st *spec.Stack, out io.Writer) *Exit {
 						}
 					} else {
 						aug.Generated.Each(func(svc string, v any) {
-							added := strs(v)
+							added, _ := v.([]string)
 							host, port := "?", "?"
 							for _, l := range added {
 								if strings.Contains(l, ".rule=Host(") {
@@ -452,15 +452,6 @@ func validate(args *Parsed, st *spec.Stack, out io.Writer) *Exit {
 		fmt.Fprintln(out, "  ! "+w)
 	}
 	return nil
-}
-
-func strs(v any) []string {
-	list, _ := v.([]any)
-	out := make([]string, 0, len(list))
-	for _, x := range list {
-		out = append(out, js.ToString(x))
-	}
-	return out
 }
 
 func cloudInit(args *Parsed, io IO) *Exit {

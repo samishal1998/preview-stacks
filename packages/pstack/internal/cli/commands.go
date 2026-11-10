@@ -43,8 +43,8 @@ var commandHelps = map[string]commandHelp{
 		summary: "provision every axis, then bring the compose project up",
 		body: `pstack up [-f preview.yml] [--set K=V]
 
-Runs each axis's up hook in order, then the compose project. A failure stops at that axis and
-tears down what it already created, so a half-provisioned stack is not left behind.
+Runs each axis's up hook in order, then the compose project. A failure stops at that axis;
+nothing already created is undone. Run pstack down to remove it.
 
   -f, --file <path>   the spec (default preview.yml)
       --set K=V       define or override a variable (repeatable)
