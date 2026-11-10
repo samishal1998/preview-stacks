@@ -149,6 +149,8 @@ function stream(): void {
 watch(
   () => props.jobId,
   async () => {
+    // The component is reused job to job; a stream left open from the last one would keep appending.
+    closeStream();
     lines.value = [];
     job.value = null;
     loading.value = true;

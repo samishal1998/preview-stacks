@@ -523,7 +523,7 @@ async function deletePreset(): Promise<void> {
             <td role="cell" data-label="image" class="mono mute">{{ c.image }}</td>
             <td role="cell" data-label="state">
               <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
-              <span v-if="c.health" class="mute" style="font-size: var(--t-sm)"> · {{ c.health }}</span>
+              <span v-if="c.state === 'running' && c.health" class="mute" style="font-size: var(--t-sm)"> · {{ c.health }}</span>
             </td>
             <td role="cell" data-label="restarts">
               <span :class="c.restartCount > 0 ? 'badge warn' : 'mute'">{{ c.restartCount }}</span>
@@ -586,7 +586,7 @@ async function deletePreset(): Promise<void> {
           <span class="k fit mono">{{ d }}</span>
           <span class="v">
             <span class="mute">control.{{ d }} · api.{{ d }} · wakes sleeping previews</span>
-            <button v-if="can('maintainer')" class="sm ghost" :disabled="savingDomains" @click="removeDomain(d)">Remove</button>
+            <ActionButton v-if="can('maintainer')" variant="ghost" class="sm" :disabled="savingDomains" :confirm="`Remove ${d}?`" @run="removeDomain(d)">Remove</ActionButton>
           </span>
         </li>
       </ul>

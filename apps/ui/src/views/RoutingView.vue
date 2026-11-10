@@ -30,7 +30,7 @@ import type {
   RoutingWriteResponse,
   RuntimeRoute,
 } from '../api/types';
-import { settings } from '../composables/useSettings';
+import { tokenMissing } from '../composables/useDeploymentActions';
 import { stamp } from '../composables/useFormat';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
@@ -78,7 +78,7 @@ const confirmDelete = ref('');
 
 const dirty = computed(() => openName.value !== null && draft.value !== original.value);
 const canSave = computed(
-  () => !!settings.token && !saving.value && draft.value.trim().length > 0 && (dirty.value || openName.value === ''),
+  () => !tokenMissing.value && !saving.value && draft.value.trim().length > 0 && (dirty.value || openName.value === ''),
 );
 
 const STARTER = `http:
@@ -324,7 +324,7 @@ async function remove(): Promise<void> {
         <p>Re-run setup on the host to add the mount.</p>
       </div>
 
-      <div v-else-if="!settings.token" class="banner info">
+      <div v-else-if="tokenMissing" class="banner info">
         <b>Viewing needs a token.</b>
         <p>
           These files hold basic-auth hashes.
@@ -386,7 +386,7 @@ async function remove(): Promise<void> {
           <ActionButton variant="primary" :pending="saving" :disabled="!canSave" @click="save">
             {{ saving ? 'Saving…' : 'Save' }}
           </ActionButton>
-          <span v-if="!settings.token" class="mute">Saving needs a token.</span>
+          <span v-if="tokenMissing" class="mute">Saving needs a token.</span>
         </div>
 
         <template v-if="openName">
@@ -410,7 +410,7 @@ async function remove(): Promise<void> {
           <div class="row">
             <ActionButton
               variant="danger"
-              :disabled="confirmDelete !== openName || !settings.token"
+              :disabled="confirmDelete !== openName || tokenMissing"
               :title="confirmDelete !== openName ? 'Type the file name to confirm.' : undefined"
               @click="remove"
             >

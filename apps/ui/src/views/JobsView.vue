@@ -45,7 +45,11 @@ const rows = computed(() => {
     if (only.value !== 'all' && j.state !== only.value) return false;
     if (deployment.value && j.deployment !== deployment.value) return false;
     if (!needle) return true;
-    return j.stack.toLowerCase().includes(needle) || j.action.includes(needle);
+    return (
+      j.stack.toLowerCase().includes(needle) ||
+      j.action.includes(needle) ||
+      actionLabel(j.action).toLowerCase().includes(needle)
+    );
   });
 });
 </script>
@@ -106,7 +110,7 @@ const rows = computed(() => {
         </span>
       </div>
 
-      <p v-if="state.jobsError" class="s-failed">{{ state.jobsError }}</p>
+      <p v-if="state.jobsError" class="s-failed" role="alert">{{ state.jobsError }}</p>
       <SkeletonList v-else-if="!state.jobsLoaded" :rows="5" tall />
 
       <div v-else class="table-scroll">

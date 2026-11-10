@@ -324,7 +324,7 @@ async function save(): Promise<void> {
 async function remove(entry: SsoProviderEntry): Promise<void> {
   const r = await api.del(`/api/sso/config/${entry.key}`);
   if (!r.ok) {
-    listError.value = problem(r, 'remove the provider');
+    toast('error', problem(r, 'remove the provider'));
     return;
   }
   toast('ok', `Removed ${entry.key}. Its accounts keep working.`);

@@ -118,7 +118,7 @@ const destructive: BulkAction[] = ['down', 'down-forget'];
         </label>
       </div>
 
-      <p v-if="state.deploymentsError" class="s-failed">{{ state.deploymentsError }}</p>
+      <p v-if="state.deploymentsError" class="s-failed" role="alert">{{ state.deploymentsError }}</p>
       <SkeletonList v-else-if="!state.deploymentsLoaded" :rows="4" tall />
 
       <template v-else>
