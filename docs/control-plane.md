@@ -1111,7 +1111,7 @@ A failed swap, restart or ready wait after the commit undoes the apply, through 
 | …and undoing drops a period starting within `lead` (rule 1, files on disk) | new files and save kept; `previous_*` cleared; no second restart | `failed: not ready — S3 from <date> starts too soon to undo; left in place` |
 | the rollback's restart or ready | previous files and row; Loki down | `failed: rollback did not come up` |
 | the rollback's render, read, write or revert | `previous_*` set | `failed: rollback failed: <error>`; the next job resumes |
-| finish | new config live; `previous_*` set | `failed: could not record the finished apply`; the next job resumes |
+| finish | new config live; `previous_*` set | `failed: could not record the finished apply: <err>`; the next job resumes |
 
 **Cancel.** Before the commit, a cancel stops the job with nothing changed. After it, the work ignores
 the cancel: it restarts, waits, and finishes or rolls back. The job still reads `cancelled`.

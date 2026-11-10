@@ -58,6 +58,31 @@
   and `scaler.failed` (`{ action, error, attempt }`). None carries a credential, the join token or
   `user_data`; Tofu's output is scrubbed, then cut to 20 lines.
 
+### Fixed
+
+- **SSO sign-in** no longer redirects to `/<TAB>/host` (a browser reads it as `//host`).
+- **`pstack upgrade`, `pstack ui` and `pstack logging`** no longer refuse an http01 host whose
+  `.env` names a DNS provider.
+- **Signals**: a failed `docker node ls`, `service ls` or `service ps` reads as
+  `reachable: false`, not an empty cluster. It no longer raises `empty` or clears `stuck` signals,
+  and the node actions answer 409. `signal.cleared` carries the `since` of when the signal was
+  first seen.
+- **Runtime** answers `reachable: false` when `docker inspect` fails, instead of an empty stack.
+- **Login** runs argon2 for an unknown user too, so response time no longer reveals which names exist.
+  A stored hash with out-of-range parameters is refused instead of panicking.
+- **Config import** skips a user or SSO provider whose role is not one of the four. Expired sessions
+  are deleted at sign-in.
+- **Deliveries** left `pending` by a restart are marked failed at boot.
+- **TLS wildcard** changes re-render the added domains' routers.
+- **`pstack validate`** shows the generated host and port for a `pstack.routing.port` service
+  (it printed `https://?`). Completion scripts list `completion` once.
+- **UIs**:
+  - The basic UI's SSO buttons render, and its hints accept a session.
+  - The advanced UI's Routing and Registries save with a session.
+  - Both UIs show a stopped container's state, not its last health check.
+- **Client**: the `notifiers.test`, `specs.put`/`get` and `deployments.get` types match the
+  server, and `waitForReady` works with a short `timeoutMs`.
+
 ## 0.45.0 — 2026-11-02
 
 ### Added
