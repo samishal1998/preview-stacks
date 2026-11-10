@@ -61,9 +61,16 @@ func isAPICommand(argv []string) bool { return len(argv) > 0 && argv[0] == "api"
 // checked before the tree is built (so a typo'd URL fails once, not per command), and without this
 // the most common first thing anyone types would answer with a sentence about PSTACK_API_URL
 // instead of the list they asked for. Bare `pstack api` counts — cobra prints help for it.
+//
+// A bare `help` counts only when it does not follow a flag, where it is that flag's VALUE (`--name
+// help` is a real call: path params are flags here). Ceiling: `help` after a boolean flag is then a
+// real call (it fails on PSTACK_API_URL, which is safe), and `--name -h` still reads as help.
 func isHelpOnly(tail []string) bool {
-	for _, a := range tail {
-		if a == "--help" || a == "-h" || a == "help" || a == "--version" || a == "-v" {
+	for i, a := range tail {
+		if a == "--help" || a == "-h" || a == "--version" || a == "-v" {
+			return true
+		}
+		if a == "help" && (i == 0 || !strings.HasPrefix(tail[i-1], "-")) {
 			return true
 		}
 	}

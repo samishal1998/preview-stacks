@@ -443,6 +443,13 @@ func TestCloudInitAdminAccountAndToken(t *testing.T) {
 		a = withCreds
 		a.Token = "tok\nen" // the folded scalar turns it into a space
 		expectErr(a, "one line")
+		// The DNS token sits in the same quoted INIT_ENV prefix.
+		// negative control: drop PSTACK_DNS_TOKEN from both loops in validate — these two render.
+		a = withCreds
+		a.Challenge, a.DNSProvider, a.DNSToken = "dns01", "hetzner", "a'b"
+		expectErr(a, "PSTACK_DNS_TOKEN .*single quote")
+		a.DNSToken = "x{{PSTACK_VERSION}}"
+		expectErr(a, "PSTACK_DNS_TOKEN must not contain")
 		// A marker inside a credential is expanded by the renderer itself: the value is placed at
 		// INIT_ENV and PSTACK_VERSION is substituted after it, so the host booted with "0.29.0" as
 		// the password while the operator was shown "{{PSTACK_VERSION}}".

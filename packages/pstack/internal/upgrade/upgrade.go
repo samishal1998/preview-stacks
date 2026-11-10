@@ -103,7 +103,6 @@ var (
 	hearthImage  = regexp.MustCompile(`\$\{PSTACK_UI_HEARTH_IMAGE\}`)
 	lokiSvc      = regexp.MustCompile(`(?m)^\s{2}loki:`)
 	scalerSvc    = regexp.MustCompile(`(?m)^\s{2}scaler:`)
-	semverRe     = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
 )
 
 // ReadControlState reads what the running control stack was configured with.
@@ -278,7 +277,9 @@ func initFlags(state *ControlState) string {
 		"--acme-email " + swarm.Shq(state.AcmeEmail),
 		"--challenge " + string(state.Challenge),
 	}
-	if state.Challenge == initctl.DNS01 && state.DNSProvider != "" {
+	// Under http01 too: init keeps DNS_PROVIDER whatever the challenge, and initguard refuses a re-init
+	// that drops it.
+	if state.DNSProvider != "" {
 		flags = append(flags, "--dns-provider "+swarm.Shq(state.DNSProvider))
 	}
 	if state.UI.HasContainer() {
@@ -529,7 +530,7 @@ func LoggedDeployments(dataDir string) int {
 // Options are Upgrade's inputs.
 type Options struct {
 	DataDir string
-	// Target is an npm dist-tag or exact version. `latest` is resolved by bun, not by us. Default latest.
+	// Target is a release version or `latest` (resolved on the release page, not by us). Default latest.
 	Target string
 	// Phase defaults to install.
 	Phase Phase

@@ -164,26 +164,33 @@ type rawInspect struct {
 
 // inspectIDs is one `docker inspect` for all of them rather than one each.
 func inspectIDs(r exec.Runner, ids []string) []rawInspect {
+	parsed, _ := inspectIDsChecked(r, ids)
+	return parsed
+}
+
+// inspectIDsChecked is inspectIDs plus whether docker answered. A failed inspect still parses its
+// stdout (a container removed since `docker ps` fails the call but the rest are printed); ok is
+// false only when it failed AND nothing parsed. An OK answer with an empty list stays ok.
+func inspectIDsChecked(r exec.Runner, ids []string) (parsed []rawInspect, ok bool) {
 	if len(ids) == 0 {
-		return nil
+		return nil, true
 	}
 	q := make([]string, len(ids))
 	for i, id := range ids {
 		q[i] = shq(id)
 	}
 	res := r.Run("docker inspect "+strings.Join(q, " "), exec.RunOptions{Label: "docker inspect"})
-	if !res.OK {
-		return nil
-	}
-	var parsed []rawInspect
 	out := strings.TrimSpace(res.Stdout)
 	if out == "" {
 		out = "[]"
 	}
 	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
-		return nil
+		parsed = nil
 	}
-	return parsed
+	if !res.OK && len(parsed) == 0 {
+		return nil, false
+	}
+	return parsed, true
 }
 
 // idsByLabel lists container ids carrying a label, `-a` so a stopped container still counts. nil,
@@ -834,7 +841,10 @@ func DeploymentRuntime(a RuntimeArgs) Runtime {
 	if !ok {
 		return empty()
 	}
-	inspected := inspectIDs(r, ids)
+	inspected, ok := inspectIDsChecked(r, ids)
+	if !ok {
+		return empty()
+	}
 	containers := make([]ContainerInfo, 0, len(inspected))
 	for _, raw := range inspected {
 		containers = append(containers, toContainer(raw, stack))

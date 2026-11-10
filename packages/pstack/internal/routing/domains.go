@@ -270,8 +270,9 @@ func renderDomains(domains []string, o DomainOptions) string {
 //
 // `loki.` and `grafana.` count ALWAYS, not only on a host running `--logging loki`: a host that
 // turned logging off must still never answer either with a waking page, and no preview can take
-// the name meanwhile. `grafana.` exists only on the primary; on an added domain it is reserved so
-// that the wake catch-all never hands it to a preview.
+// the name meanwhile. `grafana.<d>` is routed on an added domain only while Grafana runs
+// (DomainOptions.Grafana); it is reserved either way, so the wake catch-all never hands it to a
+// preview.
 func (s *RoutingStore) IsControlHostname(hostname, primary string) bool {
 	h := strings.ToLower(hostname)
 	for _, d := range append([]string{primary}, s.Domains()...) {

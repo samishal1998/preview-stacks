@@ -112,15 +112,16 @@ func TestTheGeneratedTreeMatchesTheLock(t *testing.T) {
 //
 // negative control: drop isHelpOnly and resolve the host unconditionally — `pstack api --help` on a
 // laptop then answers with a sentence about PSTACK_API_URL instead of the list.
+// negative control: count every bare `help` as help again — `api specs get --name help` skips the host.
 func TestHelpNeedsNoHost(t *testing.T) {
-	for _, argv := range [][]string{{"api"}, {"api", "--help"}, {"api", "deployments", "--help"}, {"api", "help"}} {
+	for _, argv := range [][]string{{"api"}, {"api", "--help"}, {"api", "deployments", "--help"}, {"api", "help"}, {"api", "specs", "help"}, {"api", "help", "specs"}} {
 		if !isHelpOnly(argv[1:]) {
 			t.Errorf("%v should not need a configured host", argv)
 		}
 	}
 	// And a real invocation must still be checked, or the first thing a caller learns is a
 	// connection error against a placeholder hostname.
-	for _, argv := range [][]string{{"api", "deployments", "list"}, {"api", "jobs", "get", "--job-id", "x"}} {
+	for _, argv := range [][]string{{"api", "deployments", "list"}, {"api", "jobs", "get", "--job-id", "x"}, {"api", "specs", "get", "--name", "help"}} {
 		if isHelpOnly(argv[1:]) {
 			t.Errorf("%v is a real call and must resolve PSTACK_API_URL first", argv)
 		}

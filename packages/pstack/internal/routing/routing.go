@@ -46,6 +46,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/omap"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/yamlx"
@@ -222,6 +223,9 @@ func (s *RoutingStore) Write(name, content string) (*string, error) {
 	return s.write(name, content)
 }
 
+// tmpSeq numbers write's temp files.
+var tmpSeq atomic.Uint64
+
 // write is Write without the reserved-name gate — for the routes that OWN a reserved file.
 func (s *RoutingStore) write(name, content string) (*string, error) {
 	if err := AssertValidRoutingName(name); err != nil {
@@ -239,7 +243,8 @@ func (s *RoutingStore) write(name, content string) (*string, error) {
 		p := string(b)
 		previous = &p
 	}
-	tmp := filepath.Join(s.Dir, fmt.Sprintf(".pstack-tmp-%d-%s.part", os.Getpid(), name))
+	// The counter keeps two concurrent writes of one name off one temp file.
+	tmp := filepath.Join(s.Dir, fmt.Sprintf(".pstack-tmp-%d-%d-%s.part", os.Getpid(), tmpSeq.Add(1), name))
 	if err := os.WriteFile(tmp, []byte(content), 0o666); err != nil {
 		_ = os.Remove(tmp)
 		return nil, &Error{fmt.Sprintf("could not write %s: %s", name, err)}

@@ -209,7 +209,7 @@ func (ws *Watcher) Get(stack string) (StackReadiness, bool) {
 // StartOptions parameterise Start.
 type StartOptions struct {
 	TimeoutMs int64
-	// Restart replaces a finished watch; a running one is returned as-is either way.
+	// Restart also stops and replaces a RUNNING watch; a finished one is replaced either way.
 	Restart bool
 	// Emit is whether the watch announces itself on the bus. FALSE for a watch a mere READ started:
 	// opening a never-deployed deployment's page must not put "pr-9 did not become ready" in Slack.
