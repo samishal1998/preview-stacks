@@ -66,7 +66,6 @@ func zshQuote(v string) string {
 
 func sortedCommands() []string {
 	out := append([]string{}, Commands...)
-	out = append(out, "completion")
 	sort.Strings(out)
 	return out
 }
