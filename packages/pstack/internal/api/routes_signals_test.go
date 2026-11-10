@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
@@ -198,6 +199,19 @@ func TestSignalsTickEmitsOnChangeOnly(t *testing.T) {
 		if !want[line] {
 			t.Fatalf("unexpected %q in %v", line, *seen)
 		}
+	}
+}
+
+// negative control: store the new tick's payload unconditionally → since moves to the second tick.
+func TestSignalsTickKeepsTheFirstSince(t *testing.T) {
+	s := signalsServer(t)
+	s.host = signalsShim(t, false)
+	s.signalsTick()
+	first := s.signalsSent["stuck/pr-42_api"].Since
+	time.Sleep(5 * time.Millisecond)
+	s.signalsTick()
+	if got := s.signalsSent["stuck/pr-42_api"].Since; got != first {
+		t.Fatalf("since moved from %d to %d", first, got)
 	}
 }
 

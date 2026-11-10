@@ -411,6 +411,15 @@ func (w *Webhooks) Prune(notifierID int64) error {
 	return err
 }
 
+// SettleInterrupted fails every delivery still `pending` — called once at boot, before the
+// dispatcher starts, so nothing can be in flight. A restart or a recovered panic leaves such a row
+// behind; Prune never removes a pending row, so without this it would read "pending" forever.
+func (w *Webhooks) SettleInterrupted() error {
+	_, err := w.Store.DB.Exec("UPDATE deliveries SET status = 'failed', error = 'interrupted by a restart', updated_at = ? WHERE status = 'pending'",
+		time.Now().UnixMilli())
+	return err
+}
+
 func changed(res sql.Result, err error) (bool, error) {
 	if err != nil {
 		return false, err

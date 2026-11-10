@@ -173,3 +173,27 @@ func TestDeliveriesAndPrune(t *testing.T) {
 		t.Fatal("empty must be [] not null")
 	}
 }
+
+// negative control: make SettleInterrupted a no-op → the row stays pending.
+func TestSettleInterruptedFailsPendingRows(t *testing.T) {
+	w := open(t, nil)
+	row, _, _ := w.Create(CreateArgs{Type: "webhook", Name: "n", Events: []string{"*"}, Signs: true})
+	pending, _ := w.StartDelivery(row.ID, "evt_1", "job.failed", nil)
+	done, _ := w.StartDelivery(row.ID, "evt_2", "job.failed", nil)
+	_ = w.FinishDelivery(done, Result{Status: "delivered", Attempts: 1})
+	if err := w.SettleInterrupted(); err != nil {
+		t.Fatal(err)
+	}
+	read := func(id int64) (status string, errText *string) {
+		if err := w.Store.DB.QueryRow("SELECT status, error FROM deliveries WHERE id = ?", id).Scan(&status, &errText); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if st, e := read(pending); st != "failed" || e == nil || *e != "interrupted by a restart" {
+		t.Fatalf("pending row: %s %v", st, e)
+	}
+	if st, e := read(done); st != "delivered" || e != nil {
+		t.Fatalf("finished row touched: %s %v", st, e)
+	}
+}

@@ -176,7 +176,11 @@ func (s *Server) signalsTick() {
 	var raised, cleared []signalPayload
 	s.emptyMu.Lock()
 	for id, p := range now {
-		if _, had := s.signalsSent[id]; !had {
+		// A stuck payload is stamped with this tick's time; keep the first one, so `since` (and the
+		// cleared event that carries it) says when pstack first saw it, as webhook-events.md states.
+		if old, had := s.signalsSent[id]; had {
+			p.Since = old.Since
+		} else {
 			raised = append(raised, p)
 		}
 		s.signalsSent[id] = p
