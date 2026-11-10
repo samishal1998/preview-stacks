@@ -291,6 +291,26 @@ func TestLokiApplyVerifyFailureChangesNothing(t *testing.T) {
 	}
 }
 
+func TestLokiApplyFinishFailureSaysWhy(t *testing.T) {
+	// negative control: drop the `: "+err.Error()` suffix on the finish step → the message ends at
+	// "apply" and the prefix check fails.
+	var s *Server
+	s, _ = lokiFixture(t, func(cmd string) (exec.Result, bool) {
+		if strings.HasSuffix(cmd, "/usr/bin/loki -health") {
+			// Loki is ready; the store is now gone, as on a full disk, so only Finish can fail.
+			_ = s.store.Close()
+			return exec.Result{OK: true}, true
+		}
+		return exec.Result{}, false
+	})
+	job, _ := s.startLokiApply(s.lokiPut("alice", retention(14), nil), "alice", false)
+	j := waitLokiJob(t, s, job.ID)
+	phase, ok, msg := lastStep(t, j)
+	if j.State != jobs.Failed || phase != "finish" || ok || !strings.HasPrefix(msg, "could not record the finished apply: ") {
+		t.Fatalf("%q %s %v %q", j.State, phase, ok, msg)
+	}
+}
+
 func TestLokiApplyRowWriteFailureRestartsNothing(t *testing.T) {
 	// negative control: ignore loki.Save's error (`_ = loki.Save(…)` and carry on) — the job swaps
 	// and issues `docker restart 'l1'`, and both checks fail.

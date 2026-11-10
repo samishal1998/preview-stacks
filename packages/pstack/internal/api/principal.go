@@ -98,6 +98,3 @@ func shareAllows(who *auth.Principal, method, path string) bool {
 	}
 	return false
 }
-
-// authed is `principal(req) !== null`, for the two routes that withhold a source otherwise.
-func (s *Server) authed(r *http.Request) bool { return s.principal(r) != nil }

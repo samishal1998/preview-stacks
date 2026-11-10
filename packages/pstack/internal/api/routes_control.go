@@ -26,15 +26,7 @@ func (s *Server) controlRuntime(w http.ResponseWriter) error {
 }
 
 func (s *Server) controlRestart(w http.ResponseWriter, r *http.Request) error {
-	body := bodyObject(r)
-	var service string
-	if body != nil {
-		if v, _ := body.Get("service"); v != nil {
-			if sv, ok := v.(string); ok {
-				service = sv
-			}
-		}
-	}
+	service, _ := getStr(bodyObject(r), "service")
 	if service == "" {
 		writeError(w, 400, "body must be { service } — a control service name from GET /api/control/runtime")
 		return nil

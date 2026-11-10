@@ -11,7 +11,7 @@
 // reservations a compose file happens to declare, which is usually none. Reporting what docker says
 // is both simpler and true.
 //
-// Nothing here is stored. `Look` runs three read-only docker commands every time it is called
+// Nothing here is stored. `Look` runs four read-only docker commands every time it is called
 // (invariant 10); the only memory in the feature is the api package's "when did I first see this
 // node empty" map, which is allowed to forget on restart because a late signal is harmless and an
 // early one is not.
@@ -67,7 +67,9 @@ type Stuck struct {
 }
 
 // View is the whole answer. Swarm is false on a host that runs compose, where there is nothing to
-// report; Reachable is false when docker did not answer at all, which is not the same thing.
+// report; Reachable is false when docker did not answer, which is not the same thing. A failed
+// `service ls` or `service ps` is not answering: read as "no tasks", it would call every busy
+// worker empty.
 type View struct {
 	Swarm     bool
 	Reachable bool
@@ -97,11 +99,19 @@ func Look(r exec.Runner) View {
 		at[n.Hostname] = len(v.Nodes) - 1
 	}
 
-	ids, global := services(r)
+	silent := View{Nodes: []Node{}, Stuck: []Stuck{}}
+	ids, global, ok := services(r)
+	if !ok {
+		return silent
+	}
 	if len(ids) == 0 {
 		return v
 	}
-	for _, t := range tasks(r, ids) {
+	ts, ok := tasks(r, ids)
+	if !ok {
+		return silent
+	}
+	for _, t := range ts {
 		service := serviceOf(t.Name)
 		// Never allocated. Not a machine shortage — swarm never got as far as looking for a machine —
 		// so the reason says so, and nobody buys a machine for a network that is out of addresses.
@@ -132,12 +142,13 @@ type rawService struct {
 	ID, Name, Mode string
 }
 
-// services returns every service id, in docker's order, and the names of the global ones.
-func services(r exec.Runner) (ids []string, global map[string]bool) {
+// services returns every service id, in docker's order, the names of the global ones, and false
+// when docker did not answer.
+func services(r exec.Runner) (ids []string, global map[string]bool, ok bool) {
 	global = map[string]bool{}
 	res := r.Run("docker service ls --format '{{json .}}'", exec.RunOptions{Label: "docker service ls"})
 	if !res.OK {
-		return nil, global
+		return nil, global, false
 	}
 	for _, line := range strings.Split(res.Stdout, "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -152,7 +163,7 @@ func services(r exec.Runner) (ids []string, global map[string]bool) {
 			global[s.Name] = true
 		}
 	}
-	return ids, global
+	return ids, global, true
 }
 
 // rawTask is the part of `docker service ps --format '{{json .}}'` this reads. The full set is
@@ -185,8 +196,9 @@ func (t rawTask) unallocated() bool {
 	return false
 }
 
-// tasks lists every task that should be running, across the services given.
-func tasks(r exec.Runner, ids []string) []rawTask {
+// tasks lists every task that should be running, across the services given, and false when docker
+// did not answer.
+func tasks(r exec.Runner, ids []string) ([]rawTask, bool) {
 	quoted := make([]string, len(ids))
 	for i, id := range ids {
 		quoted[i] = swarm.Shq(id)
@@ -194,7 +206,7 @@ func tasks(r exec.Runner, ids []string) []rawTask {
 	cmd := "docker service ps --no-trunc --filter desired-state=running --format '{{json .}}' " + strings.Join(quoted, " ")
 	res := r.Run(cmd, exec.RunOptions{Label: "docker service ps"})
 	if !res.OK {
-		return nil
+		return nil, false
 	}
 	out := []rawTask{}
 	for _, line := range strings.Split(res.Stdout, "\n") {
@@ -206,7 +218,7 @@ func tasks(r exec.Runner, ids []string) []rawTask {
 			out = append(out, t)
 		}
 	}
-	return out
+	return out, true
 }
 
 // serviceOf is `pr-42_web.1` → `pr-42_web`. The suffix is a slot number or a node id, neither of

@@ -55,7 +55,7 @@ func TestHealthNamesGrafanaOnlyWhenOn(t *testing.T) {
 	})
 	t.Run("on: the configured domain's URL, last", func(t *testing.T) {
 		// negative control: delete the `body = append(body, jsonx.KV{K: "grafana", …})` line — got "";
-		// and, run separately, prepend it (`body = append(jsonx.Object{{K: "grafana", V: s.grafanaURL()}}, body...)`) — the last key is "version".
+		// and, run separately, prepend it (`body = append(jsonx.Object{{K: "grafana", V: grafanaURLOn(s.opts.Domain)}}, body...)`) — the last key is "version".
 		s := grafanaServer(t)
 		s.grafana.Store(true)
 		b := healthBody(t, s)
@@ -366,7 +366,7 @@ func TestGrafanaVerify(t *testing.T) {
 	})
 
 	t.Run("an unsafe method needs Grafana's Origin", func(t *testing.T) {
-		// negative control: compare requestHost(r) with "grafana."+s.opts.Domain instead of Origin with s.grafanaURL() — the preview POST gets 204.
+		// negative control: compare requestHost(r) with "grafana."+s.opts.Domain instead of Origin with grafanaURLOn(s.opts.Domain) — the preview POST gets 204.
 		for _, c := range []struct {
 			name, method, origin string
 			code                 int
@@ -440,7 +440,7 @@ func TestGrafanaVerify(t *testing.T) {
 	})
 
 	t.Run("callback: a reload by a signed-in browser goes to Grafana's home", func(t *testing.T) {
-		// negative control: delete the `if user != nil { redirect(w, s.grafanaURL()+"/") … }` branch — the reload gets 204.
+		// negative control: delete the `if user != nil { redirect(w, grafanaURLOn(s.opts.Domain)+"/") … }` branch — the reload gets 204.
 		w := forwardAuth(s, "x-forwarded-uri", grafanaCallbackPath+"?code="+sso.RandomB64URL(32), "cookie", dev)
 		if w.Code != 302 || w.Header().Get("location") != "https://grafana.preview.example.com/" {
 			t.Fatalf("got %d %q", w.Code, w.Header().Get("location"))

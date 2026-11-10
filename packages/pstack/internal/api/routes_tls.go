@@ -78,6 +78,7 @@ func (s *Server) tlsWildcardPut(w http.ResponseWriter, r *http.Request) error {
 		}
 		return err
 	}
+	s.reconcileDomains() // the added domains' routers were rendered for the old mode
 	writeJSON(w, 200, jsonx.O(
 		"ok", true,
 		"wildcard", info,
@@ -88,6 +89,9 @@ func (s *Server) tlsWildcardPut(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) tlsWildcardDelete(w http.ResponseWriter) error {
 	removed, err := s.routing.RemoveWildcard()
+	if removed {
+		s.reconcileDomains() // the mode is off even when a file would not unlink
+	}
 	if err != nil {
 		if routing.IsError(err) {
 			writeError(w, 400, err.Error())

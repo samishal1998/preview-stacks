@@ -25,8 +25,9 @@
 // ── WHAT IS SAID ────────────────────────────────────────────────────────────────────────────────
 //
 // `node.pruned` once per node that reported, `0` included; a failed prune reports nothing and sends
-// nothing. `node` is null on compose (NP-R15), where the script's `-` is selfKey. Memory only
-// (invariant 10): /api/stats shows the newest per node, and a restart forgets them.
+// nothing; the log gets docker's first stderr line. `node` is null on compose (NP-R15), where the
+// script's `-` is selfKey. Memory only (invariant 10): /api/stats shows the newest per node, and a
+// restart forgets them.
 package api
 
 import (
@@ -120,7 +121,12 @@ func (s *Server) prune(reason string, keys []string) {
 
 	var out strings.Builder
 	local := func(script string) {
-		out.WriteString(s.pruneRunner(ctx).Run(script, exec.RunOptions{Label: "image prune"}).Stdout + "\n")
+		res := s.pruneRunner(ctx).Run(script, exec.RunOptions{Label: "image prune"})
+		// The script's status is sed's, so docker refusing shows only on stderr.
+		if !res.OK || strings.TrimSpace(res.Stderr) != "" {
+			s.opts.Log("prune: local prune: " + dockerSaid(res))
+		}
+		out.WriteString(res.Stdout + "\n")
 	}
 	if reason == "scheduled" {
 		afterH := s.settings.ImagePruneAfterH()
@@ -164,8 +170,8 @@ func (s *Server) pruneJob(ctx context.Context, script, constraint string, global
 		s.pruneRunner(rmCtx).Run("docker service rm "+name, exec.RunOptions{Label: "docker service rm " + name})
 	}()
 	r := s.pruneRunner(ctx)
-	if !r.Run(nodestats.PruneJobCmd(name, script, constraint, global), exec.RunOptions{Label: "image prune " + name}).OK {
-		s.opts.Log("prune: " + name + " failed")
+	if res := r.Run(nodestats.PruneJobCmd(name, script, constraint, global), exec.RunOptions{Label: "image prune " + name}); !res.OK {
+		s.opts.Log("prune: " + name + " failed: " + dockerSaid(res))
 		return ""
 	}
 	return r.Run("docker service logs --raw "+name, exec.RunOptions{Label: "docker service logs " + name}).Stdout

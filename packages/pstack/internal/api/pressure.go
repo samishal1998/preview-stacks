@@ -72,14 +72,20 @@ type pressureEdge struct {
 	data  pressurePayload
 }
 
-// evaluatePressure judges every fresh node against the settings as they are now, then emits the
-// edges outside statsMu (Go rule 14).
-func (s *Server) evaluatePressure(now int64) {
-	t := nodestats.Thresholds{
+// thresholds is the pressure settings as they are now. The judge, the refusal and the sleep all read
+// it, so they cannot disagree about what pressure is.
+func (s *Server) thresholds() nodestats.Thresholds {
+	return nodestats.Thresholds{
 		DiskPct: s.settings.PressureDiskPct(),
 		MemPct:  s.settings.PressureMemPct(),
 		CPULoad: s.settings.PressureCPULoad(),
 	}
+}
+
+// evaluatePressure judges every fresh node against the settings as they are now, then emits the
+// edges outside statsMu (Go rule 14).
+func (s *Server) evaluatePressure(now int64) {
+	t := s.thresholds()
 	edges := []pressureEdge{}
 	func() {
 		s.statsMu.Lock()
@@ -156,11 +162,7 @@ func (s *Server) inPressureLocked(key string, now int64) ([]nodestats.Kind, node
 // capacityRefusal says why an up or wake of a deployment on o is refused: `worker-2: disk 94% ≥ 90%`,
 // the first node by hostname and its first kind.
 func (s *Server) capacityRefusal(o spec.Orchestrator, now int64) (why string, refused bool) {
-	t := nodestats.Thresholds{
-		DiskPct: s.settings.PressureDiskPct(),
-		MemPct:  s.settings.PressureMemPct(),
-		CPULoad: s.settings.PressureCPULoad(),
-	}
+	t := s.thresholds()
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	keys := []string{s.selfKey}
@@ -195,11 +197,7 @@ func (s *Server) pressureSleep(now int64) {
 	if idleMin == 0 || !s.meter.OK() {
 		return
 	}
-	t := nodestats.Thresholds{
-		DiskPct: s.settings.PressureDiskPct(),
-		MemPct:  s.settings.PressureMemPct(),
-		CPULoad: s.settings.PressureCPULoad(),
-	}
+	t := s.thresholds()
 	reasons := map[string]string{} // stack → why, from its first node in key order
 	func() {
 		s.statsMu.Lock()

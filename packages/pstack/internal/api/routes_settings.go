@@ -111,6 +111,18 @@ func (s *Server) putSetting(w http.ResponseWriter, r *http.Request, key string) 
 		writeError(w, 405, "use PUT")
 		return nil
 	}
+	body := bodyObject(r)
+	if body == nil {
+		writeError(w, 400, "body must be { value }")
+		return nil
+	}
+	raw, present := body.Get("value")
+	if !present {
+		writeError(w, 400, "body must be { value }")
+		return nil
+	}
+	// The body is read before the lock: a client that stalls it must not hold every write behind it.
+	//
 	// writeMu, like every other check-then-act in this package. `Set` is a single upsert, so the
 	// TABLE is safe on its own — the pair below is not: two concurrent PUTs of max_jobs could store
 	// one value and leave the registry running at the other, which is the silent drift between the
@@ -121,22 +133,9 @@ func (s *Server) putSetting(w http.ResponseWriter, r *http.Request, key string) 
 	// notify dispatcher, and a SQLite read inside it, would run under this mutex. Raising the cap
 	// from 1 to 50 would do up to fifty of those reads holding the server's global write lock.
 	// Rule 14 is about exactly this, and every other site in this package already avoids it:
-	// routes_deploy.go registers `defer release()` BEFORE `defer s.writeMu.Unlock()` so LIFO frees
-	// the mutex first. Here there is no second defer to order against, so the unlock is explicit
-	// and every path below returns after it.
+	// putDeployment and specRoutes hold writeMu inside a closure and emit after it returns. Here
+	// the unlock is explicit and every path below returns after it.
 	s.writeMu.Lock()
-	body := bodyObject(r)
-	if body == nil {
-		s.writeMu.Unlock()
-		writeError(w, 400, "body must be { value }")
-		return nil
-	}
-	raw, present := body.Get("value")
-	if !present {
-		s.writeMu.Unlock()
-		writeError(w, 400, "body must be { value }")
-		return nil
-	}
 	// js.ToString is rule 7: a JSON number arrives as float64 and `8.0` must store as "8". Anything
 	// that is not a string or a number becomes "" and is refused by the validator, which names the
 	// key it refused.

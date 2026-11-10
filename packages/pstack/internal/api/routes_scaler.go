@@ -203,6 +203,12 @@ func (s *Server) scalerPut(w http.ResponseWriter, r *http.Request) error {
 			return nil
 		}
 	}
+	// The docker call before scalerMu, never under it.
+	enabled := controlServiceOn(inspect.ControlRuntime(s.host), "scaler")
+	s.scalerMu.Lock()
+	defer s.scalerMu.Unlock()
+	// The preset is checked under scalerMu, where scalerPresetDelete checks the selection: outside
+	// it, a DELETE between the two could leave the saved preset with no files.
 	files, _, err := s.scalerPresetFiles(set.Preset)
 	if err != nil {
 		return err
@@ -221,11 +227,6 @@ func (s *Server) scalerPut(w http.ResponseWriter, r *http.Request) error {
 			return nil
 		}
 	}
-
-	// The docker call before scalerMu, never under it.
-	enabled := controlServiceOn(inspect.ControlRuntime(s.host), "scaler")
-	s.scalerMu.Lock()
-	defer s.scalerMu.Unlock()
 	rep, err := s.scalerLastReport()
 	if err != nil {
 		return err

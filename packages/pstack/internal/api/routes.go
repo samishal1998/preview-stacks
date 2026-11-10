@@ -409,7 +409,7 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		if err != nil || dep == nil {
 			return err
 		}
-		return s.deploymentSource(w, r, dep)
+		return s.deploymentSource(w, dep)
 	}
 	if m := containerRe.FindStringSubmatch(path); m != nil {
 		if r.Method != http.MethodPost {
@@ -500,11 +500,7 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		switch r.Method {
 		case http.MethodGet:
 			// Dynamic config holds basicAuth hashes and forwardAuth URLs — the same secret class
-			// as a spec's hooks.
-			if !s.authed(r) {
-				writeJSON(w, 200, jsonx.O("name", name, "sourceWithheld", true))
-				return nil
-			}
+			// as a spec's hooks. Behind the gate in handle(), like every route here.
 			content, err := s.routing.Read(name)
 			if err != nil {
 				return err
@@ -755,14 +751,20 @@ func (s *Server) specRoutes(w http.ResponseWriter, r *http.Request, name string)
 		if d, ok := getStr(body, "description"); ok {
 			opts.Description = &d
 		}
-		s.writeMu.Lock()
-		defer s.writeMu.Unlock()
-		prev, err := s.specs.Get(name)
-		if err != nil {
+		// writeMu for the check and the write, released before the Emit (Go rule 14).
+		var stored *specs.StoredSpec
+		var existed bool
+		err := func() error {
+			s.writeMu.Lock()
+			defer s.writeMu.Unlock()
+			prev, err := s.specs.Get(name)
+			if err != nil {
+				return err
+			}
+			existed = prev != nil
+			stored, err = s.specs.Put(name, src, opts)
 			return err
-		}
-		existed := prev != nil
-		stored, err := s.specs.Put(name, src, opts)
+		}()
 		if err != nil {
 			return err
 		}
@@ -784,42 +786,44 @@ func (s *Server) specRoutes(w http.ResponseWriter, r *http.Request, name string)
 	}
 	switch r.Method {
 	case http.MethodGet:
-		// THE SOURCE IS A SECRET, THE METADATA IS NOT: hook bodies are shell strings that routinely
-		// carry a credential inline. Withheld EXPLICITLY rather than sent empty.
-		out := stored.Pairs()
-		if s.authed(r) {
-			src, err := s.specs.Source(name)
-			if err != nil {
-				return err
-			}
-			out = append(out, jsonx.KV{K: "source", V: src})
-		} else {
-			out = append(out, jsonx.KV{K: "sourceWithheld", V: true})
-		}
-		writeJSON(w, 200, out)
-		return nil
-	case http.MethodDelete:
-		// Fail closed: a deployment referencing a deleted spec can never be torn down.
-		s.writeMu.Lock()
-		defer s.writeMu.Unlock()
-		metas, err := s.registry.List()
+		// THE SOURCE IS A SECRET: hook bodies are shell strings that routinely carry a credential
+		// inline. The gate in handle() is what keeps it from an unauthenticated caller, and a share
+		// link never reaches this route (shareAllows).
+		src, err := s.specs.Source(name)
 		if err != nil {
 			return err
 		}
-		users := []string{}
-		for _, d := range metas {
-			if d.SpecName == name {
-				users = append(users, d.ID)
+		writeJSON(w, 200, append(stored.Pairs(), jsonx.KV{K: "source", V: src}))
+		return nil
+	case http.MethodDelete:
+		// Fail closed: a deployment referencing a deleted spec can never be torn down. writeMu for
+		// the check and the remove, released before the Emit (Go rule 14).
+		users, err := func() ([]string, error) {
+			s.writeMu.Lock()
+			defer s.writeMu.Unlock()
+			metas, err := s.registry.List()
+			if err != nil {
+				return nil, err
 			}
+			users := []string{}
+			for _, d := range metas {
+				if d.SpecName == name {
+					users = append(users, d.ID)
+				}
+			}
+			if len(users) > 0 {
+				return users, nil
+			}
+			return nil, s.specs.Remove(name)
+		}()
+		if err != nil {
+			return err
 		}
 		if len(users) > 0 {
 			writeJSON(w, 409, jsonx.O("error", `spec "`+name+`" is referenced by `+js.NumberString(float64(len(users)))+" deployment(s) — deleting it "+
 				"would leave them unresolvable, and an unresolvable deployment can never be "+
 				"torn down. Remove them first.", "deployments", users))
 			return nil
-		}
-		if err := s.specs.Remove(name); err != nil {
-			return err
 		}
 		s.bus.Emit("spec.deleted", jsonx.O("name", name))
 		writeJSON(w, 200, jsonx.O("deleted", name))
@@ -946,11 +950,18 @@ func (s *Server) redeliver(w http.ResponseWriter, r *http.Request, nid, did int6
 	if data == nil {
 		data = omap.New()
 	}
-	// The dispatcher needs the UNMASKED row (the read path masks).
-	raw := *row
-	if cfg, err := s.hooks.RawConfigOf(nid); err == nil && cfg != nil {
-		raw.Config = cfg
+	// The dispatcher needs the UNMASKED row (the read path masks). Never the masked one as a
+	// fallback: that POSTs to a masked URL (invariant 15).
+	cfg, err := s.hooks.RawConfigOf(nid)
+	if err != nil {
+		return err
 	}
+	if cfg == nil { // deleted since the Get
+		writeError(w, 404, "no such notifier: "+js.NumberString(float64(nid)))
+		return nil
+	}
+	raw := *row
+	raw.Config = cfg
 	s.dispatcher.Redeliver(raw, events.Event{ID: eventID, Event: eventName, At: time.Now().UnixMilli(), Data: jsonx.Must(data)})
 	writeJSON(w, 200, jsonx.O("redelivered", did, "notifier", nid, "event", eventName, "eventId", eventID,
 		"note", "Queued. It carries the original event id, so a receiver that already processed it "+
@@ -1021,15 +1032,22 @@ func (s *Server) testNotifier(w http.ResponseWriter, nid int64, row *webhooks.No
 		writeError(w, 400, `unknown notifier type "`+row.Type+`"`)
 		return nil
 	}
-	secret := ""
-	if sp, err := s.hooks.SecretOf(nid); err == nil && sp != nil {
-		secret = *sp
+	// RAW, not row.Config: the row masks secret-marked fields for display, and a masked config or
+	// an empty secret is never a fallback (invariant 15). nil is a notifier deleted since the Get;
+	// a type that does not sign stores "", which is not nil.
+	sp, err := s.hooks.SecretOf(nid)
+	if err != nil {
+		return err
 	}
-	// RAW, not row.Config: the row masks secret-marked fields for display.
-	cfg := row.Config
-	if raw, err := s.hooks.RawConfigOf(nid); err == nil && raw != nil {
-		cfg = raw
+	cfg, err := s.hooks.RawConfigOf(nid)
+	if err != nil {
+		return err
 	}
+	if sp == nil || cfg == nil {
+		writeError(w, 404, "no such notifier: "+js.NumberString(float64(nid)))
+		return nil
+	}
+	secret := *sp
 	now := time.Now().UnixMilli()
 	eventID := "evt_test_" + js.Base36(now)
 	deliveryID, err := s.hooks.StartDelivery(nid, eventID, "test", nil)

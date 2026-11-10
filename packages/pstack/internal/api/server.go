@@ -632,7 +632,9 @@ func (s *Server) clearSleep(id, stack string, waking bool) {
 		return
 	}
 	if asleep {
-		_ = s.registry.SetSleep(id, nil)
+		if err := s.registry.SetSleep(id, nil); err != nil {
+			s.opts.Log("sleep: could not clear the record of " + id + ": " + err.Error())
+		}
 	}
 	s.reindex()
 }
@@ -746,20 +748,24 @@ func (s *Server) startLifecycle(id string, dep *registry.Deployment, st *spec.St
 				}
 				record := &registry.SleepRecord{Since: time.Now().UnixMilli(), Reason: o.Reason, Hosts: dedupe(hosts), Rules: dedupe(rules)}
 				s.writeMu.Lock()
-				_ = s.registry.SetSleep(id, record)
+				serr := s.registry.SetSleep(id, record)
 				// Asleep supersedes waking: the record is the mapping again.
 				s.wakeMu.Lock()
 				delete(s.waking, id)
 				s.wakeMu.Unlock()
 				s.reindex()
 				s.writeMu.Unlock()
-				if len(record.Hosts) > 0 || len(record.Rules) > 0 {
+				switch {
+				case serr != nil:
+					// No record, no wake index entry: a request would get the Down page, not a wake.
+					sink.Emit(log.Warn, "torn down, but the sleep record was not written: "+serr.Error()+" — only POST …/wake (or up) brings it back")
+				case len(record.Hosts) > 0 || len(record.Rules) > 0:
 					names := append([]string{}, record.Hosts...)
 					for _, r := range record.Rules {
 						names = append(names, "/"+r+"/")
 					}
 					sink.Emit(log.Info, "asleep — a request to "+strings.Join(names, ", ")+" wakes it")
-				} else {
+				default:
 					sink.Emit(log.Info, "asleep — no hostnames were found on its containers, so only POST …/wake brings it back")
 				}
 				s.bus.Emit("stack.slept", jsonx.O("stack", st.Stack, "deployment", id, "reason", o.Reason, "hosts", record.Hosts))
@@ -1032,6 +1038,17 @@ func (s *Server) Addr() net.Addr {
 	return s.ln.Addr()
 }
 
+// recovered is the deferred recover every goroutine the server starts carries (Go rule 14): it logs
+// the panic and runs then, so a panic costs one tick or one stream, never the process.
+func (s *Server) recovered(what string, then func()) {
+	if p := recover(); p != nil {
+		s.opts.Log(fmt.Sprintf("%s: %v", what, p))
+		if then != nil {
+			then()
+		}
+	}
+}
+
 func (s *Server) reindexLoop() {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
@@ -1040,10 +1057,13 @@ func (s *Server) reindexLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			s.reindex()
-			// Not inside reindex(): request paths call that, and this is two docker calls. Still needed
-			// after Start: `pstack logging` adds or removes grafana while pstack keeps running.
-			s.grafanaCheckIn()
+			func() {
+				defer s.recovered("reindex: tick failed", nil)
+				s.reindex()
+				// Not inside reindex(): request paths call that, and this is two docker calls. Still
+				// needed after Start: `pstack logging` adds or removes grafana while pstack keeps running.
+				s.grafanaCheckIn()
+			}()
 		}
 	}
 }

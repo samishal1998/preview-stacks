@@ -355,6 +355,38 @@ func TestScalerPresetRoutes(t *testing.T) {
 }
 
 // negative control: in scalerConfigGet, serve only custom presets' files — the built-in case gets {}.
+// A DELETE that lands while a PUT selecting the preset is in its docker call (outside scalerMu):
+// the PUT must not then save a preset that has no files.
+// negative control: check the preset before the docker call → the PUT answers 200 and the stored
+// preset is team-a with no files.
+func TestScalerPutRacingAPresetDelete(t *testing.T) {
+	s := scServer(t, t.TempDir())
+	if code, out := scCall(t, s, "t0ken", "PUT", "/api/scaler/presets/team-a", scFiles(t, scCustomMain)); code != 200 {
+		t.Fatalf("PUT team-a: %d %s", code, out)
+	}
+	f := exec.NewFake(nil, "")
+	deleted := false
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if !deleted {
+			deleted = true
+			if code, out := scCall(t, s, "t0ken", "DELETE", "/api/scaler/presets/team-a", ""); code != 200 {
+				t.Errorf("DELETE team-a: %d %s", code, out)
+			}
+		}
+		return exec.Result{OK: true}, true
+	}
+	s.host = f
+	if code, out := scCall(t, s, "t0ken", "PUT", "/api/scaler", `{"preset":"team-a"}`); code != 400 || !strings.Contains(out, "unknown preset") {
+		t.Fatalf("PUT /api/scaler: %d %s, want 400 unknown preset", code, out)
+	}
+	if !deleted {
+		t.Fatal("the PUT made no docker call")
+	}
+	if row, err := store.GetScalerConfig(s.store.DB); err != nil || row.Preset == "team-a" {
+		t.Fatalf("stored preset = %q (%v)", row.Preset, err)
+	}
+}
+
 func TestScalerConfigIsRootOnly(t *testing.T) {
 	s := scServer(t, t.TempDir())
 	_, session, _ := grafanaAccount(t, s, "ada", auth.Admin)

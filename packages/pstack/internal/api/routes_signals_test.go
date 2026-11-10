@@ -240,6 +240,98 @@ func TestSignalsTickIgnoresAnUnreadableDocker(t *testing.T) {
 	}
 }
 
+// failing is signalsShim with every command that starts with prefix refused.
+func failing(t *testing.T, prefix string) *exec.Fake {
+	t.Helper()
+	f := signalsShim(t, false)
+	answer := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.HasPrefix(strings.TrimSpace(cmd), prefix) {
+			return exec.Result{OK: false, Stderr: "context deadline exceeded"}, true
+		}
+		return answer(cmd)
+	}
+	return f
+}
+
+// negative control: drop the `len(view.Nodes) == 0` half of answered() → the node-ls case clears
+// `empty/n3…` and wipes its clock; drop the answered() guard in signalsView → the unreachable case
+// loses the clock. Drop the ok checks in signals.Look → the service cases raise `empty/n2…` and
+// clear `stuck/pr-42_api`.
+func TestSignalsTickIgnoresAFailedDockerCommand(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		host func(t *testing.T) exec.Runner
+	}{
+		{"node ls", func(t *testing.T) exec.Runner { return failing(t, "docker node ls") }},
+		{"service ls", func(t *testing.T) exec.Runner { return failing(t, "docker service ls") }},
+		{"service ps", func(t *testing.T) exec.Runner { return failing(t, "docker service ps") }},
+		{"unreachable", func(t *testing.T) exec.Runner { return exec.NewFake(func(string) bool { return true }, "") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := signalsServer(t)
+			s.host = signalsShim(t, false)
+			s.signalsTick()
+			before := s.emptySince["n3abcdef01234567"]
+			seen := captureBus(t, s)
+
+			s.host = c.host(t)
+			s.signalsTick()
+			_ = getSignals(t, s)
+
+			if len(*seen) != 0 {
+				t.Fatalf("emitted %v", *seen)
+			}
+			if after, ok := s.emptySince["n3abcdef01234567"]; before == 0 || !ok || after != before {
+				t.Fatalf("emptySince moved: %d then %d (%v)", before, after, ok)
+			}
+		})
+	}
+}
+
+// negative control: drop the `len(view.Nodes) == 0` check in swarmNodeRoutes → a node that exists
+// answers 404 `no such node` while `node ls` is failing.
+func TestDrainWhileNodeLsFails(t *testing.T) {
+	s := signalsServer(t)
+	s.host = failing(t, "docker node ls")
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/nodes/n2abcdef01234567/drain"); code != 409 || !strings.Contains(body, "docker did not answer") {
+		t.Fatalf("status %d: %s", code, body)
+	}
+}
+
+// negative control: drop the deferred s.recovered in signalsTickSafe → the panic escapes and the
+// test binary dies.
+func TestSignalsTickSurvivesAPanic(t *testing.T) {
+	s := signalsServer(t)
+	f := exec.NewFake(nil, "")
+	f.Answer = func(string) (exec.Result, bool) { panic("bad docker output") }
+	s.host = f
+	logged := []string{}
+	s.opts.Log = func(line string) { logged = append(logged, line) }
+
+	s.signalsTickSafe()
+
+	if len(logged) != 1 || logged[0] != "signals: tick failed: bad docker output" {
+		t.Fatalf("logged %q", logged)
+	}
+}
+
+// The stream pumps pass stop/cancel as then: a recovered pump must still end its stream.
+// negative control: drop the then() call in recovered → stopped stays false.
+func TestRecoveredLogsAndRunsThen(t *testing.T) {
+	s := signalsServer(t)
+	logged := []string{}
+	s.opts.Log = func(line string) { logged = append(logged, line) }
+	stopped := false
+	func() {
+		defer s.recovered("logs: stream pump failed", func() { stopped = true })
+		panic("boom")
+	}()
+	if !stopped || len(logged) != 1 || logged[0] != "logs: stream pump failed: boom" {
+		t.Fatalf("stopped %v, logged %q", stopped, logged)
+	}
+}
+
 func nodeAction(t *testing.T, s *Server, method, path string) (int, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()

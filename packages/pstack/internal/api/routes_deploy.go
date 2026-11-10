@@ -257,45 +257,57 @@ func (s *Server) putDeployment(w http.ResponseWriter, r *http.Request, id string
 		return nil
 	}
 	defer release()
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
-	existing, err := s.registry.Get(id)
-	if err != nil {
-		return err
-	}
-	existed := existing != nil
-	// Does another deployment already resolve to this stack? A WARNING, NOT A REFUSAL, and only for
-	// a NEW deployment: on a replace the id already owns the stack.
-	stackSharedWith := []string{}
-	if !existed {
-		others, err := s.registry.List()
+	// writeMu covers the registry reads and the write; the Emit below runs after it (Go rule 14).
+	// The hold stays until return, so same-stack PUTs still emit in order.
+	var (
+		dep             *registry.Deployment
+		existed         bool
+		stackSharedWith = []string{}
+	)
+	err = func() error {
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		existing, err := s.registry.Get(id)
 		if err != nil {
 			return err
 		}
-		for _, other := range others {
-			if other.ID == id {
-				continue
+		existed = existing != nil
+		// Does another deployment already resolve to this stack? A WARNING, NOT A REFUSAL, and only
+		// for a NEW deployment: on a replace the id already owns the stack.
+		if !existed {
+			others, err := s.registry.List()
+			if err != nil {
+				return err
 			}
-			if st, err := s.resolveDep(other.ID, nil); err == nil && st.Stack == parsed.Stack {
-				stackSharedWith = append(stackSharedWith, other.ID)
+			for _, other := range others {
+				if other.ID == id {
+					continue
+				}
+				if st, err := s.resolveDep(other.ID, nil); err == nil && st.Stack == parsed.Stack {
+					stackSharedWith = append(stackSharedWith, other.ID)
+				}
 			}
 		}
+		ordered := omap.New()
+		for _, k := range varKeys {
+			ordered.Set(k, vars[k])
+		}
+		dep, err = s.registry.Put(id, specSource, registry.PutOptions{ComposeYaml: composeSource, Env: env, Vars: ordered, SpecName: specName, Host: host})
+		if err != nil {
+			return err
+		}
+		// What it serves may now collide with a route (a stack named like one, a new explicit
+		// host): settled before its `up` creates the label router.
+		s.reconcileCustomRoutes()
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 	// The other advisory finding about this submission: the keys swarm drops. Same shape as
 	// stackSharedWith — reported, never a refusal.
 	swarmNotes := swarmNotesFor(parsed, composeSource)
-	ordered := omap.New()
-	for _, k := range varKeys {
-		ordered.Set(k, vars[k])
-	}
-	dep, err := s.registry.Put(id, specSource, registry.PutOptions{ComposeYaml: composeSource, Env: env, Vars: ordered, SpecName: specName, Host: host})
-	if err != nil {
-		return err
-	}
-	// What it serves may now collide with a route (a stack named like one, a new explicit host):
-	// settled before its `up` creates the label router.
-	s.reconcileCustomRoutes()
 	// Identity only: the sources routinely carry inline credentials, and a webhook URL is
 	// outside the auth gate that protects every other reader of them.
 	name := "deployment.created"
@@ -717,12 +729,9 @@ func (s *Server) deploymentLogs(w http.ResponseWriter, r *http.Request, dep *reg
 	return nil
 }
 
-// deploymentSource is GET /api/deployments/:id/source — restricted exactly like a named spec's.
-func (s *Server) deploymentSource(w http.ResponseWriter, r *http.Request, dep *registry.Deployment) error {
-	if !s.authed(r) {
-		writeJSON(w, 200, jsonx.O("id", dep.ID, "specName", nullable(dep.SpecName), "sourceWithheld", true))
-		return nil
-	}
+// deploymentSource is GET /api/deployments/:id/source. The source is a secret (hook bodies carry
+// credentials inline); the gate in handle() is what keeps it from an unauthenticated caller.
+func (s *Server) deploymentSource(w http.ResponseWriter, dep *registry.Deployment) error {
 	specYaml, comp, err := s.registry.Source(dep.ID)
 	if err != nil {
 		return err
