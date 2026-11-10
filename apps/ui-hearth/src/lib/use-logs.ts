@@ -84,6 +84,7 @@ export function useLogs(o: {
     buffer = [];
     error.value = '';
     note.value = '';
+    loading.value = false;
     touched.value = true;
     following.value = true;
     source = new EventSource(deploymentApi.streamUrl(o.id(), opts(), o.token?.()));

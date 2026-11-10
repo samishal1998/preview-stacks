@@ -24,7 +24,7 @@ import { coreApi, normalizeControl, type Control } from '../api-core';
 import { summarize } from '../lib/deployments';
 import { problem } from '../lib/problem';
 import { useNow } from '../lib/now';
-import { actionLabel, ago, containerTone, jobTone, took } from '../format';
+import { actionLabel, ago, containerTone, jobTone, sentence, took } from '../format';
 import { data, refresh } from '../state';
 
 const router = useRouter();
@@ -75,7 +75,7 @@ const cols: TableColumn[] = [
   { key: 'image', label: 'Image', truncate: true, hideBelow: 700 },
 ];
 const serviceRows = computed(() =>
-  (control.value?.services ?? []).map((s) => ({ id: s.name, name: s.name, state: s.state, health: s.health || null, image: s.image || '—' })),
+  (control.value?.services ?? []).map((s) => ({ id: s.name, name: s.name, state: s.state, health: s.state === 'running' ? s.health || null : null, image: s.image || '—' })),
 );
 </script>
 
@@ -108,7 +108,7 @@ const serviceRows = computed(() =>
             <HAlert v-else-if="!control.services.length" tone="danger" title="Nothing is running in this project" compact />
             <HDataTable v-if="serviceRows.length" label="Control stack services" :rows="serviceRows" :columns="cols" :page-size="20">
               <template #cell="{ row, column, value }">
-                <HBadge v-if="column.key === 'state' || column.key === 'health'" dot :label="String(value || '—')" :tone="containerTone(String(row.state), (row.health as string | null) ?? null)" />
+                <HBadge v-if="column.key === 'state' || column.key === 'health'" dot :label="sentence(String(value || ''))" :tone="containerTone(String(row.state), (row.health as string | null) ?? null)" />
                 <template v-else>{{ value }}</template>
               </template>
             </HDataTable>
@@ -144,7 +144,7 @@ const serviceRows = computed(() =>
             interactive
             :title="`${actionLabel(j.action)} ${j.stack}`"
             :description="`${ago(j.startedAt, now)} · ${took(j.startedAt, j.endedAt, now)}`"
-            :badge="j.state"
+            :badge="sentence(j.state)"
             :tone="jobTone(j.state)"
             @activate="router.push(`/jobs/${encodeURIComponent(j.id)}`)"
           />

@@ -32,7 +32,7 @@ import { filterDeployments, runState, summarize } from '../lib/deployments';
 import { problem } from '../lib/problem';
 import { useNow } from '../lib/now';
 import { useSlashFocus } from '../lib/use-slash-focus';
-import { ago, runTone } from '../format';
+import { ago, runTone, sentence } from '../format';
 import { can } from '../lib/users';
 import { auth, data, refresh, toast } from '../state';
 
@@ -87,9 +87,9 @@ const rowActions = (row: TableRow): MenuAction[] => {
   ];
 };
 
-const kindOptions = computed(() => (['isolated', 'shared'] as const).map((k) => ({ value: k, label: k, count: sum.value[k] })));
+const kindOptions = computed(() => (['isolated', 'shared'] as const).map((k) => ({ value: k, label: sentence(k), count: sum.value[k] })));
 const stateOptions = computed(() =>
-  (['running', 'busy', 'asleep', 'idle', 'unknown'] as const).map((s) => ({ value: s, label: s, count: data.deployments.filter((d) => runState(d) === s).length })),
+  (['running', 'busy', 'asleep', 'idle', 'unknown'] as const).map((s) => ({ value: s, label: sentence(s), count: data.deployments.filter((d) => runState(d) === s).length })),
 );
 const filtering = computed(() => kinds.value.length + states.value.length + (q.value ? 1 : 0));
 function clearFilters(): void {
@@ -226,8 +226,8 @@ const search = useSlashFocus();
             {{ value }}
             <HText v-if="row.spec" tone="muted" size="sm"> · {{ row.spec }}</HText>
           </template>
-          <HBadge v-else-if="column.key === 'state'" dot :label="String(value)" :tone="runTone(String(value))" />
-          <HBadge v-else-if="column.key === 'kind'" :label="String(value)" :tone="value === 'shared' ? 'warning' : 'neutral'" variant="outline" />
+          <HBadge v-else-if="column.key === 'state'" dot :label="sentence(String(value))" :tone="runTone(String(value))" />
+          <HBadge v-else-if="column.key === 'kind'" :label="sentence(String(value))" :tone="value === 'shared' ? 'warning' : 'neutral'" variant="outline" />
           <HBadge v-else-if="column.key === 'stack' && !value" label="Needs variables" tone="warning" />
           <template v-else-if="column.key === 'updated'">{{ ago(Number(value) || null, now) }}</template>
           <template v-else>{{ value }}</template>

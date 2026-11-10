@@ -27,7 +27,7 @@ import {
 import type { Job } from '@samyx/preview-stacks-client';
 import { api } from '../api';
 import { coreApi } from '../api-core';
-import { actionLabel, jobTone, stamp, took } from '../format';
+import { actionLabel, jobTone, sentence, stamp, took } from '../format';
 import { addLine, countUnverifiable, isTerminal, jobTarget, leakedAxes, logEntries, stepLine, stepState, supersededBy, waitReason, waitText, type LogLine } from '../lib/jobs';
 import { problem } from '../lib/problem';
 import { useNow } from '../lib/now';
@@ -179,7 +179,7 @@ async function rerun(): Promise<void> {
     :title="actionLabel(job.action)"
     :description="job.stack"
     :breadcrumbs="[{ id: 'jobs', label: 'Jobs' }, { id: 'self', label: id }]"
-    :status="job.state"
+    :status="sentence(job.state)"
     :tone="jobTone(job.state)"
     :fields="[
       { key: 'started', label: 'Started', value: job.startedAt ? stamp(job.startedAt) : queued ? 'Not started' : 'Never started' },

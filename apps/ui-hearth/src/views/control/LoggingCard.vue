@@ -4,7 +4,8 @@ import { RouterLink } from 'vue-router';
 import { HAlert, HAlertDialog, HBadge, HButton, HCard, HInput, HNumberInput, HSelect, HSettingsPage, HStack, HSwitch, HText } from '@hearth-ui/vue';
 import type { Job, LokiSettings, LokiStorageInput } from '@samyx/preview-stacks-client';
 import { controlApi, id, poll, why } from '../../api-control';
-import { isTerminal, rangeProblem, storageBadge, supersededBy } from '../../lib/control';
+import { rangeProblem, storageBadge } from '../../lib/control';
+import { isTerminal, supersededBy } from '../../lib/jobs';
 import { data, toast } from '../../state';
 
 const props = defineProps<{ canAdmin: boolean }>();

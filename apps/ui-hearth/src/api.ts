@@ -6,7 +6,7 @@
  * A non-2xx is not an exception: `call` always resolves, and callers branch on `status`.
  */
 import { clearToken, getToken } from './lib/token';
-import type { DeploymentRow, Job, JobStub, Logs, Me, Runtime } from '@samyx/preview-stacks-client';
+import type { DeploymentRow, Job, JobStub, Me } from '@samyx/preview-stacks-client';
 
 export type Result<T> = { ok: boolean; status: number; body: T & { error?: string } };
 export type Lifecycle = 'up' | 'verify' | 'down' | 'sleep' | 'wake';
@@ -53,18 +53,8 @@ export const api = {
   login: (username: string, password: string) => call<unknown>('POST', '/api/auth/login', { username, password }),
   logout: () => call<unknown>('POST', '/api/auth/logout', {}),
   deployments: () => call<{ deployments: DeploymentRow[] }>('GET', '/api/deployments'),
-  deployment: (d: string) => call<DeploymentRow>('GET', `/api/deployments/${id(d)}`),
-  runtime: (d: string) => call<Runtime>('GET', `/api/deployments/${id(d)}/runtime`),
-  logs: (d: string, o: { service?: string; tail?: number; timestamps?: boolean } = {}) => {
-    const q = new URLSearchParams({ tail: String(o.tail ?? 300) });
-    if (o.service) q.set('service', o.service);
-    if (o.timestamps) q.set('timestamps', '1');
-    return call<Logs>('GET', `/api/deployments/${id(d)}/logs?${q}`);
-  },
   jobs: () => call<{ jobs: Job[] }>('GET', '/api/jobs'),
   job: (j: string) => call<{ job: Job }>('GET', `/api/jobs/${id(j)}`),
   act: (d: string, action: Lifecycle, body: { verify?: boolean; forget?: boolean; force?: boolean } = {}) =>
     call<{ job: JobStub }>('POST', `/api/deployments/${id(d)}/${action}`, action === 'down' ? { verify: true, ...body } : {}),
-  cancel: (d: string) => call<unknown>('POST', `/api/deployments/${id(d)}/cancel`, {}),
-  forget: (d: string) => call<unknown>('DELETE', `/api/deployments/${id(d)}`),
 };

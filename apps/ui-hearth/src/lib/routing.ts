@@ -27,8 +27,8 @@ export type Target = { text: string; tone: 'neutral' | 'warning' | 'danger' | 'i
 /** The "Forwards to" cell: the address, or the one reason there is none. */
 export function targetOf(r: Pick<RuntimeRoute, 'target' | 'targetReason'>): Target {
   if (r.target) return { text: r.target, tone: 'neutral' };
-  if (r.targetReason === 'no-port') return { text: 'no port declared', tone: 'warning' };
-  if (r.targetReason === 'not-on-ingress') return { text: 'not on the ingress network', tone: 'danger' };
-  if (r.targetReason === 'unknown-node') return { text: 'address not known from this node', tone: 'info' };
-  return { text: 'not known', tone: 'neutral' };
+  if (r.targetReason === 'no-port') return { text: 'No port declared', tone: 'warning' };
+  if (r.targetReason === 'not-on-ingress') return { text: 'Not on the ingress network', tone: 'danger' };
+  if (r.targetReason === 'unknown-node') return { text: 'Address not known from this node', tone: 'info' };
+  return { text: 'Not known', tone: 'neutral' };
 }

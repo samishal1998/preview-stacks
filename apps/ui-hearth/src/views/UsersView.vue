@@ -252,17 +252,17 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
               <HText weight="medium" style="min-width: 0; overflow: hidden; text-overflow: ellipsis">{{ value }}</HText>
               <HBadge v-if="userById(row) && isYou(userById(row)!)" label="you" tone="info" size="sm" />
             </HStack>
-            <span v-else-if="column.key === 'role' && isAdmin && userById(row)" :title="isLastAdmin(userById(row)!, users) ? LAST_ADMIN_WHY : undefined">
-              <HSelect
-                :label="`Role for ${row.username}`"
-                hide-label
-                size="compact"
-                :model-value="String(value)"
-                :options="pickerOptions(String(value))"
-                :disabled="isLastAdmin(userById(row)!, users)"
-                @update:model-value="(v: string) => askRole(userById(row)!, v)"
-              />
-            </span>
+            <HSelect
+              v-else-if="column.key === 'role' && isAdmin && userById(row)"
+              :label="`Role for ${row.username}`"
+              hide-label
+              size="compact"
+              :model-value="String(value)"
+              :options="pickerOptions(String(value))"
+              :disabled="isLastAdmin(userById(row)!, users)"
+              :hint="isLastAdmin(userById(row)!, users) ? LAST_ADMIN_WHY : undefined"
+              @update:model-value="(v: string) => askRole(userById(row)!, v)"
+            />
             <template v-else-if="column.key === 'role'">{{ sentence(String(value)) }}</template>
             <template v-else>{{ value }}</template>
           </template>

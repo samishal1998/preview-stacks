@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { actionLabel, ago, jobTone, sentence, took } from '../src/format';
+import { actionLabel, ago, containerTone, jobTone, sentence, took } from '../src/format';
 import { runState, summarize, filterDeployments } from '../src/lib/deployments';
 import { addLine, countUnverifiable, isTerminal, jobTarget, leakedAxes, logEntries, stepLine, stepState, supersededBy, waitReason } from '../src/lib/jobs';
 import { problem } from '../src/lib/problem';
@@ -87,4 +87,10 @@ test('a step line never repeats its state', () => {
   expect(stepLine(st({}))).toBe('ok');
   expect(stepLine(st({ ok: false, code: 1 }))).toBe('failed: exit 1');
   expect(stepLine(st({ message: 'unverifiable: no assert_gone', skipped: true }))).toBe('unverifiable: no assert_gone');
+});
+
+// negative control: drop `state === 'running' &&` from containerTone's unhealthy check
+test('a stopped container ignores its last health probe', () => {
+  expect(containerTone('running', 'unhealthy')).toBe('danger');
+  expect(containerTone('exited', 'unhealthy')).toBe('neutral');
 });

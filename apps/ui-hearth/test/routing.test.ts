@@ -11,6 +11,6 @@ test('route targets', () => {
   expect(targetOf({ target: '10.0.0.2:80' }).text).toBe('10.0.0.2:80');
   expect(targetOf({ target: null, targetReason: 'not-on-ingress' }).tone).toBe('danger');
   expect(targetOf({ target: null, targetReason: 'unknown-node' }).tone).toBe('info');
-  expect(targetOf({ target: null }).text).toBe('not known');
+  expect(targetOf({ target: null }).text).toBe('Not known');
   expect(isPattern('(pattern) x')).toBe(true);
 });
