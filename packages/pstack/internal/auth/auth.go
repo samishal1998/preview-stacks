@@ -50,6 +50,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/js"
@@ -457,16 +458,32 @@ func (a *Auth) Login(username, password string) (session string, user *UserRow, 
 		return "", nil, err
 	}
 	// One error for both wrong-user and wrong-password: naming which half failed turns the login
-	// form into a username oracle.
-	if row == nil || !VerifyPassword(password, hash) {
+	// form into a username oracle. An unknown username still pays one argon2 derivation, or the
+	// response time would name it instead.
+	if row == nil {
+		verifyPassword(password, dummyHash())
+		return "", nil, errorf("invalid username or password")
+	}
+	if !verifyPassword(password, hash) {
 		return "", nil, errorf("invalid username or password")
 	}
 	session, err = mintSession(a.store.DB, row.ID)
 	return session, row, err
 }
 
-// mintSession is the one place a session row is created — password login and SSO both come through here.
+// verifyPassword is VerifyPassword; a var only so a test can count the derivations Login runs.
+var verifyPassword = VerifyPassword
+
+// dummyHash is what an unknown username is verified against. Lazy: as a package initializer it
+// would cost every `pstack` start a 64 MiB derivation.
+var dummyHash = sync.OnceValue(func() string { return HashPassword("") })
+
+// mintSession is the one place a session row is created — password login and SSO both come through
+// here, so it also sweeps expired rows, on the caller's connection (it runs inside SsoSignIn's Tx).
 func mintSession(q store.Querier, userID int64) (string, error) {
+	if _, err := q.Exec("DELETE FROM sessions WHERE expires_at <= ?", now()); err != nil {
+		return "", err
+	}
 	session := randomSecret("pstack_ses_")
 	_, err := q.Exec("INSERT INTO sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
 		sha256Hex(session), userID, now(), now()+SessionTTLMs)
@@ -494,12 +511,6 @@ func (a *Auth) SessionHashUser(idHash string) (*UserRow, error) {
 // Logout deletes the session row.
 func (a *Auth) Logout(session string) error {
 	_, err := a.store.DB.Exec("DELETE FROM sessions WHERE id_hash = ?", sha256Hex(session))
-	return err
-}
-
-// PruneSessions is housekeeping — expired rows are already unusable; this just stops them accumulating.
-func (a *Auth) PruneSessions() error {
-	_, err := a.store.DB.Exec("DELETE FROM sessions WHERE expires_at <= ?", now())
 	return err
 }
 

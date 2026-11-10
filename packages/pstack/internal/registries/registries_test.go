@@ -2,10 +2,12 @@ package registries
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
@@ -245,4 +247,29 @@ func TestPrivateRegistryCredentials(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestConcurrentPutsKeepEveryCredential(t *testing.T) {
+	// negative control: drop the s.mu.Lock() in Put — hosts go missing or a Put errors on the shared temp file.
+	store := New(t.TempDir())
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := store.Put(fmt.Sprintf("r%d.example.com", i), "sami", password); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if got := len(store.State().Entries); got != n {
+		t.Fatalf("%d of %d credentials survived", got, n)
+	}
 }

@@ -180,11 +180,12 @@ func TestPKCE(t *testing.T) {
 
 	t.Run("redirectAfterLogin only ever survives as a same-origin path", func(t *testing.T) {
 		// negative control: drop the `//` check → '//evil.example' survives
+		// negative control: drop the control-byte check → "/\t/evil.example" survives
 		if SafeNext("/deployments/pr-7") != "/deployments/pr-7" {
 			t.Fatal("path")
 		}
 		// Every one of these is absolute to a browser.
-		for _, bad := range []string{"//evil.example", "https://evil.example", `/\evil.example`, ""} {
+		for _, bad := range []string{"//evil.example", "https://evil.example", `/\evil.example`, "", "/\t/evil.example", "/\n/evil.example", "/\r/evil.example"} {
 			if SafeNext(bad) != "/" {
 				t.Fatalf("%q survived", bad)
 			}
