@@ -83,7 +83,12 @@ export async function loadDetail(): Promise<void> {
 
 /** Point the singleton at a deployment. Resets everything a stale id could leak into the new one. */
 export function openDeployment(id: string): void {
-  if (dep.id === id && (dep.detail || dep.error)) return; // a tab change, not a navigation
+  // A remount on the same id (back from a job page): keep the cached panel on screen, but re-read it,
+  // or a sleep/wake that just finished still shows the pre-action state.
+  if (dep.id === id && (dep.detail || dep.error)) {
+    void loadDetail();
+    return;
+  }
   dep.id = id;
   dep.detail = null;
   dep.error = '';

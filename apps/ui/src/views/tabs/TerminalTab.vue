@@ -201,7 +201,8 @@ onBeforeUnmount(teardown);
       <span v-if="state === 'open'" class="badge ok"><span class="dot pulse" />Connected</span>
     </div>
 
-    <p v-if="!running.length && !loadError" class="hint">Nothing is running.</p>
+    <p v-if="rt && !rt.reachable" class="hint">Docker did not answer.</p>
+    <p v-else-if="rt && !running.length && !loadError" class="hint">Nothing is running.</p>
 
     <p v-if="state === 'closed' && closeReason" class="hint">Session ended — {{ closeReason }}.</p>
 

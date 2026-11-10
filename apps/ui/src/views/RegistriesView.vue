@@ -20,7 +20,7 @@
 import { computed, ref } from 'vue';
 import { api, problem } from '../api/client';
 import type { RegistriesResponse, RegistryEntry } from '../api/types';
-import { settings } from '../composables/useSettings';
+import { tokenMissing } from '../composables/useDeploymentActions';
 import { toast } from '../composables/useToasts';
 import ActionButton from '../components/ActionButton.vue';
 import ErrorNote from '../components/ErrorNote.vue';
@@ -41,7 +41,7 @@ const saving = ref(false);
 const formError = ref('');
 
 const canSave = computed(
-  () => !!settings.token && !saving.value && !!host.value && !!username.value && !!password.value,
+  () => !tokenMissing.value && !saving.value && !!host.value && !!username.value && !!password.value,
 );
 
 async function load(): Promise<void> {
@@ -139,7 +139,7 @@ async function forget(registry: string): Promise<void> {
             <span>{{ e.username ?? 'unknown user' }}</span>
             <span v-if="e.viaHelper" class="badge warn">Via helper</span>
             <span class="grow" />
-            <ActionButton :disabled="!settings.token" variant="danger" :confirm="`Forget ${e.registry}?`" @run="forget(e.registry)">
+            <ActionButton :disabled="tokenMissing" :title="tokenMissing ? 'Needs an access token.' : undefined" variant="danger" :confirm="`Forget ${e.registry}?`" @run="forget(e.registry)">
               Forget
             </ActionButton>
           </span>
@@ -183,7 +183,7 @@ async function forget(registry: string): Promise<void> {
         <ActionButton variant="primary" :pending="saving" :disabled="!canSave" @click="save">
           {{ saving ? 'Adding…' : 'Add credential' }}
         </ActionButton>
-        <span v-if="!settings.token" class="mute">Adding needs an access token.</span>
+        <span v-if="tokenMissing" class="mute">Adding needs an access token.</span>
       </div>
     </section>
   </div>

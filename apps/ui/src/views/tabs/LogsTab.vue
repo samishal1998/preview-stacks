@@ -105,6 +105,8 @@ watch(
       containers.value = [];
       selected.value = '';
       logs.value = null;
+      // `prev` is unset only on the immediate first run, before `liveLines` is declared below.
+      if (prev) liveLines.value = [];
     }
     // Gated on the RESOLVED spec, not just the id: this component mounts before the parent has
     // resolved the deployment, so an id-only watcher saw `dep.detail === undefined` and the
@@ -160,6 +162,9 @@ async function fetchLogs(): Promise<void> {
   // A slow response for the previously-selected service must not land in a pane now labelled with a
   // different one.
   if (r.ok && (r.body.service ?? '') !== chosen) return;
+  // A stopped follow's buffer would otherwise outrank this answer in `shown`. While following, the
+  // restarted stream owns the pane.
+  if (!following.value) liveLines.value = [];
   if (!r.ok) {
     logs.value = null;
     error.value = problem(r, 'load the logs');
@@ -403,7 +408,7 @@ const stateTone = (c: RuntimeContainer): string =>
             </span>
             <span class="clist-sub mono" :title="c.name">{{ c.name }}</span>
             <span class="clist-state" :class="stateTone(c)">
-              {{ sentence(c.health ?? c.state) }}
+              {{ sentence(c.state === 'running' && c.health ? c.health : c.state) }}
             </span>
           </button>
           <p v-if="!containers.length" class="hint">No containers.</p>

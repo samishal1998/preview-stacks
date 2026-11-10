@@ -99,7 +99,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           <button class="sm ghost" @click="loadControl">Refresh</button>
         </div>
 
-        <p v-if="controlError" class="s-failed">{{ controlError }}</p>
+        <p v-if="controlError" class="s-failed" role="alert">{{ controlError }}</p>
         <SkeletonList v-else-if="!controlLoaded" :rows="3" />
 
         <template v-else-if="control">
@@ -167,7 +167,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             <RouterLink to="/deployments">all →</RouterLink>
           </div>
 
-          <p v-if="state.deploymentsError" class="s-failed">{{ state.deploymentsError }}</p>
+          <p v-if="state.deploymentsError" class="s-failed" role="alert">{{ state.deploymentsError }}</p>
           <SkeletonList v-else-if="!state.deploymentsLoaded" :rows="2" tall />
           <template v-else>
             <!-- `data-zero` dims a nought so it stops competing with the counts that moved. -->
@@ -205,7 +205,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
             <RouterLink to="/jobs">all →</RouterLink>
           </div>
 
-          <p v-if="state.jobsError" class="s-failed">{{ state.jobsError }}</p>
+          <p v-if="state.jobsError" class="s-failed" role="alert">{{ state.jobsError }}</p>
           <SkeletonList v-else-if="!state.jobsLoaded" :rows="4" />
           <ul v-else class="kvlist stagger">
             <li v-for="(j, i) in recentJobs" :key="j.id" :style="{ '--i': i }">

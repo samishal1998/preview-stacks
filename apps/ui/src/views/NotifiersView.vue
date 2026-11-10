@@ -120,7 +120,11 @@ async function create(): Promise<void> {
 
 async function setEnabled(n: NotifierRow, enabled: boolean): Promise<void> {
   const r = await api.patch<{ notifier: NotifierRow }>(`/api/notifiers/${n.id}`, { enabled });
-  if (!r.ok) listError.value = problem(r, 'update this notifier');
+  // A toast, not listError: the reload below would clear that before anyone read it.
+  if (!r.ok) {
+    toast('error', problem(r, 'update this notifier'));
+    return;
+  }
   void load();
 }
 
