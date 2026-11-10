@@ -364,6 +364,9 @@ func New(o Options) (*Server, error) {
 	}
 	s.registry.Env = env
 	s.hooks = webhooks.New(st, notify.PublicConfig)
+	if err := s.hooks.SettleInterrupted(); err != nil {
+		o.Log("notify: could not settle interrupted deliveries: " + err.Error())
+	}
 	s.dispatcher = notify.New(s.hooks)
 	// The bus is a singleton and this listener is per-server: the subscription ends with the server,
 	// or one event fans out into every database any server ever opened.
