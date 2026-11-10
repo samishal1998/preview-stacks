@@ -501,7 +501,7 @@ packages byte-compatible with it, and they stay after the port because the contr
 14. Concurrency: every shared struct names its owner or its mutex in a comment; **no method calls a
     sink, a subscriber or a bus listener while holding a mutex**; goroutines only where listed (the
     job runner, a delivery send, stream pumps, the watchers, `statsLoop` and the prune runner it
-    starts), each with `recover`. `events.Emit` dispatches synchronously, in registration order —
+    starts, `signalsLoop`, `reindexLoop`), each with `recover` (`Server.recovered`). `events.Emit` dispatches synchronously, in registration order —
     never `go fn(e)`.
 15. Streams: pumps read to EOF → `wg.Wait()` → `cmd.Wait()` → the terminal frame. Never `Wait`
     while a pump is still reading. `exec.Command("bash", "-c", cmd)` with `cmd.Cancel` sending
