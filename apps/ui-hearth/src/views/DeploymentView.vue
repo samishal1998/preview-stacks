@@ -131,7 +131,7 @@ const tabs = computed(() => (can('developer', auth) ? allTabs : allTabs.filter((
 
 // The fix for an unresolved spec lives on Config, so land there, but only from the tab with nothing to show.
 watch(detailError, (e) => {
-  if (e && !props.tab) void router.replace(`/deployments/${encodeURIComponent(props.id)}/config`);
+  if (e && !dep.value && !props.tab) void router.replace(`/deployments/${encodeURIComponent(props.id)}/config`);
 });
 
 // The detail call does not say whether the stack is up; the list row does.
@@ -140,8 +140,8 @@ const shared = computed(() => dep.value?.kind === 'shared');
 const fields = computed(() => [
   { key: 'stack', label: 'Stack', value: dep.value?.stack ?? (detailError.value ? 'unresolved' : '—') },
   { key: 'kind', label: 'Kind', value: dep.value ? sentence(dep.value.kind) : '—' },
-  { key: 'orchestrator', label: 'Orchestrator', value: dep.value?.orchestrator ?? 'none' },
-  { key: 'spec', label: 'Spec', value: dep.value?.specName ?? 'inline' },
+  { key: 'orchestrator', label: 'Orchestrator', value: sentence(dep.value?.orchestrator ?? 'none') },
+  { key: 'spec', label: 'Spec', value: dep.value?.specName ?? 'Inline' },
   { key: 'updated', label: 'Updated', value: ago(dep.value?.updatedAt) },
 ]);
 

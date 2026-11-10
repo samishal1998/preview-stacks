@@ -1,15 +1,4 @@
-import type { Job } from '@samyx/preview-stacks-client';
 import type { ScalerInput, ScalerPreset, ScalerReport, ScalerSettings, ScalerView } from '../api-control';
-
-const ROLES = ['viewer', 'developer', 'maintainer', 'admin'] as const;
-export type RoleName = (typeof ROLES)[number];
-
-/** Rendering only; the server decides. Root passes everything, an unknown role ranks below viewer. */
-export function atLeast(root: boolean, role: string | null | undefined, min: RoleName): boolean {
-  if (root) return true;
-  const have = ROLES.indexOf((role ?? '') as RoleName) + 1;
-  return have > 0 && have >= ROLES.indexOf(min) + 1;
-}
 
 /** 268435456 -> "256 MiB"; null -> "unlimited". */
 export function mem(bytes: number | null): string {
@@ -43,18 +32,6 @@ export function rangeProblem(v: number | null, r: Range): string {
   if (v === null || !Number.isInteger(v)) return 'A whole number.';
   return v < r.min || v > r.max ? `${r.min} to ${r.max}.` : '';
 }
-
-/**
- * The job that replaced a superseded one: the nearest newer job for the same stack in a
- * newest-first list. Null when it aged out or the list has not loaded.
- */
-export function supersededBy(job: Job, jobs: Job[]): Job | null {
-  const i = jobs.findIndex((j) => j.id === job.id);
-  if (i < 0) return null;
-  return jobs.slice(0, i).reverse().find((j) => j.stack === job.stack) ?? null;
-}
-
-export const isTerminal = (state: string): boolean => !['queued', 'running'].includes(state);
 
 /** The Workers card shows while the scaler is on (or docker did not say) or still owns workers. */
 export const scalerShown = (v: ScalerView): boolean => v.enabled !== false || (v.report?.workers.length ?? 0) > 0;

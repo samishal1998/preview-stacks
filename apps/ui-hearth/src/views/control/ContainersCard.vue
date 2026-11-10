@@ -2,7 +2,8 @@
 import { computed, ref } from 'vue';
 import { HAlertDialog, HAlert, HBadge, HCard, HDataTable, HEmptyState, HSkeleton, HStack, type MenuAction, type TableColumn, type TableRow } from '@hearth-ui/vue';
 import { controlApi, why, type ControlRuntime } from '../../api-control';
-import { ago, containerTone } from '../../format';
+import { ago } from '../../format';
+import { containerState } from '../../lib/deployment';
 import { mem } from '../../lib/control';
 import { byLabel } from '../../lib/labels';
 import { toast } from '../../state';
@@ -32,6 +33,7 @@ const rows = computed<TableRow[]>(() =>
   })),
 );
 const find = (rowId: string) => named.value.get(rowId);
+const stateBadge = (row: TableRow) => containerState(find(String(row.id)) ?? { state: String(row.state), health: null });
 
 // pstack cannot restart itself: the server refuses its own container by name.
 const rowActions = (row: TableRow): MenuAction[] => {
@@ -76,11 +78,7 @@ async function restart(): Promise<void> {
             <HBadge v-if="value === 'pstack'" tone="neutral" label="Restart from the host" size="sm" />
           </HStack>
         </template>
-        <HBadge
-          v-else-if="column.key === 'state'"
-          :tone="containerTone(String(value), find(String(row.id))?.health ?? null)"
-          :label="find(String(row.id))?.health ? `${value} · ${find(String(row.id))?.health}` : String(value)"
-        />
+        <HBadge v-else-if="column.key === 'state'" :tone="stateBadge(row).tone" :label="stateBadge(row).label" />
         <template v-else-if="column.key === 'restarts'">
           <HStack direction="row" :gap="2" align="center" wrap>
             <HBadge :tone="Number(value) > 0 ? 'warning' : 'neutral'" :label="String(value)" />

@@ -7,7 +7,8 @@ import { computed, ref } from 'vue';
 import { HAlert, HButton, HGrid, HPageHeader, HStack, HStatCard, HText } from '@hearth-ui/vue';
 import { controlApi, poll, why, type ControlRuntime, type DomainsStatus, type ForwardStatus, type TlsStatus } from '../api-control';
 import { ago } from '../format';
-import { atLeast, daysLeft, type RoleName } from '../lib/control';
+import { daysLeft } from '../lib/control';
+import { can as canRole, type Role } from '../lib/users';
 import { auth } from '../state';
 import ContainersCard from './control/ContainersCard.vue';
 import CertificatesCard from './control/CertificatesCard.vue';
@@ -15,7 +16,7 @@ import DomainsCard from './control/DomainsCard.vue';
 import LoggingCard from './control/LoggingCard.vue';
 import WorkersCard from './control/WorkersCard.vue';
 
-const can = (min: RoleName) => atLeast(auth.root, auth.role, min);
+const can = (min: Role) => canRole(min, auth);
 
 const runtime = ref<ControlRuntime | null>(null);
 const loaded = ref(false);

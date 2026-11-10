@@ -54,7 +54,7 @@ export function jobTone(state: string): Tone {
 }
 
 export function containerTone(state: string, health: string | null): Tone {
-  if (health === 'unhealthy') return 'danger';
+  if (state === 'running' && health === 'unhealthy') return 'danger'; // Docker keeps the last probe on a stopped one
   if (state === 'running') return 'success';
   if (state === 'exited') return 'neutral';
   return state === 'no task running' ? 'danger' : 'warning';

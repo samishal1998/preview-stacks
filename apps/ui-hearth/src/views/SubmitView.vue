@@ -132,13 +132,14 @@ watch(
       if (saved.some((e) => e.k)) vars.value = saved;
       await loadSource(id);
     } else if (from) {
-      // Duplicate: same fetch, empty id, variables come across.
+      // Duplicate: same fetch, empty id, variables come across. The id clears before the await so a
+      // stale run cannot wipe an id typed, or set by a newer route, while the source loads.
+      depId.value = '';
       spec.value = '';
       compose.value = '';
       const stored = rowVars(data.deployments.find((d) => d.id === from));
       if (stored) vars.value = pairsFromRecord(stored);
       await loadSource(from);
-      depId.value = '';
     } else {
       // Plain submit: nothing carries over from a record opened before.
       depId.value = '';

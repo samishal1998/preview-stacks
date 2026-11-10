@@ -11,7 +11,7 @@ import { poll } from '../api-control';
 import { byLabel } from '../lib/labels';
 import { useCardColumns } from '../lib/use-card-columns';
 import { DISTROS, hasReadyWorker, joinPath, joinProblem, removable, thisManager, workersOnly, type JoinFormat } from '../lib/swarm';
-import { ago } from '../format';
+import { ago, sentence } from '../format';
 import { can } from '../lib/users';
 import { auth, toast } from '../state';
 
@@ -206,9 +206,9 @@ onBeforeUnmount(() => {
               <HBadge v-if="sig(nodeOf(row)?.id ?? '')?.emptySince" tone="neutral" :label="`empty ${ago(sig(nodeOf(row)!.id)!.emptySince)}`" />
               </HStack>
             </template>
-            <HBadge v-else-if="column.key === 'role'" :label="String(value)" :tone="value === 'manager' ? 'accent' : 'neutral'" variant="outline" />
-            <HBadge v-else-if="column.key === 'status'" dot :label="String(value)" :tone="value === 'ready' ? 'success' : 'danger'" />
-            <HBadge v-else-if="column.key === 'availability'" :label="String(value)" :tone="value === 'active' ? 'neutral' : 'warning'" />
+            <HBadge v-else-if="column.key === 'role'" :label="sentence(String(value))" :tone="value === 'manager' ? 'accent' : 'neutral'" variant="outline" />
+            <HBadge v-else-if="column.key === 'status'" dot :label="sentence(String(value))" :tone="value === 'ready' ? 'success' : 'danger'" />
+            <HBadge v-else-if="column.key === 'availability'" :label="sentence(String(value))" :tone="value === 'active' ? 'neutral' : 'warning'" />
             <code v-else-if="column.key === 'engine' || column.key === 'short'" style="white-space: nowrap">{{ value }}</code>
             <template v-else>{{ value }}</template>
           </template>

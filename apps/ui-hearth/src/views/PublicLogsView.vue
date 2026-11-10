@@ -108,7 +108,7 @@ const rows = computed(() =>
     name: c.name,
     state: sentence(c.state),
     tone: (c.state === 'running' ? 'success' : 'danger') as Tone,
-    health: c.health ? sentence(c.health) : '—',
+    health: c.state === 'running' && c.health ? sentence(c.health) : '—',
     node: c.node ?? '—',
   })),
 );

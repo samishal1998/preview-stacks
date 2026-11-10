@@ -121,7 +121,7 @@ const search = useSlashFocus();
       >
         <template #cell="{ row, column, value }">
           <template v-if="column.key === 'state'">
-            <HBadge dot :label="String(value)" :tone="jobTone(String(value))" :title="sentence(String(value))" />
+            <HBadge dot :label="sentence(String(value))" :tone="jobTone(String(value))" />
             <HText v-if="row.note" tone="muted" size="sm" as="div">
               <template v-if="row.noteTo">
                 <RouterLink :to="String(row.noteTo)">{{ row.note }}</RouterLink>

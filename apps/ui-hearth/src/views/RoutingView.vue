@@ -142,7 +142,7 @@ const withheld = ref(false);
 const loadingFile = ref(false);
 const saving = ref(false);
 const fileError = ref('');
-const undo = ref<{ name: string; content: string } | null>(null);
+const undo = ref<{ name: string; content: string; deleted?: boolean } | null>(null);
 const askDelete = ref(false);
 
 const isNew = computed(() => openName.value === '');
@@ -237,7 +237,7 @@ async function remove(): Promise<void> {
     fileError.value = msg(r, 'Not deleted');
     return;
   }
-  if (r.body.previous) undo.value = { name, content: r.body.previous };
+  if (r.body.previous) undo.value = { name, content: r.body.previous, deleted: true };
   toast(`Deleted ${name}.`, 'success');
   close();
   void loadList();
@@ -253,7 +253,7 @@ async function remove(): Promise<void> {
       </template>
     </HPageHeader>
 
-    <HAlert v-if="undo" tone="info" :title="`Replaced ${undo.name}.`" dismissible @dismiss="undo = null">
+    <HAlert v-if="undo" tone="info" :title="`${undo.deleted ? 'Deleted' : 'Replaced'} ${undo.name}.`" dismissible @dismiss="undo = null">
       <HButton size="compact" variant="secondary" label="Put it back" @click="putBack" />
     </HAlert>
 
@@ -268,7 +268,7 @@ async function remove(): Promise<void> {
               <HText v-if="isPattern(h)" tone="muted">{{ h }}</HText>
               <a v-else :href="`https://${h}`" target="_blank" rel="noreferrer">{{ h }}</a>
             </template>
-            <HText v-if="!(routeOf(row)?.hosts.length)" tone="muted">no host in the rule</HText>
+            <HText v-if="!(routeOf(row)?.hosts.length)" tone="muted">No host in the rule</HText>
           </HStack>
         </template>
         <template v-else-if="column.key === 'target' && routeOf(row)">

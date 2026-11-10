@@ -33,7 +33,7 @@ const items = computed<DescriptionItem[]>(() => {
         label: 'Subdomains',
         value: c.subdomains.map((s) => `*.${s.host} → ${s.profile}${s.depth === 'any' ? ' (any depth, HTTP only)' : ''}`).join('; '),
       });
-    out.push({ key: 'orch', label: 'Orchestrator', value: d.orchestrator ?? 'compose' });
+    out.push({ key: 'orch', label: 'Orchestrator', value: sentence(d.orchestrator ?? 'compose') });
   }
   if (d.sleep) {
     const parts = [d.sleep.idle && `${d.sleep.idle} idle`, d.sleep.after && `${d.sleep.after} after deploy`].filter(Boolean);

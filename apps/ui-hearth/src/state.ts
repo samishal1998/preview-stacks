@@ -5,7 +5,7 @@
  * refreshes every few seconds is what a person watching a deploy wants. `connection` is the honest
  * summary — a failed poll flips it, and the shell says so instead of showing stale rows as live.
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import type { DeploymentRow, Job } from '@samyx/preview-stacks-client';
 import type { ToastItem } from '@hearth-ui/vue';
 import { api, onUnauthorized } from './api';
@@ -102,18 +102,6 @@ export function stopPolling(): void {
   if (timer) clearInterval(timer);
   timer = undefined;
 }
-
-export const summary = computed(() => {
-  const d = data.deployments;
-  return {
-    total: d.length,
-    running: d.filter((x) => x.running === true).length,
-    busy: d.filter((x) => x.busy === true).length,
-    asleep: d.filter((x) => x.asleep).length,
-    unresolved: d.filter((x) => x.unresolved).length,
-    failedJobs: data.jobs.filter((j) => j.state === 'failed' || j.state === 'leaked').length,
-  };
-});
 
 /** Reads who the server says is signed in. False when nobody is. */
 export async function loadMe(): Promise<boolean> {

@@ -110,7 +110,7 @@ async function save(): Promise<void> {
     saveError.value = 'Fix the highlighted fields.';
     return;
   }
-  if (!(await put(draft.value, typed.value))) return;
+  if (!(await put({ ...draft.value, dismissed: saved.value.dismissed }, typed.value))) return;
   creds.value = {};
   newKey.value = newValue.value = '';
   toast('Saved.', 'success');
@@ -255,6 +255,7 @@ async function deletePreset(): Promise<void> {
             :options="presetOptions"
             :disabled="locked || !canAdmin"
             :hint="chosen && !chosen.preset.lockFile ? 'No lock file: providers download unpinned.' : undefined"
+            :error="dirty && !draft.preset ? 'Choose a preset.' : undefined"
           />
           <HText v-if="locked" tone="muted">Locked while workers exist.</HText>
           <HInput
