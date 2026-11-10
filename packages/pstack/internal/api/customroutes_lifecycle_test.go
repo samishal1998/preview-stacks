@@ -359,3 +359,35 @@ func TestCustomRoutesForgetThatRollsBackAnnouncesNothing(t *testing.T) {
 		t.Fatalf("events = %v", *seen)
 	}
 }
+
+// A sleep whose record cannot be written must not tell the transcript a request wakes it: with no
+// record there is no wake index entry, and a visitor gets the Down page.
+// negative control: discard SetSleep's error (`var serr error; _ = s.registry.SetSleep(…)`) →
+// the job logs an "asleep — …" line and no warning.
+func TestSleepRecordWriteFailureSaysSo(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only file")
+	}
+	s, _ := crServer(t)
+	meta := filepath.Join(s.registry.Root, "pr-1", "meta.json")
+	if err := os.Chmod(meta, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(meta, 0o644) })
+	code, out := crCall(t, s, "POST", "/api/deployments/pr-1/sleep", "")
+	if code != 202 {
+		t.Fatalf("POST sleep: %d %v", code, out)
+	}
+	id, _ := out["job"].(map[string]any)["id"].(string)
+	j := waitLokiJob(t, s, id)
+	warned := false
+	for _, e := range j.Log {
+		if strings.HasPrefix(e.Message, "asleep — ") {
+			t.Fatalf("logged %q with no sleep record", e.Message)
+		}
+		warned = warned || (e.Level == log.Warn && strings.HasPrefix(e.Message, "torn down, but the sleep record was not written: "))
+	}
+	if !warned {
+		t.Fatalf("no warning in %+v", j.Log)
+	}
+}

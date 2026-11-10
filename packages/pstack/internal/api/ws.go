@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/auth"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/inspect"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/registry"
@@ -122,7 +123,7 @@ func (s *Server) runTerminal(conn *websocket.Conn, argv []string, shell, contain
 	}()
 
 	cmd := osexec.Command(argv[0], argv[1:]...)
-	cmd.Env = envListFrom(s.env)
+	cmd.Env = exec.EnvList(s.env)
 	stdin, err := cmd.StdinPipe()
 	if err == nil {
 		var stdout, stderr io.ReadCloser
@@ -138,6 +139,7 @@ func (s *Server) runTerminal(conn *websocket.Conn, argv []string, shell, contain
 			var pumps sync.WaitGroup
 			pump := func(rd io.Reader) {
 				defer pumps.Done()
+				defer s.recovered("terminal: pump failed", cancel)
 				buf := make([]byte, 32<<10)
 				for {
 					n, rerr := rd.Read(buf)
@@ -169,6 +171,7 @@ func (s *Server) runTerminal(conn *websocket.Conn, argv []string, shell, contain
 			// Keystrokes go to the shell verbatim, except CR → NL: there is no line discipline
 			// (that is what the missing pty WAS), so this one conversion is the whole fix.
 			go func() {
+				defer s.recovered("terminal: reader failed", cancel)
 				for {
 					_, data, rerr := conn.Read(ctx)
 					if rerr != nil {
@@ -195,12 +198,4 @@ func (s *Server) runTerminal(conn *websocket.Conn, argv []string, shell, contain
 	}
 	write(websocket.MessageText, []byte("\r\n[pstack] could not start a shell: "+err.Error()+"\r\n"))
 	closeWith(websocket.StatusInternalError, "spawn failed")
-}
-
-func envListFrom(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k, v := range m {
-		out = append(out, k+"="+v)
-	}
-	return out
 }

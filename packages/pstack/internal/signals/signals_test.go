@@ -120,6 +120,27 @@ func TestLookOnAComposeHost(t *testing.T) {
 	}
 }
 
+// negative control: drop the ok check after services() or tasks() → that case reads Reachable with
+// three nodes at Tasks 0, which calls the busy worker empty.
+func TestLookWhenAServiceCommandFails(t *testing.T) {
+	for _, failing := range []string{"docker service ls", "docker service ps"} {
+		t.Run(failing, func(t *testing.T) {
+			f := manager(t)
+			answer := f.Answer
+			f.Answer = func(cmd string) (exec.Result, bool) {
+				if strings.HasPrefix(strings.TrimSpace(cmd), failing) {
+					return exec.Result{OK: false, Stderr: "context deadline exceeded"}, true
+				}
+				return answer(cmd)
+			}
+			v := Look(f)
+			if v.Reachable || v.Swarm || len(v.Nodes) != 0 || len(v.Stuck) != 0 || v.Nodes == nil || v.Stuck == nil {
+				t.Fatalf("view = %+v", v)
+			}
+		})
+	}
+}
+
 // negative control: keep asking for tasks when no service exists → the command runs with no ids and
 // docker would error; the fake records the call and this fails.
 func TestLookWithNoServices(t *testing.T) {

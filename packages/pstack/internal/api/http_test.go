@@ -28,6 +28,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/sso"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/stack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/store"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/webhooks"
 )
 
 func TestCrToNl(t *testing.T) {
@@ -1373,5 +1374,33 @@ func TestPreviewHostnameIsWhatTheCatchAllRoutesHere(t *testing.T) {
 		if got := s.previewHostname(h); got != want {
 			t.Errorf("previewHostname(%q) = %v, want %v", h, got, want)
 		}
+	}
+}
+
+// A notifier deleted between the masked Get and the raw read is gone: 404, and nothing is sent with
+// the masked config or an empty secret (invariant 15).
+// negative control: fall back to row.Config and secret "" when the raw reads return nil → the
+// test send starts a delivery and answers 200 (or the error its insert hits), never 404.
+func TestTestNotifierNeverSendsTheMaskedConfig(t *testing.T) {
+	s := signalsServer(t)
+	cfg := omap.New()
+	cfg.Set("url", "http://127.0.0.1:1/hook")
+	row, _, err := s.hooks.Create(webhooks.CreateArgs{Type: "webhook", Name: "gone", Config: cfg, Events: []string{"job.succeeded"}, Signs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := s.hooks.Get(row.ID)
+	if err != nil || stale == nil {
+		t.Fatalf("get: %v %v", stale, err)
+	}
+	if _, err := s.hooks.Remove(row.ID); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	if err := s.testNotifier(w, row.ID, stale); err != nil {
+		s.fail(w, err)
+	}
+	if w.Code != 404 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 }

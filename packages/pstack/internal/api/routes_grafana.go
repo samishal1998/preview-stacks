@@ -44,9 +44,7 @@ func (s *Server) grafanaOn() bool {
 	return s.opts.Domain != "" && s.opts.Token != "" && s.grafana.Load()
 }
 
-// grafanaURL is G on the primary domain. From config, never from a request header.
-func (s *Server) grafanaURL() string { return grafanaURLOn(s.opts.Domain) }
-
+// grafanaURLOn is G on domain. From config, never from a request header.
 func grafanaURLOn(domain string) string { return "https://grafana." + domain }
 
 // domainFor is the host's domain this request arrived on: the primary, or one of the added domains.
@@ -192,7 +190,7 @@ func (s *Server) grafanaCallback(w http.ResponseWriter, r *http.Request, code st
 
 // grafanaStart runs on control.<domain>, where pstack_session lives: it turns that session into a
 // 60-second, single-use code bound to the state cookie Grafana's host set. A browser navigated here,
-// so every failure is plain text (the ssoFailed rule, routes_auth.go:52-53).
+// so every failure is plain text (the ssoFailed rule, routes_auth.go).
 func (s *Server) grafanaStart(w http.ResponseWriter, r *http.Request) {
 	if !s.grafanaOn() {
 		http.Error(w, "Not found.", 404)

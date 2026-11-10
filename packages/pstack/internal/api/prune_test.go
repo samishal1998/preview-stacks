@@ -175,6 +175,52 @@ func takesTasks(s *Server) {
 	s.nodeMeta[statsWorkerID] = nodeMeta{Hostname: "worker-1", Role: "worker", Status: "ready", Availability: "active"}
 }
 
+// The log is the only trace of a failed prune, so it carries docker's reason.
+func TestPruneLogsDockersReason(t *testing.T) {
+	refused := func(s *Server, prefix string) *[]string {
+		f := exec.NewFake(nil, "")
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			if strings.HasPrefix(strings.TrimSpace(cmd), prefix) {
+				return exec.Result{OK: false, Stderr: "no suitable node (scheduling constraints not satisfied)\nmore"}, true
+			}
+			return exec.Result{OK: true}, true
+		}
+		s.host = f
+		logged := []string{}
+		s.opts.Log = func(line string) { logged = append(logged, line) }
+		return &logged
+	}
+	// negative control: log only `prune: <name> failed` → the reason is missing.
+	t.Run("job", func(t *testing.T) {
+		s := statsServer(t)
+		s.onSwarm, s.selfKey = true, "n1"
+		takesTasks(s)
+		logged := refused(s, pruneCreate)
+		s.prune("pressure", []string{statsWorkerID})
+		want := []string{"prune: pstack-prune-1000000 failed: no suitable node (scheduling constraints not satisfied)"}
+		if !reflect.DeepEqual(*logged, want) {
+			t.Fatalf("logged %q, want %q", *logged, want)
+		}
+	})
+	// negative control: log only when !res.OK → the script exits 0 (sed's status) and nothing is
+	// logged.
+	t.Run("local", func(t *testing.T) {
+		s := statsServer(t)
+		f := exec.NewFake(nil, "")
+		f.Answer = func(string) (exec.Result, bool) {
+			return exec.Result{OK: true, Stderr: "Error response from daemon: a prune operation is already running\n"}, true
+		}
+		s.host = f
+		logged := []string{}
+		s.opts.Log = func(line string) { logged = append(logged, line) }
+		s.prune("pressure", []string{"-"})
+		want := []string{"prune: local prune: Error response from daemon: a prune operation is already running"}
+		if !reflect.DeepEqual(logged, want) {
+			t.Fatalf("logged %q, want %q", logged, want)
+		}
+	})
+}
+
 // negative control: rm only after a successful create → both subtests fail.
 func TestPruneAlwaysRemovesTheJob(t *testing.T) {
 	// negative control: rm only after a successful create → no rm.

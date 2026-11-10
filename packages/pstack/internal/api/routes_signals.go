@@ -4,9 +4,9 @@
 //
 // ── THE READ CHANGES NOTHING ────────────────────────────────────────────────────────────────────
 //
-// It emits no event and starts no work (AGENTS.md's rule for a new route). The ticker in
-// server.go is the only thing that raises and clears. A consumer can poll this as often as it
-// likes; the cost is three docker commands.
+// It emits no event and starts no work (AGENTS.md's rule for a new route). The ticker below
+// (signalsLoop, started in server.go) is the only thing that raises and clears. A consumer can poll
+// this as often as it likes; the cost is four docker commands.
 //
 // ── emptySince IS THE ONLY STATE ────────────────────────────────────────────────────────────────
 //
@@ -28,29 +28,39 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
 
+// answered is false when docker said nothing to go on: unreachable, or a manager whose node list
+// failed (SwarmInfo reads that as active with no nodes, and a manager is always one of its own).
+// routes_stats.go guards the same case.
+func answered(view signals.View) bool {
+	return view.Reachable && !(view.Swarm && len(view.Nodes) == 0)
+}
+
 // signalsView is one `Look`, with the empty clocks applied. The ticker and the route share it so
-// neither can describe the cluster differently.
+// neither can describe the cluster differently. A docker that did not answer leaves the clocks
+// alone: silence is not "every machine is gone".
 func (s *Server) signalsView() (signals.View, map[string]int64) {
 	view := signals.Look(s.host)
 	now := time.Now().UnixMilli()
 
 	s.emptyMu.Lock()
 	defer s.emptyMu.Unlock()
-	seen := map[string]bool{}
-	for _, n := range view.Nodes {
-		seen[n.ID] = true
-		// The manager is never a machine to take away, so it never gets a clock.
-		if n.Tasks > 0 || n.Role != "worker" {
-			delete(s.emptySince, n.ID)
-			continue
+	if answered(view) {
+		seen := map[string]bool{}
+		for _, n := range view.Nodes {
+			seen[n.ID] = true
+			// The manager is never a machine to take away, so it never gets a clock.
+			if n.Tasks > 0 || n.Role != "worker" {
+				delete(s.emptySince, n.ID)
+				continue
+			}
+			if _, ok := s.emptySince[n.ID]; !ok {
+				s.emptySince[n.ID] = now
+			}
 		}
-		if _, ok := s.emptySince[n.ID]; !ok {
-			s.emptySince[n.ID] = now
-		}
-	}
-	for id := range s.emptySince {
-		if !seen[id] {
-			delete(s.emptySince, id) // the machine is gone; so is its clock
+		for id := range s.emptySince {
+			if !seen[id] {
+				delete(s.emptySince, id) // the machine is gone; so is its clock
+			}
 		}
 	}
 	out := make(map[string]int64, len(s.emptySince))
@@ -156,7 +166,7 @@ func signalsNow(view signals.View, empty map[string]int64) map[string]signalPayl
 // signalsTick is one comparison. Public enough for a test to drive it without waiting for a timer.
 func (s *Server) signalsTick() {
 	view, empty := s.signalsView()
-	if !view.Swarm || !view.Reachable {
+	if !view.Swarm || !answered(view) {
 		return
 	}
 	now := signalsNow(view, empty)
@@ -196,9 +206,15 @@ func (s *Server) signalsLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			s.signalsTick()
+			s.signalsTickSafe()
 		}
 	}
+}
+
+// signalsTickSafe is one tick where a panic costs the tick, never the loop (Go rule 14).
+func (s *Server) signalsTickSafe() {
+	defer s.recovered("signals: tick failed", nil)
+	s.signalsTick()
 }
 
 // ── acting on a node ────────────────────────────────────────────────────────────────────────────
@@ -219,6 +235,10 @@ func (s *Server) swarmNodeRoutes(w http.ResponseWriter, r *http.Request, id, act
 	}
 	if !view.Swarm {
 		writeError(w, 409, "this daemon is not a swarm manager")
+		return nil
+	}
+	if len(view.Nodes) == 0 { // `node ls` failed: a node that exists is not "no such node"
+		writeError(w, 409, "docker did not answer")
 		return nil
 	}
 	var node *signals.Node

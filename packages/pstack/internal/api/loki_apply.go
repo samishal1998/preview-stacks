@@ -358,7 +358,7 @@ func (a *lokiApply) run(ctx context.Context) stack.Outcome {
 
 	// 8. finish
 	if err := loki.Finish(s.store); err != nil {
-		return a.end(phaseFinish, false, "could not record the finished apply")
+		return a.end(phaseFinish, false, "could not record the finished apply: "+err.Error())
 	}
 	a.step(phaseFinish, true, "")
 
@@ -477,8 +477,8 @@ func (a *lokiApply) rollback(post exec.Runner, row *loki.Row) stack.Outcome {
 				break
 			}
 		}
-		if loki.Finish(s.store) != nil {
-			return done("could not record the finished apply")
+		if err := loki.Finish(s.store); err != nil {
+			return done("could not record the finished apply: " + err.Error())
 		}
 		return done("not ready — S3 from " + from + " starts too soon to undo; left in place")
 	}
@@ -645,7 +645,7 @@ func (a *lokiApply) resume(runner exec.Runner, row *loki.Row) bool {
 	}
 	a.step(phaseReady, true, "")
 	if err := loki.Finish(s.store); err != nil {
-		return fail(phaseFinish, "could not record the finished apply")
+		return fail(phaseFinish, "could not record the finished apply: "+err.Error())
 	}
 	a.step(phaseFinish, true, "resumed")
 	return true

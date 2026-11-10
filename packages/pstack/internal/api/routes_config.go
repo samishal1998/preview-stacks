@@ -5,9 +5,9 @@
 // ── ROOT TOKEN ONLY. NOT AN ADMIN SESSION. THIS IS DELIBERATE ────────────────────────────────────
 //
 // `mayMoveConfig` admits `auth.KindRoot` and nothing else. Every other admin-gated route in this
-// package admits an admin browser session too — see the join-token check in routes.go, which reads
-// `who.Kind != auth.KindRoot && !(who.Kind == auth.KindUser && who.User.Role == "admin")`. Copying
-// that shape here would be the single worst change anyone could make to this file:
+// package admits an admin browser session too — the admin rows in permissions.go, and
+// mayApplySealedConfig below for the session-admitting shape. Copying that shape onto the export or
+// the plaintext import would be the single worst change anyone could make to this file:
 //
 //   - GET returns argon2 password hashes, API-token hashes, every host secret, every notifier
 //     signing secret, the SSO client secret and every registry password, in plaintext. Reachable
@@ -256,9 +256,8 @@ func (s *Server) importSealedConfig(w http.ResponseWriter, r *http.Request, who 
 	s.applyParsedConfig(w, doc, who)
 }
 
-// failConfig maps a refused document to 400 the way `fail` maps every other domain error. It is
-// here rather than in `fail`'s switch only because server.go is not this change's to edit — the
-// integrator should add `config.IsError(err)` to that list and delete this.
+// failConfig maps a refused document (*config.Error) and a wrong passphrase (config.ErrPassphrase, a
+// sentinel) to 400; everything else goes to fail.
 func (s *Server) failConfig(w http.ResponseWriter, err error) {
 	// ErrPassphrase is a SENTINEL, not a *config.Error, so IsError does not catch it — and a wrong
 	// passphrase is the caller's mistake, not this server's fault. Without this arm the sealed

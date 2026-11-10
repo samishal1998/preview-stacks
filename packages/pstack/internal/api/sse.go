@@ -214,12 +214,18 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request, dep *registry
 	var pumps sync.WaitGroup
 	pump := func(rd io.Reader, level string) {
 		defer pumps.Done()
+		defer s.recovered("logs: stream pump failed", stop)
 		sc := bufio.NewScanner(rd)
 		sc.Buffer(make([]byte, 64<<10), 16<<20)
 		for sc.Scan() {
 			if !out.send(jsonx.O("level", level, "line", redact.RedactText(sc.Text(), secrets...))) {
 				stop()
 			}
+		}
+		// A line over the cap leaves the pipe unread: stop compose, or nothing reaches EOF and the
+		// stream sits on keepalives until the one-hour cap.
+		if sc.Err() != nil {
+			stop()
 		}
 	}
 	pumps.Add(2)
