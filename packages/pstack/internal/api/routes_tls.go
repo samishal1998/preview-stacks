@@ -14,7 +14,8 @@
 // `POST /api/tls/redeploy` is tls-challenge.md's migration loop, server-side: per-PR router labels
 // are stamped at deploy time from the mode the host was in THEN, so entering or leaving a wildcard
 // mode requires each stack to deploy once more. Asleep stacks are skipped — their labels
-// regenerate on wake, and redeploying them here would BE a wake nobody asked for.
+// regenerate on wake, and redeploying them here would BE a wake nobody asked for. So are stacks
+// docker does not list (downed, record kept): their next `up` stamps the new labels anyway.
 package api
 
 import (
@@ -25,6 +26,7 @@ import (
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jobs"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/jsonx"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/routing"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/spec"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/terminal"
 )
 
@@ -115,6 +117,8 @@ func (s *Server) tlsRedeploy(w http.ResponseWriter, who *auth.Principal) error {
 	if err != nil {
 		return err
 	}
+	// nil when docker did not answer: unknown is not "nothing running" (invariant 11), so redeploy.
+	projects := s.composeProjects()
 	started := []jsonx.Object{}
 	skipped := []jsonx.Object{}
 	for _, m := range metas {
@@ -131,6 +135,15 @@ func (s *Server) tlsRedeploy(w http.ResponseWriter, who *auth.Principal) error {
 		st, err := s.resolveDep(m.ID, nil)
 		if err != nil {
 			skipped = append(skipped, jsonx.O("id", m.ID, "reason", "does not resolve: "+err.Error()))
+			continue
+		}
+		// Torn down with its record kept: an `up` here would bring back a stack somebody downed.
+		// Not for swarm: composeProjects drops a failed `docker stack ls` silently, so for a swarm
+		// stack "not listed" may mean unknown, and unknown proceeds.
+		// ponytail: swarm stacks downed with their record kept are still redeployed; give
+		// composeProjects a stack-ls-answered bit if that matters.
+		if projects != nil && !projects[st.Stack] && orchestratorOf(st) != spec.Swarm {
+			skipped = append(skipped, jsonx.O("id", m.ID, "reason", "not running"))
 			continue
 		}
 		o := lifecycleOptions{By: terminal.ActorOf(*who), Reason: "tls: redeploy to regenerate router labels"}

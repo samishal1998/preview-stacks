@@ -47,12 +47,12 @@ Half a day. **The plumbing is not the hard part** — the three decisions below 
 
 ### Non-flat bodies get *better*, not worse
 
-Seven operations have a body oascmd calls non-flat — a property that is a map or a nested object, so
+Six operations have a body oascmd calls non-flat — a property that is a map or a nested object, so
 there is no sane flag shape for it and the CLI offers only `--data`:
 
 ```
 deployments put · notifiers create · notifiers update · sso config put
-sso provider put · config import · config import-sealed
+config import · config import-sealed
 ```
 
 MCP takes a JSON object natively, so `deployments put` would get real `spec` / `compose` / `env`

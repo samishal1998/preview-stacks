@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"regexp"
 	"time"
@@ -28,7 +29,7 @@ func (s *Server) principal(r *http.Request) *auth.Principal {
 		return &auth.Principal{Kind: auth.KindRoot}
 	}
 	if b := bearer(r); b != "" {
-		if len(b) == len(token) && b == token {
+		if subtle.ConstantTimeCompare([]byte(b), []byte(token)) == 1 {
 			return &auth.Principal{Kind: auth.KindRoot}
 		}
 		if len(b) > 11 && b[:11] == "pstack_pat_" {

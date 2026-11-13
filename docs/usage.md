@@ -4214,7 +4214,7 @@ anything it does not list is the root token's alone.
 | GET | `/api/tls` | — | **maintainer and up** — `{ mode, traefik, wildcard, note }`; the mode is derived from the artifacts, never stored |
 | PUT | `/api/tls/wildcard` | `{ cert, key }` | **admin** — store a wildcard pair, enter `dns-persist-01`; 400 names what is wrong with the pair. The key has no read path |
 | DELETE | `/api/tls/wildcard` | — | **admin** — back to Traefik-native resolution; 404 when none is stored |
-| POST | `/api/tls/redeploy` | — | **maintainer and up** — redeploy every awake stack so labels regenerate; `{ started[], skipped[] }` |
+| POST | `/api/tls/redeploy` | — | **maintainer and up** — redeploy every awake stack so labels regenerate; asleep stacks are skipped (labels regenerate on wake), and so are stacks docker does not list (`not running`; their next `up` stamps the labels); `{ started[], skipped[] }` |
 | GET | `/deployments/:id/public-logs-view` | `?token=<jwt>` | the page a share link opens (no auth — the token is on the page's own API calls) |
 | ANY | `<preview hostname>/*` | the `Host` header, via the catch-all router | a sleeping **or waking** stack's hostname: **503** + `Retry-After: 5` + `x-pstack-wake: 1` + the wake page. A sleeping one also starts a wake job; a waking one is held until readiness settles ([7b](#sleep-and-wake-on-call)). **While forwarding**, checked first: passed to the target with its Host unchanged, never woken here; a failure is the Down page, **503** + `retry-after: 5` ([7f](#7f-move-stacks-to-another-host-0460)) |
 | GET | `/api/jobs` | — | `{ jobs: [...] }`, newest first, max 50, in-memory |

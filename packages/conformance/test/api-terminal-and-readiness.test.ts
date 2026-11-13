@@ -75,6 +75,22 @@ describe('container terminal', () => {
     }
   });
 
+  test('docker not answering is a 503, not "no such container"', async () => {
+    // negative control: drop the Reachable check in terminalRoute — an empty container list from a
+    // failed `docker ps` answers 404, telling the operator the container is gone when docker is.
+    const docker = dockerShim(arm('"ps -aq "*', 'Cannot connect to the Docker daemon', 1));
+    const s = await bootServer({ tag: 'term-down', pathPrefix: docker.dir });
+    try {
+      await putSpec(s);
+      const r = await fetch(`${s.base}/api/deployments/d/terminal?container=probe-app-1`, { headers: s.H });
+      expect(r.status).toBe(503);
+      expect(((await r.json()) as { error: string }).error).toMatch(/docker did not answer/);
+    } finally {
+      await s.stop();
+      docker.remove();
+    }
+  });
+
   test('unauthenticated, and a shell outside the allowlist, never reach docker', async () => {
     const { s, docker } = await bootTerm();
     try {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"errors"
 	"net/http"
 	"regexp"
@@ -104,7 +105,7 @@ func (s *Server) preGate(w http.ResponseWriter, r *http.Request, path string) bo
 	case path == "/api/auth/bootstrap" && r.Method == http.MethodPost:
 		// Gated by PSTACK_TOKEN specifically, not by principal(): its whole purpose is to work
 		// before any account exists.
-		if s.opts.Token != "" && bearer(r) != s.opts.Token {
+		if s.opts.Token != "" && subtle.ConstantTimeCompare([]byte(bearer(r)), []byte(s.opts.Token)) != 1 {
 			writeError(w, 401, "bootstrap requires the PSTACK_TOKEN bearer")
 			return true
 		}

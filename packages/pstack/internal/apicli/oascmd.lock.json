@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "1128517b4e005836861419e6a402c5a0b5b00c78e7764c492c5980ca1ff6df40",
+  "specDigest": "1e8caa1a899ca74b5ba66176d9f8f20226a9886934f3f23ba9786ab7736e4470",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -701,14 +701,29 @@
           "description": "The registry id, e.g. `pr-123`."
         },
         {
+          "name": "refresh",
+          "source": "query",
+          "type": "string",
+          "enum": [
+            "1"
+          ],
+          "description": "1 starts a new watch when the last one has finished."
+        },
+        {
           "name": "timeout",
           "source": "query",
           "type": "int",
-          "description": "Milliseconds to wait for a verdict."
+          "description": "Seconds a new watch runs for, clamped to 5–3600. Ignored when a watch is already running."
+        },
+        {
+          "name": "wait",
+          "source": "query",
+          "type": "int",
+          "description": "Seconds to block for a verdict, 0–60."
         }
       ],
       "ext": {},
-      "digest": "6debfd3c3e7055f1"
+      "digest": "56e7e352b575b85a"
     },
     "getDeploymentRuntime": {
       "operationId": "getDeploymentRuntime",
@@ -1520,30 +1535,6 @@
         "name": "config put"
       },
       "digest": "75f27f961da2eb32"
-    },
-    "putSsoProvider": {
-      "operationId": "putSsoProvider",
-      "method": "PUT",
-      "path": "/api/sso/config/{key}",
-      "command": "sso provider put",
-      "funcName": "NewSsoProviderPutCommand",
-      "flags": [
-        {
-          "name": "key",
-          "source": "path",
-          "type": "string",
-          "required": true,
-          "description": "The provider's slug."
-        }
-      ],
-      "body": {
-        "flat": false,
-        "required": true
-      },
-      "ext": {
-        "name": "provider put"
-      },
-      "digest": "4c18ecab332198a3"
     },
     "putTlsWildcard": {
       "operationId": "putTlsWildcard",

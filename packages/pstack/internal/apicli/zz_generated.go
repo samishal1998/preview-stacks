@@ -121,7 +121,6 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("sso", "config").AddCommand(NewSsoConfigGetCommand(exec))
 	group("sso", "config").AddCommand(NewSsoConfigPutCommand(exec))
 	group("sso", "provider").AddCommand(NewSsoProviderDeleteCommand(exec))
-	group("sso", "provider").AddCommand(NewSsoProviderPutCommand(exec))
 	group("stats").AddCommand(NewStatsGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmGetCommand(exec))
 	group("swarm").AddCommand(NewSwarmJoinCommand(exec))
@@ -838,17 +837,26 @@ func NewDeploymentsLogsGetCommand(exec oascmd.ExecOptions) *cobra.Command {
 func NewDeploymentsReadinessGetCommand(exec oascmd.ExecOptions) *cobra.Command {
 	var (
 		flagTimeout int64
+		flagWait    int64
+		flagRefresh string
 		flagID      string
 	)
 	cmd := &cobra.Command{
 		Use:   "get",
 		Short: "The readiness verdict, optionally waiting for one.",
 	}
-	cmd.Flags().Int64Var(&flagTimeout, "timeout", 0, "Milliseconds to wait for a verdict.")
+	cmd.Flags().Int64Var(&flagTimeout, "timeout", 0, "Seconds a new watch runs for, clamped to 5–3600. Ignored when a watch is already running.")
+	cmd.Flags().Int64Var(&flagWait, "wait", 0, "Seconds to block for a verdict, 0–60.")
+	cmd.Flags().StringVar(&flagRefresh, "refresh", "", "1 starts a new watch when the last one has finished. (one of: 1)")
 	cmd.Flags().StringVar(&flagID, "id", "", "The registry id, e.g. `pr-123`.")
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
 	_ = cmd.MarkFlagRequired("id")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("refresh") {
+			if err := oascmd.ValidateEnum("refresh", []string{"1"}, flagRefresh); err != nil {
+				return err
+			}
+		}
 		req := oascmd.Request{
 			Method:     "GET",
 			Path:       "/api/deployments/{id}/readiness",
@@ -857,6 +865,12 @@ func NewDeploymentsReadinessGetCommand(exec oascmd.ExecOptions) *cobra.Command {
 		}
 		if cmd.Flags().Changed("timeout") {
 			req.Query.Set("timeout", strconv.FormatInt(flagTimeout, 10))
+		}
+		if cmd.Flags().Changed("wait") {
+			req.Query.Set("wait", strconv.FormatInt(flagWait, 10))
+		}
+		if cmd.Flags().Changed("refresh") {
+			req.Query.Set("refresh", flagRefresh)
 		}
 		req.PathParams["id"] = flagID
 		e := exec
@@ -3074,46 +3088,6 @@ func NewSsoProviderDeleteCommand(exec oascmd.ExecOptions) *cobra.Command {
 			PathParams: map[string]string{},
 		}
 		req.PathParams["key"] = flagKey
-		e := exec
-		raw, _ := cmd.Flags().GetBool("json")
-		e.Raw = e.Raw || raw
-		if e.Out == nil {
-			e.Out = os.Stdout
-		}
-		return oascmd.Execute(cmd.Context(), e, req)
-	}
-	return cmd
-}
-
-// NewSsoProviderPutCommand returns the "sso provider put" command (PUT
-// /api/sso/config/{key}).
-func NewSsoProviderPutCommand(exec oascmd.ExecOptions) *cobra.Command {
-	var (
-		flagKey  string
-		flagData string
-	)
-	cmd := &cobra.Command{
-		Use:   "put",
-		Short: "PUT /api/sso/config/{key}",
-	}
-	cmd.Flags().StringVar(&flagKey, "key", "", "The provider's slug.")
-	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
-	cmd.Flags().Bool("json", false, "print the raw JSON response")
-	_ = cmd.MarkFlagRequired("key")
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		req := oascmd.Request{
-			Method:     "PUT",
-			Path:       "/api/sso/config/{key}",
-			PathParams: map[string]string{},
-		}
-		req.PathParams["key"] = flagKey
-		body := map[string]any{}
-		switch {
-		case flagData != "":
-			req.RawBody = []byte(flagData)
-		case len(body) > 0:
-			req.Body = body
-		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw
