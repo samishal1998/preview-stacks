@@ -353,7 +353,9 @@ The file does four things, in this order: install **Docker**, install **pstack (
 binary)**, get a **control image** onto the box, then hand over to **`pstack init`**. The split
 matters — `init` owns the control stack's compose file, `.env` and `dns.env`; everything else on the
 box is a *host input* it mounts rather than owns, so re-rendering the stack never touches your
-inputs and rotating a secret never means re-rendering the stack.
+inputs and rotating a secret never means re-rendering the stack. One exception: for a DNS provider
+not listed in §3, a re-run with no `PSTACK_DNS_TOKEN` keeps the existing `dns.env`, because the
+variable name in it is your own edit.
 
 ### `pstack` is one binary
 

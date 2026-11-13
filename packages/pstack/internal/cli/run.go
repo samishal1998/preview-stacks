@@ -13,7 +13,6 @@ import (
 	"os"
 	osexec "os/exec"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -398,8 +397,8 @@ func validate(args *Parsed, st *spec.Stack, out io.Writer) *Exit {
 		fmt.Fprintln(out, "  compose: "+st.Compose.File+" ["+profiles+"]")
 		// What the generated labels would be. Read-only — `validate` must not write the derived
 		// file — and shown because pstack derives the hostname.
-		abs, _ := filepath.Abs(args.File)
-		if raw, err := os.ReadFile(filepath.Join(filepath.Dir(abs), st.Compose.File)); err == nil && strings.Contains(string(raw), "pstack.routing.") {
+		// Relative to the shell's directory, as up/down read it (filesFor) — not the spec's.
+		if raw, err := os.ReadFile(st.Compose.File); err == nil && strings.Contains(string(raw), "pstack.routing.") {
 			if parsed, err := yamlx.Parse(raw); err == nil {
 				if doc, ok := parsed.(*omap.Map); ok {
 					// unknown rather than probing docker: `validate` is offline by contract.

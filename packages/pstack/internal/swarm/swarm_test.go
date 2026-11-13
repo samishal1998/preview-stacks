@@ -210,16 +210,50 @@ func TestSwarmify(t *testing.T) {
 	})
 }
 
+// StackRmCmd run under sh against a stub docker: the exit status is the removal's, not the wait's.
+// negative control: return the old `"docker stack rm " + s + "; " + wait + vols` (no rc) — "stack rm
+// fails" exits 0.
+func TestStackRmExitStatus(t *testing.T) {
+	for _, c := range []struct {
+		name, fail string
+		volumes    bool
+		ok         bool
+	}{
+		{"all ok", "", true, true},
+		{"stack rm fails", "stack rm", true, false},
+		{"stack rm fails, sleep", "stack rm", false, false},
+		{"volume rm fails", "volume rm", true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// `volume ls` lists one volume so xargs runs `volume rm`; everything else lists nothing.
+			stub := "#!/bin/sh\ncase \"$*\" in\n  \"" + c.fail + "\"*) exit 1 ;;\n  \"volume ls\"*) echo v1 ;;\nesac\nexit 0\n"
+			if c.fail == "" {
+				stub = "#!/bin/sh\ncase \"$*\" in\n  \"volume ls\"*) echo v1 ;;\nesac\nexit 0\n"
+			}
+			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := osexec.Command("sh", "-c", StackRmCmd("s1", c.volumes))
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+			err := cmd.Run()
+			if (err == nil) != c.ok {
+				t.Errorf("err=%v, want ok=%v", err, c.ok)
+			}
+		})
+	}
+}
+
 func TestCommandLines(t *testing.T) {
 	// negative control: drop `--with-registry-auth` from StackDeployCmd — the verbatim line fails.
 	if got := StackDeployCmd("s1", []string{"dc.yml"}); got != `docker stack deploy -c 'dc.yml' --prune --with-registry-auth --detach=true 's1'` {
 		t.Errorf("deploy: %s", got)
 	}
 	rm := StackRmCmd("s1", true)
-	if !strings.HasPrefix(rm, "docker stack rm 's1'; for i in $(seq 1 60); do [ -z \"$(docker stack ps 's1' -q 2>/dev/null)\" ] && [ -z \"$(docker network ls -q --filter 'label=com.docker.stack.namespace=s1')\" ] && break; sleep 1; done") {
+	if !strings.HasPrefix(rm, "docker stack rm 's1'; rc=$?; for i in $(seq 1 60); do [ -z \"$(docker stack ps 's1' -q 2>/dev/null)\" ] && [ -z \"$(docker network ls -q --filter 'label=com.docker.stack.namespace=s1')\" ] && break; sleep 1; done") {
 		t.Errorf("rm: %s", rm)
 	}
-	if !strings.HasSuffix(rm, "; docker volume ls -q --filter 'label=com.docker.stack.namespace=s1' | xargs -r docker volume rm >/dev/null") {
+	if !strings.HasSuffix(rm, "; docker volume ls -q --filter 'label=com.docker.stack.namespace=s1' | xargs -r docker volume rm >/dev/null || rc=$?; [ \"$rc\" -eq 0 ]") {
 		t.Errorf("rm volumes: %s", rm)
 	}
 	if strings.Contains(StackRmCmd("s1", false), "docker volume") {

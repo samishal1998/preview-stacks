@@ -596,6 +596,17 @@ func Init(opts Options) error {
 		return err
 	}
 
+	// The provider the existing dns.env was written for: .env's DNS_PROVIDER, read before this run
+	// rewrites it. dns.env below is kept only when the provider has not changed.
+	prevProvider := ""
+	if raw, err := os.ReadFile(filepath.Join(controlDir, ".env")); err == nil {
+		for _, l := range strings.Split(string(raw), "\n") {
+			if v, ok := strings.CutPrefix(l, "DNS_PROVIDER="); ok {
+				prevProvider = v
+			}
+		}
+	}
+
 	// 0600: this file holds PSTACK_TOKEN, and that token drives an API with a read-write Docker
 	// socket — i.e. root on this host. Anyone who can read it owns the box.
 	if err := write(out, filepath.Join(controlDir, ".env"), envFile(envValues{
@@ -607,7 +618,18 @@ func Init(opts Options) error {
 	}
 
 	// Only meaningful for dns01; written either way so switching modes needs no extra step.
-	if err := write(out, filepath.Join(controlDir, "dns.env"), dnsEnvFile(dnsProvider, opts.Token), 0o600, dryRun); err != nil {
+	//
+	// Except for an unknown provider with no token: the operator renamed CHANGEME_VARIABLE_NAME by
+	// hand, upgrade cannot read that name back, and a rewrite would drop their credential. So an
+	// existing file written for the same provider is kept. Ceiling: an explicitly empty PSTACK_DNS_TOKEN cannot blank it, and extra
+	// variables beside a KNOWN provider's token are still dropped.
+	dnsPath := filepath.Join(controlDir, "dns.env")
+	_, statErr := os.Stat(dnsPath)
+	if _, known := DNSTokenVar[dnsProvider]; dnsProvider != "" && !known && opts.Token == "" && statErr == nil && prevProvider == dnsProvider {
+		if dryRun {
+			fmt.Fprintf(out, "  [dry-run] keep %s\n", dnsPath)
+		}
+	} else if err := write(out, dnsPath, dnsEnvFile(dnsProvider, opts.Token), 0o600, dryRun); err != nil {
 		return err
 	}
 
@@ -841,8 +863,8 @@ func envFile(v envValues) string {
 		"# How previews deploy: swarm (docker stack deploy) or compose. `pstack upgrade` keeps it.",
 		"PSTACK_ORCHESTRATOR=" + string(v.orchestrator),
 		"",
-		"# Bearer token for the API. Mutating routes require it; GETs do not, so ingress auth is still",
-		"# the only gate on job transcripts and the stack list (docs/bootstrap.md §9).",
+		"# Root bearer token for the API. Every route except health, the probe, the OpenAPI description",
+		"# and sign-in needs it, a session or a share link.",
 		"PSTACK_TOKEN=" + v.pstackToken,
 		"",
 	}

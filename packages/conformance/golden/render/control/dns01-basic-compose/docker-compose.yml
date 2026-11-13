@@ -12,7 +12,7 @@
 # manages THIS stack. `up` on this project recreates the pstack container, killing the process
 # performing the operation mid-flight; if the new image is broken, the only thing that could have
 # repaired the host just died with it. Upgrades therefore run from the host (`pstack init` /
-# `pstack self-upgrade`) — which is also why this file lives next to the registry instead of being
+# `pstack upgrade`) — which is also why this file lives next to the registry instead of being
 # submitted to it as a deployment.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -87,7 +87,7 @@ services:
       # ── metrics, for pstack only ──
       # Per-router request counters on an entrypoint that is NOT published: pstack reads
       # http://traefik:8082/metrics over preview-ingress to decide when a preview is idle
-      # (`sleep.idle` in a spec — src/scheduler.ts). Nothing outside the control stack can reach it.
+      # (`sleep.idle` in a spec — internal/scheduler). Nothing outside the control stack can reach it.
       - --entrypoints.metrics.address=:8082
       - --metrics.prometheus=true
       - --metrics.prometheus.entrypoint=metrics
@@ -155,7 +155,7 @@ services:
       #
       # The blast radius is real: an unparseable file makes Traefik log a parse error for the whole
       # DIRECTORY and it can discard the rest with it, so the symptom is other people's routes
-      # disappearing. src/routing.ts validates before writing and renames into place so the watcher
+      # disappearing. internal/routing validates before writing and renames into place so the watcher
       # never sees a partial file. What it CANNOT break is control.<domain> and api.<domain> — those
       # are docker labels on this container, so the surface you would use to undo a bad edit survives
       # one. Keep it that way.
@@ -175,8 +175,8 @@ services:
       # Where the docker CLI looks for config.json — the mount above. Without this it would look in
       # /root/.docker, which is inside the image and empty.
       DOCKER_CONFIG: /docker-config
-      # Bearer token for mutating routes. Note GETs are NOT gated — /api/jobs/:id returns full hook
-      # transcripts — so the ingress in front of this is the only protection on reads.
+      # Root bearer token. Every route except health, the probe, the OpenAPI description and sign-in
+      # needs this token, a session or a share link.
       PSTACK_TOKEN: ${PSTACK_TOKEN}
       # First-admin bootstrap, honoured only while no accounts exist. Optional: without it, create
       # the first account with `POST /api/auth/bootstrap` using the PSTACK_TOKEN bearer.

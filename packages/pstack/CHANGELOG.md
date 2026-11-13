@@ -82,6 +82,30 @@
   - Both UIs show a stopped container's state, not its last health check.
 - **Client**: the `notifiers.test`, `specs.put`/`get` and `deployments.get` types match the
   server, and `waitForReady` works with a short `timeoutMs`.
+- **`init`** keeps an existing `dns.env` for a DNS provider outside the verified list when no token
+  is passed and the provider has not changed, so an upgrade no longer drops the hand-edited credential.
+- **`POST /api/tls/redeploy`** skips a compose stack docker does not list (`not running`) instead
+  of bringing back a downed stack.
+- **Terminal** answers 503, not 404, when docker does not answer.
+- **Named specs** may use `${vars.*}` and `${secrets.*}`.
+- **`pstack status`** prints why the compose file was rejected instead of `(nothing running)`.
+- **`pstack validate`** reads the compose file relative to the current directory, like `up` and `down`.
+- **Swarm `down` and `sleep`** report a failed `docker stack rm` as non-fatal instead of OK.
+- **Root token** comparison is constant-time.
+- **Hearth**: Run again and the bulk actions send the deployment's stored variables; a failed
+  refresh says so instead of "Could not resolve this deployment".
+- **UIs**: the advanced UI's Danger tab shows a refused action once, and its Control tables keep
+  headers aligned; the basic UI fits a 320 px screen and pins Vue 3.5.40 with SRI.
+- **Generated files** (goldens moved): the control compose and `.env` comments describe auth
+  correctly and name real commands and packages; cloud-init's final message no longer advertises a
+  Traefik dashboard; `pstack --help` lists `swarm previews`.
+- **`openapi.yaml`**: readiness `timeout` is in seconds; `wait` and `refresh` are documented;
+  `putDeployment` lists `specName` and `vars`.
+
+### Removed
+
+- **`pstack api sso provider put`** (`PUT /api/sso/config/{key}`): no handler existed; it always
+  answered 404.
 
 ## 0.45.0 — 2026-11-02
 

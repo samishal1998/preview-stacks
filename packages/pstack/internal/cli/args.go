@@ -465,6 +465,8 @@ func Usage(version string) string {
 		"              --format command|script|cloud-config|token   (default command)",
 		"              --distro ubuntu|debian|fedora|suse|arch|alpine   (cloud-config only)",
 		"              -o <file>                  write it to a file instead of stdout",
+		"            pstack swarm previews workers|any",
+		"                                             workers drains this manager; any undoes it",
 		"",
 		"pull/push:  pstack pull config -o <file>   seal EVERY credential on a host into one file",
 		"            pstack push config -i <file>   apply one onto this host — creates, never overwrites",

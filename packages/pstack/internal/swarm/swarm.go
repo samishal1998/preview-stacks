@@ -480,6 +480,9 @@ func StackDeployCmd(stack string, files []string) string {
 // gone, and a redeploy that races it fails with "network … has active endpoints". Bounded at 60s.
 //
 // volumes: also remove the stack's labelled volumes (teardown). Sleep keeps them.
+//
+// The exit status is rc, not the wait loop's (always 0): a failed `stack rm` or volume rm still
+// waits, then fails the command.
 func StackRmCmd(stack string, volumes bool) string {
 	s := Shq(stack)
 	wait := "for i in $(seq 1 60); do " +
@@ -487,9 +490,9 @@ func StackRmCmd(stack string, volumes bool) string {
 		"[ -z \"$(docker network ls -q --filter " + Shq("label="+StackLabel+"="+stack) + ")\" ] && break; sleep 1; done"
 	vols := ""
 	if volumes {
-		vols = "; docker volume ls -q --filter " + Shq("label="+StackLabel+"="+stack) + " | xargs -r docker volume rm >/dev/null"
+		vols = "; docker volume ls -q --filter " + Shq("label="+StackLabel+"="+stack) + " | xargs -r docker volume rm >/dev/null || rc=$?"
 	}
-	return "docker stack rm " + s + "; " + wait + vols
+	return "docker stack rm " + s + "; rc=$?; " + wait + vols + "; [ \"$rc\" -eq 0 ]"
 }
 
 // StackPsCmd is `docker stack ps`.

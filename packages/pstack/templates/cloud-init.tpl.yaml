@@ -129,7 +129,7 @@ runcmd:
   # `pstack-control` project, and WAITS for the API's healthcheck. Re-running it is the upgrade path.
   #
   # No --challenge  ⇒ HTTP-01: no DNS provider, no token, nothing to rotate.
-  # No PSTACK_IMAGE ⇒ `pstack:local`, which step 4 just built.
+  # No PSTACK_IMAGE ⇒ `pstack:local`, which step 3 just built.
 {{INIT_ENV_NOTE}}
   #
   # ONE CERT RULE, worth internalising now: under HTTP-01 each router resolves its own certificate,
@@ -156,7 +156,6 @@ final_message: |
 
     UI       https://control.{{DOMAIN}}
     API      https://api.{{DOMAIN}}/api/health
-    Traefik  https://traefik.{{DOMAIN}}   (admin / the password you set)
 
   Upgrade later with `pstack upgrade` over SSH — it reuses this token and domain.
 
