@@ -1537,11 +1537,10 @@ manager, so changing one redeploys nothing.
 control template gains no marker (invariant 20). `init` creates it, as it creates the control stack
 (invariant 12): a container on this node and, on a swarm, a global service on every other node.
 
-**The control-plane node never relies on a swarm task.** A manager drained with
-`--previews-on workers` runs no swarm task at all, global or job, and that manager is the node
-whose disk filled in the incident that started this. So the local container measures it, its
-prunes run through the host runner, and the global service carries `node.id!=<self>` so an
-undrained manager does not report twice. When `init` cannot read the manager's node id, it skips
+**The control-plane node never relies on a swarm task.** With `--previews-on workers` the manager
+runs no preview, and it is the node whose disk filled in the incident that started this. So the
+local container measures it, its prunes run through the host runner, and the global service carries
+`node.id!=<self>` so the manager does not report twice. When `init` cannot read the manager's node id, it skips
 the service with a note rather than create it without the constraint.
 
 **Logs are the transport.** Every 30 s the API reads `docker logs --since 90s` (and

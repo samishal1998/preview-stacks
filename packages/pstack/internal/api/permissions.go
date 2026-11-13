@@ -225,6 +225,8 @@ var permissions = []perm{
 	// Taking a machine out of the running, putting it back, and forgetting one that is gone. Host
 	// configuration, like the join token above — and none of the three creates or destroys a machine.
 	{re: swarmNodeRe, methods: mPostDelete, min: auth.Maintainer},
+	// Where previews run: the same scheduling call as drain, on this manager.
+	{re: swarmPreviewsRe, methods: mPost, min: auth.Maintainer},
 
 	// ── host variables & secrets ────────────────────────────────────────────────────────────────
 	// The list never returns a secret's value (invariant 15), so reading it is a viewer's.

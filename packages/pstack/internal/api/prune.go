@@ -14,8 +14,8 @@
 //
 // ── WHERE ───────────────────────────────────────────────────────────────────────────────────────
 //
-// The control-plane node (selfKey) is always pruned by the host runner: a drained manager runs no
-// swarm task, job or not, and it is the node whose disk filled (NP-R10). On swarm the scheduled
+// The control-plane node (selfKey) is always pruned by the host runner: with `--previews-on workers`
+// it runs no swarm task, and it is the node whose disk filled (NP-R10). On swarm the scheduled
 // prune adds one global-job excluding self, skipped when the self id is unknown (never
 // unconstrained), and an emergency on another node is a replicated-job pinned to it. A job is
 // create, `service logs --raw`, then `service rm` on every path, on a fresh 30 s ctx: the 10-minute

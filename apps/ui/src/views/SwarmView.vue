@@ -51,10 +51,10 @@ usePolling(load, 10_000);
 const unplugged = computed(() => info.value?.nodes.filter((n) => n.lokiPlugin === false) ?? []);
 
 // ── where previews run ──────────────────────────────────────────────────────────────────────────
-// A drained manager keeps the control stack (plain compose, which a drain does not touch) and swarm
-// places every preview on a worker. `self` is the node this control plane runs on.
+// `workers` labels this manager pstack.previews=off, which every preview's placement excludes; the
+// API reads the label back. null (unknown) shows as "any". `self` is the node this API runs on.
 const manager = computed(() => info.value?.nodes.find((n) => n.self && n.role === 'manager'));
-const previewsOn = computed(() => (manager.value?.availability === 'drain' ? 'workers' : 'any'));
+const previewsOn = computed(() => info.value?.previewsOn ?? 'any');
 const hasWorker = computed(() => info.value?.nodes.some((n) => !n.self && n.status === 'ready' && n.availability === 'active') ?? false);
 const switching = ref(false);
 
@@ -62,7 +62,7 @@ async function setPreviewsOn(v: string): Promise<void> {
   const m = manager.value;
   if (!m || switching.value || v === previewsOn.value) return;
   switching.value = true;
-  const r = await api.post<unknown>(`/api/swarm/nodes/${encodeURIComponent(m.id)}/${v === 'workers' ? 'drain' : 'undrain'}`);
+  const r = await api.post<unknown>(`/api/swarm/previews/${v === 'workers' ? 'workers' : 'any'}`);
   switching.value = false;
   if (r.status === 403) toast('error', 'Maintainer only.');
   else if (!r.ok) toast('error', problem(r, 'change where previews run'));

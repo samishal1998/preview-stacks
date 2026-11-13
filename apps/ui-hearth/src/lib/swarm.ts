@@ -15,9 +15,6 @@ type Placed = { role: string; status: string; availability: string; self?: boole
 /** The manager this API runs on. */
 export const thisManager = <T extends Placed>(nodes: T[]): T | undefined => nodes.find((n) => n.self && n.role === 'manager');
 
-/** Drained manager: it keeps the control stack and every preview lands on a worker. */
-export const workersOnly = (nodes: Placed[]): boolean => thisManager(nodes)?.availability === 'drain';
-
 /** A node besides this one that swarm can place a preview on. */
 export const hasReadyWorker = (nodes: Placed[]): boolean =>
   nodes.some((n) => !n.self && n.status === 'ready' && n.availability === 'active');

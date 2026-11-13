@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -37,7 +38,8 @@ var (
 	jobRe         = regexp.MustCompile(`^/api/jobs/([^/]+)(?:/(stream))?$`)
 	// The optional trailing action group has to be spelled exactly like this: openapi_coverage_test
 	// expands this shape into three paths (/nodes/{id}, …/drain, …/undrain) and collapses any other.
-	swarmNodeRe = regexp.MustCompile(`^/api/swarm/nodes/([^/]+)(?:/(drain|undrain))?$`)
+	swarmNodeRe     = regexp.MustCompile(`^/api/swarm/nodes/([^/]+)(?:/(drain|undrain))?$`)
+	swarmPreviewsRe = regexp.MustCompile(`^/api/swarm/previews/(workers|any)$`)
 	// Spelled like swarmNodeRe, so openapi_coverage_test expands it into /{name} and /{name}/assignment.
 	customRouteRe  = regexp.MustCompile(`^/api/custom-routes/([^/]+)(?:/(assignment))?$`)
 	scalerPresetRe = regexp.MustCompile(`^/api/scaler/presets/([^/]+)$`)
@@ -279,7 +281,30 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 			note = "Add a worker: GET /api/swarm/join?format=command|script|cloud-config, run it on the new machine."
 		}
 		fields = append(fields, jsonx.KV{K: "note", V: note})
+		// The manager's pstack.previews label; null off a manager or when docker did not answer.
+		var previewsOn *string
+		if len(info.Nodes) > 0 {
+			previewsOn = swarm.ReadPreviewsOn(s.host)
+		}
+		fields = append(fields, jsonx.KV{K: "previewsOn", V: previewsOn})
 		writeJSON(w, 200, append(spread(info), fields...))
+		return nil
+	}
+	if m := swarmPreviewsRe.FindStringSubmatch(path); m != nil && r.Method == http.MethodPost {
+		note, err := swarm.SetPreviewsOn(s.host, m[1])
+		switch {
+		case errors.Is(err, swarm.ErrNotAManager):
+			writeError(w, 409, err.Error())
+			return nil
+		case err != nil:
+			writeError(w, 502, err.Error())
+			return nil
+		}
+		var n *string
+		if note != "" {
+			n = &note
+		}
+		writeJSON(w, 200, jsonx.Object{{K: "previewsOn", V: m[1]}, {K: "note", V: n}})
 		return nil
 	}
 	if m := swarmNodeRe.FindStringSubmatch(path); m != nil {

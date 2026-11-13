@@ -258,6 +258,12 @@ func (s *Server) swarmNodeRoutes(w http.ResponseWriter, r *http.Request, id, act
 
 	switch {
 	case action == "drain" && r.Method == http.MethodPost:
+		// A drained manager cannot attach the control stack's plain containers to the overlay, so
+		// Traefik and pstack would not start again.
+		if node.ID == view.Self {
+			writeError(w, 409, "refusing to drain this manager: it runs the control stack. POST /api/swarm/previews/workers keeps previews off it.")
+			return nil
+		}
 		return s.setAvailability(w, *node, "drain")
 	case action == "undrain" && r.Method == http.MethodPost:
 		return s.setAvailability(w, *node, "active")

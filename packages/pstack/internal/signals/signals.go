@@ -73,8 +73,10 @@ type Stuck struct {
 type View struct {
 	Swarm     bool
 	Reachable bool
-	Nodes     []Node
-	Stuck     []Stuck
+	// Self is this node's id; "" when docker did not say.
+	Self  string
+	Nodes []Node
+	Stuck []Stuck
 }
 
 // Look asks docker what the swarm looks like right now.
@@ -85,6 +87,9 @@ func Look(r exec.Runner) View {
 	// rows plus a task count, so it reuses them rather than asking twice.
 	info := swarm.SwarmInfo(r)
 	v.Reachable = info.Reachable
+	if info.NodeID != nil {
+		v.Self = *info.NodeID
+	}
 	if !info.Reachable || !info.Active {
 		return v
 	}

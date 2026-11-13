@@ -1336,7 +1336,7 @@ Everything `init` reads:
 | `--logging none\|loki` | `PSTACK_LOGGING` | `none` | `loki`: a Loki service in the control stack, its log plugin on this node, and a `logging:` block on every deployed service that has none. Anything else exits 3. `upgrade` keeps whatever the host has |
 | `--ingress-subnet <cidr>` | `PSTACK_INGRESS_SUBNET` | `10.250.0.0/16` | swarm only: the address range of `preview-ingress`, which every routed preview service takes an address on. Used when the network is created; an existing network is **kept as it is** unless you set this, and then one with a different range is re-created — every preview must be asleep or down first, and `init` stops naming the ones still attached. See [the address leak](preview-ingress-address-leak.md) |
 | `--shared-subnet <cidr>` | `PSTACK_SHARED_SUBNET` | `10.251.0.0/16` | the same, for `preview-shared` |
-| `--previews-on workers\|any` | `PSTACK_PREVIEWS_ON` | *unset* | swarm only. `workers` drains this manager, so it runs only the control stack and every preview lands on a worker; `any` undoes it. Unset leaves the manager as it is, so `pstack upgrade` never changes it. With no worker yet, previews stay pending until one joins (init says so). Under compose it exits 3 |
+| `--previews-on workers\|any` | `PSTACK_PREVIEWS_ON` | *unset* | swarm only. `workers` labels this manager `pstack.previews=off`, so it runs only the control stack and every preview lands on a worker; `any` undoes it. Unset leaves the manager as it is, so `pstack upgrade` never changes it. With no worker yet, previews stay pending until one joins (init says so). Under compose it exits 3 |
 | — | `PSTACK_DNS_TOKEN` | *unset* | the DNS-01 credential, written to `dns.env`. Omit for the tokenless providers |
 | — | `PSTACK_TOKEN` | *generated* | the API bearer token. Supply it to keep or rotate a known one; leave it unset to be handed a fresh one **printed exactly once** |
 | — | `PSTACK_LOKI_PASSWORD` | *generated* | with `--logging loki`: the push password (32 lowercase hex), kept in `control/.env` as `LOKI_PUSH_PASSWORD`. Supply it to keep the host's |
@@ -2433,10 +2433,13 @@ looks (default 30000; `0` turns it off).
 ### Keeping the manager for the control stack
 
 A manager that also runs previews shares its memory with the swarm's own bookkeeping, and a burst of
-previews starting at once can starve the manager until it stops answering. `workers` drains the
-manager: swarm moves every preview to a worker and places none there again, while the control stack
-(Traefik, pstack, the UI, Loki, Grafana) keeps running, because it is plain compose and a drain does
-not touch it.
+previews starting at once can starve the manager until it stops answering. `workers` labels the
+manager `pstack.previews=off`, and every preview pstack deploys carries the placement constraint
+`node.labels.pstack.previews != off`: swarm moves running previews to a worker and places none there
+again. The control stack (Traefik, pstack, the UI, Loki, Grafana) keeps running, because it is plain
+compose. It is a label, not a drain: a drained node cannot attach plain containers to the overlay
+network, so the control stack would not start again. A preview deployed before 0.46.0 has no
+constraint until its next `up`.
 
 ```bash
 pstack swarm previews workers          # on the manager; same as the Swarm page's "Run previews on"
@@ -2444,8 +2447,9 @@ pstack init … --previews-on workers    # at install time; cloud-init takes the
 ```
 
 Add a worker **first**. With none ready, the previews are pending, not running; the command, init and
-the Swarm page all say so. `any` makes the manager schedulable again. It is swarm's own scheduling
-state, so it survives a restart and `pstack upgrade` leaves it alone.
+the Swarm page all say so. `any` labels the manager back on. The label is swarm's own state, so it
+survives a restart and `pstack upgrade` leaves it alone. Over the API:
+`POST /api/swarm/previews/workers` (or `/any`), and `GET /api/swarm` reports `previewsOn`.
 
 **The daemon is protected too.** `pstack init` (so `cloud-init` and `upgrade`) sets `dockerd`'s
 `OOMScoreAdjust` to -900 through a systemd drop-in, `/etc/systemd/system/docker.service.d/pstack-oom.conf`,
@@ -3538,9 +3542,9 @@ tell which credentials a preset needs, so a missing one shows as a failed refres
 
 **Reservations decide load-based scaling.** Swarm reports `insufficient resources` only against
 reservations, so past `min` the scaler adds workers for load only when previews declare
-`deploy.resources.reservations` (or `mem_reservation`). A cluster with no active node at all (the
-manager drained by `--previews-on workers`, `min: 0`) still gets its first worker: a drained node
-qualifies.
+`deploy.resources.reservations` (or `mem_reservation`). A cluster with no node previews may use
+(the manager labelled off by `--previews-on workers`, `min: 0`) still gets its first worker: a drained
+node qualifies, and so do placement constraints that no more nodes fail than there are managers.
 
 **Settings are frozen per worker.** A worker keeps the per-worker variables it was created with, so
 an edit changes only workers created afterwards. While the scaler owns any worker, the preset and
@@ -3925,7 +3929,7 @@ for `docker builder prune`. `0` turns it off. `until` is the image's age, not it
   those hold their images until newer tasks push them out.
 
 On a swarm a prune is a `pstack-prune-<ms>` job service, removed when it ends. This manager is
-always pruned directly: a drained manager runs no swarm task.
+always pruned directly, never by a swarm task.
 
 **Log caps.** The control stack's containers cap their json-file logs (Traefik `10m` × 2, the rest
 `50m` × 3). With Loki off, every preview service without a `logging:` key gets `10m` × 3. Run

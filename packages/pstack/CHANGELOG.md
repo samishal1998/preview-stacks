@@ -60,6 +60,19 @@
 
 ### Fixed
 
+- **Keeping the manager for the control stack works on a real swarm.** `workers` drained the
+  manager, and a drained (or paused) node cannot attach plain containers to the overlay network, so
+  Traefik and pstack could not start again after a reboot or `pstack upgrade`. `workers` now labels
+  the manager `pstack.previews=off`, and every swarm preview carries the placement constraint
+  `node.labels.pstack.previews != off`; a preview deployed earlier gets it on its next `up`. The
+  CLI also passed `self` to `docker node update`, which refuses it.
+  - `pstack init` and `upgrade` turn a drained or paused manager (the Swarm page's "Workers only"
+    since 0.44.0) into the label and make it active, and say so.
+  - `POST /api/swarm/previews/workers|any` sets it (maintainer), `GET /api/swarm` reports
+    `previewsOn`, and both UIs use them. `POST /api/swarm/nodes/<this manager>/drain` is refused
+    (409).
+  - The worker scaler counts `scheduling constraints not satisfied on N nodes` as stuck when N is at
+    most the number of managers, so a manager-only host still gets its first worker.
 - **SSO sign-in** no longer redirects to `/<TAB>/host` (a browser reads it as `//host`).
 - **`pstack upgrade`, `pstack ui` and `pstack logging`** no longer refuse an http01 host whose
   `.env` names a DNS provider.

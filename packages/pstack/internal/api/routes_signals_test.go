@@ -11,6 +11,7 @@ import (
 
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/events"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
+	"github.com/samishal1998/preview-stacks/packages/pstack/internal/swarm"
 )
 
 // signalsServer is a real New() server; nothing listens and it is never Started, because Start runs
@@ -510,5 +511,69 @@ func TestNodeDeleteRefusesADrainedNodeThatIsStillUp(t *testing.T) {
 	}
 	if ran(f, "docker node rm 'n3abcdef01234567'") {
 		t.Fatalf("removed a node that is still up: %v", f.Commands())
+	}
+}
+
+// negative control: run SetPreviewsOn with a fixed "workers" instead of the URL's word → POST
+// /previews/any labels the manager off and the `on` command is never recorded.
+func TestSwarmPreviewsLabelsThisManager(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	s.host = f
+
+	code, body := nodeAction(t, s, "POST", "/api/swarm/previews/workers")
+	if code != 200 || !strings.Contains(body, `"previewsOn": "workers"`) {
+		t.Fatalf("workers: %d %s", code, body)
+	}
+	if !ran(f, "docker node update --label-add 'pstack.previews=off' 'n1abcdef01234567'") {
+		t.Fatalf("label not set: %v", f.Commands())
+	}
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/previews/any"); code != 200 || !strings.Contains(body, `"previewsOn": "any"`) {
+		t.Fatalf("any: %d %s", code, body)
+	}
+	if !ran(f, "docker node update --label-add 'pstack.previews=on' 'n1abcdef01234567'") {
+		t.Fatalf("label not cleared: %v", f.Commands())
+	}
+	if code, _ := nodeAction(t, s, "POST", "/api/swarm/previews/everywhere"); code != 404 {
+		t.Fatalf("everywhere: %d", code)
+	}
+
+	s.host = exec.NewFake(nil, "") // docker answers, but not as a swarm manager
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/previews/workers"); code != 409 {
+		t.Fatalf("not a manager: %d %s", code, body)
+	}
+}
+
+// negative control: read previewsOn as "any" whatever the label says → a manager labelled off reads
+// as running previews, and the UI offers to switch to what is already set.
+func TestSwarmReadsPreviewsOnFromTheLabel(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	inner := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.TrimSpace(cmd) == swarm.PreviewsOnCmd {
+			return exec.Result{OK: true, Stdout: "off\n"}, true
+		}
+		return inner(cmd)
+	}
+	s.host = f
+	if code, body := nodeAction(t, s, "GET", "/api/swarm"); code != 200 || !strings.Contains(body, `"previewsOn": "workers"`) {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
+// negative control: drop the `node.ID == view.Self` refusal → draining this manager answers 200 and
+// `docker node update --availability drain` is recorded.
+func TestDrainRefusesThisManager(t *testing.T) {
+	s := signalsServer(t)
+	f := signalsShim(t, false)
+	s.host = f
+	if code, body := nodeAction(t, s, "POST", "/api/swarm/nodes/n1abcdef01234567/drain"); code != 409 {
+		t.Fatalf("%d %s", code, body)
+	}
+	for _, c := range f.Commands() {
+		if strings.Contains(c, "node update") {
+			t.Fatalf("ran %q", c)
+		}
 	}
 }

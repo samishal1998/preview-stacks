@@ -14,7 +14,7 @@ import (
 
 const pruneCreate = "docker service create --name pstack-prune-"
 
-// swarmAgent is the swarm fixtures (n1 the drained manager, worker-1 reporting from *logs); prune
+// swarmAgent is the swarm fixtures (n1 the manager, worker-1 reporting from *logs); prune
 // answers the prune commands, nil fails them all.
 func swarmAgent(t *testing.T, prune map[string]string) (*Server, *string) {
 	t.Helper()
@@ -80,7 +80,7 @@ func TestEmergencyPruneOncePerTenMinutes(t *testing.T) {
 	if creates[0] != want {
 		t.Fatalf("create:\n got %s\nwant %s", creates[0], want)
 	}
-	// The drained manager has no batch: unknown is never pressure.
+	// The manager has no batch: unknown is never pressure.
 	if local := commandsWith(s, nodestats.PruneScript(0, false)); len(local) != 0 {
 		t.Fatalf("self pruned = %q, want none", local)
 	}

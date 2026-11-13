@@ -145,6 +145,8 @@ export type SwarmInfo = {
   /** The line that installs the loki log plugin on a node. Present only when logging is on. */
   lokiPluginInstall?: string;
   note: string;
+  /** This manager's pstack.previews label: `workers` when off. null off a manager or when docker did not answer. */
+  previewsOn: 'workers' | 'any' | null;
 };
 
 /** One node, from its pstack-agent. Every reading is null while the node is stale or never reported. */

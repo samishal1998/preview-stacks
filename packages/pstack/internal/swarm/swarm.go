@@ -56,6 +56,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -454,9 +455,19 @@ func Swarmify(input *omap.Map, profiles []string) SwarmifyResult {
 			note(name, "dropped `"+k+"` — not in the compose v3 schema swarm reads")
 		}
 
-		if deploy.Len() > 0 {
-			svc.Set("deploy", deploy)
+		// Every preview stays off a node labelled pstack.previews=off (SetPreviewsOn's `workers`).
+		placement, ok := dictOf(deploy.GetMap("placement"))
+		if !ok {
+			placement = omap.New()
 		}
+		constraints := append([]any{}, placement.GetSlice("constraints")...)
+		if !slices.Contains(constraints, any(PreviewsOffConstraint)) {
+			constraints = append(constraints, PreviewsOffConstraint)
+		}
+		placement.Set("constraints", constraints)
+		deploy.Set("placement", placement)
+
+		svc.Set("deploy", deploy)
 	}
 
 	return SwarmifyResult{Doc: doc, Notes: notes}
@@ -767,25 +778,97 @@ func NodeAvailabilityCmd(id, availability string) string {
 	return "docker node update --availability " + Shq(availability) + " " + Shq(id)
 }
 
-// PreviewsOn values: where previews may run. `workers` drains this manager, so it keeps the control
-// stack (plain compose, which a drain does not touch) and swarm places every preview on a worker.
+// PreviewsOn values: where previews may run. `workers` labels this manager pstack.previews=off, and
+// every preview carries PreviewsOffConstraint (Swarmify), so swarm places them on workers only. A
+// label, not a drain: a drained or paused node cannot attach a plain container to an overlay, so the
+// control stack (Traefik and pstack, plain compose on preview-ingress) would not start again.
 const (
 	PreviewsOnWorkers = "workers"
 	PreviewsOnAny     = "any"
 )
 
-// SetPreviewsOn drains this manager (`workers`) or makes it schedulable again (`any`). Idempotent:
-// docker accepts the same availability twice. note is non-empty when `workers` leaves nowhere for a
-// preview to run — there is no other ready, active node — which is a state to report, not to refuse:
-// a host is set up manager-only before its first worker joins.
+// PreviewsOffConstraint keeps a preview off a node labelled pstack.previews=off. A node without the
+// label passes: swarm compares a missing label as "".
+const PreviewsOffConstraint = "node.labels.pstack.previews != off"
+
+// PreviewsLabelCmd sets this node's pstack.previews label: `off` or `on`. `on` rather than
+// --label-rm, which docker refuses for a label the node does not have.
+func PreviewsLabelCmd(id, value string) string {
+	return "docker node update --label-add " + Shq("pstack.previews="+value) + " " + Shq(id)
+}
+
+// PreviewsOnCmd reads this node's pstack.previews label: "" when unset. `inspect` takes "self".
+const PreviewsOnCmd = `docker node inspect self --format '{{index .Spec.Labels "pstack.previews"}}'`
+
+// ReadPreviewsOn is `workers` when this node is labelled off, `any` otherwise, nil when docker did
+// not answer.
+func ReadPreviewsOn(r exec.Runner) *string {
+	res := r.Run(PreviewsOnCmd, exec.RunOptions{Label: "docker node inspect"})
+	if !res.OK {
+		return nil
+	}
+	v := PreviewsOnAny
+	if strings.TrimSpace(res.Stdout) == "off" {
+		v = PreviewsOnWorkers
+	}
+	return &v
+}
+
+// UndrainSelf turns a drained or paused manager into the label: pstack.previews=off first, so no
+// preview lands there in between, then active. A drained node cannot attach the control stack to the
+// overlay (0.44.0–0.45.x's "Workers only" on the Swarm page drained it). note is "" when there was
+// nothing to do.
+func UndrainSelf(r exec.Runner) (note string, err error) {
+	info := SwarmInfo(r)
+	if !info.Active || info.NodeID == nil {
+		return "", nil
+	}
+	for _, n := range info.Nodes {
+		if !n.Self || n.Availability == "active" {
+			continue
+		}
+		for _, cmd := range []string{PreviewsLabelCmd(*info.NodeID, "off"), NodeAvailabilityCmd(*info.NodeID, "active")} {
+			if res := r.Run(cmd, exec.RunOptions{Label: "docker node update"}); !res.OK {
+				first, _, _ := strings.Cut(strings.TrimSpace(res.Stderr), "\n")
+				if first == "" {
+					first = "docker refused the command"
+				}
+				return "", errors.New(first)
+			}
+		}
+		was := map[string]string{"drain": "drained", "pause": "paused"}[n.Availability]
+		return "this manager was " + firstOr(was, n.Availability) + ": now active, previews kept off it by label", nil
+	}
+	return "", nil
+}
+
+func firstOr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// ErrNotAManager is SetPreviewsOn's refusal on a host that is not a swarm manager.
+var ErrNotAManager = errors.New("this host is not a swarm manager")
+
+// SetPreviewsOn labels this manager off (`workers`) or on (`any`). Idempotent. Swarm moves running
+// previews off a node that no longer satisfies their constraints. note is non-empty when `workers`
+// leaves nowhere for a preview to run — there is no other ready, active node — which is a state to
+// report, not to refuse: a host is set up manager-only before its first worker joins.
 func SetPreviewsOn(r exec.Runner, mode string) (note string, err error) {
-	availability := "active"
+	value := "on"
 	if mode == PreviewsOnWorkers {
-		availability = "drain"
+		value = "off"
 	} else if mode != PreviewsOnAny {
 		return "", errors.New("previews-on must be workers or any, got \"" + mode + "\"")
 	}
-	res := r.Run(NodeAvailabilityCmd("self", availability), exec.RunOptions{Label: "docker node update"})
+	// `docker node update` takes no "self" (inspect and ps do): name this node by its id.
+	info := SwarmInfo(r)
+	if !info.Active || info.NodeID == nil {
+		return "", ErrNotAManager
+	}
+	res := r.Run(PreviewsLabelCmd(*info.NodeID, value), exec.RunOptions{Label: "docker node update"})
 	if !res.OK {
 		first, _, _ := strings.Cut(strings.TrimSpace(res.Stderr), "\n")
 		if first == "" {
@@ -794,7 +877,6 @@ func SetPreviewsOn(r exec.Runner, mode string) (note string, err error) {
 		return "", errors.New(first)
 	}
 	if mode == PreviewsOnWorkers {
-		info := SwarmInfo(r)
 		for _, n := range info.Nodes {
 			if !n.Self && n.Status == "ready" && n.Availability == "active" {
 				return "", nil

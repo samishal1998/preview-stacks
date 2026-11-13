@@ -127,6 +127,7 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("swarm").AddCommand(NewSwarmNodeRemoveCommand(exec))
 	group("swarm").AddCommand(NewSwarmNodeDrainCommand(exec))
 	group("swarm").AddCommand(NewSwarmNodeUndrainCommand(exec))
+	group("swarm").AddCommand(NewSwarmPreviewsCommand(exec))
 	group("host").AddCommand(NewHostTerminalSessionsCommand(exec))
 	group("tls").AddCommand(NewTlsStatusCommand(exec))
 	group("tls").AddCommand(NewTlsRedeployCommand(exec))
@@ -3226,7 +3227,7 @@ func NewSwarmNodeDrainCommand(exec oascmd.ExecOptions) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "node-drain",
-		Short: "Take a node out of the running — swarm stops placing work on it and moves what is there.",
+		Short: "Take a node out of the running — swarm stops placing work on it and moves what is there. Refused (409) for the manager the API runs on; use POST /api/swarm/previews/workers.",
 	}
 	cmd.Flags().StringVar(&flagID, "id", "", "")
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
@@ -3269,6 +3270,42 @@ func NewSwarmNodeUndrainCommand(exec oascmd.ExecOptions) *cobra.Command {
 			PathParams: map[string]string{},
 		}
 		req.PathParams["id"] = flagID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewSwarmPreviewsCommand returns the "swarm previews" command (POST
+// /api/swarm/previews/{where}).
+func NewSwarmPreviewsCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagWhere string
+	)
+	cmd := &cobra.Command{
+		Use:   "previews",
+		Short: "Where previews run. `workers` labels this manager pstack.previews=off, which every preview's placement excludes; `any` labels it on.",
+	}
+	cmd.Flags().StringVar(&flagWhere, "where", "", "(one of: workers, any)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("where")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("where") {
+			if err := oascmd.ValidateEnum("where", []string{"workers", "any"}, flagWhere); err != nil {
+				return err
+			}
+		}
+		req := oascmd.Request{
+			Method:     "POST",
+			Path:       "/api/swarm/previews/{where}",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["where"] = flagWhere
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw

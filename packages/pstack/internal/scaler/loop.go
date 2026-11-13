@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -118,21 +119,43 @@ func New(o Options) (*Loop, error) {
 	return &Loop{o: o, s: s}, nil
 }
 
-var clauseRe = regexp.MustCompile(`^(insufficient resources on \d+ nodes?|\d+ nodes? not available for new tasks)$`)
+var (
+	clauseRe     = regexp.MustCompile(`^(insufficient resources on \d+ nodes?|\d+ nodes? not available for new tasks)$`)
+	constraintRe = regexp.MustCompile(`^scheduling constraints not satisfied on (\d+) nodes?$`)
+)
 
 // Qualifies says whether a stuck task's reason is one a new worker can fix: `no suitable node (…)`
-// with at least one clause, every clause short resources or a drained node.
-func Qualifies(reason string) bool {
+// with at least one clause, every clause short resources, a drained node, or constraints that only
+// managers fail (`--previews-on workers` labels managers off). A user's own constraint that a manager
+// also fails qualifies too; the worker it buys marks the service does-not-fit, so it costs one.
+func Qualifies(reason string, managers int) bool {
 	rest, ok := strings.CutPrefix(reason, "no suitable node (")
 	if !ok || !strings.HasSuffix(rest, ")") {
 		return false
 	}
 	for _, c := range strings.Split(strings.TrimSuffix(rest, ")"), "; ") {
+		if m := constraintRe.FindStringSubmatch(c); m != nil {
+			if n, err := strconv.Atoi(m[1]); err != nil || n > managers {
+				return false
+			}
+			continue
+		}
 		if !clauseRe.MatchString(c) {
 			return false
 		}
 	}
 	return true
+}
+
+// managers counts the manager nodes in this tick's signals.
+func (l *Loop) managers() int {
+	n := 0
+	for _, nd := range l.sig.Nodes {
+		if nd.Role == "manager" {
+			n++
+		}
+	}
+	return n
 }
 
 // Tick is one pass of the spec's steps 1–7, at most one apply. The error is a local failure
@@ -713,7 +736,7 @@ func (l *Loop) scaleUp(now int64) error {
 
 	cfg := l.cfg
 	want := l.stuckServices(func(st sigStuck) bool {
-		return Qualifies(st.Reason) && !slices.Contains(l.s.DoesNotFit, st.Service)
+		return Qualifies(st.Reason, l.managers()) && !slices.Contains(l.s.DoesNotFit, st.Service)
 	})
 	if len(want) == 0 {
 		l.s.MaxReported = false
@@ -730,7 +753,7 @@ func (l *Loop) scaleUp(now int64) error {
 	if owned >= cfg.Min {
 		switch {
 		case len(want) == 0:
-			if dnf := l.stuckServices(func(st sigStuck) bool { return Qualifies(st.Reason) }); len(dnf) > 0 {
+			if dnf := l.stuckServices(func(st sigStuck) bool { return Qualifies(st.Reason, l.managers()) }); len(dnf) > 0 {
 				l.action = "does not fit: " + strings.Join(dnf, ", ")
 			} else {
 				l.action = "idle"

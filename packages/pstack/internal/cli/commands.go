@@ -108,8 +108,8 @@ healthcheck. Idempotent: re-running it IS the upgrade path.
       --orchestrator swarm|compose
       --logging none|loki        Loki log shipping (default none)
       --scaler on|off            swarm: add and remove workers (default off)
-      --previews-on workers|any  swarm: workers drains this manager, so it runs only the control
-                                 stack and every preview lands on a worker. Unset leaves it as is
+      --previews-on workers|any  swarm: workers keeps previews off this manager (node label
+                                 pstack.previews=off); it runs only the control stack. Unset leaves it as is
       --force                    proceed even though this run would change something you did
                                  not ask it to change
 
@@ -243,8 +243,8 @@ when it carries any.`,
 		summary: "the nodes previews run on, and how to add one",
 		body: `pstack swarm [status]      the node table (exit 1 if this host is not a manager)
 pstack swarm join         what a new worker runs — A SECRET, it joins any machine to the cluster
-pstack swarm previews workers|any   workers drains this manager: it keeps only the control stack and
-                          every preview lands on a worker. any undoes it.
+pstack swarm previews workers|any   workers keeps previews off this manager (node label
+                          pstack.previews=off): it runs only the control stack. any undoes it.
 
       --format command|script|cloud-config|token   default command
       --distro <name>   cloud-config only
