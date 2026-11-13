@@ -48,7 +48,7 @@ const HOOKS: HookName[] = ['up', 'assert_live', 'down', 'assert_gone'];
                     :key="h"
                     class="badge"
                     :class="{ off: !a.hooks.includes(h) }"
-                    style="margin-right: 4px"
+                    style="margin-right: var(--s1)"
                     >{{ h }}</span
                   ></span
                 >

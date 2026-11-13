@@ -176,7 +176,7 @@ function urlFor(c: RuntimeContainer): string | null {
             <h2 class="section">Routing</h2>
             <span class="grow" />
             <span class="mute" style="font-size: var(--t-sm)">
-              TLS: {{ rt.challenge === 'unknown' ? 'unknown' : rt.challenge }}
+              TLS: {{ rt.challenge }}
               <!-- The mode itself is a concept docs/tls-challenge.md owns; this only says where
                    it is changed. -->
               <InfoHint label="where to change the TLS mode" align="end">

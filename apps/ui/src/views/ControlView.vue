@@ -502,70 +502,74 @@ async function deletePreset(): Promise<void> {
       <!-- Unknown is not empty: a dead docker means nothing here is KNOWN. The distinction is the
            point (invariant 10); the sentence explaining it is not. -->
       <div v-if="!view.reachable" class="banner warn"><b>Docker isn't answering.</b> Nothing here is known.</div>
-      <table v-else-if="view.containers.length" role="table" class="cards">
-        <thead role="rowgroup">
-          <tr role="row">
-            <th role="columnheader">Service</th>
-            <th role="columnheader">Image</th>
-            <th role="columnheader">State</th>
-            <th role="columnheader">Restarts</th>
-            <th role="columnheader">Memory limit</th>
-            <th role="columnheader">Started</th>
-            <th role="columnheader"></th>
-          </tr>
-        </thead>
-        <tbody role="rowgroup" class="stagger">
-          <tr v-for="(c, i) in view.containers" :key="c.id" role="row" :style="{ '--i': i }">
-            <td role="cell" class="name" data-label="service">
-              {{ c.service || c.name }}
-              <span v-if="c.service === 'pstack'" class="badge info" title="the container answering this page">This API</span>
-            </td>
-            <td role="cell" data-label="image" class="mono mute">{{ c.image }}</td>
-            <td role="cell" data-label="state">
-              <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
-              <span v-if="c.state === 'running' && c.health" class="mute" style="font-size: var(--t-sm)"> · {{ c.health }}</span>
-            </td>
-            <td role="cell" data-label="restarts">
-              <span :class="c.restartCount > 0 ? 'badge warn' : 'mute'">{{ c.restartCount }}</span>
-              <span
-                v-if="c.oomKilled"
-                class="badge failed"
-                title="Killed by the kernel for exceeding its memory limit"
-                >OOM</span
-              >
-            </td>
-            <td role="cell" data-label="memory" class="mono mute">{{ mem(c.memLimitBytes) }}</td>
-            <td role="cell" data-label="started" class="mute">{{ c.startedAt ? ago(c.startedAt) : '—' }}</td>
-            <td role="cell" data-label="">
-              <ActionButton
-                v-if="c.service && c.service !== 'pstack'"
-                variant="ghost"
-                :pending="restarting === c.service"
-                :disabled="restarting !== ''"
-                @click="restart(c.service)"
-              >
-                Restart
-              </ActionButton>
-              <span
-                v-else-if="c.service === 'pstack'"
-                class="mute"
-                style="font-size: var(--t-sm)"
-                title="Restart this one from the host"
-              >
-                host-only
-              </span>
-              <span
-                v-else
-                class="mute"
-                style="font-size: var(--t-sm)"
-                title="No compose service label, so the restart API cannot address it."
-              >
-                —
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- In `.table-scroll`, not a direct `.panel > table`: that rule splits thead and tbody into two
+           table boxes, and the headers drifted off their columns. -->
+      <div v-else-if="view.containers.length" class="table-scroll">
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Service</th>
+              <th role="columnheader">Image</th>
+              <th role="columnheader">State</th>
+              <th role="columnheader">Restarts</th>
+              <th role="columnheader">Memory limit</th>
+              <th role="columnheader">Started</th>
+              <th role="columnheader"></th>
+            </tr>
+          </thead>
+          <tbody role="rowgroup" class="stagger">
+            <tr v-for="(c, i) in view.containers" :key="c.id" role="row" :style="{ '--i': i }">
+              <td role="cell" class="name" data-label="service">
+                {{ c.service || c.name }}
+                <span v-if="c.service === 'pstack'" class="badge info" title="the container answering this page">This API</span>
+              </td>
+              <td role="cell" data-label="image" class="mono mute">{{ c.image }}</td>
+              <td role="cell" data-label="state">
+                <span :class="c.state === 'running' ? 's-ok' : 's-failed'">{{ sentence(c.state) }}</span>
+                <span v-if="c.state === 'running' && c.health" class="mute" style="font-size: var(--t-sm)"> · {{ sentence(c.health) }}</span>
+              </td>
+              <td role="cell" data-label="restarts">
+                <span :class="c.restartCount > 0 ? 'badge warn' : 'mute'">{{ c.restartCount }}</span>
+                <span
+                  v-if="c.oomKilled"
+                  class="badge failed"
+                  title="Killed by the kernel for exceeding its memory limit"
+                  >OOM</span
+                >
+              </td>
+              <td role="cell" data-label="memory" class="mono mute">{{ mem(c.memLimitBytes) }}</td>
+              <td role="cell" data-label="started" class="mute">{{ c.startedAt ? ago(c.startedAt) : '—' }}</td>
+              <td role="cell" data-label="">
+                <ActionButton
+                  v-if="c.service && c.service !== 'pstack'"
+                  variant="ghost"
+                  :pending="restarting === c.service"
+                  :disabled="restarting !== ''"
+                  @click="restart(c.service)"
+                >
+                  Restart
+                </ActionButton>
+                <span
+                  v-else-if="c.service === 'pstack'"
+                  class="mute"
+                  style="font-size: var(--t-sm)"
+                  title="Restart this one from the host"
+                >
+                  host-only
+                </span>
+                <span
+                  v-else
+                  class="mute"
+                  style="font-size: var(--t-sm)"
+                  title="No compose service label, so the restart API cannot address it."
+                >
+                  —
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="mute">None listed — the project label changed, not the stack stopped.</p>
     </section>
 
@@ -876,46 +880,50 @@ async function deletePreset(): Promise<void> {
         </li>
       </ul>
 
-      <table v-if="scalerReport?.workers.length" role="table" class="cards">
-        <thead role="rowgroup">
-          <tr role="row">
-            <th role="columnheader">Name</th>
-            <th role="columnheader">Settings</th>
-            <th role="columnheader">State</th>
-            <th role="columnheader">Created</th>
-          </tr>
-        </thead>
-        <tbody role="rowgroup">
-          <tr v-for="w in scalerReport.workers" :key="w.name" role="row">
-            <td role="cell" class="name mono" data-label="name">{{ w.name }}</td>
-            <td role="cell" class="mono mute" data-label="settings">
-              {{ Object.entries(w.vars).map(([k, v]) => `${k}=${v}`).join(' ') || '—' }}
-            </td>
-            <td role="cell" data-label="state">
-              <span :class="w.state === 'ready' ? 's-ok' : w.state === 'lost' || w.state === 'down' ? 's-failed' : ''">{{ sentence(w.state) }}</span>
-            </td>
-            <td role="cell" class="mute" data-label="created">{{ ago(w.createdAt) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll" v-if="scalerReport?.workers.length">
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Name</th>
+              <th role="columnheader">Settings</th>
+              <th role="columnheader">State</th>
+              <th role="columnheader">Created</th>
+            </tr>
+          </thead>
+          <tbody role="rowgroup">
+            <tr v-for="w in scalerReport.workers" :key="w.name" role="row">
+              <td role="cell" class="name mono" data-label="name">{{ w.name }}</td>
+              <td role="cell" class="mono mute" data-label="settings">
+                {{ Object.entries(w.vars).map(([k, v]) => `${k}=${v}`).join(' ') || '—' }}
+              </td>
+              <td role="cell" data-label="state">
+                <span :class="w.state === 'ready' ? 's-ok' : w.state === 'lost' || w.state === 'down' ? 's-failed' : ''">{{ sentence(w.state) }}</span>
+              </td>
+              <td role="cell" class="mute" data-label="created">{{ ago(w.createdAt) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="mute">No workers.</p>
 
-      <table v-if="openOrphans.length" role="table" class="cards" style="margin-top: var(--s4)">
-        <thead role="rowgroup">
-          <tr role="row">
-            <th role="columnheader">Possible orphan</th>
-            <th role="columnheader"></th>
-          </tr>
-        </thead>
-        <tbody role="rowgroup">
-          <tr v-for="o in openOrphans" :key="o" role="row">
-            <td role="cell" class="name mono" data-label="orphan">{{ o }}</td>
-            <td role="cell" class="row-actions" data-label="">
-              <ActionButton v-if="can('admin')" variant="ghost" :pending="savingScaler" @click="dismissOrphan(o)">Dismiss</ActionButton>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-scroll" v-if="openOrphans.length" style="margin-top: var(--s4)">
+        <table role="table" class="cards">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">Possible orphan</th>
+              <th role="columnheader"></th>
+            </tr>
+          </thead>
+          <tbody role="rowgroup">
+            <tr v-for="o in openOrphans" :key="o" role="row">
+              <td role="cell" class="name mono" data-label="orphan">{{ o }}</td>
+              <td role="cell" class="row-actions" data-label="">
+                <ActionButton v-if="can('admin')" variant="ghost" :pending="savingScaler" @click="dismissOrphan(o)">Dismiss</ActionButton>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <ErrorNote v-if="scalerError" :text="scalerError" />
       <p v-if="!can('admin')" class="hint">Admin only.</p>

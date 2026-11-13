@@ -25,11 +25,12 @@ import { api, problem } from '../../api/client';
 import type { CancelStackResponse, ConflictBody, ShareLink, ShareView } from '../../api/types';
 import { dep, isShared, varsQuery } from '../../composables/useDeployment';
 import {
-  act,
+  act as sharedAct,
   actionError,
   busy,
   conflict,
   conflictJobId,
+  fromDanger,
   onConflict,
   pending,
   tokenMissing,
@@ -127,11 +128,19 @@ const forceArmed = computed(
   () => !!dep.detail?.stack && forceTyped.value === dep.detail.stack,
 );
 
+/** act() clears fromDanger before its first await; marking it after keeps this tab's errors here. */
+function act(...a: Parameters<typeof sharedAct>): Promise<void> {
+  const p = sharedAct(...a);
+  fromDanger.value = true;
+  return p;
+}
+
 async function forget(): Promise<void> {
   if (!forgetArmed.value) return;
   pending.value = 'forget';
   actionError.value = '';
   conflict.value = null;
+  fromDanger.value = true;
 
   const r = await api.del<ConflictBody>(
     `/api/deployments/${encodeURIComponent(dep.id)}${varsQuery.value}`,
@@ -225,7 +234,7 @@ async function forget(): Promise<void> {
           Opens {{ shareLink.views.join(' and ') }} until
           {{ new Date(shareLink.expiresAt).toLocaleString() }}.
         </p>
-        <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ shareLink.url }}</pre>
+        <pre class="code" tabindex="0" style="white-space: pre-wrap; word-break: break-all">{{ shareLink.url }}</pre>
         <div class="row">
           <button @click="copyShare">Copy</button>
           <a :href="shareLink.url" target="_blank" rel="noopener">Open ↗</a>
@@ -343,8 +352,8 @@ async function forget(): Promise<void> {
           <b>Stopped mid-run.</b> What it created before stopping is still there — run Verify.
         </div>
 
-        <ErrorNote v-if="actionError" :text="actionError" />
-        <ConflictNote v-if="conflict" :conflict="conflict" :job-id="conflictJobId" />
+        <ErrorNote v-if="actionError && fromDanger" :text="actionError" />
+        <ConflictNote v-if="conflict && fromDanger" :conflict="conflict" :job-id="conflictJobId" />
       </template>
     </section>
 

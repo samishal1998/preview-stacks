@@ -152,9 +152,9 @@ async function changeRole(u: User, role: string): Promise<void> {
     // or the UI keeps offering what the server will now refuse. (The server needs no prompting:
     // every request looks the role up fresh.)
     await checkAuth();
-    toast('ok', `You are now a ${role}.`);
+    toast('ok', `You are now ${role === 'admin' ? 'an' : 'a'} ${role}.`);
   } else {
-    toast('ok', `${u.username} is now a ${role}.`);
+    toast('ok', `${u.username} is now ${role === 'admin' ? 'an' : 'a'} ${role}.`);
   }
   void load();
 }
@@ -224,7 +224,7 @@ async function removeToken(t: Token): Promise<void> {
       <!-- The one-line interlock: there is no read path on the server, so this really is the only
            time the value exists anywhere but the clipboard. -->
       <p>{{ revealed.note }}</p>
-      <pre class="code" style="white-space: pre-wrap; word-break: break-all">{{ revealed.value }}</pre>
+      <pre class="code" tabindex="0" style="white-space: pre-wrap; word-break: break-all">{{ revealed.value }}</pre>
       <div class="row">
         <button @click="revealed = null">Dismiss</button>
       </div>

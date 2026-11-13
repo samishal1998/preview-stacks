@@ -10,7 +10,7 @@ import { HAlert, HBadge, HButton, HEmptyState, HErrorPage, HResourceDetail, HSke
 import type { Runtime } from '@samyx/preview-stacks-client';
 import { deploymentApi, type DeploymentDetail } from '../api-deployment';
 import { ACTION_LABEL, ago, jobTone, took } from '../format';
-import { problemText, runState, sentence } from '../lib/deployment';
+import { detailNote, problemText, runState, sentence } from '../lib/deployment';
 import { exploreUrl, showGrafana, stackQuery, stackServices } from '../lib/grafana';
 import { useDeploymentActions } from '../lib/use-deployment-actions';
 import { can } from '../lib/users';
@@ -38,6 +38,8 @@ const loading = ref(true);
 const refreshing = ref(false);
 /** Why the spec did not resolve, or any other failure of the detail call. The 400 names the missing variable. */
 const detailError = ref('');
+const detailStatus = ref(0);
+const note = computed(() => detailNote(detailStatus.value, !!dep.value));
 const runtimeError = ref('');
 
 const actions = useDeploymentActions(() => props.id, dep);
@@ -57,9 +59,11 @@ async function load(): Promise<void> {
     detailError.value = '';
   } else if (dep.value && (d.status === 0 || d.status >= 500)) {
     // A blip on a poll keeps what is shown; only a real answer (400 unresolved, 403) replaces it.
+    detailStatus.value = d.status;
     detailError.value = problemText(d.status, d.body.error, 'Deployment');
   } else {
     dep.value = null;
+    detailStatus.value = d.status;
     detailError.value = problemText(d.status, d.body.error, 'Deployment');
   }
   if (r.ok) {
@@ -131,14 +135,14 @@ const tabs = computed(() => (can('developer', auth) ? allTabs : allTabs.filter((
 
 // The fix for an unresolved spec lives on Config, so land there, but only from the tab with nothing to show.
 watch(detailError, (e) => {
-  if (e && !dep.value && !props.tab) void router.replace(`/deployments/${encodeURIComponent(props.id)}/config`);
+  if (e && !dep.value && !props.tab && note.value.config) void router.replace(`/deployments/${encodeURIComponent(props.id)}/config`);
 });
 
 // The detail call does not say whether the stack is up; the list row does.
-const state = computed(() => (dep.value ? runState({ busy: dep.value.busy, asleep: dep.value.asleep, running: data.deployments.find((d) => d.id === props.id)?.running ?? null }) : { label: detailError.value ? 'Unresolved' : 'Loading', tone: 'neutral' as const }));
+const state = computed(() => (dep.value ? runState({ busy: dep.value.busy, asleep: dep.value.asleep, running: data.deployments.find((d) => d.id === props.id)?.running ?? null }) : { label: detailError.value ? (note.value.config ? 'Unresolved' : 'Unknown') : 'Loading', tone: 'neutral' as const }));
 const shared = computed(() => dep.value?.kind === 'shared');
 const fields = computed(() => [
-  { key: 'stack', label: 'Stack', value: dep.value?.stack ?? (detailError.value ? 'unresolved' : '—') },
+  { key: 'stack', label: 'Stack', value: dep.value?.stack ?? (detailError.value && note.value.config ? 'unresolved' : '—') },
   { key: 'kind', label: 'Kind', value: dep.value ? sentence(dep.value.kind) : '—' },
   { key: 'orchestrator', label: 'Orchestrator', value: sentence(dep.value?.orchestrator ?? 'none') },
   { key: 'spec', label: 'Spec', value: dep.value?.specName ?? 'Inline' },
@@ -179,7 +183,7 @@ const timeline = computed<TimelineItem[]>(() =>
   <HResourceDetail
     v-else
     :title="id"
-    :description="dep?.stack ?? (detailError ? 'unresolved' : '')"
+    :description="dep?.stack ?? (detailError && note.config ? 'unresolved' : '')"
     :breadcrumbs="[{ id: 'deployments', label: 'Deployments' }, { id: 'self', label: id }]"
     :status="state.label"
     :tone="state.tone"
@@ -213,7 +217,7 @@ const timeline = computed<TimelineItem[]>(() =>
       </HStack>
     </template>
 
-    <template #overview><DeploymentOverview :id="id" :dep="dep" :runtime="runtime" :error="detailError" :loading="loading" /></template>
+    <template #overview><DeploymentOverview :id="id" :dep="dep" :runtime="runtime" :error="detailError" :note="note" :loading="loading" /></template>
     <template #config><ConfigTab :id="id" :dep="dep" :runtime="runtime" /></template>
     <template #runtime><RuntimeTab :id="id" :dep="dep" :runtime="runtime" :error="runtimeError" :loading="refreshing" @refresh="reload" /></template>
     <template #axes><AxesTab :id="id" :dep="dep" :runtime="runtime" /></template>

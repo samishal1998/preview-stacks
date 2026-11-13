@@ -21,6 +21,7 @@ import {
   actionError,
   busy,
   conflict,
+  fromDanger,
   conflictJobId,
   pending,
   resetActions,
@@ -53,6 +54,9 @@ const tabsResize = new ResizeObserver(showActiveTab);
 onMounted(() => tabsEl.value && tabsResize.observe(tabsEl.value));
 onBeforeUnmount(() => tabsResize.disconnect());
 watch(() => route.path, showActiveTab, { flush: 'post' });
+
+/* The Danger tab prints errors from its own controls beside them (once it has a detail); the header would say them twice. */
+const onDanger = computed(() => route.name === 'd.danger' && !!dep.detail && fromDanger.value);
 
 const TABS = [
   { to: 'overview', label: 'Overview' },
@@ -146,7 +150,7 @@ watch(
         :title="`asleep since ${new Date(dep.detail.asleep.since).toLocaleString()} (${dep.detail.asleep.reason})`"
         ><span class="dot" />Asleep</span
       >
-      <span v-if="dep.detail?.orchestrator === 'swarm'" class="badge" title="deployed as a swarm stack">swarm</span>
+      <span v-if="dep.detail?.orchestrator === 'swarm'" class="badge" title="deployed as a swarm stack">{{ sentence(dep.detail.orchestrator) }}</span>
       <!--
         Deploy and Verify live HERE, on every tab — they are the product's routine actions, and they
         used to be reachable only through a tab named "Danger". Teardown stays there: the header
@@ -190,9 +194,9 @@ watch(
       </div>
     </div>
 
-    <ErrorNote v-if="actionError" :text="actionError" />
+    <ErrorNote v-if="actionError && !onDanger" :text="actionError" />
     <ConflictNote
-      v-if="conflict"
+      v-if="conflict && !onDanger"
       :conflict="conflict"
       :job-id="conflictJobId"
       style="margin-bottom: var(--s4)"

@@ -11,7 +11,7 @@ import { problemText, sentence } from '../../lib/deployment';
 import { can } from '../../lib/users';
 import { auth } from '../../state';
 
-const props = defineProps<{ id: string; dep: DeploymentDetail | null; runtime: Runtime | null; error: string; loading: boolean }>();
+const props = defineProps<{ id: string; dep: DeploymentDetail | null; runtime: Runtime | null; error: string; note: { title: string; config: boolean }; loading: boolean }>();
 const router = useRouter();
 const stamp = (at?: number | null) => (at ? new Date(at).toLocaleString() : '—');
 
@@ -93,8 +93,8 @@ const rdTone = computed(() => (rd.value?.state === 'ready' ? 'success' : rd.valu
 
 <template>
   <HStack direction="column" :gap="4">
-    <HAlert v-if="error" tone="danger" title="Could not resolve this deployment" :description="error">
-      <HButton variant="secondary" label="Open Config" @click="router.push(`/deployments/${encodeURIComponent(id)}/config`)" />
+    <HAlert v-if="error" tone="danger" :title="note.title" :description="error">
+      <HButton v-if="note.config" variant="secondary" label="Open Config" @click="router.push(`/deployments/${encodeURIComponent(id)}/config`)" />
     </HAlert>
     <HAlert v-if="dep?.asleep" tone="info" :title="`Asleep since ${stamp(dep.asleep.since)}`" :description="`${dep.asleep.reason}. ${wakeOn}`" />
     <HAlert

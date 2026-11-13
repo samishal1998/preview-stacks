@@ -436,7 +436,7 @@ const stateTone = (c: RuntimeContainer): string =>
           </div>
 
           <template v-if="logs || following || liveLines.length">
-            <pre v-if="raw" class="log">{{ shown || '(no output)' }}</pre>
+            <pre v-if="raw" class="log" tabindex="0">{{ shown || '(no output)' }}</pre>
             <LogViewer
               v-else
               :rows="logRows"

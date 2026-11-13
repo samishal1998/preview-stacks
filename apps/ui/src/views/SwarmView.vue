@@ -202,7 +202,7 @@ onBeforeUnmount(() => {
         <p v-else class="mute">Docker lists no nodes.</p>
         <div v-if="unplugged.length" class="banner warn">
           <b>No loki plugin on {{ unplugged.map((n) => n.hostname || n.id.slice(0, 12)).join(', ') }}.</b>
-          <pre class="code" style="white-space: pre-wrap; overflow-wrap: anywhere">{{ info.lokiPluginInstall }}</pre>
+          <pre class="code" tabindex="0" style="white-space: pre-wrap; overflow-wrap: anywhere">{{ info.lokiPluginInstall }}</pre>
         </div>
       </template>
     </section>
@@ -281,7 +281,7 @@ onBeforeUnmount(() => {
           If it leaks, rotate it on the manager:
           <code>docker swarm join-token --rotate worker</code>
         </p>
-        <pre class="code" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto">{{ revealed }}</pre>
+        <pre class="code" tabindex="0" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto">{{ revealed }}</pre>
         <div class="row">
           <button @click="copy">Copy</button>
           <button @click="revealed = ''">Hide</button>

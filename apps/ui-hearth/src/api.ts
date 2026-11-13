@@ -6,7 +6,7 @@
  * A non-2xx is not an exception: `call` always resolves, and callers branch on `status`.
  */
 import { clearToken, getToken } from './lib/token';
-import type { DeploymentRow, Job, JobStub, Me } from '@samyx/preview-stacks-client';
+import type { DeploymentRow, Job, Me } from '@samyx/preview-stacks-client';
 
 export type Result<T> = { ok: boolean; status: number; body: T & { error?: string } };
 export type Lifecycle = 'up' | 'verify' | 'down' | 'sleep' | 'wake';
@@ -55,6 +55,4 @@ export const api = {
   deployments: () => call<{ deployments: DeploymentRow[] }>('GET', '/api/deployments'),
   jobs: () => call<{ jobs: Job[] }>('GET', '/api/jobs'),
   job: (j: string) => call<{ job: Job }>('GET', `/api/jobs/${id(j)}`),
-  act: (d: string, action: Lifecycle, body: { verify?: boolean; forget?: boolean; force?: boolean } = {}) =>
-    call<{ job: JobStub }>('POST', `/api/deployments/${id(d)}/${action}`, action === 'down' ? { verify: true, ...body } : {}),
 };

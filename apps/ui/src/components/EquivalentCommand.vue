@@ -98,7 +98,7 @@ async function copy(): Promise<void> {
           <button class="ghost sm" @click="copy">Copy</button>
         </div>
 
-        <pre class="eqc-code">{{ text }}</pre>
+        <pre class="eqc-code" tabindex="0">{{ text }}</pre>
 
         <p class="eqc-note">
           Runs {{ what }} exactly as the button above does.

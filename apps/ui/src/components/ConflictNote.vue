@@ -19,7 +19,7 @@ defineProps<{ conflict: Conflict; jobId?: string }>();
 <template>
   <div class="banner" :class="conflict.kind === 'shared' ? 'leaked' : 'info'" role="alert">
     <b>Refused — nothing was started.</b>
-    <pre class="raw" style="color: var(--fg-dim); max-height: 200px">{{ conflict.text }}</pre>
+    <pre class="raw" tabindex="0" style="color: var(--fg-dim); max-height: 200px">{{ conflict.text }}</pre>
 
     <p v-if="conflict.kind === 'shared'">
       Type the stack name in the confirmation field above and press <code>down</code> again.

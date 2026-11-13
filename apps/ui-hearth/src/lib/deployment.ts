@@ -18,6 +18,12 @@ export function problemText(status: number, error: string | undefined, what: str
   return error ? `${what}: ${error}` : `${what}: HTTP ${status}`;
 }
 
+/** The note for a failed detail call. 0 or 5xx is the server failing, which Config cannot fix; `shown` = a poll failed under data still on screen. */
+export function detailNote(status: number, shown: boolean): { title: string; config: boolean } {
+  if (status === 0 || status >= 500) return { title: shown ? 'Could not refresh this deployment' : 'Could not load this deployment', config: false };
+  return { title: 'Could not resolve this deployment', config: true };
+}
+
 export type ConflictBody = { error?: string; stack?: string; kind?: string; containers?: number; deployments?: string[] };
 export type Conflict = { kind: 'shared' | 'containers' | 'referenced' | 'other'; text: string; stack: string; deployments: string[] };
 
