@@ -104,7 +104,23 @@ func AssertValidSpecName(name string) error {
 var (
 	undefinedRe = regexp.MustCompile(`undefined variable\(s\) (.+?)\.`)
 	varNameRe   = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	hostRefRe   = regexp.MustCompile(`\$\{(vars|secrets)\.([A-Za-z_][A-Za-z0-9_]*)\}`)
 )
+
+// sentinelHost satisfies every `${vars.X}`/`${secrets.X}` the source names. Those live on the host's
+// Variables page, not in the spec, so a named spec (a template) must validate without them — and
+// they are never a requiredVar. Nil host values would refuse them outright.
+func sentinelHost(source string) *spec.HostValues {
+	h := &spec.HostValues{Vars: map[string]string{}, Secrets: map[string]string{}}
+	for _, m := range hostRefRe.FindAllStringSubmatch(source, -1) {
+		if m[1] == "vars" {
+			h.Vars[m[2]] = "x"
+		} else {
+			h.Secrets[m[2]] = "x"
+		}
+	}
+	return h
+}
 
 // FindRequiredVars is which `${VAR}` references a spec cannot satisfy on its own.
 //
@@ -125,6 +141,7 @@ func FindRequiredVars(source string) []string {
 		sort.Strings(out)
 		return out
 	}
+	host := sentinelHost(source)
 	for i := 0; i < 32; i++ {
 		// Only the sentinels — NOT process.env. A variable that happens to exist in the server's
 		// environment would otherwise be silently satisfied here and then be missing on a machine
@@ -133,7 +150,7 @@ func FindRequiredVars(source string) []string {
 		for k := range found {
 			env[k] = "x"
 		}
-		_, err := spec.Parse(source, env, nil)
+		_, err := spec.Parse(source, env, host)
 		if err == nil {
 			return sorted()
 		}
@@ -236,7 +253,7 @@ func (s *SpecStore) Put(name, specYaml string, opts PutOptions) (*StoredSpec, er
 	for _, k := range requiredVars {
 		env[k] = "x"
 	}
-	parsed, err := spec.Parse(specYaml, env, nil)
+	parsed, err := spec.Parse(specYaml, env, sentinelHost(specYaml))
 	if err != nil {
 		// Nothing has touched disk yet, so there is no rollback to do — the failure is clean.
 		return nil, &Error{"spec rejected: " + err.Error()}

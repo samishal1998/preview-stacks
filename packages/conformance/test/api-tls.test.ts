@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { bootServer, tmpd, type Booted } from '../harness/server.ts';
-import { ALWAYS_OK, dockerShim } from '../harness/docker-shim.ts';
+import { ALWAYS_OK, arm, dockerShim } from '../harness/docker-shim.ts';
 
 const CERT = readFileSync(join(import.meta.dir, '../harness/tls-wildcard.crt.pem'), 'utf8');
 const KEY = readFileSync(join(import.meta.dir, '../harness/tls-wildcard.key.pem'), 'utf8');
@@ -19,10 +19,10 @@ const KEY = readFileSync(join(import.meta.dir, '../harness/tls-wildcard.key.pem'
 const SPEC = 'version: 1\nstack: pr-t\nenv:\n  PREVIEW_DOMAIN: preview.example.com\ncompose: {file: compose.yml, profiles: []}\naxes: []\n';
 const COMPOSE = 'services:\n  app:\n    image: x\n    labels:\n      - pstack.routing.port=80\n';
 
-async function boot(tag: string) {
+async function boot(tag: string, arms = ALWAYS_OK) {
   const routingDir = tmpd('tls-dynamic');
   mkdirSync(routingDir, { recursive: true });
-  const docker = dockerShim(ALWAYS_OK);
+  const docker = dockerShim(arms);
   const s = await bootServer({ tag, routingDir, domain: 'preview.example.com', pathPrefix: docker.dir });
   return { s, routingDir, stop: async () => { await s.stop(); docker.remove(); } };
 }
@@ -114,11 +114,15 @@ describe('the certificate mode over HTTP', () => {
     }
   }, 30_000);
 
-  test('the redeploy loop redeploys the awake and skips the asleep', async () => {
+  test('the redeploy loop redeploys the awake and skips the asleep and the downed', async () => {
     // negative control: drop the Sleep check in tlsRedeploy — the sleeping stack below is redeployed,
     // which IS a wake nobody asked for, and its hostname stops answering the waking page mid-flight.
-    const { s, stop } = await boot('tls-redeploy');
+    // negative control: drop the composeProjects check — pr-downed (PUT, never up, so docker does not
+    // list it) lands in started, and the redeploy brings up a stack somebody tore down.
+    // `--all` lists stopped projects too, so the napper is listed: only its Sleep record skips it.
+    const { s, stop } = await boot('tls-redeploy', arm('compose ls --all --format json', '[{"Name":"pr-awake"},{"Name":"pr-napper"}]'));
     try {
+      expect((await j(s, 'PUT', '/api/deployments/pr-downed', { spec: SPEC.replaceAll('pr-t', 'pr-downed'), compose: COMPOSE })).status).toBeLessThan(300);
       await deployAndRead(s, 'pr-awake');
       await deployAndRead(s, 'pr-napper');
       expect((await j(s, 'POST', '/api/deployments/pr-napper/sleep', {})).status).toBeLessThan(300);
@@ -136,6 +140,7 @@ describe('the certificate mode over HTTP', () => {
       };
       expect(r.started.map((x) => x.id)).toEqual(['pr-awake']);
       expect(r.skipped.some((x) => x.id === 'pr-napper' && x.reason.includes('asleep'))).toBe(true);
+      expect(r.skipped).toContainEqual({ id: 'pr-downed', reason: 'not running' });
     } finally {
       await stop();
     }

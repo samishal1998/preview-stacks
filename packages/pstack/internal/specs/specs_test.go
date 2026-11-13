@@ -85,6 +85,30 @@ func TestNamedSpecsStoreOnceReferenceMany(t *testing.T) {
 		}
 	})
 
+	t.Run("a spec naming host vars and secrets stores; they are not requiredVars", func(t *testing.T) {
+		// negative control: pass nil host values to spec.Parse in Put — "spec rejected: env.R:
+		// ${vars.REGION} — host vars live on the control plane"; nil in FindRequiredVars → [].
+		store := New(t.TempDir())
+		src := "version: 1\nstack: pr-${PR}\nenv:\n  R: ${vars.REGION}\n  S: ${secrets.TOKEN}\naxes: []\n"
+		stored, err := store.Put("hosted", src, PutOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(stored.RequiredVars, []string{"PR"}) {
+			t.Fatalf("requiredVars = %v", stored.RequiredVars)
+		}
+	})
+
+	t.Run("a secret in the stack name is still refused", func(t *testing.T) {
+		// negative control: drop the ${secrets. guard on `stack` in spec.Parse — the sentinel
+		// satisfies the reference and the Put stores a spec whose identity is a secret.
+		store := New(t.TempDir())
+		_, err := store.Put("leaky", "version: 1\nstack: pr-${secrets.X}\naxes: []\n", PutOptions{})
+		if err == nil || !strings.Contains(err.Error(), "stack: must not reference ${secrets.*}") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
 	t.Run("rejects a name that could escape the store directory", func(t *testing.T) {
 		// negative control: drop AssertValidSpecName from dir() — the Put succeeds outside Root.
 		store := New(t.TempDir())

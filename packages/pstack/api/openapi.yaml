@@ -116,11 +116,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [spec]
               properties:
-                spec: { type: string, description: The spec document, as text. }
+                spec: { type: string, description: 'The spec document, as text. Pass this OR specName.' }
                 compose: { type: string, description: The compose file, as text. }
                 env: { type: object, additionalProperties: { type: string }, description: 'Spec variables. Read from HERE, never from the query string.' }
+                specName: { type: string, description: 'A stored spec to reference instead of an inline one.' }
+                vars: { type: object, additionalProperties: { type: string }, description: "The stored spec's variables, kept with the deployment." }
       responses: { '200': { $ref: '#/components/responses/Ok' }, '201': { $ref: '#/components/responses/Created' }, '400': { $ref: '#/components/responses/BadRequest' }, '409': { $ref: '#/components/responses/Conflict' } }
     delete:
       tags: [deployments]
@@ -218,7 +219,9 @@ paths:
       operationId: getDeploymentReadiness
       summary: The readiness verdict, optionally waiting for one.
       parameters:
-        - { name: timeout, in: query, schema: { type: integer }, description: Milliseconds to wait for a verdict. }
+        - { name: timeout, in: query, schema: { type: integer }, description: 'Seconds a new watch runs for, clamped to 5–3600. Ignored when a watch is already running.' }
+        - { name: wait, in: query, schema: { type: integer }, description: 'Seconds to block for a verdict, 0–60.' }
+        - { name: refresh, in: query, schema: { type: string, enum: ['1'] }, description: '1 starts a new watch when the last one has finished.' }
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
   /api/deployments/{id}/logs:
@@ -829,16 +832,6 @@ paths:
 
   /api/sso/config/{key}:
     parameters: [{ name: key, in: path, required: true, schema: { type: string }, description: The provider's slug. }]
-    put:
-      tags: [sso]
-      operationId: putSsoProvider
-      x-cli-name: provider put
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { type: object }
-      responses: { '200': { $ref: '#/components/responses/Ok' }, '400': { $ref: '#/components/responses/BadRequest' } }
     delete:
       tags: [sso]
       operationId: deleteSsoProvider

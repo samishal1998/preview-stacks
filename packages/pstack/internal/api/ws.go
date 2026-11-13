@@ -45,6 +45,10 @@ func (s *Server) terminalRoute(w http.ResponseWriter, r *http.Request, dep *regi
 	}
 	// Challenge unknown skips a docker call this route has no use for.
 	rt := inspect.DeploymentRuntime(inspect.RuntimeArgs{Stack: st.Stack, Runner: s.host, Challenge: inspect.Unknown, Orchestrator: orchestratorOf(st)})
+	if !rt.Reachable {
+		writeError(w, 503, "docker did not answer, so ownership of this container could not be checked")
+		return nil
+	}
 	c := findContainer(rt, wanted)
 	if c == nil {
 		writeJSON(w, 404, jsonx.O("error", `no container "`+wanted+`" in deployment `+dep.ID, "containers", containerNames(rt)))
