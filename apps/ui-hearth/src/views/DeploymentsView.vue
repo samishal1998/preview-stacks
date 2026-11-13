@@ -26,7 +26,7 @@ import {
   type TableRow,
   type TableSort,
 } from '@hearth-ui/vue';
-import { api } from '../api';
+import { deploymentApi } from '../api-deployment';
 import { BULK_LABEL, chosen, isTearDown, sendable, skipReason, type BulkAction } from '../bulk';
 import { filterDeployments, runState, summarize } from '../lib/deployments';
 import { problem } from '../lib/problem';
@@ -117,7 +117,7 @@ async function send(ids: string[], action: BulkAction): Promise<void> {
       run.results.push({ id, skipped: why });
       continue;
     }
-    const r = await api.act(id, action === 'down-forget' ? 'down' : action, action === 'down-forget' ? { forget: true } : {});
+    const r = await deploymentApi.act(id, action === 'down-forget' ? 'down' : action, action === 'down-forget' ? { forget: true } : {});
     if (r.status === 202 && r.body.job) run.results.push({ id, job: { id: r.body.job.id, state: r.body.job.state } });
     else run.results.push({ id, error: problem(r, BULK_LABEL[action].toLowerCase()) });
   }

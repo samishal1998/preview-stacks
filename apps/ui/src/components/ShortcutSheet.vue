@@ -30,7 +30,7 @@ const emit = defineEmits<{ close: [] }>();
         <dl>
           <template v-for="s in SHORTCUTS" :key="s.keys">
             <dt>
-              <kbd v-for="k in s.keys.split(' ')" :key="k" style="margin-left: 4px">{{ k }}</kbd>
+              <kbd v-for="k in s.keys.split(' ')" :key="k" style="margin-left: var(--s1)">{{ k }}</kbd>
             </dt>
             <dd>{{ s.what }}</dd>
           </template>

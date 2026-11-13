@@ -62,6 +62,11 @@
   nav .meta { border-top: 1px solid var(--line); padding: 10px 9px 0; font-size: 11px; color: var(--fg-mute); }
   nav .meta div { overflow-wrap: anywhere; margin-bottom: 3px; }
   .view { padding: 14px 16px 32px; min-width: 0; }
+  /* Narrow: the nav goes above the view, full width, and stops being sticky. */
+  @media (max-width: 640px) {
+    .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+    nav { position: static; border-right: 0; border-bottom: 1px solid var(--line); }
+  }
 
   .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
   .two.wide-left { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
@@ -1382,7 +1387,7 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/vue@3.5.40/dist/vue.global.prod.js" integrity="sha384-yjSqnKX+01fhYzLUMRlCkMrHMTdKxwYcGIk5HZ6ug+4nfJn10+F7YsKRuGR5kQac" crossorigin="anonymous"></script>
 <script>
 'use strict';
 const { createApp } = Vue;

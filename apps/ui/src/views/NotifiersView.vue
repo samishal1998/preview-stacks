@@ -237,7 +237,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
       <!-- Only a signing type ever produces one; see `signs` in notify.ts. -->
       <div v-if="revealed" class="banner ok">
         <b>Signing secret for “{{ revealed.name }}” — shown once. Copy it now.</b>
-        <pre class="code">{{ revealed.secret }}</pre>
+        <pre class="code" tabindex="0">{{ revealed.secret }}</pre>
         <div class="row">
           <button class="btn" @click="revealed = null">Dismiss</button>
         </div>
@@ -280,7 +280,7 @@ async function redeliver(d: DeliveryRow): Promise<void> {
                   <td role="cell" data-label="last delivery">
                     <span v-if="!n.lastStatus" class="mute">never</span>
                     <span v-else :class="n.lastStatus === 'ok' ? 's-ok' : 's-failed'">
-                      {{ n.lastStatus }}
+                      {{ sentence(n.lastStatus) }}
                     </span>
                     <div v-if="n.lastAt" class="mute nowrap" style="font-size: var(--t-sm)">
                       <RelativeTime :at="n.lastAt" />

@@ -206,7 +206,7 @@ const runningJobs = computed(() => state.jobs.filter((j) => j.state === 'running
       -->
       <div class="foot">
         <div v-if="state.healthError" class="s-failed">Can't reach the server</div>
-        <div v-else-if="state.health" class="row" style="gap: 4px">
+        <div v-else-if="state.health" class="row" style="gap: var(--s1)">
           <span v-if="authState.user" class="foot-who" :title="authState.user.username">{{ authState.user.username }}</span>
           <span v-else-if="authState.root && authState.checked" class="foot-who">token access</span>
           <!-- The role, permanently, next to who you are: it is the reason half this rail is or is

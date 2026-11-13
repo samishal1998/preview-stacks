@@ -460,7 +460,7 @@ function loadExample(): void {
         <span v-if="result" class="s-ok">
           {{ result.created ? 'Created' : 'Replaced' }} — stack
           <b>{{ result.stack }}</b>
-          <RouterLink :to="`/deployments/${encodeURIComponent(result.id)}`" style="margin-left: 8px">
+          <RouterLink :to="`/deployments/${encodeURIComponent(result.id)}`" style="margin-left: var(--s2)">
             open →
           </RouterLink>
         </span>

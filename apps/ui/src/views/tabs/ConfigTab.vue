@@ -107,7 +107,7 @@ const clashes = computed(() => conflictingVars(dep.vars, storedVars.value));
                 -->
                 <td role="cell" class="dim" data-label="length">
                   {{ e.length }} chars
-                  <span v-if="e.length === 0" class="badge warn" style="margin-left: 6px">never set</span>
+                  <span v-if="e.length === 0" class="badge warn" style="margin-left: var(--s2)">never set</span>
                 </td>
               </tr>
               <tr v-if="!dep.detail.env.length" role="row">

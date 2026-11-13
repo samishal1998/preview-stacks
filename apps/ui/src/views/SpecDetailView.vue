@@ -128,7 +128,7 @@ const users = computed(() => state.deployments.filter((d) => d.specName === prop
           <b>Hidden without an access token.</b>
           <p><RouterLink to="/settings">Add your token</RouterLink> to see it.</p>
         </div>
-        <pre v-else-if="spec.source" class="code">{{ spec.source }}</pre>
+        <pre v-else-if="spec.source" class="code" tabindex="0">{{ spec.source }}</pre>
         <!-- Withheld above, genuinely empty here — the two must not read the same. -->
         <p v-else class="mute">No source.</p>
       </section>

@@ -416,7 +416,7 @@ function rulesLine(c: SsoConfig): string {
         <div class="field">
           <label>Redirect URI</label>
           <div class="row sso-copy">
-            <code class="sso-url">{{ callbackUrl }}</code>
+            <code class="sso-url" tabindex="0">{{ callbackUrl }}</code>
             <button type="button" @click="copyCallback">Copy</button>
           </div>
           <p class="hint">Must match the provider's registered callback exactly.</p>
@@ -443,7 +443,7 @@ function rulesLine(c: SsoConfig): string {
             </div>
             <div class="field">
               <label>Issuer</label>
-              <code class="sso-url" :data-incomplete="assembledDiscovery.includes('<') || undefined">{{ assembledDiscovery }}</code>
+              <code class="sso-url" tabindex="0" :data-incomplete="assembledDiscovery.includes('<') || undefined">{{ assembledDiscovery }}</code>
               <p class="hint">Fetched when you save.</p>
             </div>
           </template>
@@ -621,7 +621,7 @@ function rulesLine(c: SsoConfig): string {
         <div class="phead"><h2 class="section">Callback URL</h2></div>
         <p class="dim">Register this with every provider.</p>
         <div class="row sso-copy">
-          <code class="sso-url">{{ callbackUrl }}</code>
+          <code class="sso-url" tabindex="0">{{ callbackUrl }}</code>
           <button type="button" @click="copyCallback">Copy</button>
         </div>
       </section>

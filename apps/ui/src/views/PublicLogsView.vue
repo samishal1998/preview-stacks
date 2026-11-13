@@ -194,7 +194,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <span class="grow" />
-      <span v-if="state" class="badge" :class="state.cls">{{ state.text }}</span>
+      <span v-if="state" class="badge" :class="state.cls">{{ sentence(state.text) }}</span>
     </div>
 
     <div v-if="fatal" role="alert" class="banner failed">

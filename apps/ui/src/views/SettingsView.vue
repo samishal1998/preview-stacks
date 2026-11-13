@@ -301,7 +301,7 @@ const roleOptions = ROLES.map((r) => ({ value: r, label: sentence(r), hint: ROLE
         </div>
       </div>
 
-      <div class="row" style="gap: 8px; margin-top: 4px">
+      <div class="row" style="gap: var(--s2); margin-top: var(--s1)">
         <button class="btn" :disabled="checking" @click="recheck">
           {{ checking ? 'Checking…' : 'Test connection' }}
         </button>

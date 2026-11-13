@@ -161,7 +161,7 @@ const destructive: BulkAction[] = ['down', 'down-forget'];
           <ul>
             <li v-for="r in bulk.results" :key="r.id">
               <span class="mono">{{ r.id }}</span> —
-              <RouterLink v-if="r.job" :to="`/jobs/${encodeURIComponent(r.job.id)}`">{{ r.job.state }}</RouterLink>
+              <RouterLink v-if="r.job" :to="`/jobs/${encodeURIComponent(r.job.id)}`">{{ sentence(r.job.state) }}</RouterLink>
               <span v-else-if="r.error" class="s-failed">{{ r.error }}</span>
               <span v-else class="mute">skipped: {{ r.skipped }}</span>
             </li>

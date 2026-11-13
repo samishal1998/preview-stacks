@@ -27,6 +27,7 @@ import {
 import type { Job } from '@samyx/preview-stacks-client';
 import { api } from '../api';
 import { coreApi } from '../api-core';
+import { deploymentApi } from '../api-deployment';
 import { actionLabel, jobTone, sentence, stamp, took } from '../format';
 import { addLine, countUnverifiable, isTerminal, jobTarget, leakedAxes, logEntries, stepLine, stepState, supersededBy, waitReason, waitText, type LogLine } from '../lib/jobs';
 import { problem } from '../lib/problem';
@@ -158,7 +159,7 @@ const rerunning = ref(false);
 async function rerun(): Promise<void> {
   if (!job.value?.deployment) return;
   rerunning.value = true;
-  const r = await api.act(job.value.deployment, job.value.action as 'up' | 'verify');
+  const r = await deploymentApi.act(job.value.deployment, job.value.action as 'up' | 'verify');
   rerunning.value = false;
   if (r.status === 202 && r.body.job) void router.push(`/jobs/${encodeURIComponent(r.body.job.id)}`);
   else toast(problem(r, actionLabel(job.value.action)), 'danger');

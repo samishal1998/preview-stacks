@@ -46,7 +46,7 @@ import SkeletonList from '../../components/SkeletonList.vue';
         <li v-if="dep.detail.compose">
           <span class="k">Profiles</span>
           <span class="v">
-            <span v-for="p in dep.detail.compose.profiles" :key="p" class="badge" style="margin-right: 4px">
+            <span v-for="p in dep.detail.compose.profiles" :key="p" class="badge" style="margin-right: var(--s1)">
               {{ p }}
             </span>
             <span v-if="!dep.detail.compose.profiles.length" class="mute">none</span>
@@ -82,8 +82,8 @@ import SkeletonList from '../../components/SkeletonList.vue';
             <span class="mute">({{ dep.detail.asleep.reason }})</span>
             <div v-if="dep.detail.asleep.hosts.length || dep.detail.asleep.rules.length" class="mute" style="font-size: var(--t-sm)">
               wakes on a request to
-              <span v-for="h in dep.detail.asleep.hosts" :key="h" class="mono" style="display: inline-block; margin-right: 8px">{{ h }}</span>
-              <span v-for="r in dep.detail.asleep.rules" :key="r" class="mono" style="display: inline-block; margin-right: 8px">/{{ r }}/</span>
+              <span v-for="h in dep.detail.asleep.hosts" :key="h" class="mono" style="display: inline-block; margin-right: var(--s2)">{{ h }}</span>
+              <span v-for="r in dep.detail.asleep.rules" :key="r" class="mono" style="display: inline-block; margin-right: var(--s2)">/{{ r }}/</span>
             </div>
             <div v-else class="mute" style="font-size: var(--t-sm)">
               no hostnames — only Wake brings it back
@@ -93,7 +93,7 @@ import SkeletonList from '../../components/SkeletonList.vue';
         <li v-if="dep.detail.compose">
           <span class="k">Overlays</span>
           <span class="v">
-            <span v-for="o in dep.detail.compose.overlays" :key="o" class="mono" style="margin-right: 8px">{{ o }}</span>
+            <span v-for="o in dep.detail.compose.overlays" :key="o" class="mono" style="margin-right: var(--s2)">{{ o }}</span>
             <span v-if="!dep.detail.compose.overlays.length" class="mute">none</span>
           </span>
         </li>

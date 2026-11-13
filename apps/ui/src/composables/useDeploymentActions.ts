@@ -28,6 +28,8 @@ export const pending = ref<'' | LifecycleAction | 'forget' | 'down-forget'>('');
 export const actionError = ref('');
 export const conflict = ref<Conflict | null>(null);
 export const conflictJobId = ref('');
+/** The Danger tab's own controls raised actionError/conflict: it prints them by its buttons, the header does not. */
+export const fromDanger = ref(false);
 
 export const busy = computed(() => dep.detail?.busy === true);
 /**
@@ -89,6 +91,7 @@ export async function act(
   pending.value = forget ? 'down-forget' : action;
   actionError.value = '';
   conflict.value = null;
+  fromDanger.value = false;
 
   const body =
     action === 'down'
@@ -151,4 +154,5 @@ export function resetActions(): void {
   actionError.value = '';
   conflict.value = null;
   conflictJobId.value = '';
+  fromDanger.value = false;
 }

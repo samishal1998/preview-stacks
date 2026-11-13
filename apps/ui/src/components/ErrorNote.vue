@@ -17,6 +17,6 @@ defineProps<{ text: string; title?: string }>();
 <template>
   <div class="banner failed" role="alert">
     <b>{{ title ?? 'That did not work.' }}</b>
-    <pre class="raw">{{ text }}</pre>
+    <pre class="raw" tabindex="0">{{ text }}</pre>
   </div>
 </template>

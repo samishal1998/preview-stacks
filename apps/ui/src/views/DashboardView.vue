@@ -10,7 +10,7 @@ import { api, problem } from '../api/client';
 import type { Control } from '../api/types';
 import { leakedJobs, loadDeployments, loadJobs, state, summary } from '../composables/useControlPlane';
 import { usePolling } from '../composables/usePolling';
-import { actionLabel, ago, took } from '../composables/useFormat';
+import { actionLabel, ago, sentence, took } from '../composables/useFormat';
 import StateBadge from '../components/StateBadge.vue';
 import SkeletonList from '../components/SkeletonList.vue';
 import InfoHint from '../components/InfoHint.vue';
@@ -79,7 +79,7 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
           v-for="j in leakedJobs.slice(0, 3)"
           :key="j.id"
           :to="`/jobs/${encodeURIComponent(j.id)}`"
-          style="margin-left: 8px"
+          style="margin-left: var(--s2)"
           >{{ j.stack }} →</RouterLink
         >
       </p>
@@ -132,13 +132,13 @@ const recentJobs = computed(() => state.jobs.slice(0, 8));
               <tr v-for="(s, i) in control.services" :key="s.name" role="row" :style="{ '--i': i }">
                 <td role="cell" class="name" data-label="service">{{ s.name }}</td>
                 <td role="cell" data-label="state" :class="s.state === 'running' ? 's-ok' : 's-failed'">
-                  {{ s.state || '—' }}
+                  {{ sentence(s.state) }}
                 </td>
                 <td role="cell"
                   data-label="health"
                   :class="s.health === 'healthy' ? 's-ok' : s.health ? 's-failed' : ''"
                 >
-                  {{ s.health || '—' }}
+                  {{ sentence(s.health) }}
                 </td>
                 <td role="cell" class="name dim" data-label="image">{{ s.image || '—' }}</td>
               </tr>
