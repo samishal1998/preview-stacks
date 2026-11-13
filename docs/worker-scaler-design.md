@@ -332,8 +332,9 @@ stored by pstack like Loki's S3 secret and handed only to the root token.
 
 **Worth knowing:** past `min`, swarm reports `insufficient resources` only against reservations, so
 the scaler adds workers for load only when previews declare `deploy.resources.reservations` (or
-`mem_reservation`). A cluster with no active node at all (the manager drained by
-`--previews-on workers`, `min: 0`) still gets its first worker: a drained-node reason qualifies.
+`mem_reservation`). A cluster with no node previews may use (the manager labelled off by
+`--previews-on workers`, `min: 0`) still gets its first worker: a constraints clause naming no more
+nodes than there are managers qualifies.
 usage.md says both.
 
 ## Testing

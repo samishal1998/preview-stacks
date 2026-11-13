@@ -16,6 +16,8 @@ export const swarmApi = {
   drain: (node: string) => call<unknown>('POST', `/api/swarm/nodes/${id(node)}/drain`, {}),
   undrain: (node: string) => call<unknown>('POST', `/api/swarm/nodes/${id(node)}/undrain`, {}),
   remove: (node: string) => call<unknown>('DELETE', `/api/swarm/nodes/${id(node)}`),
+  /** Where previews run: `workers` labels this manager off, `any` back on. */
+  previews: (where: 'workers' | 'any') => call<{ previewsOn: string; note: string | null }>('POST', `/api/swarm/previews/${where}`, {}),
   /** The join material is text/plain, which `call` (JSON only) cannot carry — the one raw fetch here. */
   async join(path: string): Promise<{ ok: boolean; status: number; text: string }> {
     try {

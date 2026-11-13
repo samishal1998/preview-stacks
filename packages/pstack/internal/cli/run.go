@@ -708,7 +708,7 @@ func swarmCmd(args *Parsed, runner exec.Runner, io IO) *Exit {
 			return &Exit{Code: ExitFailed, Msg: err.Error()}
 		}
 		if args.Arg == swarm.PreviewsOnWorkers {
-			fmt.Fprintln(out, "previews run on workers only (this manager is drained)")
+			fmt.Fprintln(out, "previews run on workers only")
 		} else {
 			fmt.Fprintln(out, "previews run on any node")
 		}

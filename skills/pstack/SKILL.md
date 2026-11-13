@@ -322,7 +322,8 @@ The cutover: push config to B → `forward set` on A → `migrate` → switch DN
 ### Worker scaler: pstack adds and removes swarm workers
 
 Opt-in, swarm only. A `scaler` service in the control stack runs OpenTofu: it creates a worker when
-a preview's task is stuck for `insufficient resources` (or a drained node), and drains and destroys
+a preview's task is stuck for `insufficient resources` (or a drained node, or a manager kept off by
+`--previews-on workers`), and drains and destroys
 one it created after it sits empty past `grace`.
 
 ```bash

@@ -4,9 +4,9 @@
 // the prunes (internal/api/prune.go).
 //
 //   - A compose host, and the control-plane node of a swarm, run the agent as one local container.
-//     On swarm the global service skips that node (`node.id!=<self>`): a drained manager
-//     (`--previews-on workers`) runs no swarm task at all, and it is the node whose disk filled
-//     (NP-R10). Without the constraint an undrained manager would report twice.
+//     On swarm the global service skips that node (`node.id!=<self>`): it is the node whose disk
+//     filled (NP-R10), and the local container already reports it. Without the constraint the
+//     manager would report twice.
 //   - The image is AgentImage unless PSTACK_AGENT_IMAGE is set at init time. That override is
 //     env-only and never read back: re-export it on every `pstack init` and `pstack upgrade`, or the
 //     agent switches back to AgentImage. Cloud-init does not pass it (NP-R6).

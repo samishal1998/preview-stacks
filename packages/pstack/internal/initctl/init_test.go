@@ -1664,12 +1664,44 @@ func TestInitLoki(t *testing.T) {
 	})
 }
 
+// negative control: drop the UndrainSelf call from Init — a manager drained by 0.44's Swarm page
+// stays drained, and the control stack it is about to start cannot attach to the overlay.
+func TestInitMakesADrainedManagerActive(t *testing.T) {
+	f := okRunner("active", "")
+	base := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		switch {
+		case strings.Contains(cmd, "{{json .Swarm}}"):
+			return exec.Result{OK: true, Stdout: `{"LocalNodeState":"active","ControlAvailable":true,"NodeID":"n1"}`}, true
+		case strings.Contains(cmd, "docker node ls"):
+			return exec.Result{OK: true, Stdout: `{"ID":"n1","Hostname":"mgr","Status":"Ready","Availability":"Drain","ManagerStatus":"Leader","Self":"true"}`}, true
+		}
+		return base(cmd)
+	}
+	var out bytes.Buffer
+	err := initctl.Init(initctl.Options{
+		DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+		UI: initctl.Basic, Orchestrator: spec.Swarm, Runner: f, Out: &out,
+	})
+	cmds := strings.Join(f.Commands(), "\n")
+	if err != nil || !strings.Contains(cmds, "docker node update --availability 'active' 'n1'") || !strings.Contains(out.String(), "this manager was drained") {
+		t.Fatalf("err %v out %q cmds %v", err, out.String(), f.Commands())
+	}
+}
+
 // negative control: drop the PreviewsOn block from Init — no `docker node update` runs and the host
 // keeps scheduling previews on the manager it was asked to keep for the control stack.
 func TestInitPreviewsOn(t *testing.T) {
 	run := func(t *testing.T, o spec.Orchestrator, mode string) (*exec.Fake, string, error) {
 		t.Helper()
 		f := okRunner("active", "")
+		base := f.Answer
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			if strings.Contains(cmd, "{{json .Swarm}}") {
+				return exec.Result{OK: true, Stdout: `{"LocalNodeState":"active","NodeID":"n1"}`}, true
+			}
+			return base(cmd)
+		}
 		var out bytes.Buffer
 		err := initctl.Init(initctl.Options{
 			DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
@@ -1677,7 +1709,7 @@ func TestInitPreviewsOn(t *testing.T) {
 		})
 		return f, out.String(), err
 	}
-	drain := "docker node update --availability 'drain' 'self'"
+	drain := "docker node update --label-add 'pstack.previews=off' 'n1'"
 	t.Run("workers drains this node under swarm", func(t *testing.T) {
 		f, out, err := run(t, spec.Swarm, "workers")
 		if err != nil || !strings.Contains(strings.Join(f.Commands(), "\n"), drain) || !strings.Contains(out, "previews run on workers only") {

@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "1e8caa1a899ca74b5ba66176d9f8f20226a9886934f3f23ba9786ab7736e4470",
+  "specDigest": "cb4a0d005d59f91d171766f1bc5c4b4ada302555f79a05ca10ab9da4afa4fb8e",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -573,7 +573,7 @@
       "path": "/api/swarm/nodes/{id}/drain",
       "command": "swarm node-drain",
       "funcName": "NewSwarmNodeDrainCommand",
-      "summary": "Take a node out of the running — swarm stops placing work on it and moves what is there.",
+      "summary": "Take a node out of the running — swarm stops placing work on it and moves what is there. Refused (409) for the manager the API runs on; use POST /api/swarm/previews/workers.",
       "flags": [
         {
           "name": "id",
@@ -585,7 +585,7 @@
       "ext": {
         "name": "node-drain"
       },
-      "digest": "91c00bcbc737fe46"
+      "digest": "fe8c2e7848263e37"
     },
     "exportConfig": {
       "operationId": "exportConfig",
@@ -1959,6 +1959,30 @@
         "name": "set"
       },
       "digest": "bfa4eeb0f5e4d304"
+    },
+    "setSwarmPreviews": {
+      "operationId": "setSwarmPreviews",
+      "method": "POST",
+      "path": "/api/swarm/previews/{where}",
+      "command": "swarm previews",
+      "funcName": "NewSwarmPreviewsCommand",
+      "summary": "Where previews run. `workers` labels this manager pstack.previews=off, which every preview's placement excludes; `any` labels it on.",
+      "flags": [
+        {
+          "name": "where",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "workers",
+            "any"
+          ]
+        }
+      ],
+      "ext": {
+        "name": "previews"
+      },
+      "digest": "0f920296e226a2cd"
     },
     "setUserPassword": {
       "operationId": "setUserPassword",

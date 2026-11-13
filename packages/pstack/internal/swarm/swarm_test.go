@@ -98,6 +98,35 @@ func inactive() *exec.Fake {
 	return shim(map[string]string{cmdInfo: "{\"LocalNodeState\":\"inactive\"}\n"})
 }
 
+// negative control: drop the placement step from Swarmify — no service carries the constraint, so a
+// manager labelled pstack.previews=off still takes previews.
+func TestSwarmifyKeepsPreviewsOffLabelledNodes(t *testing.T) {
+	input := omap.New()
+	services := input.Ensure("services")
+	services.Set("bare", omap.New())
+	own := omap.New()
+	own.Ensure("deploy").Ensure("placement").Set("constraints", []any{"node.role == worker"})
+	services.Set("own", own)
+	twice := omap.New()
+	twice.Ensure("deploy").Ensure("placement").Set("constraints", []any{PreviewsOffConstraint})
+	services.Set("twice", twice)
+	before := jsonOf(t, input)
+
+	out := Swarmify(input, nil).Doc.GetMap("services")
+	for svc, want := range map[string]string{
+		"bare":  `["node.labels.pstack.previews != off"]`,
+		"own":   `["node.role == worker","node.labels.pstack.previews != off"]`,
+		"twice": `["node.labels.pstack.previews != off"]`,
+	} {
+		if got := jsonOf(t, out.GetMap(svc).GetMap("deploy").GetMap("placement").GetSlice("constraints")); got != want {
+			t.Errorf("%s: %s, want %s", svc, got, want)
+		}
+	}
+	if jsonOf(t, input) != before {
+		t.Error("Swarmify mutated its input")
+	}
+}
+
 func TestSwarmify(t *testing.T) {
 	t.Run("converts faithfully and names every change", func(t *testing.T) {
 		// negative control: skip the profile filter — `worker` survives and the key list is four long.
@@ -204,7 +233,7 @@ func TestSwarmify(t *testing.T) {
 			t.Errorf("notes:\n%s\nwant:\n%s", strings.Join(res.Notes, "\n"), strings.Join(want, "\n"))
 		}
 		// The converted document's key order is the author's, with `deploy` appended last.
-		if got := jsonOf(t, res.Doc.GetMap("services").GetMap("app")); got != `{"image":"nginx","labels":["pstack.routing.port=80"],"x-note":"kept","deploy":{"restart_policy":{"condition":"any"},"resources":{"limits":{"memory":"256m","cpus":"0.5"}},"labels":["traefik.enable=true","traefik.swarm.network=preview-ingress"]}}` {
+		if got := jsonOf(t, res.Doc.GetMap("services").GetMap("app")); got != `{"image":"nginx","labels":["pstack.routing.port=80"],"x-note":"kept","deploy":{"restart_policy":{"condition":"any"},"resources":{"limits":{"memory":"256m","cpus":"0.5"}},"labels":["traefik.enable=true","traefik.swarm.network=preview-ingress"],"placement":{"constraints":["node.labels.pstack.previews != off"]}}}` {
 			t.Errorf("app: %s", got)
 		}
 	})
@@ -853,6 +882,8 @@ func TestLokiPluginInstall(t *testing.T) {
 
 // negative control: drop the `!n.Self` test — the manager itself, drained, counts as the worker the
 // previews will run on, and the "no worker is ready" note never fires on a manager-only host.
+// negative control: pass "self" to PreviewsLabelCmd again — the label no longer names n1, which a
+// real docker needs (`docker node update` refuses "self": "node self not found").
 func TestSetPreviewsOn(t *testing.T) {
 	ran := func(f *exec.Fake, want string) bool {
 		for _, c := range f.Commands() {
@@ -862,14 +893,14 @@ func TestSetPreviewsOn(t *testing.T) {
 		}
 		return false
 	}
-	t.Run("workers drains this node and is quiet when a worker is ready", func(t *testing.T) {
+	t.Run("workers labels this node off and is quiet when a worker is ready", func(t *testing.T) {
 		f := manager(t)
 		note, err := SetPreviewsOn(f, PreviewsOnWorkers)
 		if err != nil || note != "" {
 			t.Fatalf("note %q err %v", note, err)
 		}
-		if !ran(f, NodeAvailabilityCmd("self", "drain")) {
-			t.Errorf("no drain in %v", f.Commands())
+		if !ran(f, PreviewsLabelCmd("n1", "off")) {
+			t.Errorf("no label in %v", f.Commands())
 		}
 	})
 	t.Run("workers with no other ready node says previews will wait", func(t *testing.T) {
@@ -882,10 +913,10 @@ func TestSetPreviewsOn(t *testing.T) {
 			t.Fatalf("note %q err %v", note, err)
 		}
 	})
-	t.Run("any makes this node schedulable and says nothing", func(t *testing.T) {
+	t.Run("any labels this node on and says nothing", func(t *testing.T) {
 		f := manager(t)
 		note, err := SetPreviewsOn(f, PreviewsOnAny)
-		if err != nil || note != "" || !ran(f, NodeAvailabilityCmd("self", "active")) {
+		if err != nil || note != "" || !ran(f, PreviewsLabelCmd("n1", "on")) {
 			t.Fatalf("note %q err %v %v", note, err, f.Commands())
 		}
 	})
@@ -895,13 +926,57 @@ func TestSetPreviewsOn(t *testing.T) {
 			t.Fatalf("err %v ran %v", err, f.Commands())
 		}
 	})
+	t.Run("a host outside a swarm is refused before docker node update", func(t *testing.T) {
+		f := inactive()
+		if _, err := SetPreviewsOn(f, PreviewsOnWorkers); err == nil || !strings.Contains(err.Error(), "not a swarm manager") {
+			t.Fatalf("err %v", err)
+		}
+		for _, c := range f.Commands() {
+			if strings.HasPrefix(c, "docker node update") {
+				t.Fatalf("ran %q", c)
+			}
+		}
+	})
 	t.Run("docker's refusal is the error", func(t *testing.T) {
-		f := exec.NewFake(nil, "")
-		f.Answer = func(string) (exec.Result, bool) {
+		f := manager(t)
+		f.Answer = func(cmd string) (exec.Result, bool) {
+			if strings.TrimSpace(cmd) == cmdInfo {
+				return exec.Result{OK: true, Stdout: read(t, "info-active.json")}, true
+			}
 			return exec.Result{OK: false, Stderr: "Error response from daemon: This node is not a swarm manager.\nmore"}, true
 		}
 		if _, err := SetPreviewsOn(f, PreviewsOnWorkers); err == nil || !strings.Contains(err.Error(), "not a swarm manager") || strings.Contains(err.Error(), "more") {
 			t.Fatalf("err %v", err)
 		}
 	})
+}
+
+// negative control: run the two commands in the other order → the manager is active and unlabelled
+// for a moment, and a preview can land on it; the order check fails.
+func TestUndrainSelf(t *testing.T) {
+	drained := strings.Replace(read(t, "node-ls.jsonl"), `"Availability":"Active","ManagerStatus":"Leader"`, `"Availability":"Drain","ManagerStatus":"Leader"`, 1)
+	f := shim(map[string]string{cmdInfo: read(t, "info-active.json"), cmdNodeLs: drained})
+	note, err := UndrainSelf(f)
+	if err != nil || !strings.Contains(note, "was drained") {
+		t.Fatalf("note %q err %v", note, err)
+	}
+	var updates []string
+	for _, c := range f.Commands() {
+		if strings.HasPrefix(c, "docker node update") {
+			updates = append(updates, c)
+		}
+	}
+	if want := []string{PreviewsLabelCmd("n1", "off"), NodeAvailabilityCmd("n1", "active")}; strings.Join(updates, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("updates %v, want %v", updates, want)
+	}
+
+	f = manager(t) // active already: nothing runs
+	if note, err := UndrainSelf(f); err != nil || note != "" {
+		t.Fatalf("note %q err %v", note, err)
+	}
+	for _, c := range f.Commands() {
+		if strings.HasPrefix(c, "docker node update") {
+			t.Fatalf("ran %q on an active manager", c)
+		}
+	}
 }

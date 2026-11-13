@@ -34,6 +34,7 @@
         "why": "overlay network traffic — VXLAN (every node ↔ every node)"
       }
     ],
-    "note": "Add a worker: GET /api/swarm/join?format=command|script|cloud-config, run it on the new machine."
+    "note": "Add a worker: GET /api/swarm/join?format=command|script|cloud-config, run it on the new machine.",
+    "previewsOn": "any"
   }
 }

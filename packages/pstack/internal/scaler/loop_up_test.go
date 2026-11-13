@@ -13,20 +13,40 @@ import (
 const fits = "no suitable node (insufficient resources on 2 nodes)"
 
 func TestQualifies(t *testing.T) {
-	// negative control: accept any clause after `no suitable node (` → the scheduling-constraints row passes and this fails
-	for reason, want := range map[string]bool{
-		"no suitable node (insufficient resources on 2 nodes)":                                                 true,
-		"no suitable node (insufficient resources on 1 node)":                                                  true,
-		"no suitable node (1 node not available for new tasks)":                                                true,
-		"no suitable node (insufficient resources on 2 nodes; 1 node not available for new tasks)":             true,
-		"no suitable node (scheduling constraints not satisfied on 1 node; insufficient resources on 2 nodes)": false,
-		"no suitable node":    false,
-		"no suitable node ()": false,
-		"never allocated: no suitable node (insufficient resources on 2 nodes)": false,
+	// negative control: drop the `n > managers` test → "on 2 nodes" with one manager qualifies and this fails
+	for _, c := range []struct {
+		reason   string
+		managers int
+		want     bool
+	}{
+		{"no suitable node (insufficient resources on 2 nodes)", 1, true},
+		{"no suitable node (insufficient resources on 1 node)", 1, true},
+		{"no suitable node (1 node not available for new tasks)", 1, true},
+		{"no suitable node (insufficient resources on 2 nodes; 1 node not available for new tasks)", 1, true},
+		// --previews-on workers: the manager is labelled off, so its constraint clause names it.
+		{"no suitable node (scheduling constraints not satisfied on 1 node)", 1, true},
+		{"no suitable node (scheduling constraints not satisfied on 1 node; insufficient resources on 2 nodes)", 1, true},
+		// More nodes fail the constraints than there are managers: a worker fails them too.
+		{"no suitable node (scheduling constraints not satisfied on 2 nodes)", 1, false},
+		{"no suitable node (scheduling constraints not satisfied on 1 node; insufficient resources on 2 nodes)", 0, false},
+		{"no suitable node (unsupported platform on 1 node)", 1, false},
+		{"no suitable node", 1, false},
+		{"no suitable node ()", 1, false},
+		{"never allocated: no suitable node (insufficient resources on 2 nodes)", 1, false},
 	} {
-		if got := Qualifies(reason); got != want {
-			t.Errorf("Qualifies(%q) = %v, want %v", reason, got, want)
+		if got := Qualifies(c.reason, c.managers); got != c.want {
+			t.Errorf("Qualifies(%q, %d) = %v, want %v", c.reason, c.managers, got, c.want)
 		}
+	}
+}
+
+// negative control: drop the constraint branch from Qualifies → the clause qualifies nothing and no apply runs
+func TestScaleUpOnAManagerKeptForTheControlStack(t *testing.T) {
+	h := newHarness(t)
+	h.stuck("pr-42_api", "no suitable node (scheduling constraints not satisfied on 1 node)")
+	h.tick()
+	if n := h.applies(); n != 1 {
+		t.Fatalf("applies %d, want 1", n)
 	}
 }
 

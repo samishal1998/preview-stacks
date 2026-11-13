@@ -225,7 +225,7 @@ type Options struct {
 	// range differs is recreated, which needs every preview off it first.
 	IngressSubnet string
 	SharedSubnet  string
-	// PreviewsOn is `workers` (drain this manager: control stack only), `any` (undo that) or ""
+	// PreviewsOn is `workers` (label this manager off: control stack only), `any` (undo that) or ""
 	// (nobody asked: availability is left alone, so `pstack upgrade` never changes it). Swarm only.
 	PreviewsOn string
 	// NoOOMProtect skips the dockerd oom_score_adj step (PSTACK_NO_OOM_PROTECT). For a host that
@@ -447,8 +447,20 @@ func Init(opts Options) error {
 	}
 
 	// ── 1b'. Where previews run ─────────────────────────────────────────────────────────────────
-	// Drain is swarm's own scheduling state and survives a restart, so this is applied once and never
-	// read back. The control stack is plain compose, not swarm services: draining does not touch it.
+	// A drained or paused manager cannot start the control stack (swarm.UndrainSelf): turn it into
+	// the label first, whatever --previews-on says. `any` below then labels it back on. Not under
+	// --dry-run: what it would do depends on a docker answer a dry run never gets.
+	if orchestrator == spec.Swarm && !dryRun {
+		note, err := swarm.UndrainSelf(runner)
+		if err != nil {
+			return errors.New("could not make this manager active: " + err.Error())
+		}
+		if note != "" {
+			fmt.Fprintln(out, "  "+note)
+		}
+	}
+	// A node label: swarm's own state, it survives a restart, so this is applied once and never read
+	// back. Every preview's placement excludes the label (swarm.PreviewsOffConstraint).
 	if opts.PreviewsOn != "" {
 		if orchestrator != spec.Swarm {
 			return errors.New("--previews-on needs swarm: under compose there is one node and no workers")
@@ -457,7 +469,7 @@ func Init(opts Options) error {
 		if err != nil {
 			return errors.New("could not set where previews run: " + err.Error())
 		}
-		where := map[string]string{"workers": "workers only (this manager is drained)", "any": "any node"}[opts.PreviewsOn]
+		where := map[string]string{"workers": "workers only", "any": "any node"}[opts.PreviewsOn]
 		if dryRun {
 			fmt.Fprintln(out, "  [dry-run] previews would run on "+where)
 		} else {
@@ -680,8 +692,8 @@ func Init(opts Options) error {
 
 	// ── 5b. The node agent ──────────────────────────────────────────────────────────────────────
 	// pstack-agent reports each node's disk, memory and load (internal/nodestats). This node always
-	// runs it as a local container; on swarm a global service covers every other node, since a
-	// drained manager runs no swarm task at all. Never fatal: without the agent every guard is inert
+	// runs it as a local container; on swarm a global service covers every other node
+	// (`node.id!=<self>`), so the manager never reports twice. Never fatal: without the agent every guard is inert
 	// (unknown is never pressure), which is the host's behaviour before 0.45.0. Init is the agent's
 	// only creator (invariant 12), so `pstack upgrade`, `pstack ui` and `pstack logging` recreate it
 	// by re-running this step.

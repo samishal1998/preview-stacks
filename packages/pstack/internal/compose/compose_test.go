@@ -258,7 +258,7 @@ func TestComposeDispatchesOnTheOrchestrator(t *testing.T) {
 			t.Fatal(err)
 		}
 		app := written.(*omap.Map).GetMap("services").GetMap("app")
-		if got := string(mustJSON(t, app.GetMap("deploy"))); got != `{"restart_policy":{"condition":"any"}}` {
+		if got := string(mustJSON(t, app.GetMap("deploy"))); got != `{"restart_policy":{"condition":"any"},"placement":{"constraints":["node.labels.pstack.previews != off"]}}` {
 			t.Errorf("deploy: %s", got)
 		}
 		if app.Has("profiles") {

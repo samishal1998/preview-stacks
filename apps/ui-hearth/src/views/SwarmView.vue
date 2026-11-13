@@ -10,7 +10,7 @@ import { swarmApi, type Signals } from '../api-swarm';
 import { poll } from '../api-control';
 import { byLabel } from '../lib/labels';
 import { useCardColumns } from '../lib/use-card-columns';
-import { DISTROS, hasReadyWorker, joinPath, joinProblem, removable, thisManager, workersOnly, type JoinFormat } from '../lib/swarm';
+import { DISTROS, hasReadyWorker, joinPath, joinProblem, removable, thisManager, type JoinFormat } from '../lib/swarm';
 import { ago, sentence } from '../format';
 import { can } from '../lib/users';
 import { auth, toast } from '../state';
@@ -111,15 +111,21 @@ async function act(kind: 'drain' | 'undrain' | 'remove', id: string, host: strin
 
 // ── where previews run ──────────────────────────────────────────────────────────────────────────
 const manager = computed(() => thisManager(info.value?.nodes ?? []));
-const previewsOn = computed(() => (workersOnly(info.value?.nodes ?? []) ? 'workers' : 'any'));
-const noWorker = computed(() => workersOnly(info.value?.nodes ?? []) && !hasReadyWorker(info.value?.nodes ?? []));
-function setPreviewsOn(v: string): void {
+// The manager's pstack.previews label, read by the API. null (unknown) shows as "any".
+const previewsOn = computed(() => info.value?.previewsOn ?? 'any');
+const noWorker = computed(() => previewsOn.value === 'workers' && !hasReadyWorker(info.value?.nodes ?? []));
+async function setPreviewsOn(v: string): Promise<void> {
   const m = manager.value;
-  if (!m || acting.value || v === previewsOn.value) return;
-  if (v === 'workers') Object.assign(confirm, { open: true, kind: 'drain', id: m.id, host: m.hostname || m.id.slice(0, 12) });
-  else void act('undrain', m.id, m.hostname);
+  if (!m || acting.value || v === previewsOn.value || (v !== 'workers' && v !== 'any')) return;
+  acting.value = m.id;
+  const r = await swarmApi.previews(v);
+  acting.value = '';
+  if (r.status === 403) toast('Maintainer only.', 'danger');
+  else if (!r.ok) toast(r.body.error ?? `HTTP ${r.status}`, 'danger');
+  else toast(v === 'workers' ? 'Previews run on workers only.' : 'Previews run on any node.', 'success');
+  void load(true);
 }
-const drainText = computed(() => (confirm.id === manager.value?.id ? 'Every preview moves to a worker.' : 'Its tasks move to other nodes.'));
+const drainText = 'Its tasks move to other nodes.';
 
 // ── joining ─────────────────────────────────────────────────────────────────────────────────────
 const FORMATS: Array<{ value: JoinFormat; label: string }> = [
