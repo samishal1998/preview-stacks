@@ -329,7 +329,8 @@ func Status(st *spec.Stack, r exec.Runner) string {
 	}
 	res, err := compose.ComposePs(st, r)
 	if err != nil {
-		return "(nothing running)"
+		// The compose file was rejected before docker ran: say why, not that nothing is up.
+		return "(" + err.Error() + ")"
 	}
 	if out := strings.TrimSpace(res.Stdout); out != "" {
 		return out

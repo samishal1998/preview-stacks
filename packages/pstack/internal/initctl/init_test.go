@@ -2157,3 +2157,39 @@ func TestInitScalerNeedsSwarm(t *testing.T) {
 		t.Errorf("refused init left %v and ran %v", entries, f.Commands())
 	}
 }
+
+// An unknown provider's variable name is the operator's own edit, which upgrade cannot read back:
+// re-running init with no token keeps dns.env, and a token still rewrites it.
+// negative control: drop the keep branch before dns.env's write in Init — the edit is replaced.
+func TestInitKeepsAnUnknownProvidersDNSEnv(t *testing.T) {
+	dir := t.TempDir()
+	// negative control: drop `prevProvider == dnsProvider` from the keep branch and the switch from
+	// cloudflare below keeps CF_DNS_API_TOKEN, failing the last check.
+	run := func(provider, token string) {
+		t.Helper()
+		if err := initctl.Init(initctl.Options{
+			DataDir: dir, Domain: "preview.example.com", AcmeEmail: "ops@example.com", Challenge: initctl.DNS01,
+			DNSProvider: provider, Token: token, Orchestrator: spec.Compose, Runner: okRunner("inactive", ""), Out: &bytes.Buffer{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "control", "dns.env")
+	run("digitalocean", "")
+	if err := os.WriteFile(path, []byte("DO_AUTH_TOKEN=abc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("digitalocean", "")
+	if got := read(t, path); got != "DO_AUTH_TOKEN=abc\n" {
+		t.Errorf("kept file rewritten:\n%s", got)
+	}
+	run("digitalocean", "xyz")
+	if got := read(t, path); !strings.Contains(got, "CHANGEME_VARIABLE_NAME=xyz") {
+		t.Errorf("a token must still rewrite it:\n%s", got)
+	}
+	run("cloudflare", "cf")
+	run("digitalocean", "")
+	if got := read(t, path); !strings.Contains(got, "CHANGEME_VARIABLE_NAME=") {
+		t.Errorf("a provider switch must write the new template:\n%s", got)
+	}
+}

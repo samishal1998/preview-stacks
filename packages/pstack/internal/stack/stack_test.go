@@ -210,3 +210,15 @@ func TestFirstLineMarksACut(t *testing.T) {
 		t.Errorf("short: %q", got)
 	}
 }
+
+// negative control: return "(nothing running)" on a ComposePs error in Status — the reason is lost.
+func TestStatusSaysWhyTheComposeFileWasRejected(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "c.yml"), []byte("services:\n  web:\n    image: nginx\n    labels: [pstack.routing.port=abc]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := Status(parse(t, "stack: s\ncompose:\n  file: c.yml\naxes: []\n"), exec.NewFake(nil, "").WithCwd(dir))
+	if got == "(nothing running)" || !strings.Contains(got, "pstack.routing.port") {
+		t.Errorf("got %q", got)
+	}
+}
