@@ -155,6 +155,12 @@ func ComposeUp(st *spec.Stack, r exec.Runner, extraEnv map[string]string, note f
 		for _, n := range m.LogNotes {
 			note(n)
 		}
+		for _, n := range m.TLSNotes {
+			note(n)
+		}
+		for _, n := range m.MatchNotes {
+			note(n)
+		}
 	}
 	if isSwarm(st) {
 		if logged {

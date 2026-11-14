@@ -619,3 +619,18 @@ func TestComposeLogsForOneService(t *testing.T) {
 		}
 	})
 }
+
+// negative control: stop emitting m.TLSNotes in ComposeUp — the note is missing.
+func TestComposeUpSaysWhyASubtreeHasNoCertificate(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "dc.yml"), []byte("services:\n  backend:\n    image: x\n    labels: [pstack.routing.port=80]\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	r := exec.NewFake(nil, "").WithCwd(dir) // docker answers nothing: the challenge mode is unknown
+	notes := []string{}
+	must(t)(ComposeUp(specFrom(t, "wild.yml", pr7), r, nil, func(l string) { notes = append(notes, l) }))
+	want := "backend: *.backend-pr-7.preview.example.com has no certificate on a host whose certificate mode is unknown"
+	if !slices.Contains(notes, want) {
+		t.Errorf("notes: %q", notes)
+	}
+}
