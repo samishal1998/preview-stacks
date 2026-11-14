@@ -655,7 +655,8 @@ stack: pr-123
 ✓ spec parses — kind: isolated, 1 axis/axes, stack "pr-123"
   compose: docker-compose.preview.yml [backend, frontend]
   subdomains: *.backend-pr-123.preview.example.com → backend  (one label)
-              PSTACK_WILD_BACKEND — interpolate it into a router label
+              router generated; ${PSTACK_WILD_BACKEND} is for a service with its own traefik labels
+              TLS: DNS-01 hosts order one certificate per deployment; other modes serve none
   - db: up, assert_gone
 ```
 
@@ -663,19 +664,21 @@ Check that hostname. pstack derived it from the profile, the stack and `PREVIEW_
 domain here is a router that parses, deploys, and never matches anything. (`DOMAIN` is accepted as a
 legacy alias; a name declared in the spec beats either one picked up from the ambient environment.)
 
-pstack does not write your Traefik labels — your compose file owns them — so it hands you the rule in
-an environment variable and you spend it on a router:
+An entry attaches to the service whose routing name (`pstack.routing.service_name`, else the service
+name) equals it. For a service routed by `pstack.routing.*` labels, pstack writes the wildcard router
+itself: `<name>-<stack>-wild`, same service, priority 2, so the exact host still wins on rule length.
+An entry that attaches to nothing is a `note:` in `validate` and in the deploy log.
+
+A service with its own `traefik.*` labels writes its own router and spends the rule pstack hands it
+in an environment variable:
 
 ```yaml
   backend:
     profiles: [backend]
     labels:
       - traefik.enable=true
-      # Your existing exact host. Unchanged, and it still wins: Traefik's default priority is the
-      # rule's LENGTH, so this scores in the dozens against the wildcard's 2.
       - traefik.http.routers.backend.rule=Host(`backend-${STACK}.${PREVIEW_DOMAIN}`)
       - traefik.http.routers.backend.tls=true
-      # The wildcard. Same service, lower priority.
       - traefik.http.routers.backend-wild.rule=${PSTACK_WILD_BACKEND}
       - traefik.http.routers.backend-wild.priority=2
       - traefik.http.routers.backend-wild.service=backend
@@ -684,30 +687,40 @@ an environment variable and you spend it on a router:
 ```
 
 No `$$` escaping: compose interpolates the *file* from its environment and does not re-scan what it
-substituted, so the rule's backticks and its `$` anchor reach Traefik intact.
+substituted, so the rule's backticks and its `$` anchor reach Traefik intact. The variable is exported
+on **every** compose subcommand, not just `up`: on `down` an unset variable would substitute empty
+and compose would be reasoning about a differently-labelled project than the one it created.
 
-The variable is exported on **every** compose subcommand, not just `up`. Compose interpolates the file
-each time, so on `down` an unset variable would substitute empty and compose would be reasoning about
-a differently-labelled project than the one it created.
+A `host:` that is a domain this host serves (the preview domain or an added one), a parent of one, or
+a control hostname is refused, even when no service uses `pstack.routing.*` labels: a priority-2
+wildcard there would take that domain's traffic.
 
-### Before you promise anyone this works
+### DNS, TLS and wake
 
-Routing is the easy third. `subdomains: [backend]` defaults to **one label** — `api.backend-pr-123.…`
-yes, `a.b.backend-pr-123.…` no — because that is the depth DNS and TLS can deliver:
+`subdomains: [backend]` defaults to **one label**: `api.backend-pr-123.…` yes, `a.b.backend-pr-123.…`
+no.
 
-- **DNS:** you need `*.backend-pr-123.<domain>` to resolve. A wildcard record covers exactly one
-  label, so a single `*.<domain>` record does **not** cover this — you need a wildcard at that level,
-  or a resolver you control.
-- **TLS:** you need a certificate for `*.backend-pr-123.<domain>`. That is **DNS-01 only** (HTTP-01
-  cannot issue wildcards) and it is **one certificate per PR**, against Let's Encrypt's ~50 per
-  registered domain per week — the same ceiling described in
-  [control-plane.md](control-plane.md#why-the-ceiling-is-the-reason-to-move-to-dns-01).
+- **DNS:** nothing to add. The `*.<domain>` record the host already has answers deeper names too
+  (RFC 4592). One caveat: while Let's Encrypt validates the subtree's certificate, lego's
+  `_acme-challenge.backend-pr-123.<domain>` TXT record makes that name exist, so it and its subtree
+  stop resolving through `*.<domain>`. Resolvers cache the miss for the zone's negative TTL. This
+  happens at first issue and at renewal, about every 60 days.
+- **TLS:** the host's `*.<domain>` certificate covers one label, so the subtree needs its own:
 
-`{ backend: any }` matches any depth. Traefik will route it, and **no certificate can ever cover it**
-— `*.*.host` is not a legal SAN. That is HTTP-only, permanently, by construction rather than by
-omission. Use it for a host whose DNS you control and where plain HTTP is fine; reach for it because
-a wildcard "should" be recursive and you get hostnames that resolve, route, and then fail the
-handshake, which is the most confusing of the three failures to debug.
+  | Mode | The `-wild` router | Deploy log note |
+  |---|---|---|
+  | `dns01` | orders `backend-pr-123.<domain>` + `*.backend-pr-123.<domain>`: one certificate per deployment, against Let's Encrypt's ~50 per registered domain per week ([control-plane.md](control-plane.md#why-the-ceiling-is-the-reason-to-move-to-dns-01)) | none |
+  | `http01`, unknown | `tls=true`, no certificate (HTTP-01 cannot issue wildcards); the deploy still succeeds | `backend: *.backend-pr-123.<domain> has no certificate on an http01 host (wildcards need DNS-01)` |
+  | `dns-persist-01` | `tls=true`; served by name if the stored pair's SANs cover `*.backend-pr-123.<domain>` | `backend: *.backend-pr-123.<domain> is served only if the stored wildcard covers it` |
+
+  Deployments made before this pick up their certificate on the next `up` or
+  `POST /api/tls/redeploy`.
+- **Wake:** the wake catch-all matches any depth under the domain, so a request to a sleeping stack's
+  subtree wakes it.
+
+`{ backend: any }` matches any depth. Traefik routes it, and **no certificate can cover more than one
+label**: on `dns01` the `*.backend-pr-123.<domain>` pin still applies, and the log notes that deeper
+names get none. Use it where plain HTTP is fine for the deeper names.
 
 ---
 
@@ -1724,6 +1737,10 @@ Point it at the next PR and the same links follow. **No redeploy:** pstack rewri
   each wildcard subdomain derived from one. A service with an explicit `pstack.routing.host`, an
   explicit `subdomains` host, or its own `traefik.*` labels has a host that does not carry the stack
   name, so it already is stable and gets no twin.
+- **Certificates.** A route host inherits the host's certificate. A wildcard twin follows the
+  [subdomain rules](#dns-tls-and-wake): on `dns01` each route and subdomain service orders one
+  certificate for `web-checkout.<domain>` + `*.web-checkout.<domain>`, and moving the route to another
+  stack reuses it.
 - **Names.** A DNS label of at most 40 characters (`a-z`, `0-9`, `-`): anything else is a 400.
   `control`, `api`, `loki` and `grafana` are reserved (400). The stack name of a registered
   deployment, or a route that exists, is a 409.

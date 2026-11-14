@@ -123,8 +123,15 @@ point a route at the current deployment: `pstack route create checkout <deployme
 answers as `<surface>-checkout` too, with no redeploy. A held route is refused without `--force`.
 `pstack route ls|unassign|rm` do the rest (the API is `/api/custom-routes`).
 
-**Flatten per-PR hostnames with dashes.** A wildcard matches exactly **one** label:
+**Flatten per-PR hostnames with dashes.** A certificate wildcard matches exactly **one** label:
 `backend-pr-1.<domain>` is covered by `*.<domain>`; `backend.pr-1.<domain>` is **not**.
+
+**A whole subtree per surface:** `compose.subdomains: [backend]` (the profile must be in
+`compose.profiles`) routes `*.backend-pr-1.<domain>` to `backend`. pstack writes the `-wild` router
+for a `pstack.routing.*` service; a service with its own `traefik.*` labels uses
+`${PSTACK_WILD_BACKEND}`. DNS needs nothing new. On a `dns01` host each deployment orders one
+certificate for the subtree; other modes serve it without one, and the deploy log says so. One label
+deep by default (`{backend: any}` routes deeper names over HTTP only).
 
 ### TLS: HTTP-01 by default, DNS-01 when the arithmetic says so
 
