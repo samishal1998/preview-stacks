@@ -104,14 +104,16 @@ const customRoutesHeader = "# Written by pstack (/api/custom-routes) from the cu
 // one wins never depends on the caller's order. The server settles collisions before this (the
 // earlier claim wins, deployments first), so the name drop is a safety net that never fires there.
 //
-// TLS is never the dns01 wildcard pin: the stack's own certificate story covers the alias host the
-// same way it covers the stack host, and a pin per alias would order a wildcard certificate each.
+// Plain alias routers inherit the host's certificate. A `-wild` router on dns01 pins its own
+// `<host>` + `*.<host>`, one certificate per alias and subdomain service, because nothing else covers
+// a second-level name. On every other mode it gets `tls: {}`: a resolver on a HostRegexp orders
+// nothing, and only DNS-01 issues wildcards.
 func RenderCustomRoutes(targets []AliasTarget, mode string) (string, error) {
 	targets = slices.Clone(targets)
 	slices.SortFunc(targets, func(a, b AliasTarget) int { return strings.Compare(a.Alias, b.Alias) })
 	var routers, notes strings.Builder
 	seen := map[string]bool{}
-	router := func(name, rule, priority, service, host string) {
+	router := func(name, rule, priority, service, tls string) {
 		if seen[name] {
 			notes.WriteString("# dropped " + name + ": the name is taken by another route\n")
 			return
@@ -124,7 +126,7 @@ func RenderCustomRoutes(targets []AliasTarget, mode string) (string, error) {
 		}
 		routers.WriteString("      entryPoints: [websecure]\n")
 		routers.WriteString("      service: " + strconv.Quote(service) + "\n")
-		routers.WriteString(tlsFor(host, mode, false))
+		routers.WriteString(tls)
 	}
 	for _, t := range targets {
 		if t.Provider != "docker" && t.Provider != "swarm" {
@@ -138,11 +140,15 @@ func RenderCustomRoutes(targets []AliasTarget, mode string) (string, error) {
 			host := t.Host(s)
 			service := s.Name + "-" + t.Stack + "@" + t.Provider
 			if !s.NoHost {
-				router(name, "Host(`"+host+"`)", "", service, host)
+				router(name, "Host(`"+host+"`)", "", service, tlsFor(host, mode, false))
 			}
 			if s.Depth != "" {
 				// Priority 2, like autolabel's -wild: any exact host still wins.
-				router(name+"-wild", spec.WildcardRule(host, s.Depth), "2", service, host)
+				wildTLS := "      tls: {}\n"
+				if mode == "dns01" {
+					wildTLS = tlsFor(host, mode, true)
+				}
+				router(name+"-wild", spec.WildcardRule(host, s.Depth), "2", service, wildTLS)
 			}
 		}
 	}

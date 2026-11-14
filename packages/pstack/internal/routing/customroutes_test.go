@@ -58,7 +58,7 @@ func TestCustomRoutesGolden(t *testing.T) {
 		"      priority: 2\n" +
 		"      entryPoints: [websecure]\n" +
 		"      service: \"web-myapp-pr-123@docker\"\n" +
-		"      tls:\n        certResolver: le\n"
+		"      tls: {}\n"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -125,33 +125,53 @@ func TestCustomRoutesWildcardService(t *testing.T) {
 }
 
 func TestCustomRoutesTLSByMode(t *testing.T) {
-	for _, tc := range []struct{ mode, wantIn string }{
+	const pin = "      tls:\n        certResolver: le\n        domains:\n          - main: web-checkout.preview.example.com\n            sans:\n              - \"*.web-checkout.preview.example.com\"\n"
+	for _, tc := range []struct{ mode, plain, wild string }{
 		// negative control: return `tls: {}` for every mode — an http01 alias host gets no
 		// certificate at all.
-		{"http01", "certResolver: le"},
+		{"http01", "      tls:\n        certResolver: le\n", "      tls: {}\n"},
 		// negative control: same `tls: {}` mutation — an unknown mode must still ask for a certificate.
-		{"", "certResolver: le"},
-		// negative control: call tlsFor with wildcardPin=true — each dns01 alias orders a SECOND
-		// wildcard certificate and burns the rate limit.
-		{"dns01", "tls: {}"},
+		{"", "      tls:\n        certResolver: le\n", "      tls: {}\n"},
+		// negative control: pass wildcardPin=false for -wild — the subtree gets no certificate.
+		// negative control: pass wildcardPin=true for the plain router — each alias orders a SECOND
+		// *.<domain> pin and burns the rate limit.
+		{"dns01", "      tls: {}\n", pin},
 		// negative control: return `certResolver: le` for every mode — the stored wildcard is
 		// bypassed and each alias host orders its own certificate.
-		{"dns-persist-01", "tls: {}"},
+		{"dns-persist-01", "      tls: {}\n", "      tls: {}\n"},
 	} {
 		t.Run("mode="+tc.mode, func(t *testing.T) {
 			content := render(t, tc.mode, checkout("docker",
 				AliasService{Name: "web", Domain: "preview.example.com", Depth: spec.DepthOne},
 			))
-			if got := strings.Count(content, tc.wantIn); got != 2 {
-				t.Errorf("%q on %d routers, want both:\n%s", tc.wantIn, got, content)
+			i := strings.Index(content, "    pstack-route-checkout-web-wild:\n")
+			if i < 0 {
+				t.Fatalf("no -wild router:\n%s", content)
 			}
-			for _, pin := range []string{"domains:", "sans:"} {
-				if strings.Contains(content, pin) {
-					t.Errorf("an alias router never carries the wildcard pin (%s):\n%s", pin, content)
-				}
+			plain, wild := content[:i], content[i:]
+			if !strings.HasSuffix(plain, tc.plain) {
+				t.Errorf("plain router TLS, want %q:\n%s", tc.plain, content)
+			}
+			if !strings.HasSuffix(wild, tc.wild) {
+				t.Errorf("-wild router TLS, want %q:\n%s", tc.wild, content)
 			}
 			renderedRouters(t, content)
 		})
+	}
+}
+
+// The pin follows the alias host, not the stack, so moving a route reuses the certificate in acme.json.
+// negative control: build the pin from the stack host (`web-<stack>.<domain>`) → the blocks differ.
+func TestCustomRoutesWildPinFollowsTheAliasNotTheStack(t *testing.T) {
+	tlsOf := func(stack string) string {
+		tg := checkout("docker", AliasService{Name: "web", Domain: "preview.example.com", Depth: spec.DepthOne})
+		tg.Stack = stack
+		c := render(t, "dns01", tg)
+		return c[strings.Index(c, "    pstack-route-checkout-web-wild:"):][strings.Index(c[strings.Index(c, "    pstack-route-checkout-web-wild:"):], "      tls:"):]
+	}
+	a, b := tlsOf("a-pr-1"), tlsOf("a-pr-2")
+	if a != b || !strings.Contains(a, "main: web-checkout.preview.example.com") {
+		t.Errorf("tls blocks differ or miss the alias host:\n%s\n---\n%s", a, b)
 	}
 }
 
