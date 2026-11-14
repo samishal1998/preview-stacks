@@ -60,6 +60,11 @@
 
 ### Fixed
 
+- **Wildcard subdomains** (`compose.subdomains`) get a certificate on DNS-01 hosts: one per
+  deployment, and one per custom route. Other modes note why there is none instead of asking Traefik
+  for one it cannot order. A subdomains host that is a served domain or a control hostname is
+  refused, and an entry that matches no service is noted. `POST /api/tls/redeploy` stamps existing
+  deployments.
 - **Wake** catch-alls match any depth, so a sleeping stack's subdomain subtree wakes it. `pstack
   upgrade` applies it to the primary and the added domains.
 - **`pstack init` on a fresh swarm host** retries the control stack's start once when docker answers
