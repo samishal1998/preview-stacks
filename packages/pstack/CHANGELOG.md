@@ -60,6 +60,8 @@
 
 ### Fixed
 
+- **Wake** catch-alls match any depth, so a sleeping stack's subdomain subtree wakes it. `pstack
+  upgrade` applies it to the primary and the added domains.
 - **`pstack init` on a fresh swarm host** retries the control stack's start once when docker answers
   "network preview-ingress not found": containers starting beside a new overlay's first attachment
   can miss it.

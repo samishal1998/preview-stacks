@@ -828,21 +828,22 @@ func dedupe(xs []string) []string {
 	return out
 }
 
-// previewHostname reports whether a hostname is one the wake catch-all routes here — one label under
+// previewHostname reports whether a hostname is one the wake catch-all routes here — any depth under
 // a domain this host answers on — and not one of the control plane's own.
 func (s *Server) previewHostname(h string) bool {
-	oneLabelUnder := func(d string) bool {
+	under := func(d string) bool {
 		label, ok := strings.CutSuffix(h, "."+strings.ToLower(d))
-		return d != "" && ok && label != "" && !strings.Contains(label, ".")
+		return d != "" && ok && label != ""
 	}
-	if oneLabelUnder(s.opts.Domain) {
+	if under(s.opts.Domain) && !strings.Contains(strings.TrimSuffix(h, "."+strings.ToLower(s.opts.Domain)), ".") {
 		// A nil store checks the primary's own names only, which is all one label under the primary
 		// can be — so the console's own requests never read the domains file.
 		return !(*routing.RoutingStore)(nil).IsControlHostname(h, s.opts.Domain)
 	}
-	if !strings.Contains(h, ".") || !slices.ContainsFunc(s.routing.Domains(), oneLabelUnder) {
+	if !strings.Contains(h, ".") || !(under(s.opts.Domain) || slices.ContainsFunc(s.routing.Domains(), under)) {
 		return false
 	}
+	// Deeper names read the store: an added domain may sit under the primary (control.sub.<primary>).
 	return !s.routing.IsControlHostname(h, s.opts.Domain)
 }
 

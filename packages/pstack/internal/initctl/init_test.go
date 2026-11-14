@@ -299,7 +299,7 @@ func TestInitSwarmModeAndWakeCatchAll(t *testing.T) {
 			"--providers.docker=true", // the control stack's own routers
 			"--metrics.prometheus.addrouterslabels=true",
 			"PSTACK_DOMAIN: ${DOMAIN}", "PSTACK_TRAEFIK_METRICS: http://traefik:8082/metrics",
-			"traefik.http.routers.pstack-wake.rule=HostRegexp(`^[a-z0-9-]+\\.preview\\.example\\.com$$`)",
+			"traefik.http.routers.pstack-wake.rule=HostRegexp(`^([a-z0-9-]+\\.)+preview\\.example\\.com$$`)",
 			"traefik.http.routers.pstack-wake.priority=1",
 		} {
 			if !strings.Contains(r.yaml, want) {
@@ -2250,5 +2250,23 @@ func TestInitKeepsAnUnknownProvidersDNSEnv(t *testing.T) {
 	run("digitalocean", "")
 	if got := read(t, path); !strings.Contains(got, "CHANGEME_VARIABLE_NAME=") {
 		t.Errorf("a provider switch must write the new template:\n%s", got)
+	}
+}
+
+// The primary's catch-all, compiled the way Traefik reads it (compose turns `$$` into `$`).
+// negative control: render the one-label `^[a-z0-9-]+\\.` prefix → a.web-pr-1.d is not caught.
+func TestWakeRouterLabelMatchesAnyDepth(t *testing.T) {
+	m := regexp.MustCompile("rule=HostRegexp\\(`(.+)`\\)").FindStringSubmatch(initctl.WakeRouterLabels("preview.example.com"))
+	if m == nil {
+		t.Fatal("no wake rule")
+	}
+	re := regexp.MustCompile(strings.ReplaceAll(m[1], "$$", "$"))
+	for h, want := range map[string]bool{
+		"web-pr-1.preview.example.com": true, "a.web-pr-1.preview.example.com": true, "a.b.web-pr-1.preview.example.com": true,
+		"preview.example.com": false, "x.other.com": false,
+	} {
+		if re.MatchString(h) != want {
+			t.Errorf("%s: want %v", h, want)
+		}
 	}
 }

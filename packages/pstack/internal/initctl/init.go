@@ -989,13 +989,14 @@ func SwarmProviderArgs(orchestrator spec.Orchestrator) string {
 	}, "\n")
 }
 
-// WakeRouterLabels is the catch-all router for wake-on-call. A Go regexp over one label under the
-// domain; `$$` is how a literal `$` survives compose's interpolation of this file, and the dots are
+// WakeRouterLabels is the catch-all router for wake-on-call. A Go regexp over any depth under the
+// domain, so a sleeping stack's subdomain subtree (`a.web-pr-1.<d>`) wakes it too; the exact
+// control routers still win on priority; `$$` is how a literal `$` survives compose's interpolation of this file, and the dots are
 // escaped here (the template cannot, it only knows `${DOMAIN}`).
 func WakeRouterLabels(domain string) string {
 	re := spec.EscapeHostRegexp(domain)
 	return strings.Join([]string{
-		"      - traefik.http.routers.pstack-wake.rule=HostRegexp(`^[a-z0-9-]+\\." + re + "$$`)",
+		"      - traefik.http.routers.pstack-wake.rule=HostRegexp(`^([a-z0-9-]+\\.)+" + re + "$$`)",
 		"      - traefik.http.routers.pstack-wake.priority=1",
 		"      - traefik.http.routers.pstack-wake.entrypoints=websecure",
 		"      - traefik.http.routers.pstack-wake.tls=true",

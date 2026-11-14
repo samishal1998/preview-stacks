@@ -236,7 +236,7 @@ services:
       # anything else gets the UI. `tls=true` alone: under DNS-01 the wildcard covers it, under HTTP-01
       # Traefik serves the certificate it already issued for that hostname while the stack was live.
       # Rendered by `pstack init` (the domain's dots must be escaped in the regexp).
-      - traefik.http.routers.pstack-wake.rule=HostRegexp(`^[a-z0-9-]+\.preview\.example\.com$$`)
+      - traefik.http.routers.pstack-wake.rule=HostRegexp(`^([a-z0-9-]+\.)+preview\.example\.com$$`)
       - traefik.http.routers.pstack-wake.priority=1
       - traefik.http.routers.pstack-wake.entrypoints=websecure
       - traefik.http.routers.pstack-wake.tls=true

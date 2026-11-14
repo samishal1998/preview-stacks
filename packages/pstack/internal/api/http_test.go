@@ -1351,9 +1351,13 @@ func TestPreviewHostnameIsWhatTheCatchAllRoutesHere(t *testing.T) {
 	// negative control: return true for every hostname under a domain — control.<domain> and
 	// api.<domain> then answer with the "not answering" page, and the console is gone.
 	s := &Server{routing: routing.New(t.TempDir()), opts: Options{Domain: "preview.example.com"}}
-	if _, err := s.routing.SetDomains([]string{"other.dev"}, routing.DomainOptions{}); err != nil {
+	if _, err := s.routing.SetDomains([]string{"other.dev", "sub.preview.example.com"}, routing.DomainOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	// negative control: keep the one-label check (`!strings.Contains(label, ".")`) — a.b.<domain>, which
+	// the wake catch-all now routes here at any depth, gets the console instead of the Down page.
+	// negative control: check a deeper name under the primary with the nil store — control.sub.<primary>,
+	// an added domain's console, gets the Down page.
 	for h, want := range map[string]bool{
 		"app-pr-1.preview.example.com":     true,
 		"app-pr-1.other.dev":               true,
@@ -1364,7 +1368,10 @@ func TestPreviewHostnameIsWhatTheCatchAllRoutesHere(t *testing.T) {
 		"loki.preview.example.com":         false,
 		"control.other.dev":                false,
 		"api.other.dev":                    false,
-		"a.b.preview.example.com":          false, // the catch-all is one label deep
+		"a.b.preview.example.com":          true, // the catch-all matches any depth
+		"a.web-pr-1.other.dev":             true,
+		"x.control.preview.example.com":    true,  // only control. itself is the console
+		"control.sub.preview.example.com":  false, // an added domain nested under the primary
 		"preview.example.com":              false,
 		"127.0.0.1":                        false,
 		"localhost":                        false,
