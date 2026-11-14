@@ -60,6 +60,9 @@
 
 ### Fixed
 
+- **`pstack init` on a fresh swarm host** retries the control stack's start once when docker answers
+  "network preview-ingress not found": containers starting beside a new overlay's first attachment
+  can miss it.
 - **Keeping the manager for the control stack works on a real swarm.** `workers` drained the
   manager, and a drained (or paused) node cannot attach plain containers to the overlay network, so
   Traefik and pstack could not start again after a reboot or `pstack upgrade`. `workers` now labels
