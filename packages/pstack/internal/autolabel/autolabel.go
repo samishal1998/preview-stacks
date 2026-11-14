@@ -175,6 +175,43 @@ var ControlHostname = func(host string) bool {
 	return routing.New(routing.DynamicDir(registry.DataDir())).IsControlHostname(host, primary)
 }
 
+// ServedDomains is every domain this host answers on: the primary (resolved as ControlHostname
+// resolves it) and the added ones from routing.DynamicDir. Behind a variable for the same reason.
+var ServedDomains = func() []string {
+	primary := os.Getenv("PSTACK_DOMAIN")
+	if primary == "" {
+		primary = domainFromControlEnv()
+	}
+	out := routing.New(routing.DynamicDir(registry.DataDir())).Domains()
+	if primary != "" {
+		out = append([]string{primary}, out...)
+	}
+	return out
+}
+
+// CheckSubdomainHosts refuses a compose.subdomains host whose priority-2 wildcard would outrank the
+// wake catch-all (1) on a domain this host serves: a control hostname, a served domain, or a parent
+// of one (with `depth: any` a parent's subtree contains the domain). Per entry, so a spec whose
+// services write their own traefik labels is checked too.
+func CheckSubdomainHosts(st *spec.Stack) error {
+	if st.Compose == nil || len(st.Compose.Subdomains) == 0 {
+		return nil
+	}
+	served := ServedDomains()
+	for _, sub := range st.Compose.Subdomains {
+		if ControlHostname(sub.Host) {
+			return &spec.Error{Msg: fmt.Sprintf("compose.subdomains.%s.host %s is a control hostname", sub.Profile, sub.Host)}
+		}
+		h := strings.ToLower(sub.Host)
+		for _, d := range served {
+			if d = strings.ToLower(d); h == d || strings.HasSuffix(d, "."+h) {
+				return &spec.Error{Msg: fmt.Sprintf("compose.subdomains.%s.host %s contains %s, a domain this host serves", sub.Profile, sub.Host, d)}
+			}
+		}
+	}
+	return nil
+}
+
 // domainFromControlEnv reads DOMAIN= from control/.env — the KEY=VALUE grammar
 // upgrade.ReadControlState parses the same file with. A missing file or line is "", which
 // IsControlHostname skips, exactly like an unset primary.
@@ -211,6 +248,10 @@ type AugmentResult struct {
 	Generated *omap.Map
 	// Skipped is service name → why it was left alone (string). Ordered.
 	Skipped *omap.Map
+	// TLSNotes says why a `-wild` router has no certificate, one line per router. Never nil.
+	TLSNotes []string
+	// MatchNotes names each compose.subdomains entry that attached to no service. Never nil.
+	MatchNotes []string
 }
 
 // LabelsToMap normalises a service's labels (list or mapping) to an ordered mapping. Defined in
@@ -285,6 +326,9 @@ func hasTraefik(m *omap.Map) bool {
 // cannot disagree with the host they are deployed to.
 func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 	st, challenge := a.Spec, a.Challenge
+	if err := CheckSubdomainHosts(st); err != nil {
+		return nil, err
+	}
 	// Structurally clone so a caller's document is never mutated — this runs on every compose command.
 	doc := a.Doc.Clone()
 	generated := omap.New()
@@ -302,6 +346,8 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 	}
 
 	anyRouted := false
+	tlsNotes, matchNotes := []string{}, []string{}
+	matched := map[string]bool{}
 
 	for _, name := range services.Keys() {
 		svcRaw, _ := services.Get(name)
@@ -327,6 +373,8 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 
 		// Your labels win, entirely. Not merged, not partially applied.
 		if hasTraefik(labels) || hasTraefik(deployLabels) {
+			// Its labels may interpolate ${PSTACK_WILD_<NAME>}, so its entry is not "unmatched".
+			matched[name] = true
 			skipped.Set(name, "has its own traefik.* labels")
 			continue
 		}
@@ -402,6 +450,7 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 				if sub.Profile != req.Name {
 					continue
 				}
+				matched[sub.Profile] = true
 				added = append(added,
 					"traefik.http.routers."+id+"-wild.rule="+spec.WildcardRule(sub.Host, sub.Depth),
 					"traefik.http.routers."+id+"-wild.priority=2",
@@ -409,8 +458,24 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 					"traefik.http.routers."+id+"-wild.tls=true",
 					"traefik.http.routers."+id+"-wild.service="+id,
 				)
-				if !wildcardMode(challenge) {
-					added = append(added, "traefik.http.routers."+id+"-wild.tls.certresolver=le")
+				// The host's *.<domain> covers one label, so a subtree needs its own certificate, and only
+				// DNS-01 issues wildcards. A certresolver on a HostRegexp router orders nothing.
+				switch challenge {
+				case DNS01:
+					added = append(added,
+						"traefik.http.routers."+id+"-wild.tls.certresolver=le",
+						"traefik.http.routers."+id+"-wild.tls.domains[0].main="+sub.Host,
+						"traefik.http.routers."+id+"-wild.tls.domains[0].sans=*."+sub.Host,
+					)
+					if sub.Depth == spec.DepthAny {
+						tlsNotes = append(tlsNotes, req.Name+": names deeper than one label under "+sub.Host+" get no certificate")
+					}
+				case DNSPersist:
+					tlsNotes = append(tlsNotes, req.Name+": *."+sub.Host+" is served only if the stored wildcard covers it")
+				case HTTP01:
+					tlsNotes = append(tlsNotes, req.Name+": *."+sub.Host+" has no certificate on an http01 host (wildcards need DNS-01)")
+				default:
+					tlsNotes = append(tlsNotes, req.Name+": *."+sub.Host+" has no certificate on a host whose certificate mode is unknown")
 				}
 				break
 			}
@@ -481,7 +546,14 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 		doc.Set("networks", networks)
 	}
 
-	return &AugmentResult{Doc: doc, Generated: generated, Skipped: skipped}, nil
+	if st.Compose != nil {
+		for _, sub := range st.Compose.Subdomains {
+			if !matched[sub.Profile] {
+				matchNotes = append(matchNotes, fmt.Sprintf(`subdomains entry "%s" matches no routed service; no wildcard router`, sub.Profile))
+			}
+		}
+	}
+	return &AugmentResult{Doc: doc, Generated: generated, Skipped: skipped, TLSNotes: tlsNotes, MatchNotes: matchNotes}, nil
 }
 
 // InjectLogging gives every service without a `logging` key the loki driver block, and returns the
@@ -595,6 +667,8 @@ type MaterializeResult struct {
 	// LogNotes is one job-log line per service left alone because it has its own `logging:`. Empty,
 	// never nil.
 	LogNotes []string
+	// TLSNotes and MatchNotes are AugmentResult's, for the job log. Never nil.
+	TLSNotes, MatchNotes []string
 }
 
 // MaterializeCompose reads the submitted compose file, augments it, and writes the derived file next
@@ -622,7 +696,7 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	// wherever `-f` pointed.
 	generatedRel := filepath.Join(filepath.Dir(original), GeneratedCompose)
 	untouched := func() *MaterializeResult {
-		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: omap.New(), Notes: []string{}, Logged: []string{}, LogNotes: []string{}}
+		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: omap.New(), Notes: []string{}, Logged: []string{}, LogNotes: []string{}, TLSNotes: []string{}, MatchNotes: []string{}}
 	}
 
 	rawBytes, err := os.ReadFile(source)
@@ -649,10 +723,17 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	// No pstack.routing.* anywhere means no labels to generate, and no reason to ask docker for the
 	// challenge mode.
 	wantsRouting := strings.Contains(raw, "pstack.routing.")
+	if !wantsRouting {
+		// AugmentComposeDoc checks these when it runs; without it nothing else would.
+		if err := CheckSubdomainHosts(a.Spec); err != nil {
+			return nil, err
+		}
+	}
 
 	out := doc
 	generated := omap.New()
 	skipped := omap.New()
+	tlsNotes, matchNotes := []string{}, []string{}
 	if wantsRouting {
 		challenge := Unknown
 		if a.Challenge != nil {
@@ -667,6 +748,7 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		out = result.Doc
 		generated = result.Generated
 		skipped = result.Skipped
+		tlsNotes, matchNotes = result.TLSNotes, result.MatchNotes
 	}
 	// After the labels and before the swarm conversion: one step for both orchestrators, and
 	// Swarmify keeps `logging`.
@@ -689,7 +771,7 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 		notes = converted.Notes
 	}
 	if !isSwarm && generated.Len() == 0 && len(logged) == 0 && len(capped) == 0 {
-		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: skipped, Notes: []string{}, Logged: []string{}, LogNotes: logNotes}, nil
+		return &MaterializeResult{File: original, Generated: omap.New(), Skipped: skipped, Notes: []string{}, Logged: []string{}, LogNotes: logNotes, TLSNotes: tlsNotes, MatchNotes: matchNotes}, nil
 	}
 
 	// JSON, which every YAML parser reads identically. Written beside the original, never over it.
@@ -715,5 +797,5 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 			return nil, err
 		}
 	}
-	return &MaterializeResult{File: generatedRel, Generated: generated, Skipped: skipped, Notes: notes, Logged: logged, LogNotes: logNotes}, nil
+	return &MaterializeResult{File: generatedRel, Generated: generated, Skipped: skipped, Notes: notes, Logged: logged, LogNotes: logNotes, TLSNotes: tlsNotes, MatchNotes: matchNotes}, nil
 }

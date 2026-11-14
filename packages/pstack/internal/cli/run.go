@@ -431,6 +431,9 @@ func validate(args *Parsed, st *spec.Stack, out io.Writer) *Exit {
 								fmt.Fprintln(out, "  generated: "+svc+" skipped — "+why)
 							}
 						})
+						for _, n := range aug.MatchNotes {
+							fmt.Fprintln(out, "  note: "+n)
+						}
 					}
 				}
 			}

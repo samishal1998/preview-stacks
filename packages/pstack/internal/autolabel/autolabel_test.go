@@ -891,3 +891,123 @@ func TestLoggedServices(t *testing.T) {
 		t.Errorf("no services = %#v, want []", got)
 	}
 }
+
+func subsSpec(t *testing.T, compose string) *spec.Stack {
+	t.Helper()
+	st, err := spec.Parse("version: 1\nstack: pr-7\nenv:\n  DOMAIN: preview.example.com\ncompose:\n  file: docker-compose.yml\n"+compose+"axes: []\n", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// The -wild router's certificate by mode: only DNS-01 can issue `*.app-pr-7.<d>`, so only there does
+// it order one; every other mode says why there is none.
+// negative control: append the three dns01 labels for every challenge → the http01 row has a certresolver.
+// negative control: drop the TLSNotes append → the http01 row's notes are empty.
+func TestWildRouterCertificateByMode(t *testing.T) {
+	app := "services:\n  app:\n    image: x\n    labels: [pstack.routing.port=80]\n"
+	const wild = "traefik.http.routers.app-pr-7-wild."
+	pin := []string{
+		wild + "tls.certresolver=le",
+		wild + "tls.domains[0].main=app-pr-7.preview.example.com",
+		wild + "tls.domains[0].sans=*.app-pr-7.preview.example.com",
+	}
+	one := specFrom(t, "spec-subs.yml", map[string]string{"PR": "7"})
+	for _, c := range []struct {
+		ch    Challenge
+		pin   bool
+		notes []string
+	}{
+		{DNS01, true, []string{}},
+		{HTTP01, false, []string{"app: *.app-pr-7.preview.example.com has no certificate on an http01 host (wildcards need DNS-01)"}},
+		{Unknown, false, []string{"app: *.app-pr-7.preview.example.com has no certificate on a host whose certificate mode is unknown"}},
+		{DNSPersist, false, []string{"app: *.app-pr-7.preview.example.com is served only if the stored wildcard covers it"}},
+	} {
+		r := augment(t, doc(t, app), one, c.ch)
+		labels := labelsOf(t, r.Doc, "app")
+		for _, l := range pin {
+			if contains(labels, l) != c.pin {
+				t.Errorf("%s: %s present=%v, want %v", c.ch, l, !c.pin, c.pin)
+			}
+		}
+		if !c.pin && contains(labels, wild+"tls.certresolver=le") {
+			t.Errorf("%s: -wild has a certresolver", c.ch)
+		}
+		if !reflect.DeepEqual(r.TLSNotes, c.notes) {
+			t.Errorf("%s: TLSNotes %q, want %q", c.ch, r.TLSNotes, c.notes)
+		}
+		if c.ch == DNS01 && contains(labels, "traefik.http.routers.app-pr-7.tls.certresolver=le") {
+			t.Errorf("dns01: the plain router must inherit the host certificate")
+		}
+	}
+
+	t.Run("depth any pins one label and says deeper names get none", func(t *testing.T) {
+		// negative control: return before the pin when the depth is any → the pin is missing.
+		r := augment(t, doc(t, app), subsSpec(t, "  profiles: [app]\n  subdomains: {app: any}\n"), DNS01)
+		if !contains(labelsOf(t, r.Doc, "app"), pin[2]) {
+			t.Errorf("no pin: %v", labelsOf(t, r.Doc, "app"))
+		}
+		want := []string{"app: names deeper than one label under app-pr-7.preview.example.com get no certificate"}
+		if !reflect.DeepEqual(r.TLSNotes, want) {
+			t.Errorf("TLSNotes %q", r.TLSNotes)
+		}
+	})
+}
+
+// D9: an entry that attaches to no routed service used to be silent.
+// negative control: skip the MatchNotes loop → MatchNotes is empty.
+func TestSubdomainEntryMatchingNothingIsNoted(t *testing.T) {
+	st := subsSpec(t, "  profiles: [app, x, own]\n  subdomains: [app, x, own]\n")
+	d := doc(t, "services:\n  app:\n    image: x\n    labels: [pstack.routing.port=80]\n  own:\n    image: x\n    labels: [traefik.enable=true]\n")
+	r := augment(t, d, st, DNS01)
+	want := []string{`subdomains entry "x" matches no routed service; no wildcard router`}
+	if !reflect.DeepEqual(r.MatchNotes, want) {
+		t.Fatalf("MatchNotes %q, want %q (a service with its own traefik labels uses ${PSTACK_WILD_OWN})", r.MatchNotes, want)
+	}
+}
+
+// D7: a subdomains host that is a served domain, a parent of one, or a control hostname would
+// outrank the wake catch-all (priority 2 over 1) and take that domain's traffic. Checked per entry,
+// whether or not any service is routed by pstack.routing.* labels.
+// negative control: drop the CheckSubdomainHosts call in AugmentComposeDoc → no error.
+// negative control: compare h == d only (no parent check) → acme.dev is accepted.
+func TestWildcardHostCannotBeServed(t *testing.T) {
+	oldC, oldS := ControlHostname, ServedDomains
+	t.Cleanup(func() { ControlHostname, ServedDomains = oldC, oldS })
+	ControlHostname = func(h string) bool { return h == "control.preview.example.com" }
+	ServedDomains = func() []string { return []string{"preview.example.com", "pr.acme.dev"} }
+	app := "services:\n  app:\n    image: x\n    labels: [pstack.routing.port=80]\n"
+	for host, want := range map[string]string{
+		"pr.acme.dev":                 "compose.subdomains.app.host pr.acme.dev contains pr.acme.dev, a domain this host serves",
+		"acme.dev":                    "compose.subdomains.app.host acme.dev contains pr.acme.dev, a domain this host serves",
+		"control.preview.example.com": "compose.subdomains.app.host control.preview.example.com is a control hostname",
+	} {
+		st := subsSpec(t, "  profiles: [app]\n  subdomains: {app: {host: "+host+", depth: any}}\n")
+		_, err := AugmentComposeDoc(AugmentArgs{Doc: doc(t, app), Spec: st, Challenge: DNS01})
+		if err == nil || !spec.IsSpecError(err) || err.Error() != want {
+			t.Errorf("%s: got %v", host, err)
+		}
+	}
+	ok := subsSpec(t, "  profiles: [app]\n  subdomains: {app: {host: x.pr.acme.dev}}\n")
+	if _, err := AugmentComposeDoc(AugmentArgs{Doc: doc(t, app), Spec: ok, Challenge: DNS01}); err != nil {
+		t.Errorf("a host under a served domain is fine: %v", err)
+	}
+
+	t.Run("refused with no pstack.routing.* service, before any file is written", func(t *testing.T) {
+		// negative control: drop the CheckSubdomainHosts call in MaterializeCompose → no error.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  app:\n    image: x\n    labels: [traefik.enable=true]\n"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		st := subsSpec(t, "  profiles: [app]\n  subdomains: {app: {host: acme.dev}}\n")
+		ch := DNS01
+		_, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: st, Runner: exec.NewFake(nil, ""), Challenge: &ch})
+		if err == nil || !strings.Contains(err.Error(), "a domain this host serves") {
+			t.Fatalf("got %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, GeneratedCompose)); !os.IsNotExist(err) {
+			t.Errorf("a file was written: %v", err)
+		}
+	})
+}
