@@ -222,3 +222,24 @@ func TestWildcardSubdomains(t *testing.T) {
 		}
 	})
 }
+
+// A subdomains host equal to the preview domain, or a parent of it, renders a priority-2 wildcard
+// that outranks the wake catch-all and takes every hostname on the host.
+// negative control: drop the equality-or-parent check in ResolveSubdomains → both cases resolve.
+func TestSubdomainHostCannotBeThePreviewDomain(t *testing.T) {
+	const domain = "preview.example.com"
+	want := func(host string) string {
+		return "compose.subdomains.web.host " + host + " contains the preview domain; its wildcard would catch every hostname on this host"
+	}
+	for _, host := range []string{domain, "Preview.Example.com", "example.com"} {
+		h := host
+		_, err := ResolveSubdomains([]SubdomainConfig{{Profile: "web", Depth: DepthOne, Host: &h}}, "pr-1", []string{"web"}, domain)
+		if err == nil || err.Error() != want(host) {
+			t.Fatalf("host %q: got %v", host, err)
+		}
+	}
+	ok := "x." + domain
+	if _, err := ResolveSubdomains([]SubdomainConfig{{Profile: "web", Depth: DepthOne, Host: &ok}}, "pr-1", []string{"web"}, domain); err != nil {
+		t.Fatalf("a host under the domain is fine: %v", err)
+	}
+}
