@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	pstack "github.com/samishal1998/preview-stacks/packages/pstack"
 	"github.com/samishal1998/preview-stacks/packages/pstack/internal/exec"
@@ -1662,6 +1663,32 @@ func TestInitLoki(t *testing.T) {
 			t.Errorf("dry-run wrote %v (%v)", entries, err)
 		}
 	})
+}
+
+// negative control: drop the retry after "control stack up" → the first answer, a fresh overlay's
+// "network preview-ingress not found", fails init.
+func TestInitRetriesAFreshOverlaysFirstAttach(t *testing.T) {
+	defer func(d time.Duration) { *initctl.HealthPoll = d }(*initctl.HealthPoll)
+	*initctl.HealthPoll = time.Millisecond
+	ups := 0
+	f := okRunner("active", "")
+	base := f.Answer
+	f.Answer = func(cmd string) (exec.Result, bool) {
+		if strings.Contains(cmd, "up -d --remove-orphans") {
+			if ups++; ups == 1 {
+				return exec.Result{OK: false, Stderr: "Error response from daemon: failed to set up container networking: could not find a network matching network mode preview-ingress: network preview-ingress not found"}, true
+			}
+		}
+		return base(cmd)
+	}
+	var out bytes.Buffer
+	err := initctl.Init(initctl.Options{
+		DataDir: t.TempDir(), Domain: "preview.example.com", AcmeEmail: "o@e.com", Challenge: initctl.HTTP01,
+		UI: initctl.Basic, Orchestrator: spec.Swarm, Runner: f, Out: &out,
+	})
+	if err != nil || ups != 2 {
+		t.Fatalf("err %v ups %d", err, ups)
+	}
 }
 
 // negative control: drop the UndrainSelf call from Init — a manager drained by 0.44's Swarm page

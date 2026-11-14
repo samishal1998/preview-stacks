@@ -673,6 +673,13 @@ func Init(opts Options) error {
 	// ── 4. Bring it up ──────────────────────────────────────────────────────────────────────────
 	upCmd := "docker compose -p " + ControlProject + " -f " + swarm.Shq(composePath) + " up -d --remove-orphans"
 	up := runner.Run(upCmd, exec.RunOptions{Label: "control stack up"})
+	// A fresh attachable overlay is set up on this node by its first attachment, and a container
+	// starting beside that one can get "network preview-ingress not found" (seen on a fresh Hetzner
+	// host). `up -d` is idempotent: one retry.
+	if said := up.Stderr + up.Stdout; !up.OK && strings.Contains(said, "network") && strings.Contains(said, "not found") {
+		time.Sleep(healthPoll)
+		up = runner.Run(upCmd, exec.RunOptions{Label: "control stack up"})
+	}
 	if !up.OK {
 		return errors.New("control stack failed to start:\n" + exec.Indent(firstOf(up.Stderr, up.Stdout)))
 	}
