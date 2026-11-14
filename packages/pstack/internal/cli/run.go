@@ -441,7 +441,10 @@ func validate(args *Parsed, st *spec.Stack, out io.Writer) *Exit {
 				depth = "any depth — HTTP only, no cert can cover it"
 			}
 			fmt.Fprintln(out, "  subdomains: *."+s.Host+" → "+s.Profile+"  ("+depth+")")
-			fmt.Fprintln(out, "              "+s.VarName+" — interpolate it into a router label")
+			fmt.Fprintln(out, "              router generated; ${"+s.VarName+"} is for a service with its own traefik labels")
+			if s.Depth != spec.DepthAny {
+				fmt.Fprintln(out, "              TLS: DNS-01 hosts order one certificate per deployment; other modes serve none")
+			}
 		}
 	}
 	for _, a := range st.Axes {

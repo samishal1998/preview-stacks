@@ -5,13 +5,14 @@ package spec
 // over SpecError; Go has no such cycle to dodge.
 //
 // THE GOAL. Given profile `backend` on stack `pr-123`, make anything under
-// `backend-pr-123.<domain>` reach the same place the bare host reaches. pstack does not own your
-// per-PR Traefik labels; it computes the one fiddly part — a correctly escaped, correctly anchored
-// Go regexp — and exposes it as `PSTACK_WILD_<PROFILE>` for a label you write.
+// `backend-pr-123.<domain>` reach the same place the bare host reaches. Autolabel writes the
+// `-wild` router for a service routed by `pstack.routing.*` labels; the same rule — a correctly
+// escaped, correctly anchored Go regexp — is exposed as `PSTACK_WILD_<PROFILE>` for a service that
+// writes its own traefik labels.
 //
-// THE CEILINGS: a DNS wildcard and a certificate wildcard each match exactly ONE label, so `depth:
-// any` is routing-only, permanently. `one` is the default because it is what can actually be
-// delivered.
+// THE CEILINGS: the DNS wildcard `*.<domain>` answers deeper names too (RFC 4592), but a certificate
+// wildcard covers exactly ONE label, so `depth: any` is HTTP-only, permanently. `one` is the default
+// because it is what can actually be delivered.
 
 import (
 	"fmt"
@@ -204,6 +205,12 @@ func ResolveSubdomains(configs []SubdomainConfig, stack string, profiles []strin
 		host := c.Profile + "-" + stack + "." + domain
 		if c.Host != nil {
 			host = *c.Host
+			// The preview domain or a parent of it: a priority-2 wildcard there outranks the wake
+			// catch-all and takes every hostname this host serves.
+			h, d := strings.ToLower(host), strings.ToLower(domain)
+			if h == d || strings.HasSuffix(d, "."+h) {
+				return nil, &Error{fmt.Sprintf("compose.subdomains.%s.host %s contains the preview domain; its wildcard would catch every hostname on this host", c.Profile, host)}
+			}
 		}
 		out = append(out, SubdomainRoute{Profile: c.Profile, Host: host, Depth: c.Depth, VarName: varName, Rule: WildcardRule(host, c.Depth)})
 	}
