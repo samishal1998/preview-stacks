@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -65,8 +66,19 @@ func TestEachDomainGetsConsoleAPIAndAWakeRouter(t *testing.T) {
 		t.Errorf("tls must be a router field: %v", ui.Keys())
 	}
 	wake := routers.GetMap("pstack-wake-preview-new-com")
-	if wake.GetString("rule") != "HostRegexp(`^[a-z0-9-]+\\.preview\\.new\\.com$`)" {
+	// Any depth: a sleeping stack's subdomain subtree (`a.web-pr-1.<d>`) must reach the API too.
+	// negative control: render the one-label `^[a-z0-9-]+\\.` prefix → this and the match check fail.
+	if wake.GetString("rule") != "HostRegexp(`^([a-z0-9-]+\\.)+preview\\.new\\.com$`)" {
 		t.Errorf("wake rule: %q", wake.GetString("rule"))
+	}
+	wakeRe := regexp.MustCompile(strings.TrimSuffix(strings.TrimPrefix(wake.GetString("rule"), "HostRegexp(`"), "`)"))
+	for h, want := range map[string]bool{
+		"web-pr-1.preview.new.com": true, "a.web-pr-1.preview.new.com": true, "a.b.web-pr-1.preview.new.com": true,
+		"preview.new.com": false, "x.other.com": false,
+	} {
+		if wakeRe.MatchString(h) != want {
+			t.Errorf("wake rule on %s: want %v", h, want)
+		}
 	}
 	// Priority 1 — the lowest — or the catch-all outranks the previews' own routers: Traefik's
 	// default priority is the RULE LENGTH, and this rule is longer than most Host() rules.

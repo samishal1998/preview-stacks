@@ -237,12 +237,12 @@ func renderDomains(domains []string, o DomainOptions) string {
 		b.WriteString("      entryPoints: [websecure]\n")
 		b.WriteString("      service: \"" + apiService + "\"\n")
 		b.WriteString(tlsFor(d, o.Mode, false))
-		// WAKE-ON-CALL for this domain. Priority 1 — the lowest — so a live preview's own router
+		// WAKE-ON-CALL for this domain, at any depth (a stack's subdomain subtree too). Priority 1 — the lowest — so a live preview's own router
 		// always wins; this only catches hostnames nothing else claims, which is what a sleeping
 		// stack looks like. `tls: {}` alone, exactly like the primary's: a HostRegexp gives ACME no
 		// domain to order, so it serves whatever certificate already covers that name.
 		b.WriteString("    pstack-wake-" + s + ":\n")
-		b.WriteString("      rule: \"HostRegexp(`^[a-z0-9-]+\\\\." + strings.ReplaceAll(d, ".", "\\\\.") + "$`)\"\n")
+		b.WriteString("      rule: \"HostRegexp(`^([a-z0-9-]+\\\\.)+" + strings.ReplaceAll(d, ".", "\\\\.") + "$`)\"\n")
 		b.WriteString("      priority: 1\n")
 		b.WriteString("      entryPoints: [websecure]\n")
 		b.WriteString("      service: \"" + apiService + "\"\n")

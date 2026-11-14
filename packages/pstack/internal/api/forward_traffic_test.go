@@ -172,7 +172,11 @@ func TestTrafficSkips(t *testing.T) {
 		{"api", "api." + tfDomain, 200},
 		{"grafana", "grafana." + tfDomain, 503},
 		{"loki", "loki." + tfDomain, 404},
-		{"two labels", "a.b." + tfDomain, 200},
+		// Not a skip any more: the wake catch-all routes any depth here, so a.b.<d> is a preview name
+		// and is forwarded. This B's certificate covers one label, so the TLS handshake fails before
+		// B sees a request and A answers the Down page — never the console (200).
+		// negative control: keep previewHostname one label deep → 200, the console on a preview's URL.
+		{"two labels is forwarded, not the console", "a.b." + tfDomain, 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tfForward(t, a, via)
