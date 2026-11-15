@@ -266,6 +266,7 @@ var matchers = map[string]*regexp.Regexp{
 	"jobRe":           jobRe,
 	"deploymentRe":    deploymentRe,
 	"deployCancelRe":  deployCancelRe,
+	"depSubdomainRe":  depSubdomainRe,
 	"shareRe":         shareRe,
 	"logsRe":          logsRe,
 	"logStreamRe":     logStreamRe,

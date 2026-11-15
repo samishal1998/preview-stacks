@@ -35,10 +35,10 @@ func composeDoc(st *spec.Stack, dir string) (*omap.Map, error) {
 //
 // It runs the deploy's own AugmentComposeDoc over the submitted compose file, never
 // MaterializeCompose, which writes the derived file and asks docker. The challenge does not change
-// a host. Only a generated `<name>-<stack>.<domain>` host is mirrored: an explicit
+// a host. depth ("" none) is the route's own wildcard, for a service the stack gives none. Only a generated `<name>-<stack>.<domain>` host is mirrored: an explicit
 // pstack.routing.host or compose.subdomains `host:` is already stable, and a hand-labelled service
 // never reaches Generated. An unreadable compose is an error, for the caller to log and skip.
-func aliasTarget(st *spec.Stack, dir, alias string) (routing.AliasTarget, []string, error) {
+func aliasTarget(st *spec.Stack, dir, alias string, depth spec.Depth) (routing.AliasTarget, []string, error) {
 	t := routing.AliasTarget{Alias: alias, Stack: st.Stack, Provider: "docker"}
 	if orchestratorOf(st) == spec.Swarm {
 		t.Provider = "swarm"
@@ -85,6 +85,9 @@ func aliasTarget(st *spec.Stack, dir, alias string) (routing.AliasTarget, []stri
 					break
 				}
 			}
+		}
+		if svc.Depth == "" {
+			svc.Depth = depth
 		}
 		if domain != "" && host == id+"."+domain {
 			t.Services = append(t.Services, svc)

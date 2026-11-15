@@ -86,6 +86,7 @@ const TABLE: Row[] = [
   { method: 'GET', path: '/api/deployments/nope/logs/stream', min: 'viewer', ok: 404 },
   { method: 'GET', path: '/api/deployments/nope/source', min: 'viewer', ok: 404 },
   { method: 'GET', path: '/api/deployments/nope/readiness', min: 'viewer', ok: 404 },
+  { method: 'GET', path: '/api/deployments/nope/subdomains', min: 'viewer', ok: 404 },
   { method: 'GET', path: '/api/jobs', min: 'viewer', ok: 200 },
   { method: 'GET', path: '/api/jobs/nope', min: 'viewer', ok: 404 },
   { method: 'GET', path: '/api/jobs/nope/stream', min: 'viewer', ok: 404 },
@@ -116,6 +117,7 @@ const TABLE: Row[] = [
   // ── developer: stacks and deployments ───────────────────────────────────────────────────────
   { method: 'PUT', path: '/api/deployments/nope', body: {}, min: 'developer', ok: 400 },
   { method: 'DELETE', path: '/api/deployments/nope', min: 'developer', ok: 404 },
+  { method: 'PUT', path: '/api/deployments/nope/subdomains', body: { service: 'web', depth: 'one' }, min: 'developer', ok: 404 },
   { method: 'POST', path: '/api/deployments/nope/up', min: 'developer', ok: 404 },
   { method: 'POST', path: '/api/deployments/nope/down', min: 'developer', ok: 404 },
   { method: 'POST', path: '/api/deployments/nope/verify', min: 'developer', ok: 404 },
@@ -141,6 +143,7 @@ const TABLE: Row[] = [
   { method: 'DELETE', path: '/api/custom-routes/missing-{r}', min: 'developer', ok: 404 },
   { method: 'PUT', path: '/api/custom-routes/missing-{r}/assignment', body: { deployment: 'nope' }, min: 'developer', ok: 404 },
   { method: 'DELETE', path: '/api/custom-routes/missing-{r}/assignment', min: 'developer', ok: 404 },
+  { method: 'PUT', path: '/api/custom-routes/missing-{r}/subdomains', body: { depth: 'one' }, min: 'developer', ok: 404 },
 
   // ── maintainer: host configuration ──────────────────────────────────────────────────────────
   { method: 'PUT', path: '/api/host-vars/PROBE_{r}', body: { value: 'v', secret: false }, min: 'maintainer', ok: 201 },

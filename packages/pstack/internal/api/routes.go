@@ -41,7 +41,7 @@ var (
 	swarmNodeRe     = regexp.MustCompile(`^/api/swarm/nodes/([^/]+)(?:/(drain|undrain))?$`)
 	swarmPreviewsRe = regexp.MustCompile(`^/api/swarm/previews/(workers|any)$`)
 	// Spelled like swarmNodeRe, so openapi_coverage_test expands it into /{name} and /{name}/assignment.
-	customRouteRe  = regexp.MustCompile(`^/api/custom-routes/([^/]+)(?:/(assignment))?$`)
+	customRouteRe  = regexp.MustCompile(`^/api/custom-routes/([^/]+)(?:/(assignment|subdomains))?$`)
 	scalerPresetRe = regexp.MustCompile(`^/api/scaler/presets/([^/]+)$`)
 )
 
@@ -115,6 +115,21 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 			return nil
 		}
 		return s.lifecycle(w, r, dep, action, who, vars)
+	}
+
+	if m := depSubdomainRe.FindStringSubmatch(path); m != nil {
+		if r.Method != http.MethodGet && r.Method != http.MethodPut {
+			writeError(w, 405, "use GET or PUT")
+			return nil
+		}
+		dep, err := s.depOr404(w, m[1])
+		if dep == nil || err != nil {
+			return err
+		}
+		if r.Method == http.MethodGet {
+			return s.getDeploymentSubdomains(w, dep)
+		}
+		return s.putDeploymentSubdomain(w, r, dep)
 	}
 
 	// ---- stop everything one deployment's stack has outstanding ----
@@ -509,7 +524,7 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request, path string, who
 		if err != nil {
 			return err
 		}
-		return s.customRoutesRoutes(w, r, name, m[2] != "")
+		return s.customRoutesRoutes(w, r, name, m[2])
 	}
 
 	// ---- Traefik dynamic configuration ----
