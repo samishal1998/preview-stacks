@@ -168,6 +168,7 @@ async function setDepth(s: RoutedService, v: string): Promise<void> {
               <SelectMenu
                 v-if="depthEditable(s.from, mayWrite)"
                 :model-value="s.subdomains ?? ''"
+                :disabled="saving !== ''"
                 :label="`Subdomains for ${s.service}`"
                 :options="depthOptions"
                 @update:model-value="(v) => setDepth(s, v)"

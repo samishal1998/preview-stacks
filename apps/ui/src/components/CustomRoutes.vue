@@ -45,6 +45,8 @@ const saving = ref('');
 const name = ref('');
 const target = ref(props.deployment ?? '');
 const formError = ref('');
+/** A refused Subdomains change, shown on its own row. */
+const subError = ref<{ name: string; text: string } | null>(null);
 /** The holder a 409 named when the list said the route was free. */
 const stale = ref<Holder | null>(null);
 const submitBtn = ref<InstanceType<typeof ActionButton> | null>(null);
@@ -141,10 +143,10 @@ async function setDepth(r: CustomRoute, v: string): Promise<void> {
   const res = await api.put<CustomRoute>(`${path(r.name)}/subdomains`, { depth });
   saving.value = '';
   if (!res.ok) {
-    formError.value = problem(res, `set subdomains on ${r.name}`);
+    subError.value = { name: r.name, text: problem(res, "set subdomains") };
     return;
   }
-  formError.value = '';
+  subError.value = null;
   routes.value = routes.value.map((x) => (x.name === r.name ? res.body : x));
 }
 
@@ -209,9 +211,11 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
                 :model-value="r.subdomains ?? ''"
                 :label="`Subdomains for ${r.name}`"
                 :options="depthOptions"
+                :disabled="saving !== ''"
                 @update:model-value="(v) => setDepth(r, v)"
               />
               <span v-else>{{ depthLabel(r.subdomains) }}</span>
+              <p v-if="subError?.name === r.name" class="s-failed" role="alert" style="font-size: var(--t-sm)">{{ subError.text }}</p>
             </td>
             <td v-if="!deployment" role="cell" class="cell-wrap" data-label="deployment">
               <RouterLink v-if="r.deployment" :to="`/deployments/${encodeURIComponent(r.deployment)}/runtime`">
