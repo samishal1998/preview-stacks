@@ -722,6 +722,18 @@ no.
 label**: on `dns01` the `*.backend-pr-123.<domain>` pin still applies, and the log notes that deeper
 names get none. Use it where plain HTTP is fine for the deeper names.
 
+### Turning a subtree on without editing the spec
+
+A deployment's **Subdomains** list in either UI (or
+`PUT /api/deployments/{id}/subdomains { service, depth }`, `depth` `one`, `any` or null) sets the same
+wildcard for one service with a generated host, stored on this host rather than in the spec, so a CI
+redeploy from the repo's spec keeps it. It applies on the next deploy. The spec wins: a service its
+`compose.subdomains` names shows **Set in spec** and answers 409; null always clears a row.
+`GET /api/deployments/{id}/subdomains` lists the candidates, each `{ service, host, subdomains, from }`
+(`from`: `spec`, `host` or null), plus any row whose service lost its generated host, so it can be
+cleared. The deployment's own `compose.subdomains` stays the spec's. Forgetting the deployment drops
+its rows.
+
 ---
 
 ## 6. Run the API and UI
@@ -1737,6 +1749,11 @@ Point it at the next PR and the same links follow. **No redeploy:** pstack rewri
   each wildcard subdomain derived from one. A service with an explicit `pstack.routing.host`, an
   explicit `subdomains` host, or its own `traefik.*` labels has a host that does not carry the stack
   name, so it already is stable and gets no twin.
+- **Subdomains on the route.** `PUT /api/custom-routes/{name}/subdomains { depth }` (`one`, `any`
+  or null; the **Subdomains** select in both UIs) gives the route `*.<host>` for every host it
+  mirrors that has no wildcard from its stack, with no redeploy. It belongs to the route, so it
+  follows the route to the next stack. A wildcard something else serves is a 409. Each row of
+  `GET /api/custom-routes` carries `subdomains`.
 - **Certificates.** A route host inherits the host's certificate. A wildcard twin follows the
   [subdomain rules](#dns-tls-and-wake): on `dns01` each route and subdomain service orders one
   certificate for `web-checkout.<domain>` + `*.web-checkout.<domain>`, and moving the route to another
