@@ -230,6 +230,15 @@ func TestGeneratedTraefikLabels(t *testing.T) {
 		if !found {
 			t.Errorf("no wild rule: %v", labels)
 		}
+		// The derived file is interpolated by `docker compose` and `docker stack deploy`: the regex's
+		// `$` anchor must be written `$$`, or the deploy fails "invalid interpolation format" (found
+		// on a real host). negative control: emit spec.WildcardRule unescaped → this fails.
+		for _, l := range labels {
+			if strings.HasPrefix(l, "traefik.http.routers.app-pr-7-wild.rule=") &&
+				(!strings.HasSuffix(l, "$$`)") || strings.Contains(strings.ReplaceAll(l, "$$", ""), "$")) {
+				t.Errorf("rule not $$-escaped: %s", l)
+			}
+		}
 		// Lower priority than the exact host, which scores on rule length.
 		if !contains(labels, "traefik.http.routers.app-pr-7-wild.priority=2") {
 			t.Errorf("priority: %v", labels)
