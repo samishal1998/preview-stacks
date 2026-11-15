@@ -548,13 +548,7 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 		doc.Set("networks", networks)
 	}
 
-	if st.Compose != nil {
-		for _, sub := range st.Compose.Subdomains {
-			if !matched[sub.Profile] {
-				matchNotes = append(matchNotes, fmt.Sprintf(`subdomains entry "%s" matches no routed service; no wildcard router`, sub.Profile))
-			}
-		}
-	}
+	matchNotes = append(matchNotes, unmatchedNotes(st, matched)...)
 	return &AugmentResult{Doc: doc, Generated: generated, Skipped: skipped, TLSNotes: tlsNotes, MatchNotes: matchNotes}, nil
 }
 
@@ -673,6 +667,42 @@ type MaterializeResult struct {
 	TLSNotes, MatchNotes []string
 }
 
+// unmatchedNotes is a note per compose.subdomains entry no service in matched attaches to.
+func unmatchedNotes(st *spec.Stack, matched map[string]bool) []string {
+	out := []string{}
+	if st.Compose == nil {
+		return out
+	}
+	for _, sub := range st.Compose.Subdomains {
+		if !matched[sub.Profile] {
+			out = append(out, fmt.Sprintf(`subdomains entry "%s" matches no routed service; no wildcard router`, sub.Profile))
+		}
+	}
+	return out
+}
+
+// UnmatchedSubdomains is AugmentResult.MatchNotes for a compose file with no pstack.routing.*
+// service, where AugmentComposeDoc does not run: only a service with its own traefik labels can take
+// an entry (through ${PSTACK_WILD_<NAME>}).
+func UnmatchedSubdomains(st *spec.Stack, doc *omap.Map) []string {
+	matched := map[string]bool{}
+	if services := doc.GetMap("services"); services != nil {
+		for _, name := range services.Keys() {
+			svc := services.GetMap(name)
+			if svc == nil {
+				continue
+			}
+			lv, _ := svc.Get("labels")
+			var dlv any
+			if d := svc.GetMap("deploy"); d != nil {
+				dlv, _ = d.Get("labels")
+			}
+			matched[name] = hasTraefik(LabelsToMap(lv)) || hasTraefik(LabelsToMap(dlv))
+		}
+	}
+	return unmatchedNotes(st, matched)
+}
+
 // MaterializeCompose reads the submitted compose file, augments it, and writes the derived file next
 // to it.
 //
@@ -735,7 +765,7 @@ func MaterializeCompose(a MaterializeArgs) (*MaterializeResult, error) {
 	out := doc
 	generated := omap.New()
 	skipped := omap.New()
-	tlsNotes, matchNotes := []string{}, []string{}
+	tlsNotes, matchNotes := []string{}, UnmatchedSubdomains(a.Spec, doc)
 	if wantsRouting {
 		challenge := Unknown
 		if a.Challenge != nil {

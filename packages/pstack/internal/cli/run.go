@@ -438,16 +438,24 @@ func validate(args *Parsed, st *spec.Stack, out io.Writer) *Exit {
 				}
 			}
 		}
+		// No pstack.routing.* service: AugmentComposeDoc did not run, so the notes come from here.
+		if raw, err := os.ReadFile(st.Compose.File); err == nil && !strings.Contains(string(raw), "pstack.routing.") {
+			if parsed, err := yamlx.Parse(raw); err == nil {
+				if doc, ok := parsed.(*omap.Map); ok {
+					for _, n := range autolabel.UnmatchedSubdomains(st, doc) {
+						fmt.Fprintln(out, "  note: "+n)
+					}
+				}
+			}
+		}
 		for _, s := range st.Compose.Subdomains {
-			depth := "one label"
+			depth, tls := "one label", "TLS: DNS-01 hosts order one certificate per deployment; other modes serve none"
 			if s.Depth == spec.DepthAny {
-				depth = "any depth — HTTP only, no cert can cover it"
+				depth, tls = "any depth", "TLS: DNS-01 hosts certify the first label; deeper names are HTTP only"
 			}
 			fmt.Fprintln(out, "  subdomains: *."+s.Host+" → "+s.Profile+"  ("+depth+")")
 			fmt.Fprintln(out, "              router generated; ${"+s.VarName+"} is for a service with its own traefik labels")
-			if s.Depth != spec.DepthAny {
-				fmt.Fprintln(out, "              TLS: DNS-01 hosts order one certificate per deployment; other modes serve none")
-			}
+			fmt.Fprintln(out, "              "+tls)
 		}
 	}
 	for _, a := range st.Axes {

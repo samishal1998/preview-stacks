@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Subdomain notes and listing.** A `compose.subdomains` entry no service takes is noted in the
+  deploy log and `validate` even when no service uses `pstack.routing.*` labels. `validate` says
+  what `depth: any` gets on DNS-01 (the first label certified, deeper names HTTP only).
+  `GET /api/deployments/{id}/subdomains` also lists spec entries for a service with its own
+  traefik labels, so the UIs show every wildcard.
+- **Advanced UI:** a refused Subdomains change on a custom route shows on its row, and the
+  Subdomains selects wait for a save in flight instead of dropping the pick.
+
 ## 0.46.0 — 2026-11-15
 
 ### Added

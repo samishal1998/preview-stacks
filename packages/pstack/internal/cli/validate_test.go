@@ -74,3 +74,54 @@ func TestValidateSubdomainLines(t *testing.T) {
 		t.Fatalf("validate printed:\n%s", out.String())
 	}
 }
+
+// negative control: restore "any depth — HTTP only, no cert can cover it" and skip the TLS line for
+// any → this fails.
+func TestValidateSubdomainAnyDepth(t *testing.T) {
+	dir := t.TempDir()
+	spec := "version: 1\nstack: pr-1\nenv:\n  PREVIEW_DOMAIN: preview.example.com\ncompose:\n  file: compose.yml\n  profiles: [web]\n  subdomains: {web: any}\naxes: []\n"
+	if err := os.WriteFile(filepath.Join(dir, "preview.yml"), []byte(spec), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"-f", filepath.Join(dir, "preview.yml"), "validate"}, IO{Stdout: &out, Stderr: &errOut, Env: func(string) (string, bool) { return "", false }}); code != 0 {
+		t.Fatalf("exit %d: %s %s", code, out.String(), errOut.String())
+	}
+	want := "  subdomains: *.web-pr-1.preview.example.com → web  (any depth)\n" +
+		"              router generated; ${PSTACK_WILD_WEB} is for a service with its own traefik labels\n" +
+		"              TLS: DNS-01 hosts certify the first label; deeper names are HTTP only\n"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("validate printed:\n%s", out.String())
+	}
+}
+
+// negative control: drop the `note:` loop for a routed compose file → the first case fails; drop
+// the UnmatchedSubdomains call → the second does.
+func TestValidatePrintsSubdomainNotes(t *testing.T) {
+	for name, compose := range map[string]string{
+		"routed":     "services:\n  app:\n    image: x\n    labels: [pstack.routing.port=80]\n",
+		"not routed": "services:\n  app:\n    image: x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := "version: 1\nstack: pr-1\nenv:\n  PREVIEW_DOMAIN: preview.example.com\ncompose:\n  file: compose.yml\n  profiles: [web]\n  subdomains: [web]\naxes: []\n"
+			for f, body := range map[string]string{"preview.yml": spec, "compose.yml": compose} {
+				if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o666); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wd, _ := os.Getwd()
+			if err := os.Chdir(dir); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chdir(wd) })
+			var out, errOut bytes.Buffer
+			if code := Run([]string{"-f", "preview.yml", "validate"}, IO{Stdout: &out, Stderr: &errOut, Env: func(string) (string, bool) { return "", false }}); code != 0 {
+				t.Fatalf("exit %d: %s %s", code, out.String(), errOut.String())
+			}
+			if want := "  note: subdomains entry \"web\" matches no routed service; no wildcard router\n"; !strings.Contains(out.String(), want) {
+				t.Fatalf("validate printed:\n%s", out.String())
+			}
+		})
+	}
+}
