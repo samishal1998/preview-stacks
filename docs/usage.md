@@ -710,7 +710,8 @@ no.
   | Mode | The `-wild` router | Deploy log note |
   |---|---|---|
   | `dns01` | orders `backend-pr-123.<domain>` + `*.backend-pr-123.<domain>`: one certificate per deployment, against Let's Encrypt's ~50 per registered domain per week ([control-plane.md](control-plane.md#why-the-ceiling-is-the-reason-to-move-to-dns-01)) | none |
-  | `http01`, unknown | `tls=true`, no certificate (HTTP-01 cannot issue wildcards); the deploy still succeeds | `backend: *.backend-pr-123.<domain> has no certificate on an http01 host (wildcards need DNS-01)` |
+  | `http01` | `tls=true`, no certificate (HTTP-01 cannot issue wildcards); the deploy still succeeds | `backend: *.backend-pr-123.<domain> has no certificate on an http01 host (wildcards need DNS-01)` |
+  | unknown | `tls=true`, no certificate; the deploy still succeeds | `backend: *.backend-pr-123.<domain> has no certificate on a host whose certificate mode is unknown` |
   | `dns-persist-01` | `tls=true`; served by name if the stored pair's SANs cover `*.backend-pr-123.<domain>` | `backend: *.backend-pr-123.<domain> is served only if the stored wildcard covers it` |
 
   Deployments made before this pick up their certificate on the next `up` or
