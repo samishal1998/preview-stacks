@@ -3,6 +3,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { HAlert, HButton, HCard, HDataTable, HInput, HSelect, HStack, HText, type MenuAction, type TableColumn, type TableRow } from '@hearth-ui/vue';
 import CustomRouteDialogs from '../../components/CustomRouteDialogs.vue';
+import RouteSubdomains from '../../components/RouteSubdomains.vue';
 import { focusLost, hostItems } from '../../lib/customRoutes';
 import { useCustomRoutes } from '../../lib/use-custom-routes';
 
@@ -14,12 +15,11 @@ const mine = computed(() => cr.routes.value.filter((r) => r.deployment === props
 const columns: TableColumn[] = [
   { key: 'name', label: 'Route' },
   { key: 'hosts', label: 'Hosts' },
+  { key: 'subdomains', label: 'Subdomains' },
 ];
-const rows = computed<TableRow[]>(() => mine.value.map((r) => ({ id: r.name, name: r.name, hosts: '' })));
-const hostsOf = (row: TableRow) => {
-  const r = mine.value.find((r) => r.name === row.id);
-  return hostItems(r?.hosts ?? [], r?.blocked);
-};
+const rows = computed<TableRow[]>(() => mine.value.map((r) => ({ id: r.name, name: r.name, hosts: '', subdomains: '' })));
+const routeOf = (row: TableRow) => mine.value.find((r) => r.name === row.id);
+const hostsOf = (row: TableRow) => hostItems(routeOf(row)?.hosts ?? [], routeOf(row)?.blocked);
 const actions = (): MenuAction[] => [{ id: 'unassign', label: 'Unassign' }];
 
 const NEW = '+new'; // not a DNS label, so never a route name
@@ -71,6 +71,7 @@ watch([() => cr.move.value, () => cr.drop.value, target], async ([m, d]) => {
             </template>
             <template v-if="!hostsOf(row).length">—</template>
           </HStack>
+          <RouteSubdomains v-else-if="column.key === 'subdomains' && routeOf(row)" :routes="cr" :route="routeOf(row)!" />
           <template v-else>{{ value }}</template>
         </template>
       </HDataTable>
