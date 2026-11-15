@@ -36,16 +36,20 @@ var routeNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
 // reservedRouteNames are the labels pstack owns on every domain (invariant 22).
 var reservedRouteNames = map[string]bool{"control": true, "api": true, "loki": true, "grafana": true}
 
-func (s *Server) customRoutesRoutes(w http.ResponseWriter, r *http.Request, name string, assignment bool) error {
+func (s *Server) customRoutesRoutes(w http.ResponseWriter, r *http.Request, name, sub string) error {
 	switch {
-	case !assignment && r.Method == http.MethodDelete:
+	case sub == "" && r.Method == http.MethodDelete:
 		return s.customRouteDrop(w, name, "deleted")
-	case assignment && r.Method == http.MethodPut:
+	case sub == "assignment" && r.Method == http.MethodPut:
 		return s.customRouteAssign(w, r, name)
-	case assignment && r.Method == http.MethodDelete:
+	case sub == "assignment" && r.Method == http.MethodDelete:
 		return s.customRouteDrop(w, name, "unassigned")
-	case assignment:
+	case sub == "subdomains" && r.Method == http.MethodPut:
+		return s.customRouteSubdomains(w, r, name)
+	case sub == "assignment":
 		writeError(w, 405, "use PUT or DELETE")
+	case sub == "subdomains":
+		writeError(w, 405, "use PUT")
 	default:
 		writeError(w, 405, "use DELETE")
 	}
@@ -80,7 +84,7 @@ func (s *Server) routeTarget(row store.CustomRoute) (routing.AliasTarget, error)
 	if err != nil {
 		return routing.AliasTarget{}, err
 	}
-	t, _, err := aliasTarget(d.st, d.dir, row.Name)
+	t, _, err := aliasTarget(d.st, d.dir, row.Name, spec.Depth(row.Subdomains))
 	return t, err
 }
 
@@ -109,7 +113,7 @@ type routeServes struct {
 	blocked        []routeBlock
 }
 
-// routeJSON is the API's route: `{ name, deployment, stack, hosts[], blocked[], createdAt, updatedAt }`,
+// routeJSON is the API's route: `{ name, deployment, stack, subdomains, hosts[], blocked[], createdAt, updatedAt }`,
 // with deployment and stack null when unassigned. hosts and blocked are what the last render settled
 // (routeView), so a GET parses no compose and asks no docker; both empty when it renders nothing.
 func (s *Server) routeJSON(row store.CustomRoute) jsonx.Object {
@@ -128,8 +132,8 @@ func (s *Server) routeJSON(row store.CustomRoute) jsonx.Object {
 			}
 		}
 	}
-	return jsonx.O("name", row.Name, "deployment", dep, "stack", stack, "hosts", hosts, "blocked", blocked,
-		"createdAt", row.CreatedAt, "updatedAt", row.UpdatedAt)
+	return jsonx.O("name", row.Name, "deployment", dep, "stack", stack, "subdomains", nullable(row.Subdomains),
+		"hosts", hosts, "blocked", blocked, "createdAt", row.CreatedAt, "updatedAt", row.UpdatedAt)
 }
 
 // deploymentHosts is every host a deployment serves, for the collision rules: each resolvable
@@ -148,7 +152,7 @@ func (s *Server) deploymentHosts() (map[string]routeOwner, error) {
 			continue
 		}
 		// The second return does not depend on the alias.
-		if _, hosts, err := aliasTarget(o.st, o.dir, ""); err == nil {
+		if _, hosts, err := aliasTarget(o.st, o.dir, "", ""); err == nil {
 			for _, h := range hosts {
 				taken[h] = routeOwner{"deployment", o.st.Stack}
 			}
@@ -319,8 +323,8 @@ func (s *Server) rendered() {
 // serves, or render a router name another route renders. Plain hosts and `*.` wildcards compare as
 // separate strings. Taken: deploymentHosts, then the hosts and routers every other assigned route
 // served at the last render (routeView), so assign and render agree (S2-R5). true = answered.
-func (s *Server) assignConflict(w http.ResponseWriter, name string, d resolved) (bool, error) {
-	t, _, err := aliasTarget(d.st, d.dir, name)
+func (s *Server) assignConflict(w http.ResponseWriter, name string, depth spec.Depth, d resolved) (bool, error) {
+	t, _, err := aliasTarget(d.st, d.dir, name, depth)
 	if err != nil {
 		return false, nil // stores the intent; the render logs why it serves nothing
 	}
@@ -467,7 +471,7 @@ func (s *Server) customRouteCreate(w http.ResponseWriter, r *http.Request) error
 			}
 			if d.st != nil {
 				stack = d.st.Stack
-				if answered, err := s.assignConflict(w, name, d); answered || err != nil {
+				if answered, err := s.assignConflict(w, name, "", d); answered || err != nil {
 					return nil, err
 				}
 			}
@@ -529,7 +533,7 @@ func (s *Server) customRouteAssign(w http.ResponseWriter, r *http.Request, name 
 		var stack any
 		if d.st != nil {
 			stack = d.st.Stack
-			if answered, err := s.assignConflict(w, name, d); answered || err != nil {
+			if answered, err := s.assignConflict(w, name, spec.Depth(row.Subdomains), d); answered || err != nil {
 				return nil, err
 			}
 		}
@@ -552,6 +556,47 @@ func (s *Server) customRouteAssign(w http.ResponseWriter, r *http.Request, name 
 			data = append(data, jsonx.KV{K: "previous", V: previous})
 		}
 		return &routeEvent{"route.assigned", data}, nil
+	})
+}
+
+// customRouteSubdomains is PUT …/subdomains { depth: "one" | "any" | null }: the route also serves
+// `*.<host>` for each host it mirrors that the stack gives no wildcard of its own. An assigned route
+// is checked for collisions first, like an assign. No event: nothing was assigned or unassigned.
+func (s *Server) customRouteSubdomains(w http.ResponseWriter, r *http.Request, name string) error {
+	body := bodyObject(r)
+	v, present := bodyGet(body, "depth")
+	depth, _ := v.(string)
+	if !present || (v != nil && depth != "one" && depth != "any" && depth != "off") {
+		writeError(w, 400, `body must be { depth: "one" | "any" | "off" | null }`)
+		return nil
+	}
+	if depth == "off" {
+		depth = ""
+	}
+	return s.underWriteMu(func() (*routeEvent, error) {
+		row, exists, err := store.GetCustomRoute(s.store.DB, name)
+		if err != nil || !exists {
+			if !exists {
+				writeError(w, 404, "no such route: "+name)
+			}
+			return nil, err
+		}
+		if depth != "" && row.DeploymentID != "" {
+			if d, err := s.resolveForRoute(row.DeploymentID); err == nil {
+				if answered, err := s.assignConflict(w, name, spec.Depth(depth), d); answered || err != nil {
+					return nil, err
+				}
+			}
+		}
+		if err := store.SetCustomRouteSubdomains(s.store.DB, name, depth); err != nil {
+			return nil, err
+		}
+		row.Subdomains = depth
+		if row.DeploymentID != "" {
+			s.rendered()
+		}
+		writeJSON(w, 200, s.routeJSON(row))
+		return nil, nil
 	})
 }
 

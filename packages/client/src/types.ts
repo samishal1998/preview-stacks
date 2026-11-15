@@ -102,6 +102,9 @@ export type DeploymentRow = {
   updatedAt?: number;
 };
 
+/** `GET /api/deployments/:id/subdomains`: services with a generated host; `from` says where their wildcard is set. */
+export type DeploymentSubdomain = { service: string; host: string; subdomains: 'one' | 'any' | null; from: 'spec' | 'host' | null };
+
 /**
  * `GET /api/deployments/:id`. Resolves or errors, so `stack` is always set; it carries no `running`
  * (ask `readiness` or `containers`) and adds what the spec declares.

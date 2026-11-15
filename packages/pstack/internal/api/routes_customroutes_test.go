@@ -574,8 +574,8 @@ func TestCustomRouteListShape(t *testing.T) {
 	}
 	body := compact.String()
 	for _, want := range []string{
-		`"name":"checkout","deployment":"pr-1","stack":"myapp-pr-1","hosts":["web-checkout.preview.example.com"],"blocked":[],"createdAt":`,
-		`"name":"spare","deployment":null,"stack":null,"hosts":[],"blocked":[],"createdAt":`,
+		`"name":"checkout","deployment":"pr-1","stack":"myapp-pr-1","subdomains":null,"hosts":["web-checkout.preview.example.com"],"blocked":[],"createdAt":`,
+		`"name":"spare","deployment":null,"stack":null,"subdomains":null,"hosts":[],"blocked":[],"createdAt":`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("want %s in\n%s", want, body)

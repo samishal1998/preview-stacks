@@ -11,7 +11,9 @@ import (
 type CustomRoute struct {
 	Name string
 	// DeploymentID is "" when the route is unassigned (NULL in the table).
-	DeploymentID         string
+	DeploymentID string
+	// Subdomains is the wildcard depth the route adds: "" off, "one" or "any".
+	Subdomains           string
 	CreatedAt, UpdatedAt int64
 }
 
@@ -25,7 +27,7 @@ type ErrCustomRouteHeld struct{ DeploymentID string }
 
 func (e ErrCustomRouteHeld) Error() string { return "custom route held by " + e.DeploymentID }
 
-const customRouteCols = "SELECT name, COALESCE(deployment_id, ''), created_at, updated_at FROM custom_routes"
+const customRouteCols = "SELECT name, COALESCE(deployment_id, ''), subdomains, created_at, updated_at FROM custom_routes"
 
 // ListCustomRoutes returns every route, ordered by name.
 func ListCustomRoutes(q Querier) ([]CustomRoute, error) {
@@ -37,7 +39,7 @@ func ListCustomRoutes(q Querier) ([]CustomRoute, error) {
 	out := []CustomRoute{}
 	for rows.Next() {
 		var r CustomRoute
-		if err := rows.Scan(&r.Name, &r.DeploymentID, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.Name, &r.DeploymentID, &r.Subdomains, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -48,7 +50,7 @@ func ListCustomRoutes(q Querier) ([]CustomRoute, error) {
 // GetCustomRoute reads one route; false when no route has that name.
 func GetCustomRoute(q Querier, name string) (CustomRoute, bool, error) {
 	var r CustomRoute
-	err := q.QueryRow(customRouteCols+" WHERE name = ?", name).Scan(&r.Name, &r.DeploymentID, &r.CreatedAt, &r.UpdatedAt)
+	err := q.QueryRow(customRouteCols+" WHERE name = ?", name).Scan(&r.Name, &r.DeploymentID, &r.Subdomains, &r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CustomRoute{}, false, nil
 	}

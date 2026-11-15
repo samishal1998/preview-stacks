@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,7 @@ var (
 	// "a new lifecycle action" recipe names). Sharing it would also weld this route's permission
 	// tier to up/down/verify's forever, which is the drift fuse permissions.go's header refuses.
 	deployCancelRe = regexp.MustCompile(`^/api/deployments/([^/]+)/cancel$`)
+	depSubdomainRe = regexp.MustCompile(`^/api/deployments/([^/]+)/subdomains$`)
 	shareRe        = regexp.MustCompile(`^/api/deployments/([^/]+)/share$`)
 	logsRe         = regexp.MustCompile(`^/api/deployments/([^/]+)/logs$`)
 	logStreamRe    = regexp.MustCompile(`^/api/deployments/([^/]+)/logs/stream$`)
@@ -340,7 +342,7 @@ func (s *Server) putDeployment(w http.ResponseWriter, r *http.Request, id string
 // getDeployment is GET /api/deployments/:id — field by field on purpose (guard 3): axis HOOK
 // NAMES, never hook bodies; declared env, never Stack.Env.
 func (s *Server) getDeployment(w http.ResponseWriter, dep *registry.Deployment, vars map[string]string) error {
-	st, err := s.resolveDep(dep.ID, vars)
+	st, added, err := s.resolveDepAdded(dep.ID, vars)
 	if err != nil {
 		return err
 	}
@@ -361,7 +363,9 @@ func (s *Server) getDeployment(w http.ResponseWriter, dep *registry.Deployment, 
 	}
 	var comp any
 	if st.Compose != nil {
-		comp = jsonx.O("file", st.Compose.File, "profiles", st.Compose.Profiles, "overlays", st.Compose.Overlays, "subdomains", st.Compose.Subdomains)
+		// The spec's own entries: host rows are GET …/subdomains'.
+		specSubs := slices.DeleteFunc(slices.Clone(st.Compose.Subdomains), func(r spec.SubdomainRoute) bool { return slices.Contains(added, r.Profile) })
+		comp = jsonx.O("file", st.Compose.File, "profiles", st.Compose.Profiles, "overlays", st.Compose.Overlays, "subdomains", specSubs)
 	}
 	requires := make([]jsonx.Object, 0, len(st.Requires))
 	for _, rq := range st.Requires {
@@ -450,6 +454,9 @@ func (s *Server) removeDeployment(dep *registry.Deployment, st *spec.Stack) erro
 		}); txErr != nil {
 			unassigned = nil // rolled back: nothing was unassigned, so nothing to re-render or announce
 			s.opts.Log("custom routes: could not unassign the routes of " + dep.ID + ": " + txErr.Error())
+		}
+		if e := store.ForgetDeploymentSubdomains(s.store.DB, dep.ID); e != nil {
+			s.opts.Log("subdomains: could not forget the rows of " + dep.ID + ": " + e.Error())
 		}
 		// A gone deployment frees every host it won from a route, so any assignment re-renders.
 		if len(unassigned) > 0 {
