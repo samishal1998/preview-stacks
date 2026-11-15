@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Subdomains from the UI.** A custom route gets a Subdomains setting (off, one level, any depth):
+  `*.web-checkout.<domain>` for each host it mirrors, no redeploy, kept when the route moves
+  (`PUT /api/custom-routes/{name}/subdomains`). A deployment's services with a generated host get
+  the same setting, stored on the host so a CI redeploy keeps it and applied on the next deploy
+  (`GET`/`PUT /api/deployments/{id}/subdomains`). A service
+  the spec's `compose.subdomains` names stays the spec's. Both UIs show both.
 - **Forwarding: `pstack forward`.** `pstack forward set <B's API URL> [--via <ip[:port]>]` on host A
   makes A pass every `/api/deployments` and `/api/jobs` request to B, after A's own role check and
   with B's token in place of the caller's, so CI keeps deploying against A while the jobs run on B.

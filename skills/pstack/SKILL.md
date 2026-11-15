@@ -131,7 +131,9 @@ answers as `<surface>-checkout` too, with no redeploy. A held route is refused w
 for a `pstack.routing.*` service; a service with its own `traefik.*` labels uses
 `${PSTACK_WILD_BACKEND}`. DNS needs nothing new. On a `dns01` host each deployment orders one
 certificate for the subtree; other modes serve it without one, and the deploy log says so. One label
-deep by default (`{backend: any}` routes deeper names over HTTP only).
+deep by default (`{backend: any}` routes deeper names over HTTP only). Without touching the spec:
+`PUT /api/deployments/{id}/subdomains {service, depth}` (kept across CI redeploys, applies on the
+next deploy) or `PUT /api/custom-routes/{name}/subdomains {depth}` (no redeploy).
 
 ### TLS: HTTP-01 by default, DNS-01 when the arithmetic says so
 
