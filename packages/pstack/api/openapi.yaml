@@ -187,6 +187,35 @@ paths:
       summary: Stop everything this stack has outstanding — running and queued.
       responses: { '200': { $ref: '#/components/responses/Ok' } }
 
+  /api/deployments/{id}/subdomains:
+    parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
+    get:
+      tags: [deployments]
+      operationId: listDeploymentSubdomains
+      x-cli-name: subdomains ls
+      summary: 'Each service with a generated host: { service, host, subdomains, from }, `subdomains` one, any or null, `from` spec, host or null. Viewer.'
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [deployments]
+      operationId: setDeploymentSubdomains
+      x-cli-name: subdomains set
+      summary: 'Serve `*.<host>` for one service with a generated host, stored on this host (a CI redeploy keeps it). Applies on the next deploy. A service the spec sets is 409. Developer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service, depth]
+              properties:
+                service: { type: string, description: 'A service from GET …/subdomains.' }
+                depth: { type: string, nullable: true, enum: [one, any, off], description: '`one`, `any`, or `off` (null is off too).' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /api/deployments/{id}/share:
     parameters: [{ $ref: '#/components/parameters/DeploymentId' }]
     post:
@@ -363,7 +392,7 @@ paths:
       tags: [custom-routes]
       operationId: listCustomRoutes
       x-cli-name: list
-      summary: 'Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `deployment` and `stack` are null when unassigned. Viewer.'
+      summary: 'Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `subdomains` is `one`, `any` or null. `deployment` and `stack` are null when unassigned. Viewer.'
       responses: { '200': { $ref: '#/components/responses/Ok' } }
     post:
       tags: [custom-routes]
@@ -424,6 +453,28 @@ paths:
       x-cli-name: unassign
       summary: 'Unassign a route. It is kept, serving nothing. Developer.'
       responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+
+  /api/custom-routes/{name}/subdomains:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string }, description: The route name. }]
+    put:
+      tags: [custom-routes]
+      operationId: setCustomRouteSubdomains
+      x-cli-name: subdomains
+      summary: 'Also serve `*.<host>` for each host the route mirrors. A host something else serves is 409. No redeploy. Developer.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [depth]
+              properties:
+                depth: { type: string, nullable: true, enum: [one, any, off], description: '`one`, `any`, or `off` (null is off too).' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ── registries ──────────────────────────────────────────────────────────────────────────────────
   /api/registries:

@@ -44,6 +44,7 @@ const route = (name: string, n: string | null) => ({
   name,
   deployment: n === null ? null : `pr-${n}`,
   stack: n === null ? null : `myapp-pr-${n}`,
+  subdomains: null,
   hosts: n === null ? [] : [`web-${name}.${DOMAIN}`],
   blocked: [],
   createdAt: expect.any(Number),
@@ -301,4 +302,33 @@ describe.skipIf(NO_CLI)('pstack route', () => {
     expect(r.code).toBe(3);
     expect(r.stderr).toContain('set PSTACK_API_URL');
   }, 20_000);
+});
+
+describe('subdomains without the spec', () => {
+  test('a route gets *.<host> with no redeploy; a deployment service is stored and listed', async () => {
+    // negative control: in routes_customroutes.go customRouteSubdomains, skip s.rendered() — the
+    // file keeps no -wild router and the second expect fails.
+    const { s, stop } = await boot('cr-subdomains');
+    try {
+      expect((await call(s, 'POST', '/api/custom-routes', { name: 'checkout', deployment: 'pr-1' })).status).toBe(201);
+      expect(await call(s, 'PUT', '/api/custom-routes/checkout/subdomains', { depth: 'one' })).toEqual({
+        status: 200,
+        body: { ...route('checkout', '1'), subdomains: 'one', hosts: [`web-checkout.${DOMAIN}`, `*.web-checkout.${DOMAIN}`] },
+      });
+      expect(await routesFile(s)).toContain('pstack-route-checkout-web-wild:');
+      expect((await call(s, 'PUT', '/api/custom-routes/checkout/subdomains', { depth: 'two' })).status).toBe(400);
+
+      // negative control: in server.go resolveDepAdded, skip hostSubdomains — the list stays off.
+      const off = { service: 'web', host: `web-myapp-pr-2.${DOMAIN}`, subdomains: null, from: null };
+      expect(await call(s, 'GET', '/api/deployments/pr-2/subdomains')).toEqual({ status: 200, body: [off] });
+      expect(await call(s, 'PUT', '/api/deployments/pr-2/subdomains', { service: 'web', depth: 'one' })).toEqual({
+        status: 200,
+        body: { service: 'web', subdomains: 'one', note: 'Applies on the next deploy.' },
+      });
+      expect(await call(s, 'GET', '/api/deployments/pr-2/subdomains')).toEqual({ status: 200, body: [{ ...off, subdomains: 'one', from: 'host' }] });
+      expect((await call(s, 'PUT', '/api/deployments/pr-2/subdomains', { service: 'db', depth: 'one' })).status).toBe(400);
+    } finally {
+      await stop();
+    }
+  });
 });

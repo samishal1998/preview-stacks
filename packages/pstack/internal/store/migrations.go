@@ -326,4 +326,19 @@ var Migrations = []string{
     updated_at INTEGER NOT NULL
   );
   `,
+	// 13 — wildcard subdomains an operator turns on from the API, not the spec.
+	`
+  -- CONFIGURATION AN OPERATOR CHOSE (invariant 10). '' = off, 'one' | 'any' = the depth.
+  -- A route's wildcard mirrors each of its services' hosts as *.<host>.
+  ALTER TABLE custom_routes ADD COLUMN subdomains TEXT NOT NULL DEFAULT '';
+  --
+  -- A deployment's per-service wildcard, merged into the resolved spec; a spec entry for the same
+  -- service wins. Rows go with the deployment.
+  CREATE TABLE deployment_subdomains (
+    deployment_id TEXT NOT NULL,
+    service       TEXT NOT NULL,
+    depth         TEXT NOT NULL,
+    PRIMARY KEY (deployment_id, service)
+  );
+  `,
 }

@@ -53,7 +53,7 @@ func TestAliasTargetMirrorsOnlyGeneratedHosts(t *testing.T) {
 	// negative control: mirror every Generated service (drop the `host == id+"."+domain` check) —
 	// admin joins Services and the Services comparison fails.
 	st, dir := targetFixture(t, targetSpec("", "  subdomains: [web]\n"), targetCompose)
-	got, hosts, err := aliasTarget(st, dir, "checkout")
+	got, hosts, err := aliasTarget(st, dir, "checkout", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestAliasTargetSkipsAnExplicitWildcardHost(t *testing.T) {
 	// negative control: set Depth whenever a -wild router exists (drop the derived-host check) —
 	// web gets Depth "one" and an alias wildcard nobody asked for.
 	st, dir := targetFixture(t, targetSpec("", "  subdomains:\n    web: {host: shop.preview.example.com}\n"), targetCompose)
-	got, hosts, err := aliasTarget(st, dir, "checkout")
+	got, hosts, err := aliasTarget(st, dir, "checkout", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestAliasTargetSkipsAnExplicitWildcardHost(t *testing.T) {
 func TestAliasTargetSwarm(t *testing.T) {
 	// negative control: hardcode Provider "docker" — this fails.
 	st, dir := targetFixture(t, targetSpec("  orchestrator: swarm\n", ""), targetCompose)
-	got, _, err := aliasTarget(st, dir, "checkout")
+	got, _, err := aliasTarget(st, dir, "checkout", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,20 +115,20 @@ func TestAliasTargetIsTotal(t *testing.T) {
 		if err := os.Remove(filepath.Join(dir, "compose.yml")); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := aliasTarget(st, dir, "checkout"); err == nil {
+		if _, _, err := aliasTarget(st, dir, "checkout", ""); err == nil {
 			t.Fatal("want an error")
 		}
 	})
 	t.Run("compose not a mapping", func(t *testing.T) {
 		// negative control: skip the mapping check — the nil doc augments to nothing and err is nil.
 		st, dir := targetFixture(t, targetSpec("", ""), "- web\n")
-		if _, _, err := aliasTarget(st, dir, "checkout"); err == nil {
+		if _, _, err := aliasTarget(st, dir, "checkout", ""); err == nil {
 			t.Fatal("want an error")
 		}
 	})
 	t.Run("no compose", func(t *testing.T) {
 		// negative control: drop the nil-Compose guard — this panics.
-		got, hosts, err := aliasTarget(&spec.Stack{Stack: "s"}, t.TempDir(), "checkout")
+		got, hosts, err := aliasTarget(&spec.Stack{Stack: "s"}, t.TempDir(), "checkout", "")
 		if err != nil || len(got.Services) != 0 || len(hosts) != 0 {
 			t.Fatalf("got %+v %v %v", got, hosts, err)
 		}

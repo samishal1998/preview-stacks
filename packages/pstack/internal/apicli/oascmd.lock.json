@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "generatorVersion": "oascmd-gen/1",
-  "specDigest": "cb4a0d005d59f91d171766f1bc5c4b4ada302555f79a05ca10ab9da4afa4fb8e",
+  "specDigest": "e666825d7ab3a59205719d349360e91a900f9e7b785c1dce19d822712cbdd4e1",
   "operations": {
     "actOnContainer": {
       "operationId": "actOnContainer",
@@ -1103,11 +1103,32 @@
       "path": "/api/custom-routes",
       "command": "custom-routes list",
       "funcName": "NewCustomRoutesListCommand",
-      "summary": "Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `deployment` and `stack` are null when unassigned. Viewer.",
+      "summary": "Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `subdomains` is `one`, `any` or null. `deployment` and `stack` are null when unassigned. Viewer.",
       "ext": {
         "name": "list"
       },
-      "digest": "479b425b482a4daf"
+      "digest": "77c3dd98f27f5d2d"
+    },
+    "listDeploymentSubdomains": {
+      "operationId": "listDeploymentSubdomains",
+      "method": "GET",
+      "path": "/api/deployments/{id}/subdomains",
+      "command": "deployments subdomains ls",
+      "funcName": "NewDeploymentsSubdomainsLsCommand",
+      "summary": "Each service with a generated host: { service, host, subdomains, from }, `subdomains` one, any or null, `from` spec, host or null. Viewer.",
+      "flags": [
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        }
+      ],
+      "ext": {
+        "name": "subdomains ls"
+      },
+      "digest": "71b1efd31fff15c4"
     },
     "listDeployments": {
       "operationId": "listDeployments",
@@ -1641,6 +1662,43 @@
       },
       "digest": "5a88702f763f0467"
     },
+    "setCustomRouteSubdomains": {
+      "operationId": "setCustomRouteSubdomains",
+      "method": "PUT",
+      "path": "/api/custom-routes/{name}/subdomains",
+      "command": "custom-routes subdomains",
+      "funcName": "NewCustomRoutesSubdomainsCommand",
+      "summary": "Also serve `*.\u003chost\u003e` for each host the route mirrors. A host something else serves is 409. No redeploy. Developer.",
+      "flags": [
+        {
+          "name": "depth",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "one",
+            "any",
+            "off"
+          ],
+          "description": "`one`, `any`, or `off` (null is off too)."
+        },
+        {
+          "name": "name",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The route name."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "subdomains"
+      },
+      "digest": "c302b418810cf6b7"
+    },
     "setDefaultRole": {
       "operationId": "setDefaultRole",
       "method": "PUT",
@@ -1670,6 +1728,50 @@
         "name": "set-default-role"
       },
       "digest": "5c27a683e8479e8d"
+    },
+    "setDeploymentSubdomains": {
+      "operationId": "setDeploymentSubdomains",
+      "method": "PUT",
+      "path": "/api/deployments/{id}/subdomains",
+      "command": "deployments subdomains set",
+      "funcName": "NewDeploymentsSubdomainsSetCommand",
+      "summary": "Serve `*.\u003chost\u003e` for one service with a generated host, stored on this host (a CI redeploy keeps it). Applies on the next deploy. A service the spec sets is 409. Developer.",
+      "flags": [
+        {
+          "name": "depth",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "one",
+            "any",
+            "off"
+          ],
+          "description": "`one`, `any`, or `off` (null is off too)."
+        },
+        {
+          "name": "id",
+          "source": "path",
+          "type": "string",
+          "required": true,
+          "description": "The registry id, e.g. `pr-123`."
+        },
+        {
+          "name": "service",
+          "source": "body",
+          "type": "string",
+          "required": true,
+          "description": "A service from GET …/subdomains."
+        }
+      ],
+      "body": {
+        "flat": true,
+        "required": true
+      },
+      "ext": {
+        "name": "subdomains set"
+      },
+      "digest": "00914204f3d73605"
     },
     "setForward": {
       "operationId": "setForward",

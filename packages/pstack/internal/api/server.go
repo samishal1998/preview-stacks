@@ -442,11 +442,22 @@ func orchestratorOf(st *spec.Stack) spec.Orchestrator {
 // resolveDep is every registry.Resolve on this server, so a spec referencing ${vars.*}/${secrets.*}
 // resolves identically on every route.
 func (s *Server) resolveDep(id string, vars map[string]string) (*spec.Stack, error) {
+	st, _, err := s.resolveDepAdded(id, vars)
+	return st, err
+}
+
+// resolveDepAdded is resolveDep plus the services whose wildcard came from the host, not the spec.
+func (s *Server) resolveDepAdded(id string, vars map[string]string) (*spec.Stack, []string, error) {
 	hv, sec, err := s.hostVars.ResolveMaps()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return s.registry.Resolve(id, vars, &spec.HostValues{Vars: hv, Secrets: sec})
+	st, err := s.registry.Resolve(id, vars, &spec.HostValues{Vars: hv, Secrets: sec})
+	if err != nil {
+		return nil, nil, err
+	}
+	added, err := s.hostSubdomains(id, st)
+	return st, added, err
 }
 
 func (s *Server) hostValues() *spec.HostValues {

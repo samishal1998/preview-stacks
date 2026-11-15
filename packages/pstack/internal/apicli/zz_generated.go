@@ -45,6 +45,7 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("custom-routes").AddCommand(NewCustomRoutesDeleteCommand(exec))
 	group("custom-routes").AddCommand(NewCustomRoutesUnassignCommand(exec))
 	group("custom-routes").AddCommand(NewCustomRoutesAssignCommand(exec))
+	group("custom-routes").AddCommand(NewCustomRoutesSubdomainsCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsListCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsDeleteCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsGetCommand(exec))
@@ -58,6 +59,8 @@ func NewCommandTree(exec oascmd.ExecOptions) []*cobra.Command {
 	group("deployments", "share").AddCommand(NewDeploymentsShareCreateCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsSleepCommand(exec))
 	group("deployments", "source").AddCommand(NewDeploymentsSourceGetCommand(exec))
+	group("deployments", "subdomains").AddCommand(NewDeploymentsSubdomainsLsCommand(exec))
+	group("deployments", "subdomains").AddCommand(NewDeploymentsSubdomainsSetCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsUpCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsVerifyCommand(exec))
 	group("deployments").AddCommand(NewDeploymentsWakeCommand(exec))
@@ -354,7 +357,7 @@ func NewHostControlRuntimeCommand(exec oascmd.ExecOptions) *cobra.Command {
 func NewCustomRoutesListCommand(exec oascmd.ExecOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `deployment` and `stack` are null when unassigned. Viewer.",
+		Short: "Every route: name, deployment, stack, the alias hosts it serves now, and `blocked`, each `{ host, by: { kind, name } }` that a deployment (kind deployment) or an earlier route (kind route) serves instead. `subdomains` is `one`, `any` or null. `deployment` and `stack` are null when unassigned. Viewer.",
 	}
 	cmd.Flags().Bool("json", false, "print the raw JSON response")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -517,6 +520,56 @@ func NewCustomRoutesAssignCommand(exec oascmd.ExecOptions) *cobra.Command {
 		}
 		if cmd.Flags().Changed("force") {
 			body["force"] = bodyForce
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewCustomRoutesSubdomainsCommand returns the "custom-routes subdomains"
+// command (PUT /api/custom-routes/{name}/subdomains).
+func NewCustomRoutesSubdomainsCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagName  string
+		bodyDepth string
+		flagData  string
+	)
+	cmd := &cobra.Command{
+		Use:   "subdomains",
+		Short: "Also serve `*.<host>` for each host the route mirrors. A host something else serves is 409. No redeploy. Developer.",
+	}
+	cmd.Flags().StringVar(&flagName, "name", "", "The route name.")
+	cmd.Flags().StringVar(&bodyDepth, "depth", "", "`one`, `any`, or `off` (null is off too). (one of: one, any, off)")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("name")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("depth") {
+			if err := oascmd.ValidateEnum("depth", []string{"one", "any", "off"}, bodyDepth); err != nil {
+				return err
+			}
+		}
+		req := oascmd.Request{
+			Method:     "PUT",
+			Path:       "/api/custom-routes/{name}/subdomains",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["name"] = flagName
+		body := map[string]any{}
+		if cmd.Flags().Changed("depth") {
+			body["depth"] = bodyDepth
 		}
 		switch {
 		case flagData != "":
@@ -1022,6 +1075,92 @@ func NewDeploymentsSourceGetCommand(exec oascmd.ExecOptions) *cobra.Command {
 			PathParams: map[string]string{},
 		}
 		req.PathParams["id"] = flagID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewDeploymentsSubdomainsLsCommand returns the "deployments subdomains
+// ls" command (GET /api/deployments/{id}/subdomains).
+func NewDeploymentsSubdomainsLsCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagID string
+	)
+	cmd := &cobra.Command{
+		Use:   "ls",
+		Short: "Each service with a generated host: { service, host, subdomains, from }, `subdomains` one, any or null, `from` spec, host or null. Viewer.",
+	}
+	cmd.Flags().StringVar(&flagID, "id", "", "The registry id, e.g. `pr-123`.")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("id")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		req := oascmd.Request{
+			Method:     "GET",
+			Path:       "/api/deployments/{id}/subdomains",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["id"] = flagID
+		e := exec
+		raw, _ := cmd.Flags().GetBool("json")
+		e.Raw = e.Raw || raw
+		if e.Out == nil {
+			e.Out = os.Stdout
+		}
+		return oascmd.Execute(cmd.Context(), e, req)
+	}
+	return cmd
+}
+
+// NewDeploymentsSubdomainsSetCommand returns the "deployments subdomains
+// set" command (PUT /api/deployments/{id}/subdomains).
+func NewDeploymentsSubdomainsSetCommand(exec oascmd.ExecOptions) *cobra.Command {
+	var (
+		flagID      string
+		bodyService string
+		bodyDepth   string
+		flagData    string
+	)
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "Serve `*.<host>` for one service with a generated host, stored on this host (a CI redeploy keeps it). Applies on the next deploy. A service the spec sets is 409. Developer.",
+	}
+	cmd.Flags().StringVar(&flagID, "id", "", "The registry id, e.g. `pr-123`.")
+	cmd.Flags().StringVar(&bodyService, "service", "", "A service from GET …/subdomains.")
+	cmd.Flags().StringVar(&bodyDepth, "depth", "", "`one`, `any`, or `off` (null is off too). (one of: one, any, off)")
+	cmd.Flags().StringVar(&flagData, "data", "", "request body as raw JSON (wins over per-property flags)")
+	cmd.Flags().Bool("json", false, "print the raw JSON response")
+	_ = cmd.MarkFlagRequired("id")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("depth") {
+			if err := oascmd.ValidateEnum("depth", []string{"one", "any", "off"}, bodyDepth); err != nil {
+				return err
+			}
+		}
+		req := oascmd.Request{
+			Method:     "PUT",
+			Path:       "/api/deployments/{id}/subdomains",
+			PathParams: map[string]string{},
+		}
+		req.PathParams["id"] = flagID
+		body := map[string]any{}
+		if cmd.Flags().Changed("service") {
+			body["service"] = bodyService
+		}
+		if cmd.Flags().Changed("depth") {
+			body["depth"] = bodyDepth
+		}
+		switch {
+		case flagData != "":
+			req.RawBody = []byte(flagData)
+		case len(body) > 0:
+			req.Body = body
+		}
 		e := exec
 		raw, _ := cmd.Flags().GetBool("json")
 		e.Raw = e.Raw || raw
