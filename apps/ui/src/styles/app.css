@@ -1085,11 +1085,12 @@ td.name {
     min-width: 82ch;
   }
   /*
-   * Name 20% + Hosts 36% leave 44% for Deployment and the 11rem actions column (Unassign it? and
-   * Delete side by side). Deployment needs ~16ch: (16ch + 11rem) / 0.44 ≈ 36ch + 25rem.
+   * Name 18% + Hosts 32% leave 50% for Deployment, the 8rem Subdomains select and the 11rem actions
+   * column (Unassign it? and Delete side by side). Deployment needs ~16ch: (16ch + 19rem) / 0.5 =
+   * 32ch + 38rem.
    */
   .t-custom {
-    min-width: calc(36ch + 25rem);
+    min-width: calc(32ch + 38rem);
   }
   /*
    * The declared columns summed — 22 + 12 + 13 + 20 = 67ch — plus a 20ch floor for Image, the one

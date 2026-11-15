@@ -41,6 +41,24 @@ export const hostItems = (hosts: string[], blocked: Blocked[] = []): Array<{ hos
   ...blocked.map((b) => ({ host: b.host, href: null, takenBy: b.by.name })),
 ];
 
+/** Wildcard subdomains under a host: off, one level (`*.host`), or any depth (HTTP only past one). */
+export type Depth = 'one' | 'any' | null;
+
+/** The select's options. Off travels as '' because a select value is a string. */
+export const depthOptions = [
+  { value: '', label: 'Off' },
+  { value: 'one', label: 'One level' },
+  { value: 'any', label: 'Any depth' },
+];
+
+export const depthLabel = (d: Depth): string => depthOptions.find((o) => o.value === (d ?? ''))?.label ?? 'Off';
+
+/** The `depth` a PUT sends for a select value. */
+export const toDepth = (v: string): Depth => (v === 'one' || v === 'any' ? v : null);
+
+/** A service's wildcard is changed here only by a writer, and never when the spec sets it. */
+export const depthEditable = (from: 'spec' | 'host' | null, mayWrite: boolean): boolean => mayWrite && from !== 'spec';
+
 /**
  * Focus a write dropped: on <body>, on a control it disabled, or on an element with no box: removed,
  * or a closed dialog's button, where Firefox leaves focus for a frame before it falls to <body>.

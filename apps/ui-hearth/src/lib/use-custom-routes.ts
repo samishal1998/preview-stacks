@@ -2,10 +2,10 @@
  * Custom routes for one page: the list and every write. The Routing page and the deployment page each
  * draw their own table over one of these, so both ask the same move question the same way.
  */
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { customRoutesApi, type CustomRoute } from '../api-routing';
 import { auth, data, toast } from '../state';
-import { moveQuestion, needsMove, type Holder } from './customRoutes';
+import { moveQuestion, needsMove, toDepth, type Holder } from './customRoutes';
 import { problem } from './problem';
 import { can } from './users';
 
@@ -95,8 +95,37 @@ export function useCustomRoutes() {
     else toast(problem(r, d.kind === 'delete' ? 'Not deleted' : 'Not unassigned'), 'danger');
   }
 
+  /**
+   * Subdomain picks waiting for their Save, by route. Staged like an assign: arrowing a closed select
+   * changes it per key, and a write per change would turn `one` on (and order its certificate) on the way.
+   */
+  const subPick = reactive<Record<string, string>>({});
+  /** The route whose subdomains are being saved. */
+  const subBusy = ref('');
+  const subOf = (r: CustomRoute): string => subPick[r.name] ?? r.subdomains ?? '';
+  const subStaged = (r: CustomRoute): boolean => subPick[r.name] !== undefined && subPick[r.name] !== (r.subdomains ?? '');
+
+  async function saveSubdomains(name: string): Promise<void> {
+    const v = subPick[name];
+    if (subBusy.value || v === undefined) return;
+    subBusy.value = name;
+    const r = await customRoutesApi.subdomains(name, toDepth(v));
+    subBusy.value = '';
+    if (!r.ok) {
+      toast(problem(r, 'Not saved'), 'danger');
+      void load();
+      return;
+    }
+    routes.value = routes.value.map((x) => (x.name === name ? r.body : x));
+    delete subPick[name];
+    toast(`Saved ${name}.`, 'success');
+  }
+
   const moveOpen = computed({ get: () => !!move.value, set: (v) => !v && (move.value = null) });
   const dropOpen = computed({ get: () => !!drop.value, set: (v) => !v && (drop.value = null) });
 
-  return { routes, loaded, error, busy, mayWrite, move, drop, moveOpen, dropOpen, load, assign, confirmMove, create, confirmDrop };
+  return {
+    routes, loaded, error, busy, mayWrite, move, drop, moveOpen, dropOpen, load, assign, confirmMove, create, confirmDrop,
+    subPick, subBusy, subOf, subStaged, saveSubdomains,
+  };
 }

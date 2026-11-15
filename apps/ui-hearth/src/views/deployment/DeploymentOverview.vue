@@ -6,6 +6,7 @@ import { HAlert, HBadge, HButton, HCard, HDataTable, HDescriptionList, HSkeleton
 import type { Readiness, Runtime } from '@samyx/preview-stacks-client';
 import { deploymentApi, type DeploymentDetail } from '../../api-deployment';
 import DeploymentRoutes from './DeploymentRoutes.vue';
+import DeploymentSubdomains from './DeploymentSubdomains.vue';
 
 import { problemText, sentence } from '../../lib/deployment';
 import { can } from '../../lib/users';
@@ -121,6 +122,7 @@ const rdTone = computed(() => (rd.value?.state === 'ready' ? 'success' : rd.valu
     </HCard>
 
     <DeploymentRoutes :id="id" />
+    <DeploymentSubdomains :id="id" />
 
     <HCard>
       <template #header>
