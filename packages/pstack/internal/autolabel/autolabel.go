@@ -452,7 +452,9 @@ func AugmentComposeDoc(a AugmentArgs) (*AugmentResult, error) {
 				}
 				matched[sub.Profile] = true
 				added = append(added,
-					"traefik.http.routers."+id+"-wild.rule="+spec.WildcardRule(sub.Host, sub.Depth),
+					// `$$`: docker compose and docker stack deploy interpolate this file, and the
+					// regex's `$` anchor would be an invalid interpolation. Docker hands Traefik `$`.
+					"traefik.http.routers."+id+"-wild.rule="+strings.ReplaceAll(spec.WildcardRule(sub.Host, sub.Depth), "$", "$$"),
 					"traefik.http.routers."+id+"-wild.priority=2",
 					"traefik.http.routers."+id+"-wild.entrypoints=websecure",
 					"traefik.http.routers."+id+"-wild.tls=true",

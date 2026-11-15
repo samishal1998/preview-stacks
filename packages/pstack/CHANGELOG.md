@@ -60,6 +60,8 @@
 
 ### Fixed
 
+- **A swarm deploy of a `compose.subdomains` spec no longer fails** with "invalid interpolation
+  format": the generated wildcard rule's `$` anchor is written `$$` in the derived file.
 - **Wildcard subdomains** (`compose.subdomains`) get a certificate on DNS-01 hosts: one per
   deployment, and one per custom route. Other modes note why there is none instead of asking Traefik
   for one it cannot order. A subdomains host that is a served domain or a control hostname is
