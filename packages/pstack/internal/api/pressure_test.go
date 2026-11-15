@@ -297,7 +297,11 @@ func capRun(t *testing.T, s *Server, action jobs.Action) (jobs.Job, []string) {
 	}
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		j, _ := s.jobs.Get(job.ID)
-		if j.State != jobs.Queued && j.State != jobs.Running {
+		mu.Lock()
+		// The state settles before job.failed / job.succeeded is emitted: wait for both.
+		done := slices.ContainsFunc(seen, func(e string) bool { return e == "job.failed" || e == "job.succeeded" })
+		mu.Unlock()
+		if j.State != jobs.Queued && j.State != jobs.Running && done {
 			s.readiness.Cancel(st.Stack)
 			mu.Lock()
 			defer mu.Unlock()
