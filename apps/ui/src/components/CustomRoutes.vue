@@ -15,7 +15,16 @@ import { api, problem } from '../api/client';
 import type { CustomRoute, RouteHeld } from '../api/types';
 import { can } from '../composables/useAuth';
 import { state } from '../composables/useControlPlane';
-import { focusLost, hostItems, moveQuestion, needsMove, type Holder } from '../composables/customRoutes';
+import {
+  depthLabel,
+  depthOptions,
+  focusLost,
+  hostItems,
+  moveQuestion,
+  needsMove,
+  toDepth,
+  type Holder,
+} from '../composables/customRoutes';
 import { toast } from '../composables/useToasts';
 import ActionButton from './ActionButton.vue';
 import ErrorNote from './ErrorNote.vue';
@@ -30,6 +39,8 @@ const loaded = ref(false);
 const listError = ref('');
 /** The route name a request is in flight for. */
 const busy = ref('');
+/** The route whose wildcard is saving. Not `busy`, which would show that row's buttons as pending. */
+const saving = ref('');
 
 const name = ref('');
 const target = ref(props.deployment ?? '');
@@ -122,6 +133,21 @@ async function submit(force: boolean): Promise<void> {
   formError.value = problem(r, isNew ? `create ${n}` : `assign ${n}`);
 }
 
+/** Sets the route's wildcard. Takes effect at once; the row comes back with its `*.` hosts. */
+async function setDepth(r: CustomRoute, v: string): Promise<void> {
+  const depth = toDepth(v);
+  if (depth === r.subdomains || saving.value) return;
+  saving.value = r.name;
+  const res = await api.put<CustomRoute>(`${path(r.name)}/subdomains`, { depth });
+  saving.value = '';
+  if (!res.ok) {
+    formError.value = problem(res, `set subdomains on ${r.name}`);
+    return;
+  }
+  formError.value = '';
+  routes.value = routes.value.map((x) => (x.name === r.name ? res.body : x));
+}
+
 async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> {
   busy.value = r.name;
   const res = await api.del(kind === 'delete' ? path(r.name) : `${path(r.name)}/assignment`);
@@ -149,8 +175,9 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
           `app.css` is derived from these; change one and change the other.
         -->
         <colgroup>
-          <col style="width: 20%" />
-          <col style="width: 36%" />
+          <col style="width: 18%" />
+          <col style="width: 32%" />
+          <col style="width: 8rem" />
           <col v-if="!deployment" />
           <col v-if="mayWrite" style="width: 11rem" />
         </colgroup>
@@ -158,6 +185,7 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
           <tr role="row">
             <th role="columnheader">Name</th>
             <th role="columnheader">Hosts</th>
+            <th role="columnheader">Subdomains</th>
             <th v-if="!deployment" role="columnheader">Deployment</th>
             <th v-if="mayWrite" role="columnheader" aria-label="Actions" />
           </tr>
@@ -174,6 +202,16 @@ async function drop(r: CustomRoute, kind: 'unassign' | 'delete'): Promise<void> 
                 </div>
                 <span v-if="!r.hosts.length && !r.blocked?.length" class="mute">—</span>
               </div>
+            </td>
+            <td role="cell" data-label="subdomains">
+              <SelectMenu
+                v-if="mayWrite"
+                :model-value="r.subdomains ?? ''"
+                :label="`Subdomains for ${r.name}`"
+                :options="depthOptions"
+                @update:model-value="(v) => setDepth(r, v)"
+              />
+              <span v-else>{{ depthLabel(r.subdomains) }}</span>
             </td>
             <td v-if="!deployment" role="cell" class="cell-wrap" data-label="deployment">
               <RouterLink v-if="r.deployment" :to="`/deployments/${encodeURIComponent(r.deployment)}/runtime`">

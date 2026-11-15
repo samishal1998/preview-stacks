@@ -7,6 +7,7 @@ import {
 } from '@hearth-ui/vue';
 import { routingApi, type RoutingFile, type RuntimeRoute } from '../api-routing';
 import CustomRouteDialogs from '../components/CustomRouteDialogs.vue';
+import RouteSubdomains from '../components/RouteSubdomains.vue';
 import { focusLost, hostItems } from '../lib/customRoutes';
 import { fileNameError, isPattern, STARTER, targetOf } from '../lib/routing';
 import { useCardColumns } from '../lib/use-card-columns';
@@ -76,9 +77,10 @@ const cr = useCustomRoutes();
 const crColumns: TableColumn[] = [
   { key: 'name', label: 'Route' },
   { key: 'hosts', label: 'Hosts' },
+  { key: 'subdomains', label: 'Subdomains' },
   { key: 'deployment', label: 'Assigned to', minWidth: '12rem' },
 ];
-const crRows = computed<TableRow[]>(() => cr.routes.value.map((r) => ({ id: r.name, name: r.name, hosts: '', deployment: r.deployment ?? '' })));
+const crRows = computed<TableRow[]>(() => cr.routes.value.map((r) => ({ id: r.name, name: r.name, hosts: '', subdomains: '', deployment: r.deployment ?? '' })));
 const crOf = (row: TableRow) => cr.routes.value.find((r) => r.name === row.id);
 const crHosts = (row: TableRow) => hostItems(crOf(row)?.hosts ?? [], crOf(row)?.blocked);
 const deploymentOptions = computed(() => [
@@ -307,6 +309,7 @@ async function remove(): Promise<void> {
           </template>
           <template v-if="!crHosts(row).length">—</template>
         </HStack>
+        <RouteSubdomains v-else-if="column.key === 'subdomains' && crOf(row)" :routes="cr" :route="crOf(row)!" />
         <HStack v-else-if="column.key === 'deployment' && cr.mayWrite.value" direction="row" :gap="2" wrap align="center" :data-route="row.id">
           <HSelect
             :label="`Deployment for ${row.name}`"

@@ -1,4 +1,17 @@
-/** Pure rules for custom routes: when an assign is a move, its question, and the host list. */
+/** Pure rules for custom routes: when an assign is a move, its question, the host list, and the wildcard depth (a deployment's services use it too). */
+
+/** `*.<host>` one level down (a certificate on DNS-01 hosts), or any depth (deeper levels HTTP only). */
+export type Depth = 'one' | 'any';
+export const DEPTHS = [
+  { value: '', label: 'Off' },
+  { value: 'one', label: 'One level' },
+  { value: 'any', label: 'Any depth' },
+];
+export const depthLabel = (d: Depth | null | undefined): string => DEPTHS.find((o) => o.value === (d ?? ''))?.label ?? 'Off';
+/** A select value as the API's depth: Off is null, never ''. */
+export const toDepth = (v: string): Depth | null => (v === 'one' || v === 'any' ? v : null);
+/** A service's wildcard is the writer's to change unless the spec sets it. */
+export const depthEditable = (from: 'spec' | 'host' | null, mayWrite: boolean): boolean => mayWrite && from !== 'spec';
 
 /** Who holds a route. `stack` is null when that deployment does not resolve. */
 export type Holder = { deployment: string; stack: string | null };

@@ -4,7 +4,7 @@
  * Run with `cd apps/ui && bun test test/customRoutes.test.ts`.
  */
 import { expect, test } from 'bun:test';
-import { focusLost, hostItems, moveQuestion, needsMove } from '../src/composables/customRoutes';
+import { depthEditable, depthLabel, focusLost, hostItems, moveQuestion, needsMove, toDepth } from '../src/composables/customRoutes';
 
 const held = { deployment: 'myapp-pr-122', stack: 'myapp-pr-122' };
 
@@ -62,4 +62,27 @@ test('focus is lost on body, on a disabled control, or on an element with no box
   expect(focusLost(el(0), body)).toBe(true); // the unassigned row's button, or the closed dialog's
   expect(focusLost(el(1, true), body)).toBe(true); // Assign, once the pick clears
   expect(focusLost(el(1), body)).toBe(false);
+});
+
+// negative control: mapping null to '' wrongly (or dropping an option) fails the Off/Any depth expects.
+test('depth labels', () => {
+  expect(depthLabel(null)).toBe('Off');
+  expect(depthLabel('one')).toBe('One level');
+  expect(depthLabel('any')).toBe('Any depth');
+});
+
+// negative control: sending '' as the depth (not null) fails the first expect; the server 400s on it.
+test('a select value becomes the PUT depth', () => {
+  expect(toDepth('')).toBeNull();
+  expect(toDepth('one')).toBe('one');
+  expect(toDepth('any')).toBe('any');
+  expect(toDepth('bogus')).toBeNull();
+});
+
+// negative control: ignoring `from` fails the spec expect; ignoring the role fails the viewer one.
+test('a service wildcard is editable by a writer unless the spec sets it', () => {
+  expect(depthEditable('spec', true)).toBe(false);
+  expect(depthEditable('host', false)).toBe(false);
+  expect(depthEditable('host', true)).toBe(true);
+  expect(depthEditable(null, true)).toBe(true);
 });

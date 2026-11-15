@@ -7,6 +7,7 @@
  */
 import type { DeploymentRow, JobStub, Me, Readiness, Runtime, ShareLink } from '@samyx/preview-stacks-client';
 import { call, id, type Lifecycle } from './api';
+import type { Depth } from './lib/customRoutes';
 import type { ConflictBody } from './lib/deployment';
 import { varsQuery } from './lib/vars';
 import { readVars } from './vars/store';
@@ -22,6 +23,9 @@ export type DeploymentDetail = DeploymentRow & {
   requires?: unknown[];
   axes?: Array<{ name: string; hooks: string[]; verifiable?: boolean }>;
 };
+
+/** `/api/deployments/{id}/subdomains`: each service with a generated host and its wildcard. `from: 'spec'` is read-only here. */
+export type RoutedService = { service: string; host: string; subdomains: Depth | null; from: 'spec' | 'host' | null };
 
 export type CancelResult = { stack: string; cancelled: JobStub[]; by: string; warning: string };
 export type LogOpts = { service?: string; tail?: number; since?: string; timestamps?: boolean };
@@ -65,6 +69,10 @@ export const deploymentApi = {
   forget: (d: string) => call<ConflictBody>('DELETE', base(d) + vq(d)),
   container: (d: string, name: string, action: 'start' | 'stop' | 'restart') =>
     call<{ note?: string }>('POST', `${base(d)}/containers/${id(name)}/${action}${vq(d)}`, {}),
+  subdomains: (d: string) => call<RoutedService[]>('GET', `${base(d)}/subdomains`),
+  /** Applies on the next deploy; the body's `note` says so. */
+  setSubdomains: (d: string, service: string, depth: Depth | null) =>
+    call<{ service: string; subdomains: Depth | null; note: string }>('PUT', `${base(d)}/subdomains`, { service, depth }),
   share: (d: string, views: string[], ttl: string) => call<ShareLink>('POST', `${base(d)}/share`, { views, ttl }),
 };
 

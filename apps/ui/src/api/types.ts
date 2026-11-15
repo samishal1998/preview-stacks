@@ -490,6 +490,8 @@ export type CustomRoute = {
   name: string;
   deployment: string | null;
   stack: string | null;
+  /** Wildcard subdomains under its hosts; null is off. */
+  subdomains: 'one' | 'any' | null;
   /** The alias hosts it serves now; a `*.` entry is a wildcard rule, not an address. */
   hosts: string[];
   /** Hosts a deployment (by its stack) or an earlier route serves instead: text, never a link. */
@@ -497,6 +499,17 @@ export type CustomRoute = {
   createdAt: number;
   updatedAt: number;
 };
+/**
+ * `GET /api/deployments/:id/subdomains` — the services with a generated host. `from: 'spec'` is the
+ * spec's `compose.subdomains` (read-only here); `'host'` was set through the API; null is off.
+ */
+export type RoutedService = {
+  service: string;
+  host: string;
+  subdomains: 'one' | 'any' | null;
+  from: 'spec' | 'host' | null;
+};
+
 /** A non-force PUT on a route another deployment holds answers 409 with this. */
 export type RouteHeld = { assignedTo?: { deployment: string; stack: string | null } };
 

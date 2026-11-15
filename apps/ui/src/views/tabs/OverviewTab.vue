@@ -1,11 +1,48 @@
 <script setup lang="ts">
-/** The resolved spec, summarised. Read-only — everything that acts lives on Danger. */
+/**
+ * The resolved spec, summarised, read-only. The one write here is each routed service's wildcard
+ * subdomains, which the spec may leave to the host; it applies on the next deploy, so it never
+ * deploys itself.
+ */
+import { computed, ref, watch } from 'vue';
+import { api, problem } from '../../api/client';
+import type { RoutedService } from '../../api/types';
+import { can } from '../../composables/useAuth';
+import { depthEditable, depthLabel, depthOptions, toDepth } from '../../composables/customRoutes';
 import { dep, row } from '../../composables/useDeployment';
 import { sentence, stamp } from '../../composables/useFormat';
+import { toast } from '../../composables/useToasts';
+import SelectMenu from '../../components/SelectMenu.vue';
 import SkeletonList from '../../components/SkeletonList.vue';
+
+const routed = ref<RoutedService[]>([]);
+/** The service whose wildcard is saving. */
+const saving = ref('');
+const mayWrite = computed(() => can('developer'));
+const subPath = (): string => `/api/deployments/${encodeURIComponent(dep.id)}/subdomains`;
+
+// ponytail: a failed read hides the section (as an older server's 404 should); surface it if that hides real faults.
+async function loadRouted(): Promise<void> {
+  const r = await api.get<RoutedService[]>(subPath());
+  routed.value = r.ok && Array.isArray(r.body) ? r.body : [];
+}
+watch(() => dep.id, () => void loadRouted(), { immediate: true });
+
+async function setDepth(s: RoutedService, v: string): Promise<void> {
+  const depth = toDepth(v);
+  if (depth === s.subdomains || saving.value) return;
+  saving.value = s.service;
+  const r = await api.put<{ note?: string }>(subPath(), { service: s.service, depth });
+  saving.value = '';
+  // The server's 409 already names the service.
+  if (r.ok) toast('ok', r.body.note ?? 'Applies on the next deploy.');
+  else toast('error', problem(r, 'set subdomains'));
+  void loadRouted();
+}
 </script>
 
 <template>
+  <div>
   <section class="panel">
     <div class="phead">
       <h2 class="section">Resolved spec</h2>
@@ -50,17 +87,6 @@ import SkeletonList from '../../components/SkeletonList.vue';
               {{ p }}
             </span>
             <span v-if="!dep.detail.compose.profiles.length" class="mute">none</span>
-          </span>
-        </li>
-        <li v-if="dep.detail.compose?.subdomains?.length">
-          <span class="k">Subdomains</span>
-          <span class="v">
-            <div v-for="s in dep.detail.compose.subdomains" :key="s.profile">
-              <span class="mono">*.{{ s.host }}</span>
-              <span class="mute" style="font-size: var(--t-sm)">
-                → {{ s.profile }}<template v-if="s.depth === 'any'"> · any depth, HTTP only</template>
-              </span>
-            </div>
           </span>
         </li>
         <li v-if="dep.detail.compose">
@@ -115,4 +141,45 @@ import SkeletonList from '../../components/SkeletonList.vue';
       </ul>
     </template>
   </section>
+
+  <section v-if="dep.detail?.compose && routed.length" class="panel">
+    <div class="phead">
+      <h2 class="section">Subdomains</h2>
+    </div>
+    <div class="table-scroll">
+      <table role="table" class="cards tbl-fixed">
+        <colgroup>
+          <col style="width: 20%" />
+          <col />
+          <col style="width: 14rem" />
+        </colgroup>
+        <thead role="rowgroup">
+          <tr role="row">
+            <th role="columnheader">Service</th>
+            <th role="columnheader">Host</th>
+            <th role="columnheader">Subdomains</th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          <tr v-for="s in routed" :key="s.service" role="row">
+            <td role="cell" class="mono cell-wrap" data-label="service">{{ s.service }}</td>
+            <td role="cell" class="mono cell-wrap" data-label="host">{{ s.host }}</td>
+            <td role="cell" data-label="subdomains">
+              <SelectMenu
+                v-if="depthEditable(s.from, mayWrite)"
+                :model-value="s.subdomains ?? ''"
+                :label="`Subdomains for ${s.service}`"
+                :options="depthOptions"
+                @update:model-value="(v) => setDepth(s, v)"
+              />
+              <span v-else>
+                {{ depthLabel(s.subdomains) }}<span v-if="s.from === 'spec'" class="mute"> · Set in spec.</span>
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  </div>
 </template>

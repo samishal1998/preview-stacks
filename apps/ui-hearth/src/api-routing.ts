@@ -1,4 +1,5 @@
 import { call, id } from './api';
+import type { Depth } from './lib/customRoutes';
 
 export type RoutingFile = { name: string; size: number; updatedAt: number };
 export type RoutingList = { dir: string; writable: boolean; files: RoutingFile[] };
@@ -21,6 +22,8 @@ export type CustomRoute = {
   name: string;
   deployment: string | null;
   stack: string | null;
+  /** Also serves `*.<host>` for each host. */
+  subdomains: Depth | null;
   hosts: string[];
   /** Hosts a deployment or an earlier route serves instead. */
   blocked: Array<{ host: string; by: { kind: 'deployment' | 'route'; name: string } }>;
@@ -37,4 +40,5 @@ export const customRoutesApi = {
   assign: (name: string, deployment: string, force = false) =>
     call<CustomRoute & RouteHeld>('PUT', `/api/custom-routes/${id(name)}/assignment`, force ? { deployment, force } : { deployment }),
   unassign: (name: string) => call<CustomRoute>('DELETE', `/api/custom-routes/${id(name)}/assignment`),
+  subdomains: (name: string, depth: Depth | null) => call<CustomRoute>('PUT', `/api/custom-routes/${id(name)}/subdomains`, { depth }),
 };
