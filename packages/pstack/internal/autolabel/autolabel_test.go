@@ -974,6 +974,23 @@ func TestSubdomainEntryMatchingNothingIsNoted(t *testing.T) {
 	if !reflect.DeepEqual(r.MatchNotes, want) {
 		t.Fatalf("MatchNotes %q, want %q (a service with its own traefik labels uses ${PSTACK_WILD_OWN})", r.MatchNotes, want)
 	}
+
+	t.Run("noted with no pstack.routing.* service too", func(t *testing.T) {
+		// negative control: leave matchNotes empty in MaterializeCompose's no-routing path → no note.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  own:\n    image: x\n    labels: [traefik.enable=true]\n  db:\n    image: x\n"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		st := subsSpec(t, "  profiles: [own, db]\n  subdomains: [own, db]\n")
+		ch := DNS01
+		m, err := MaterializeCompose(MaterializeArgs{Dir: dir, Spec: st, Runner: exec.NewFake(nil, ""), Challenge: &ch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{`subdomains entry "db" matches no routed service; no wildcard router`}; !reflect.DeepEqual(m.MatchNotes, want) {
+			t.Fatalf("MatchNotes %q, want %q", m.MatchNotes, want)
+		}
+	})
 }
 
 // D7: a subdomains host that is a served domain, a parent of one, or a control hostname would

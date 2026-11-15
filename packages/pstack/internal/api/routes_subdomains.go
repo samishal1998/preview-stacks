@@ -54,9 +54,8 @@ type routedService struct {
 	from       string
 }
 
-// routedServices lists them, then every host row (added: what hostSubdomains merged) whose service
-// no longer has a generated host, so it can still be seen and cleared. Nil when the compose file
-// cannot be read.
+// routedServices lists them, then every remaining compose.subdomains entry (added: what
+// hostSubdomains merged). Nil when the compose file cannot be read.
 func routedServices(st *spec.Stack, dir string, added []string) []routedService {
 	t, _, err := aliasTarget(st, dir, "", "")
 	if err != nil {
@@ -76,10 +75,15 @@ func routedServices(st *spec.Stack, dir string, added []string) []routedService 
 		}
 		out = append(out, r)
 	}
-	for _, name := range added {
-		if !slices.ContainsFunc(out, func(r routedService) bool { return r.name == name }) {
-			e := st.Compose.Subdomains[entry(name)]
-			out = append(out, routedService{name: name, host: e.Host, depth: e.Depth, from: "host"})
+	// Then every entry not listed yet: a host row whose service lost its generated host (so it can be
+	// cleared), and a spec entry for a service with its own traefik labels or none (read-only).
+	for _, e := range st.Compose.Subdomains {
+		if !slices.ContainsFunc(out, func(r routedService) bool { return r.name == e.Profile }) {
+			from := "spec"
+			if slices.Contains(added, e.Profile) {
+				from = "host"
+			}
+			out = append(out, routedService{name: e.Profile, host: e.Host, depth: e.Depth, from: from})
 		}
 	}
 	return out

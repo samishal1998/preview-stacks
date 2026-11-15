@@ -197,3 +197,23 @@ func TestDeploymentSubdomainsExplicitSpecHost(t *testing.T) {
 		t.Fatalf("explicit = %v", w)
 	}
 }
+
+// A spec entry for a service with no generated host (here: its own traefik labels) is listed too, so
+// the UIs show every wildcard the deployment has.
+// negative control: drop the trailing spec-entry loop in routedServices → only web and api are listed.
+func TestDeploymentSubdomainsListsSpecEntriesWithoutAGeneratedHost(t *testing.T) {
+	s, _ := crServer(t)
+	spec := "version: 1\nstack: myapp-pr-3\nenv:\n  PREVIEW_DOMAIN: preview.example.com\n" +
+		"compose:\n  file: compose.yml\n  profiles: [own]\n  subdomains: [own]\naxes: []\n"
+	compose := crCompose + "  own:\n    image: nginx\n    labels: [traefik.enable=true]\n"
+	if _, err := s.registry.Put("pr-3", spec, registry.PutOptions{ComposeYaml: &compose}); err != nil {
+		t.Fatal(err)
+	}
+	r := depRouted(t, s, "pr-3")
+	if len(r) != 2 {
+		t.Fatalf("routed = %v", r)
+	}
+	if o := r[1].(map[string]any); o["service"] != "own" || o["host"] != "own-myapp-pr-3.preview.example.com" || o["from"] != "spec" || o["subdomains"] != "one" {
+		t.Fatalf("own = %v", o)
+	}
+}
