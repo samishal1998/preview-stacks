@@ -164,7 +164,7 @@ onBeforeUnmount(() => {
   <HStack direction="column" :gap="4">
     <HPageHeader title="Swarm" :description="info?.active && info.managerAddr ? `Manager ${info.managerAddr}` : 'The nodes previews run on.'" actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="refreshing" @click="load(true)" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" :loading="refreshing" @click="load(true)" />
       </template>
     </HPageHeader>
 

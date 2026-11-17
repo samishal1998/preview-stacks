@@ -194,10 +194,10 @@ const timeline = computed<TimelineItem[]>(() =>
   >
     <template #actions>
       <HButton v-if="grafanaHref" variant="ghost" icon="launch" label="Grafana" :href="grafanaHref" target="_blank" />
-      <HButton variant="ghost" icon="arrow" label="Re-resolve" :loading="refreshing" @click="reload" />
+      <HButton variant="ghost" icon="refresh" label="Re-resolve" :loading="refreshing" @click="reload" />
       <HButton
         :label="primary === 'wake' ? 'Wake' : 'Deploy'"
-        :icon="primary === 'wake' ? 'sun' : 'up'"
+        :icon="primary === 'wake' ? 'sun' : 'play'"
         :loading="pending === primary"
         :disabled="!!pending || !!blocked"
         @click="actions.act(primary)"

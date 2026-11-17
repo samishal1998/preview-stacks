@@ -98,14 +98,14 @@ const columns: TableColumn[] = [
 const rows = computed<TableRow[]>(() =>
   entries.value.map((e) => ({ id: e.registry, registry: e.registry, username: e.username ?? 'unknown', via: e.viaHelper ? 'helper' : 'file' })),
 );
-const rowActions = (): MenuAction[] => [{ id: 'forget', label: 'Forget', danger: true, icon: 'close' }];
+const rowActions = (): MenuAction[] => [{ id: 'forget', label: 'Forget', danger: true, icon: 'unlink' }];
 </script>
 
 <template>
   <HStack direction="column" :gap="4">
     <HPageHeader title="Registries" description="Credentials for pulling private images." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" @click="load" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" @click="load" />
       </template>
     </HPageHeader>
 

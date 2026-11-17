@@ -80,7 +80,7 @@ const domainCount = computed(() => (domains.value ? domains.value.domains.length
   <HStack :gap="4" direction="column">
     <HPageHeader title="Control stack" eyebrow="Host" description="Containers, hostnames, certificates, logging and workers." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="refreshing" @click="reloadAll" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" :loading="refreshing" @click="reloadAll" />
       </template>
     </HPageHeader>
 

@@ -24,7 +24,7 @@ const rows = computed(() => (detail.data?.axes ?? []).map((a) => ({ id: a.name, 
 <template>
   <HCard title="Axes">
     <template #footer>
-      <HButton variant="secondary" icon="arrow" label="Re-resolve" :loading="detail.loading" @click="reloadDetail" />
+      <HButton variant="secondary" icon="refresh" label="Re-resolve" :loading="detail.loading" @click="reloadDetail" />
     </template>
     <HSkeleton v-if="detail.loading && !detail.data && !detail.error" variant="text" :lines="3" label="Loading axes" />
     <HAlert v-else-if="detail.error" tone="danger" title="Spec did not resolve" :description="detail.error" />

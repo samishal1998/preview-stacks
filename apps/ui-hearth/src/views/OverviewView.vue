@@ -83,7 +83,7 @@ const serviceRows = computed(() =>
   <HStack direction="column" :gap="6">
     <HPageHeader title="This host," accent="at a glance." variant="hero" description="Running previews, jobs in flight, failures." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="reloading" @click="reload" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" :loading="reloading" @click="reload" />
       </template>
     </HPageHeader>
 
@@ -113,7 +113,7 @@ const serviceRows = computed(() =>
               </template>
             </HDataTable>
           </template>
-          <HButton variant="ghost" size="compact" icon="arrow" label="Refresh control stack" @click="loadControl" />
+          <HButton variant="ghost" size="compact" icon="refresh" label="Refresh control stack" @click="loadControl" />
         </HStack>
       </HCard>
 
@@ -124,7 +124,7 @@ const serviceRows = computed(() =>
           <HStatCard label="Running" :value="sum.running" icon="check" :tone="sum.running ? 'success' : 'neutral'" />
           <HStatCard label="Busy" :value="sum.busy" icon="clock" tone="info" />
           <HStatCard label="Asleep" :value="sum.asleep" icon="moon" tone="neutral" />
-          <HStatCard v-if="sum.unknown" label="Unknown, not idle" :value="sum.unknown" icon="info" tone="warning" />
+          <HStatCard v-if="sum.unknown" label="Unknown, not idle" :value="sum.unknown" icon="alert" tone="warning" />
         </HGrid>
         <HAlert v-for="d in attention" :key="d.id" tone="warning" :title="`${d.id} needs variables`" :description="d.unresolved" compact>
           <HButton size="compact" variant="secondary" label="Set its variables" @click="router.push(`/deployments/${encodeURIComponent(d.id)}/config`)" />

@@ -110,7 +110,7 @@ const rows = computed<TableRow[]>(() =>
   <HStack direction="column" :gap="4">
     <HPageHeader title="Stats" description="Node pressure and what each stack uses." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="refreshing" @click="load(true)" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" :loading="refreshing" @click="load(true)" />
       </template>
     </HPageHeader>
 

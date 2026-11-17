@@ -199,7 +199,7 @@ const userActions = (row: TableRow): MenuAction[] => {
   if (!u) return [];
   const out: MenuAction[] = [];
   if (isYou(u) || isAdmin.value) out.push({ id: 'password', label: 'Change password', icon: 'lock' });
-  if (isAdmin.value) out.push({ id: 'delete', label: 'Delete', icon: 'close', danger: true, disabled: isLastAdmin(u, users.value), separatorBefore: out.length > 0 });
+  if (isAdmin.value) out.push({ id: 'delete', label: 'Delete', icon: 'trash', danger: true, disabled: isLastAdmin(u, users.value), separatorBefore: out.length > 0 });
   return out;
 };
 function onUserAction(e: { id: string; action: string }): void {
@@ -230,7 +230,7 @@ const tokOpen = computed({ get: () => !!del.token, set: (v) => !v && (del.token 
   <HStack direction="column" :gap="4">
     <HPageHeader title="Users" description="Accounts and your API tokens." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" @click="load" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" @click="load" />
       </template>
     </HPageHeader>
 
