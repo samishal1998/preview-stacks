@@ -251,7 +251,7 @@ async function remove(): Promise<void> {
     <HPageHeader title="Routing" description="Routes Traefik serves, and its config files." actions-placement="end">
       <template #actions>
         <HButton v-if="mayEdit" variant="primary" icon="plus" label="New file" @click="startNew" />
-        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="refreshing" @click="refreshAll" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" :loading="refreshing" @click="refreshAll" />
       </template>
     </HPageHeader>
 

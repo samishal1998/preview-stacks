@@ -93,7 +93,7 @@ const search = useSlashFocus();
   <HStack direction="column" :gap="4">
     <HPageHeader title="Jobs" description="Newest first, the last 50. A restart clears them." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" @click="refresh" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" @click="refresh" />
       </template>
     </HPageHeader>
 

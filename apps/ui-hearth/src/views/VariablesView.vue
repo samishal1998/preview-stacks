@@ -200,12 +200,12 @@ async function merge(): Promise<void> {
   <HStack direction="column" :gap="4">
     <HPageHeader title="Variables and secrets" description="Host values every spec can reference." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" @click="load" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" @click="load" />
         <HButton v-if="!unsupported && manage" variant="primary" icon="plus" label="Add" @click="startAdd" />
       </template>
     </HPageHeader>
 
-    <HEmptyState v-if="unsupported" title="No variable store" description="Upgrade the host." icon="settings" />
+    <HEmptyState v-if="unsupported" title="No variable store" description="Upgrade the host." icon="list" />
     <HAlert v-else-if="error" tone="danger" title="Could not load" :description="error" />
 
     <template v-else>

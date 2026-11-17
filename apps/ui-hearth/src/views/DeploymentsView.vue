@@ -157,7 +157,7 @@ const search = useSlashFocus();
   <HStack direction="column" :gap="4">
     <HPageHeader title="Deployments" :description="`${sum.total} submitted · ${sum.running} running · ${sum.busy} busy`" actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" @click="refresh" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" @click="refresh" />
         <HButton v-if="can('developer', auth)" icon="plus" label="Submit" @click="router.push('/submit')" />
       </template>
     </HPageHeader>

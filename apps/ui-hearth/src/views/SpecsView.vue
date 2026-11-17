@@ -115,7 +115,7 @@ async function create(): Promise<void> {
   <HStack direction="column" :gap="4">
     <HPageHeader title="Specs" :description="loaded && !error ? `${specs.length} stored on this host.` : undefined" actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" :loading="refreshing" @click="load" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" :loading="refreshing" @click="load" />
         <HButton v-if="!unsupported && can('developer', auth)" variant="primary" icon="plus" label="New spec" @click="openNew" />
       </template>
     </HPageHeader>

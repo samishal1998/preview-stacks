@@ -50,18 +50,18 @@ const paletteOpen = ref(false);
 const all = computed<Array<NavItem & { min?: Role }>>(() => [
   { id: 'overview', label: 'Overview', icon: 'home' },
   { id: 'deployments', label: 'Deployments', icon: 'apps', badge: data.deployments.length || undefined },
-  { id: 'jobs', label: 'Jobs', icon: 'clock', badge: data.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length || undefined },
+  { id: 'jobs', label: 'Jobs', icon: 'history', badge: data.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length || undefined },
   { id: 'specs', label: 'Specs', icon: 'code' },
   { id: 'routing', label: 'Routing', icon: 'globe' },
   { id: 'swarm', label: 'Swarm', icon: 'server' },
   { id: 'stats', label: 'Stats', icon: 'health' },
   { id: 'control', label: 'Control', icon: 'layout', min: 'maintainer' },
-  { id: 'registries', label: 'Registries', icon: 'lock' },
-  { id: 'notifiers', label: 'Notifiers', icon: 'info' },
-  { id: 'users', label: 'Users', icon: 'providers' },
-  { id: 'sso', label: 'Single sign-on', icon: 'launch', min: 'maintainer' },
-  { id: 'variables', label: 'Variables', icon: 'star' },
-  { id: 'config', label: 'Config', icon: 'copy', min: 'admin' },
+  { id: 'registries', label: 'Registries', icon: 'container' },
+  { id: 'notifiers', label: 'Notifiers', icon: 'bell' },
+  { id: 'users', label: 'Users', icon: 'users' },
+  { id: 'sso', label: 'Single sign-on', icon: 'shield', min: 'maintainer' },
+  { id: 'variables', label: 'Variables', icon: 'list' },
+  { id: 'config', label: 'Config', icon: 'upload', min: 'admin' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ]);
 const items = computed<NavItem[]>(() => {
@@ -88,7 +88,7 @@ const commands = computed<CommandItem[]>(() => [
   { id: 'go:deployments', label: 'Deployments', group: 'Go to', icon: 'apps' },
   ...items.value.filter((i) => !['overview', 'deployments'].includes(i.id)).map((i) => ({ id: `go:${i.id}`, label: i.label, group: 'Go to', icon: i.icon })),
   { id: 'go:submit', label: 'Submit a spec', group: 'Actions', icon: 'plus' },
-  { id: 'refresh', label: 'Refresh now', group: 'Actions', icon: 'arrow' },
+  { id: 'refresh', label: 'Refresh now', group: 'Actions', icon: 'refresh' },
   ...data.deployments.map((d) => ({
     id: `dep:${d.id}`,
     label: d.id,
@@ -218,8 +218,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           @retry="refresh"
         />
         <HButton variant="ghost" size="compact" icon="search" label="Search" @click="paletteOpen = true" />
-        <HButton variant="ghost" size="compact" icon="info" label="Shortcuts" @click="helpOpen = true" />
-        <HPopover label="Appearance" icon="settings" icon-only variant="ghost" panel-label="Appearance" placement="bottom">
+        <HButton variant="ghost" size="compact" icon="keyboard" label="Shortcuts" @click="helpOpen = true" />
+        <HPopover label="Appearance" icon="palette" icon-only variant="ghost" panel-label="Appearance" placement="bottom">
           <HStack direction="column" :gap="3">
             <HThemeSwitcher v-model="prefs.mode" />
             <HSelect v-model="prefs.theme" label="Palette" :options="palettes" />

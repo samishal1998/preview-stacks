@@ -20,7 +20,7 @@
     },
     "apps/ui": {
       "name": "@samyx/preview-stacks-ui",
-      "version": "0.44.0",
+      "version": "0.46.1",
       "dependencies": {
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
@@ -38,9 +38,9 @@
     },
     "apps/ui-hearth": {
       "name": "@samyx/preview-stacks-ui-hearth",
-      "version": "0.44.0",
+      "version": "0.46.1",
       "dependencies": {
-        "@hearth-ui/vue": "0.9.0",
+        "@hearth-ui/vue": "0.11.0",
         "@xterm/addon-fit": "0.10.0",
         "@xterm/xterm": "5.5.0",
         "vue": "^3.5.13",
@@ -56,7 +56,7 @@
     },
     "packages/client": {
       "name": "@samyx/preview-stacks-client",
-      "version": "0.44.0",
+      "version": "0.46.1",
       "devDependencies": {
         "@samyx/preview-stacks": "workspace:*",
         "@types/bun": "latest",
@@ -74,7 +74,7 @@
     },
     "packages/pstack": {
       "name": "@samyx/preview-stacks",
-      "version": "0.44.0",
+      "version": "0.46.1",
     },
   },
   "packages": {
@@ -276,7 +276,7 @@
 
     "@floating-ui/vue": ["@floating-ui/vue@1.1.11", "", { "dependencies": { "@floating-ui/dom": "^1.7.6", "@floating-ui/utils": "^0.2.11", "vue-demi": ">=0.13.0" } }, "sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw=="],
 
-    "@hearth-ui/vue": ["@hearth-ui/vue@0.9.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-0AF84PKSSOWQ4YMMGFVdR+E/GbXUxFWyV23+5XMxWOryR2tBQqCeZR6tQgaitRQRUJ5wzkxl9PWAGqGJuTrxtg=="],
+    "@hearth-ui/vue": ["@hearth-ui/vue@0.11.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-Rl8eNj0HooIVf4K1FM4YZa9SGNRHXit+yBCjVUc6de8T0JsOCgZ2CQe7sCPZqqZocOKF8OYJQnHHCNtloHVT8A=="],
 
     "@hono/node-server": ["@hono/node-server@2.0.12", "", { "peerDependencies": { "hono": "^4" } }, "sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg=="],
 

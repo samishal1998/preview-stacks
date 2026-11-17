@@ -112,8 +112,8 @@ function download(): void {
 </script>
 
 <template>
-  <HEmptyState v-if="!dep" title="Unavailable" description="The spec has not resolved." icon="info" />
-  <HEmptyState v-else-if="!hasCompose" title="No compose section" description="Nothing to read logs from." icon="info" />
+  <HEmptyState v-if="!dep" title="Unavailable" description="The spec has not resolved." icon="alert" />
+  <HEmptyState v-else-if="!hasCompose" title="No compose section" description="Nothing to read logs from." icon="alert" />
 
   <HStack v-else direction="column" :gap="3">
     <HStack direction="row" :gap="3" wrap align="end" style="--h-choice-height: var(--h-control-height)">
@@ -122,8 +122,8 @@ function download(): void {
       <HSelect v-model="since" label="Since" :options="SINCES" />
       <HSwitch v-model="timestamps" label="Timestamps" />
       <HButton :variant="logs.following.value ? 'danger' : 'secondary'" :label="logs.following.value ? 'Stop following' : 'Follow'" @click="logs.toggle" />
-      <HButton :label="logs.touched.value ? 'Refresh' : 'Fetch'" icon="arrow" :loading="logs.loading.value" :disabled="logs.following.value" @click="logs.fetchOnce" />
-      <HButton variant="ghost" icon="down" label="Download" :disabled="!entries.length" @click="download" />
+      <HButton :label="logs.touched.value ? 'Refresh' : 'Fetch'" icon="refresh" :loading="logs.loading.value" :disabled="logs.following.value" @click="logs.fetchOnce" />
+      <HButton variant="ghost" icon="download" label="Download" :disabled="!entries.length" @click="download" />
       <HButton v-if="grafanaHref" variant="ghost" icon="launch" label="Grafana" :href="grafanaHref" target="_blank" />
     </HStack>
 

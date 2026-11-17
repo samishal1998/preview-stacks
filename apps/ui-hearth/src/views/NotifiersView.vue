@@ -214,9 +214,9 @@ const rowActions = (row: TableRow): MenuAction[] => {
   if (!manage.value) return [{ id: 'deliveries', label: 'Deliveries', icon: 'clock' }];
   return [
     { id: 'deliveries', label: 'Deliveries', icon: 'clock' },
-    { id: 'test', label: 'Send test', icon: 'launch', disabled: testing.value !== null },
-    { id: 'toggle', label: n?.enabled ? 'Disable' : 'Enable', icon: n?.enabled ? 'minus' : 'plus' },
-    { id: 'remove', label: 'Remove', danger: true, separatorBefore: true, icon: 'close' },
+    { id: 'test', label: 'Send test', icon: 'send', disabled: testing.value !== null },
+    { id: 'toggle', label: n?.enabled ? 'Disable' : 'Enable', icon: n?.enabled ? 'pause' : 'play' },
+    { id: 'remove', label: 'Remove', danger: true, separatorBefore: true, icon: 'trash' },
   ];
 };
 function onRowAction(e: { id: string; action: string }): void {
@@ -246,7 +246,7 @@ const dRows = computed<TableRow[]>(() =>
   })),
 );
 const dActions = (row: TableRow): MenuAction[] =>
-  manage.value && dNamed.value.get(row.id)?.replayable ? [{ id: 'redeliver', label: 'Redeliver', icon: 'arrow' }] : [];
+  manage.value && dNamed.value.get(row.id)?.replayable ? [{ id: 'redeliver', label: 'Redeliver', icon: 'refresh' }] : [];
 const statusTone = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'danger' : 'warning');
 </script>
 
@@ -254,11 +254,11 @@ const statusTone = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'da
   <HStack direction="column" :gap="4">
     <HPageHeader title="Notifiers" description="Where events on this host get sent." actions-placement="end">
       <template #actions>
-        <HButton variant="secondary" icon="arrow" label="Refresh" @click="load" />
+        <HButton variant="secondary" icon="refresh" label="Refresh" @click="load" />
       </template>
     </HPageHeader>
 
-    <HEmptyState v-if="unsupported" icon="info" title="No notifiers" description="This server predates notifiers. Upgrade the host." />
+    <HEmptyState v-if="unsupported" icon="bell" title="No notifiers" description="This server predates notifiers. Upgrade the host." />
     <HEmptyState v-else-if="forbidden" icon="lock" title="Not allowed" description="Your account cannot read notifiers." />
 
     <template v-else>
@@ -337,7 +337,7 @@ const statusTone = (s: string) => (s === 'ok' ? 'success' : s === 'failed' ? 'da
         <HStack direction="row" :gap="2" align="center" justify="between" wrap>
           <HBadge v-if="queued > 0" :label="`${queued} queued`" tone="info" dot />
           <span v-else />
-          <HButton variant="secondary" size="compact" icon="arrow" label="Refresh" :loading="dLoading" @click="loadDeliveries" />
+          <HButton variant="secondary" size="compact" icon="refresh" label="Refresh" :loading="dLoading" @click="loadDeliveries" />
         </HStack>
         <HAlert v-if="dError" tone="danger" :description="dError" />
         <HDataTable

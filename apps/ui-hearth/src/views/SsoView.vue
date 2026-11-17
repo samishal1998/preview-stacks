@@ -173,7 +173,7 @@ const claimKeys = ['subject', 'username', 'email', 'name', 'avatar'] as const;
     </HPageHeader>
 
     <HAlert v-if="error" tone="danger" title="Not done" :description="error">
-      <HButton variant="secondary" size="compact" icon="arrow" label="Retry" @click="load" />
+      <HButton variant="secondary" size="compact" icon="refresh" label="Retry" @click="load" />
     </HAlert>
     <HEmptyState v-if="forbidden" icon="lock" title="Maintainer only" description="Your account cannot read sign-on settings." />
     <div v-else ref="stage" tabindex="-1" class="stage">

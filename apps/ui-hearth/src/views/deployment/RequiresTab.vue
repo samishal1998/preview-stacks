@@ -18,7 +18,7 @@ const rows = computed(() => (detail.data?.requires ?? []).map((r) => ({ id: r.na
 <template>
   <HCard title="Requires" description="Checked before anything is created.">
     <template #footer>
-      <HButton variant="secondary" icon="arrow" label="Re-resolve" :loading="detail.loading" @click="reloadDetail" />
+      <HButton variant="secondary" icon="refresh" label="Re-resolve" :loading="detail.loading" @click="reloadDetail" />
     </template>
     <HSkeleton v-if="detail.loading && !detail.data && !detail.error" variant="text" :lines="3" label="Loading requirements" />
     <HAlert v-else-if="detail.error" tone="danger" title="Spec did not resolve" :description="detail.error" />

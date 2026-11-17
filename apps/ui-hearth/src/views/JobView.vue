@@ -167,7 +167,7 @@ async function rerun(): Promise<void> {
 </script>
 
 <template>
-  <HEmptyState v-if="missing" :title="`No job ${id}`" icon="search" description="The history is held in memory. A restart clears it.">
+  <HEmptyState v-if="missing" :title="`No job ${id}`" icon="help" description="The history is held in memory. A restart clears it.">
     <HButton label="Jobs" @click="router.push('/jobs')" />
   </HEmptyState>
   <HAlert v-else-if="error && !job" tone="danger" title="Could not load the job" :description="error">
@@ -192,8 +192,8 @@ async function rerun(): Promise<void> {
     <template #actions>
       <HBadge v-if="streaming" dot tone="info" label="live" />
       <HButton v-if="!streaming && !terminal" variant="secondary" label="Reconnect" @click="stream" />
-      <HButton v-if="target" variant="secondary" :label="job.deployment ? 'Deployment' : 'Control'" icon="launch" @click="router.push(target)" />
-      <HButton v-if="rerunnable" variant="secondary" icon="arrow" label="Run again" :loading="rerunning" @click="rerun" />
+      <HButton v-if="target" variant="secondary" :label="job.deployment ? 'Deployment' : 'Control'" icon="right" @click="router.push(target)" />
+      <HButton v-if="rerunnable" variant="secondary" icon="refresh" label="Run again" :loading="rerunning" @click="rerun" />
       <HButton v-if="!terminal && can('developer', auth)" variant="danger" :label="queued ? 'Drop' : 'Stop'" :loading="stopping" @click="confirmStop = true" />
     </template>
 

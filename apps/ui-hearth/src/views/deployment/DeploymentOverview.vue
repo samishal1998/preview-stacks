@@ -131,7 +131,7 @@ const rdTone = computed(() => (rd.value?.state === 'ready' ? 'success' : rd.valu
             <HText weight="medium">Readiness</HText>
             <HBadge v-if="rd" :label="sentence(rd.state)" :tone="rdTone" dot />
           </HStack>
-          <HButton variant="secondary" icon="arrow" label="Check" :loading="rdLoading" :disabled="!dep?.stack" @click="checkReadiness" />
+          <HButton variant="secondary" icon="refresh" label="Check" :loading="rdLoading" :disabled="!dep?.stack" @click="checkReadiness" />
         </HStack>
       </template>
       <HAlert v-if="rdError" tone="danger" :title="rdError" compact />

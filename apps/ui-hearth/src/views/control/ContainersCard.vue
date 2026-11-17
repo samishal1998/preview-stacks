@@ -39,7 +39,7 @@ const stateBadge = (row: TableRow) => containerState(find(String(row.id)) ?? { s
 const rowActions = (row: TableRow): MenuAction[] => {
   const c = find(row.id);
   if (!props.canRestart || !c?.service || c.service === 'pstack') return [];
-  return [{ id: 'restart', label: 'Restart', icon: 'arrow' }];
+  return [{ id: 'restart', label: 'Restart', icon: 'refresh' }];
 };
 
 const confirm = ref({ open: false, service: '' });

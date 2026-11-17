@@ -137,7 +137,7 @@ async function runVerb(): Promise<void> {
 
       <template v-else>
         <HStack direction="row" :gap="3" wrap align="center">
-          <HButton v-if="findings.length" variant="secondary" icon="info" :label="`${findings.length} ${findingLabel(worst).toLowerCase()}`" @click="showFindings = true" />
+          <HButton v-if="findings.length" variant="secondary" icon="alert" :label="`${findings.length} ${findingLabel(worst).toLowerCase()}`" @click="showFindings = true" />
           <HAlert v-else-if="containers.length" tone="success" title="Nothing looks wrong" compact />
         </HStack>
 
@@ -186,7 +186,7 @@ async function runVerb(): Promise<void> {
               <HText weight="medium">Containers</HText>
               <HStack direction="row" :gap="2" align="center">
                 <HText tone="muted" size="sm">{{ running }} of {{ containers.length }} running</HText>
-                <HButton variant="ghost" icon="arrow" label="Refresh" :loading="loading" @click="emit('refresh')" />
+                <HButton variant="ghost" icon="refresh" label="Refresh" :loading="loading" @click="emit('refresh')" />
               </HStack>
             </HStack>
           </template>

@@ -110,7 +110,7 @@ async function remove(): Promise<void> {
       <template #actions>
         <HBadge v-if="spec" :label="spec.kind" :tone="spec.kind === 'shared' ? 'warning' : 'neutral'" variant="outline" />
         <HButton variant="secondary" icon="left" label="Specs" @click="router.push('/specs')" />
-        <HButton v-if="spec && can('developer', auth)" variant="secondary" label="Use in a deployment" icon="plus" @click="router.push(`/submit?spec=${encodeURIComponent(name)}`)" />
+        <HButton v-if="spec && can('developer', auth)" variant="secondary" label="Use in a deployment" icon="right" @click="router.push(`/submit?spec=${encodeURIComponent(name)}`)" />
         <HButton v-if="spec && can('developer', auth)" variant="secondary" label="Edit" :disabled="!!spec.sourceWithheld || edit.open" @click="startEdit" />
         <HButton
           v-if="spec && can('developer', auth)"
